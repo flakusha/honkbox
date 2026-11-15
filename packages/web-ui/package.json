@@ -1,5 +1,5 @@
 {
   "private": true,
-  "name": "@sd-rip/web-ui",
+  "name": "@honkbox/web-ui",
   "type": "module"
 }

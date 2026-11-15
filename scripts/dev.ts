@@ -5,7 +5,7 @@ export {};
 const vite = Bun.spawn(["vite", "--port", "5173", "packages/web-ui"], {
   stdio: ["inherit", "inherit", "inherit"],
 });
-const server = Bun.spawn(["cargo", "watch", "-x", "run -p sd-rip-server -- serve --dev"], {
+const server = Bun.spawn(["cargo", "watch", "-x", "run -p honkbox-server -- serve --dev"], {
   stdio: ["inherit", "inherit", "inherit"],
 });
 

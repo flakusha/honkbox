@@ -1,4 +1,4 @@
-//! `generate` bundle writer: `~/.sd-rip/jobs/{ulid}/` + atomic writes.
+//! `generate` bundle writer: `~/.honkbox/jobs/{ulid}/` + atomic writes.
 //!
 //! Layout per job dir: `request.json` (full params + slug), `final_00.{png,jpg,webp}` +
 //! sidecar `final_00.json`, `metrics.jsonl` (one line), `run.log`. Every file
@@ -7,6 +7,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use tracing::warn;
 
 /// Bundle inputs: everything the sidecars record.
 #[derive(Debug, Clone)]
@@ -24,7 +26,7 @@ pub struct BundleInputs {
     /// Image height in pixels.
     pub height: u32,
     /// Output container: art file `final_00.{ext}` + sidecar `format` field.
-    pub format: sd_rip_sd_core::OutputFormat,
+    pub format: honkbox_sd_core::OutputFormat,
     /// `SdPipeline::backend_id` (currently `"stub"`).
     pub backend_id: &'static str,
 }
@@ -41,16 +43,32 @@ pub fn parse_size(raw: &str) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// Write a full job bundle under `~/.sd-rip/jobs/{ulid}/`; returns the job dir.
+/// Job root: `~/.honkbox/jobs`. ONE-RELEASE compat: the old `~/.sd-rip/jobs`
+/// is used once (with a `warn!`) when the new dir is absent.
+fn jobs_dir() -> Result<PathBuf, String> {
+    let home = home::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
+    let new = home.join(".honkbox").join("jobs");
+    if !new.exists() {
+        let old = home.join(".sd-rip").join("jobs");
+        if old.exists() {
+            warn!(
+                "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
+                old.display(),
+                new.display()
+            );
+            return Ok(old);
+        }
+    }
+    Ok(new)
+}
+
+/// Write a full job bundle under `~/.honkbox/jobs/{ulid}/`; returns the job dir.
 pub fn write_bundle(
     inputs: &BundleInputs,
     image_bytes: &[u8],
     elapsed_ms: u64,
 ) -> Result<PathBuf, String> {
-    let jobs = home::home_dir()
-        .map(|h| h.join(".sd-rip").join("jobs"))
-        .ok_or_else(|| "cannot resolve home directory".to_string())?;
-    let dir = jobs.join(ulid::Ulid::new().to_string());
+    let dir = jobs_dir()?.join(ulid::Ulid::new().to_string());
     fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create job dir {}: {e}", dir.display()))?;
     write_bundle_into(&dir, inputs, image_bytes, elapsed_ms)?;
@@ -143,7 +161,7 @@ mod tests {
             steps: 20,
             width: 16,
             height: 16,
-            format: sd_rip_sd_core::OutputFormat::Png,
+            format: honkbox_sd_core::OutputFormat::Png,
             backend_id: "stub",
         }
     }
@@ -164,12 +182,12 @@ mod tests {
     #[test]
     fn format_changes_art_filename_and_sidecar() {
         for (format, ext, name) in [
-            (sd_rip_sd_core::OutputFormat::Png, "final_00.png", "png"),
-            (sd_rip_sd_core::OutputFormat::Jpeg, "final_00.jpg", "jpeg"),
-            (sd_rip_sd_core::OutputFormat::Webp, "final_00.webp", "webp"),
+            (honkbox_sd_core::OutputFormat::Png, "final_00.png", "png"),
+            (honkbox_sd_core::OutputFormat::Jpeg, "final_00.jpg", "jpeg"),
+            (honkbox_sd_core::OutputFormat::Webp, "final_00.webp", "webp"),
         ] {
             let dir = std::env::temp_dir().join(format!(
-                "sd-rip-jobs-fmt-{}-{}",
+                "honkbox-jobs-fmt-{}-{}",
                 std::process::id(),
                 name
             ));
@@ -189,7 +207,7 @@ mod tests {
 
     #[test]
     fn bundle_layout_exact() {
-        let dir = std::env::temp_dir().join(format!("sd-rip-jobs-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("honkbox-jobs-test-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("test dir");
         write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("bundle");
         for name in [

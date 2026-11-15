@@ -9,13 +9,21 @@ diff --git a/vendor/diffusion-rs/src/api.rs b/vendor/diffusion-rs/src/api.rs
  use diffusion_rs_sys::sd_set_preview_callback;
  use diffusion_rs_sys::sd_set_progress_callback;
  use diffusion_rs_sys::sd_slg_params_t;
-@@ -902,6 +902,20 @@ impl ModelConfig {
+@@ -902,6 +902,28 @@ impl ModelConfig {
                      flash_attn_mode: null(),
                      conv_direct_mode: null(),
                  };
-+                // Env-gated sd.cpp log wire: SD_RIP_SD_LOG=1 forwards C++
++                // Env-gated sd.cpp log wire: HONKBOX_SD_LOG=1 forwards C++
 +                // logs to stderr; off by default (silent unless asked).
-+                if std::env::var_os("SD_RIP_SD_LOG").as_deref() == Some(std::ffi::OsStr::new("1")) {
++                // ONE-RELEASE compat: SD_RIP_SD_LOG is honored when the new var is absent.
++                let sd_log_var = std::env::var_os("HONKBOX_SD_LOG").or_else(|| {
++                    let old = std::env::var_os("SD_RIP_SD_LOG");
++                    if old.is_some() {
++                        eprintln!("warn: SD_RIP_SD_LOG is deprecated; use HONKBOX_SD_LOG");
++                    }
++                    old
++                });
++                if sd_log_var.as_deref() == Some(std::ffi::OsStr::new("1")) {
 +                    unsafe extern "C" fn sd_log_forwarder(
 +                        _level: diffusion_rs_sys::sd_log_level_t,
 +                        text: *const c_char,

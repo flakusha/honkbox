@@ -1,5 +1,5 @@
 [package]
-name = "sd-rip-sd-core"
+name = "honkbox-sd-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

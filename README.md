@@ -1,4 +1,4 @@
-# sd-rip
+# honkbox
 
 Local-first generative studio in Rust: Stable Diffusion image/video generation plus local LLM chat plus audio (STT/TTS) behind one Axum REST/WS server, Vulkan-first GPU with CPU fallback, and a tabbed web UI served over the same API.
 
@@ -23,8 +23,13 @@ bun run dev        # Vite :5173 + server :8080 together
 Or run the server directly:
 
 ```sh
-cargo run -p sd-rip-server -- serve
-cargo run -p sd-rip-server -- serve --dev  # serve web-dist from disk
+cargo run -p honkbox-server -- serve
+cargo run -p honkbox-server -- serve --dev  # serve web-dist from disk
+
+Short form `hbx` is a shell alias only, not a second binary:
+
+```sh
+alias hbx=honkbox
 ```
 
 ## Scripts
@@ -68,8 +73,20 @@ llm_dirs = ["~/.cache/huggingface"]
 comfyui_dir = "~/git-ai/ai-models/Data/Models"
 ```
 
-- Env overrides: `SD_RIP_LLM_DIRS` / `SD_RIP_COMFYUI_DIR` (env wins over file).
-- Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `SD_RIP_LOG_FILE` > `~/.sd-rip/logs/sd-rip.log` (stderr human-readable, file JSONL).
+- Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over file).
+- Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `HONKBOX_LOG_FILE` > `~/.honkbox/logs/honkbox.log` (stderr human-readable, file JSONL).
+
+## Migrating from sd-rip (one release)
+
+The binary is now `honkbox` (`sd-rip` is gone). Config and state moved from
+`~/.sd-rip` to `~/.honkbox` (`honkbox.toml`, `logs/honkbox.log`, `jobs/`), and
+env vars from `SD_RIP_*` to `HONKBOX_*` (`HONKBOX_LLM_DIRS`,
+`HONKBOX_COMFYUI_DIR`, `HONKBOX_LOG_FILE`, `HONKBOX_SD_LOG`). For one release
+the old paths/vars are still honored when the new ones are absent, with a
+deprecation warning telling you to move to `~/.honkbox` — move your files
+over; afterwards the old names stop working. Browser model picks migrate the
+same way: `sd-rip.*` localStorage keys are read once, then rewritten under
+`honkbox.*`.
 
 ## Docs
 

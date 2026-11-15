@@ -1,4 +1,4 @@
-# sd-rip CI.
+# honkbox CI.
 #
 # NOTE: this repo starts with no remote; this workflow first runs on the first
 # push after a remote is added.
@@ -270,7 +270,7 @@ jobs:
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
       # Regenerates packages/web-ui/src/gen/ and fails on drift (git diff).
-      # NOTE: the OpenAPI exporter builds sd-rip-server, hence the native deps above.
+      # NOTE: the OpenAPI exporter builds honkbox-server, hence the native deps above.
       - name: Check generated OpenAPI + API types
         run: bun run codegen:check
 
@@ -308,7 +308,7 @@ jobs:
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
       - name: Check experimental feature
-        run: cargo check -p sd-rip-server --features experimental-ash-sd --locked
+        run: cargo check -p honkbox-server --features experimental-ash-sd --locked
 
   build:
     name: Build release (${{ matrix.os }})
@@ -346,4 +346,4 @@ jobs:
         run: bun run build:release
       - name: Build release binary (CPU-only)
         if: runner.os != 'Linux'
-        run: cargo build --release --locked -p sd-rip-server --no-default-features
+        run: cargo build --release --locked -p honkbox-server --no-default-features

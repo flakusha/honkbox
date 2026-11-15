@@ -8,23 +8,50 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use tracing::warn;
+
 use tracing_subscriber::{
     EnvFilter, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt,
 };
 
-/// Default log file: `~/.sd-rip/logs/sd-rip.log` (user-kept logs under the data dir).
+/// Default log file: `~/.honkbox/logs/honkbox.log` (user-kept logs under the
+/// data dir). ONE-RELEASE compat: the old `~/.sd-rip/logs/sd-rip.log` is used
+/// once (with a `warn!`) when the new file is absent but the old one exists.
 fn default_log_file() -> Option<PathBuf> {
-    home::home_dir().map(|h| h.join(".sd-rip").join("logs").join("sd-rip.log"))
+    let home = home::home_dir()?;
+    let new = home.join(".honkbox").join("logs").join("honkbox.log");
+    if !new.exists() {
+        let old = home.join(".sd-rip").join("logs").join("sd-rip.log");
+        if old.exists() {
+            warn!(
+                "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
+                old.display(),
+                new.display()
+            );
+            return Some(old);
+        }
+    }
+    Some(new)
 }
 
-/// Resolve the log path: explicit arg beats `SD_RIP_LOG_FILE` beats default.
+/// Resolve the log path: explicit arg beats `HONKBOX_LOG_FILE` beats default.
+/// ONE-RELEASE compat: `SD_RIP_LOG_FILE` is honored once (with a `warn!`)
+/// when the new var is absent.
 fn resolve_log_file(arg: Option<PathBuf>) -> Option<PathBuf> {
     if arg.is_some() {
         return arg;
     }
+    if let Ok(env) = std::env::var("HONKBOX_LOG_FILE")
+        && !env.is_empty()
+    {
+        return Some(PathBuf::from(env));
+    }
     if let Ok(env) = std::env::var("SD_RIP_LOG_FILE")
         && !env.is_empty()
     {
+        warn!(
+            "SD_RIP_LOG_FILE is deprecated; use HONKBOX_LOG_FILE (one-release compat: the old name will stop working)"
+        );
         return Some(PathBuf::from(env));
     }
     default_log_file()

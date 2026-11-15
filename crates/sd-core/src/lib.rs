@@ -228,7 +228,7 @@ impl SdPipeline for SdCppPipeline {
         }
         // Unique temp PNG: pid + nanos, so concurrent generates never collide.
         let out = std::env::temp_dir().join(format!(
-            "sd-rip-{}-{}-{}.png",
+            "honkbox-{}-{}-{}.png",
             std::process::id(),
             req.seed,
             std::time::SystemTime::now()

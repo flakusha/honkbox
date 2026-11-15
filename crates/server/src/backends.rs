@@ -6,10 +6,8 @@
 
 use std::sync::Arc;
 
-use sd_rip_audio_worker::{
-    KokoroTts, SttPipeline, StubStt, StubTts, TtsPipeline, WhisperStt,
-};
-use sd_rip_llm_worker::{LlamaCppLlm, LlmOptions, LlmPipeline, StubLlm};
+use honkbox_audio_worker::{KokoroTts, SttPipeline, StubStt, StubTts, TtsPipeline, WhisperStt};
+use honkbox_llm_worker::{LlamaCppLlm, LlmOptions, LlmPipeline, StubLlm};
 
 /// `--llm-backend` values: instant stub or the real llama.cpp pipeline.
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
@@ -55,13 +53,14 @@ pub fn make_llm(
         LlmBackend::Stub => Arc::new(StubLlm),
         LlmBackend::LlamaCpp => {
             let slug = model.unwrap_or_else(|| {
-                eprintln!(
-                    "error: --llm-model <slug> is required with --llm-backend llama-cpp"
-                );
+                eprintln!("error: --llm-model <slug> is required with --llm-backend llama-cpp");
                 std::process::exit(1);
             });
             let path = resolve(slug);
-            Arc::new(crate::or_exit(LlamaCppLlm::load(&path, &LlmOptions::default())))
+            Arc::new(crate::or_exit(LlamaCppLlm::load(
+                &path,
+                &LlmOptions::default(),
+            )))
         }
     }
 }
@@ -77,9 +76,7 @@ pub fn make_stt(
         SttBackend::Stub => Arc::new(StubStt),
         SttBackend::Whisper => {
             let slug = model.unwrap_or_else(|| {
-                eprintln!(
-                    "error: --stt-model <slug> is required with --stt-backend whisper"
-                );
+                eprintln!("error: --stt-model <slug> is required with --stt-backend whisper");
                 std::process::exit(1);
             });
             let path = resolve(slug);
@@ -99,9 +96,7 @@ pub fn make_tts(
         TtsBackend::Stub => Arc::new(StubTts),
         TtsBackend::Kokoro => {
             let slug = model.unwrap_or_else(|| {
-                eprintln!(
-                    "error: --tts-model <slug> is required with --tts-backend kokoro"
-                );
+                eprintln!("error: --tts-model <slug> is required with --tts-backend kokoro");
                 std::process::exit(1);
             });
             let path = resolve(slug);

@@ -1,5 +1,5 @@
 [package]
-name = "sd-rip-residency"
+name = "honkbox-residency"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
