@@ -25,6 +25,7 @@ toml = "1"
 sd-rip-registry = { path = "crates/registry" }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+diffusion-rs = "=0.1.20"
 ulid = "1"
 sd-rip-residency = { path = "crates/residency" }
 sd-rip-sd-core = { path = "crates/sd-core" }

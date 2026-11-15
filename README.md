@@ -7,6 +7,10 @@ Local-first generative studio in Rust: Stable Diffusion image/video generation p
 - Bun >= 1.4.4 (`bun --version`); every JS/TS flow here is bun-only.
 - System cargo (see `rust-toolchain.toml`) plus `cargo-watch` for `dev:server` (`cargo install cargo-watch`).
 - Model dirs (configurable, defaults): LLM `~/.cache/huggingface`, ComfyUI `~/git-ai/ai-models/Data/Models`.
+- Native build deps for the default `vulkan` feature: `cmake`, a C++ compiler, `libclang` (bindgen), Vulkan headers + `glslc` + SPIR-V headers (Debian/Ubuntu: `cmake clang libvulkan-dev glslang-tools spirv-headers`).
+- `LIBCLANG_PATH`: export ONE working value in every shell before any cargo/bun command (bindgen re-runs + rebuilds all of sd.cpp when it changes; codegen and tests also build the native backend). If the default LLVM mis-generates (`_IO_FILE` size errors), point it at another installed LLVM, e.g. `export LIBCLANG_PATH=/usr/lib/llvm/20/lib64`.
+- Multi-GPU Vulkan: sd.cpp uses device 0 unless `GGML_VK_VISIBLE_DEVICES` names the dGPU index (e.g. `1`); without it generation may be slow or abort with context-lost.
+- Windows/macOS CI builds use `--no-default-features` (CPU-only sd.cpp; needs `cmake` + LLVM for libclang, no Vulkan SDK).
 
 ## Quickstart
 

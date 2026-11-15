@@ -11,6 +11,9 @@ workspace = true
 [features]
 # ash backend deps (ash, gpu-allocator) arrive with the first experimental code (spike B).
 ash-backend = []
+# Real txt2img via diffusion-rs (stable-diffusion.cpp); CPU unless `vulkan`.
+vulkan = ["diffusion-rs/vulkan"]
 
 [dependencies]
 image = { workspace = true }
+diffusion-rs = { workspace = true }

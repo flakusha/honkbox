@@ -37,3 +37,7 @@ tower = { version = "0.5.3", features = ["util"] }
 # Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
 # Empty until the first experimental code lands, then forwards to sd-core/ash-backend.
 experimental-ash-sd = []
+# Vulkan execution for the sd-cpp backend (sd-rip-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
+# Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
+vulkan = ["sd-rip-sd-core/vulkan"]
+default = ["vulkan"]

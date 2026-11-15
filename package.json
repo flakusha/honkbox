@@ -41,7 +41,7 @@
     "deny": "cargo deny check licenses bans advisories",
     "spdx": "reuse lint",
     "notice": "cargo about generate about.hbs -o NOTICE",
-    "codegen:check": "cargo test --locked -p sd-rip-api-types && bun scripts/codegen-openapi-check.ts && git diff --exit-code -- packages/web-ui/src/gen/",
+    "codegen:check": "cargo test --locked -p sd-rip-api-types && bun scripts/codegen-openapi-check.ts && dprint fmt packages/web-ui/src/gen >/dev/null && git diff --exit-code -- packages/web-ui/src/gen/",
     "ci": "bun run check && bun run test && bun run build"
   },
   "devDependencies": {

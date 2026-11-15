@@ -4,6 +4,6 @@
     "correctness": "error",
     "suspicious": "warn"
   },
-  "ignorePatterns": ["web-dist/", "target/", "dist/", "node_modules/"],
+  "ignorePatterns": ["web-dist/", "target/", "dist/", "node_modules/", "packages/web-ui/src/gen/"],
   "plugins": ["typescript"]
 }

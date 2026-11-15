@@ -5,8 +5,20 @@
 [licenses]
 # cargo-deny >= 0.19 is allowlist-only: anything not in `allow` is denied.
 allow = ["AGPL-3.0-or-later", "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
-  "Unlicense", "Zlib", "BSD-2-Clause", "BSD-3-Clause", "ISC", "CC0-1.0", "Unicode-3.0"]
+  "Unlicense", "Zlib", "BSD-2-Clause", "BSD-3-Clause", "ISC", "CC0-1.0", "Unicode-3.0",
+  "NCSA", "MPL-2.0", "CDLA-Permissive-2.0"]
+# 2026-11-15 (diffusion-rs 0.1.20): NCSA = libfuzzer-sys (build-only, permissive UIUC);
+# CDLA-Permissive-2.0 = webpki-roots CA data (permissive); MPL-2.0 = option-ext (via
+# dirs→hf-hub; §3.3 Secondary-License compatible with our AGPL Larger Work, file-level,
+# attribution via NOTICE). Policy (GPL/LGPL/AGPL-incoming denied) unchanged.
 exceptions = [] # any exception needs a dated comment + ticket
+[advisories]
+# 2026-11-15, all transitive via diffusion-rs/image, no safe upgrade; revisit on bump:
+# - RUSTSEC-2025-0119 number_prefix unmaintained (indicatif→hf-hub): formatting-only.
+# - RUSTSEC-2024-0436 paste unmaintained (little_exif/rav1e): proc-macro, no runtime surface.
+# - RUSTSEC-2026-0194/0195 quick-xml 0.37 XML-DoS (little_exif PNG-EXIF path): untrusted
+#   XML unreachable (txt2img takes no image input); little_exif pins 0.37, blocks 0.41.
+ignore = ["RUSTSEC-2025-0119", "RUSTSEC-2024-0436", "RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

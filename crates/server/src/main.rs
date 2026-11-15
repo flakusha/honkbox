@@ -51,7 +51,7 @@ enum Command {
         #[command(subcommand)]
         action: ModelsAction,
     },
-    /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; stub pixels).
+    /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; picks `--backend`).
     Generate {
         /// Model slug from `models show`.
         #[arg(long)]
@@ -59,7 +59,7 @@ enum Command {
         /// Text prompt.
         #[arg(long)]
         prompt: String,
-        /// RNG seed; same seed = byte-identical PNG from the stub backend.
+        /// RNG seed; same seed = byte-identical output on either backend (both deterministic).
         #[arg(long, default_value_t = 42)]
         seed: u64,
         /// Diffusion steps.
@@ -71,6 +71,9 @@ enum Command {
         /// Image container (`final_00` extension + sidecar `format`).
         #[arg(long, value_enum, default_value = "png")]
         format: Format,
+        /// Which pipeline samples the image (`sd-cpp` decodes the real checkpoint).
+        #[arg(long, value_enum, default_value = "sd-cpp")]
+        backend: Backend,
     },
 }
 
@@ -80,6 +83,13 @@ enum Format {
     Png,
     Jpeg,
     Webp,
+}
+
+/// `generate` backends: instant stub pixels or the real sd.cpp pipeline.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum Backend {
+    Stub,
+    SdCpp,
 }
 
 /// Model-list actions.
@@ -130,7 +140,8 @@ async fn main() {
             steps,
             size,
             format,
-        } => generate(model, prompt, seed, steps, &size, format),
+            backend,
+        } => generate(model, prompt, seed, steps, &size, format, backend),
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
@@ -201,15 +212,29 @@ fn human_size(bytes: u64) -> String {
     };
     format!("{}.{}{}", bytes / div, (bytes % div) * 10 / div, unit)
 }
-/// `generate`: slug check, single-slot reserve, stub sample, bundle write.
+/// `generate`: slug check, single-slot reserve, sample, bundle write.
 ///
 /// Every failure is a loud exit-1 naming the cause; success prints the job dir.
-fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str, format: Format) {
-    use sd_rip_sd_core::SdPipeline as _;
-
+fn generate(
+    model: String,
+    prompt: String,
+    seed: u64,
+    steps: u32,
+    size: &str,
+    format: Format,
+    backend: Backend,
+) {
     logging::init(None);
     let started = std::time::Instant::now();
-    info!("sd-rip generate model={model} seed={seed} steps={steps} size={size}");
+    info!(
+        "sd-rip generate model={model} seed={seed} steps={steps} size={size} backend={backend:?}"
+    );
+    #[cfg(feature = "vulkan")]
+    if matches!(backend, Backend::SdCpp) && std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_none() {
+        eprintln!(
+            "hint: GGML_VK_VISIBLE_DEVICES unset — sd.cpp uses Vulkan device 0 (on multi-GPU boxes this may be the iGPU: slow, and 1024² aborts with context-lost; export the dGPU index, e.g. 1)"
+        );
+    }
     let cfg = match config::load(None) {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -228,10 +253,11 @@ fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str, fo
         llm_dirs: cfg.llm_dirs,
         comfyui_dir: cfg.comfyui_dir,
     });
-    if !found.iter().any(|m| m.slug == model) {
+    let Some(m) = found.iter().find(|m| m.slug == model) else {
         eprintln!("error: unknown model {model:?}; see `sd-rip models show`");
         std::process::exit(1);
-    }
+    };
+    let model_path = m.path.clone();
     let _lease = match sd_rip_residency::global().try_reserve() {
         Ok(lease) => lease,
         Err(e) => {
@@ -239,7 +265,10 @@ fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str, fo
             std::process::exit(1);
         }
     };
-    let pipeline = sd_rip_sd_core::StubPipeline;
+    let pipeline: Box<dyn sd_rip_sd_core::SdPipeline> = match backend {
+        Backend::Stub => Box::new(sd_rip_sd_core::StubPipeline),
+        Backend::SdCpp => Box::new(sd_rip_sd_core::SdCppPipeline::new(model_path)),
+    };
     let img = match pipeline.generate(&sd_rip_sd_core::Txt2ImgRequest {
         prompt: prompt.clone(),
         seed,

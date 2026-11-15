@@ -1,12 +1,13 @@
 //! Diffusion pipeline (samplers, schedulers, recipes); sync only, no HTTP/DB.
 //!
-//! The only backend at init is [`StubPipeline`]: deterministic STUB pixels (a
-//! pure function of the seed) behind the real [`SdPipeline`] seam. Real
-//! `diffusion-rs` wiring arrives later; callers swap the constructor, never
-//! the call sites.
+//! Two backends behind the real [`SdPipeline`] seam: [`StubPipeline`] (deterministic
+//! STUB pixels, a pure function of the seed) and [`SdCppPipeline`] (real txt2img via
+//! `diffusion-rs` / stable-diffusion.cpp on a caller-provided checkpoint file).
+//! Callers swap the constructor, never the call sites.
 
 use std::fmt;
 use std::io::Cursor;
+use std::path::PathBuf;
 
 /// Longest image edge in pixels accepted by the stub backend.
 pub const MAX_EDGE: u32 = 2048;
@@ -54,6 +55,8 @@ pub enum SdError {
     },
     /// Image encoding failed.
     Encode(String),
+    /// Real-backend failure (config build, `gen_img`, file IO).
+    Backend(String),
 }
 
 impl fmt::Display for SdError {
@@ -63,6 +66,7 @@ impl fmt::Display for SdError {
                 write!(f, "image edge {edge}px exceeds cap of {MAX_EDGE}px")
             }
             Self::Encode(e) => write!(f, "png encode failed: {e}"),
+            Self::Backend(e) => write!(f, "sd-cpp backend failed: {e}"),
         }
     }
 }
@@ -104,6 +108,95 @@ impl SdPipeline for StubPipeline {
             width: req.width,
             height: req.height,
             rgba,
+        })
+    }
+}
+
+/// Backend tag when compiled with `vulkan` (Vulkan execution on the dGPU).
+#[cfg(feature = "vulkan")]
+pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-vulkan";
+/// Backend tag for a CPU-only build (no `vulkan` feature).
+#[cfg(not(feature = "vulkan"))]
+pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-cpu";
+
+/// Real txt2img via `diffusion-rs` (stable-diffusion.cpp) on a caller-provided
+/// single-file checkpoint (e.g. an SDXL finetune `.safetensors`).
+///
+/// Fixed slice recipe: euler sampler, discrete (`normal`) scheduler, CFG 7.0, VAE tiling ON (required: the 1024² fp16 VAE decode otherwise exceeds the per-allocation limit). `gen_img` writes one PNG to a
+/// temp path; this impl reads it back and decodes to RGBA so the seam stays
+/// container-free. `Send + Sync` holds: all `gen_img` state is function-local.
+#[derive(Debug, Clone)]
+pub struct SdCppPipeline {
+    /// Absolute path to the checkpoint file (resolved by `server` via `registry`).
+    model_path: PathBuf,
+}
+
+impl SdCppPipeline {
+    /// Point the pipeline at a checkpoint file; nothing loads until `generate`.
+    pub fn new(model_path: PathBuf) -> Self {
+        Self { model_path }
+    }
+}
+
+impl SdPipeline for SdCppPipeline {
+    fn backend_id(&self) -> &'static str {
+        SD_CPP_BACKEND_ID
+    }
+
+    fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
+        #[cfg(feature = "vulkan")]
+        use diffusion_rs::api::{BackendDevice, Module};
+        use diffusion_rs::api::{ConfigBuilder, ModelConfigBuilder, SampleMethod};
+
+        let edge = req.width.max(req.height);
+        if edge > MAX_EDGE {
+            return Err(SdError::TooLarge { edge });
+        }
+        // Unique temp PNG: pid + nanos, so concurrent generates never collide.
+        let out = std::env::temp_dir().join(format!(
+            "sd-rip-{}-{}-{}.png",
+            std::process::id(),
+            req.seed,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        ));
+        let config = ConfigBuilder::default()
+            .prompt(req.prompt.clone())
+            .seed(req.seed.cast_signed())
+            .steps(req.steps.cast_signed())
+            .width(req.width.cast_signed())
+            .height(req.height.cast_signed())
+            .sampling_method(SampleMethod::EULER_SAMPLE_METHOD)
+            .output(out.clone())
+            .build()
+            .map_err(|e| SdError::Backend(e.to_string()))?;
+        let mut model = ModelConfigBuilder::default();
+        // VAE tiling: 1024² fp16 decode needs a ~4.8 GB contiguous Vulkan buffer,
+        // over the per-allocation limit (OOM evidence 2026-11-15, 7900 XTX).
+        // Sampling stays full-frame; only the VAE decode is tiled.
+        model
+            .model(self.model_path.clone())
+            .n_threads(0)
+            .vae_tiling(true);
+        #[cfg(feature = "vulkan")]
+        model.backend(std::collections::HashMap::from([(
+            Module::Model,
+            BackendDevice::VULKAN0,
+        )]));
+        let mut model_config = model.build().map_err(|e| SdError::Backend(e.to_string()))?;
+        diffusion_rs::api::gen_img(&config, &mut model_config)
+            .map_err(|e| SdError::Backend(e.to_string()))?;
+        let bytes = std::fs::read(&out);
+        let _ = std::fs::remove_file(&out);
+        let bytes = bytes.map_err(|e| SdError::Backend(e.to_string()))?;
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| SdError::Encode(e.to_string()))?
+            .to_rgba8();
+        Ok(GeneratedImage {
+            width: img.width(),
+            height: img.height(),
+            rgba: img.into_raw(),
         })
     }
 }
