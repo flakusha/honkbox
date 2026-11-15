@@ -7,3 +7,12 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+llama-cpp-4 = { workspace = true }
+
+[features]
+default = ["llm-vulkan"]
+llm-vulkan = ["llama-cpp-4/vulkan"]
+llm-cuda = ["llama-cpp-4/cuda"]
+
