@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# Fetched third-party trees (dynamic checkout + patches, never committed)
+vendor/
+
 # TS / bun
 node_modules/
 dist/
@@ -27,6 +30,7 @@ weights/
 
 # Env / secrets
 .env*
+.credentials.env
 
 # Scratch research + coverage
 .tmp/

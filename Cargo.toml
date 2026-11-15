@@ -49,3 +49,8 @@ must_use_candidate = "allow"
 [profile.release]
 strip = "debuginfo"
 lto = "thin"
+
+# Pin bump: sd.cpp master-1104 (5dcfa79) vendored in-repo (local-first; no upstream remote) + Rust FFI port to the new C ABI.
+[patch.crates-io]
+diffusion-rs = { path = "vendor/diffusion-rs" }
+diffusion-rs-sys = { path = "vendor/diffusion-rs/sys" }

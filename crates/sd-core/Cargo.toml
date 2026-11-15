@@ -17,3 +17,4 @@ vulkan = ["diffusion-rs/vulkan"]
 [dependencies]
 image = { workspace = true }
 diffusion-rs = { workspace = true }
+serde_json = { workspace = true }

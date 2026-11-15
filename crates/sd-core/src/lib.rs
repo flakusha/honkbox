@@ -32,6 +32,13 @@ pub struct Txt2ImgRequest {
     pub height: u32,
     /// Registry slug (e.g. `comfy:checkpoints/sdxl.safetensors`).
     pub model_slug: String,
+    /// Optional text-encoder slug (resolved by `server`); feeds the `llm`
+    /// (Qwen-VL-class) slot the new archs (krea2/moss/anima/qwen-2.1) read.
+    /// `None` = single-file checkpoint with bundled encoders (e.g. SDXL).
+    pub clip: Option<PathBuf>,
+    /// Optional standalone VAE slug (resolved by `server`); `None` = VAE
+    /// bundled in (or converted from) the diffusion checkpoint.
+    pub vae: Option<PathBuf>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -138,6 +145,73 @@ impl SdCppPipeline {
     }
 }
 
+/// Tensor-name prefix sd.cpp version-detect needs on the `.model()` slot.
+const DIFFUSION_PREFIX: &str = "model.diffusion_model.";
+
+/// Largest safetensors header we sniff (a GGUF magic decodes as a giant len).
+const HEADER_CAP: u64 = 64 * 1024 * 1024;
+
+/// Pure sniff over a checkpoint's leading bytes: true when the safetensors
+/// header parses and NONE of its tensor names carry [`DIFFUSION_PREFIX`]
+/// (split-arch diffusion-only files, e.g. qwen-2.1-convrot). Garbage,
+/// truncated, prefixed, or non-safetensors (GGUF) bytes all give false.
+fn safetensors_header_is_prefixless(header: &[u8]) -> bool {
+    let Some(len_bytes) = header.get(..8) else {
+        return false;
+    };
+    let Ok(len_bytes): Result<[u8; 8], _> = len_bytes.try_into() else {
+        return false;
+    };
+    // `end` saturates, so a GGUF-magic "len" can never match a real slice.
+    let len = u64::from_le_bytes(len_bytes);
+    let end = usize::try_from(len).map_or(usize::MAX, |l| 8usize.saturating_add(l));
+    let Some(body) = header.get(8..end) else {
+        return false;
+    };
+    let Ok(tensors) = serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(body)
+    else {
+        return false;
+    };
+    let mut any_tensor = false;
+    for key in tensors.keys() {
+        if key == "__metadata__" {
+            continue;
+        }
+        any_tensor = true;
+        if key.starts_with(DIFFUSION_PREFIX) {
+            return false;
+        }
+    }
+    any_tensor
+}
+
+/// True when `path` is a prefixless split safetensors file (see above);
+/// reads only the 8 B length plus the header JSON. Unreadable, over-cap
+/// (GGUF), or truncated files give false (`.model()` fallback).
+fn checkpoint_needs_diffusion_slot(path: &std::path::Path) -> bool {
+    use std::io::Read as _;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut len_bytes = [0u8; 8];
+    if file.read_exact(&mut len_bytes).is_err() {
+        return false;
+    }
+    let len = u64::from_le_bytes(len_bytes);
+    if len == 0 || len > HEADER_CAP {
+        return false;
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return false;
+    };
+    let mut header = vec![0u8; 8 + len];
+    header[..8].copy_from_slice(&len_bytes);
+    if file.read_exact(&mut header[8..]).is_err() {
+        return false;
+    }
+    safetensors_header_is_prefixless(&header)
+}
+
 impl SdPipeline for SdCppPipeline {
     fn backend_id(&self) -> &'static str {
         SD_CPP_BACKEND_ID
@@ -175,14 +249,27 @@ impl SdPipeline for SdCppPipeline {
         // VAE tiling: 1024² fp16 decode needs a ~4.8 GB contiguous Vulkan buffer,
         // over the per-allocation limit (OOM evidence 2026-11-15, 7900 XTX).
         // Sampling stays full-frame; only the VAE decode is tiled.
-        model
-            .model(self.model_path.clone())
-            .n_threads(0)
-            .vae_tiling(true);
+        // Prefixless split checkpoints (qwen-2.1-convrot) miss version-detect
+        // through `.model()`; their loader only prepends the missing prefix on
+        // the `.diffusion_model()` slot. GGUF/unreadable files take `.model()`.
+        if checkpoint_needs_diffusion_slot(&self.model_path) {
+            model.diffusion_model(self.model_path.clone());
+        } else {
+            model.model(self.model_path.clone());
+        }
+        model.n_threads(0).vae_tiling(true);
+        // Split encoder/VAE files (new archs ship them separately): `--clip`
+        // feeds the llm (Qwen-VL-class) slot, `--vae` the standalone VAE.
+        if let Some(clip) = req.clip.clone() {
+            model.llm(clip);
+        }
+        if let Some(vae) = req.vae.clone() {
+            model.vae(vae);
+        }
         #[cfg(feature = "vulkan")]
         model.backend(std::collections::HashMap::from([(
             Module::Model,
-            BackendDevice::VULKAN0,
+            vec![BackendDevice::VULKAN0],
         )]));
         let mut model_config = model.build().map_err(|e| SdError::Backend(e.to_string()))?;
         diffusion_rs::api::gen_img(&config, &mut model_config)
@@ -293,6 +380,8 @@ mod tests {
             width,
             height,
             model_slug: "comfy:checkpoints/x.safetensors".to_string(),
+            clip: None,
+            vae: None,
         }
     }
 
@@ -326,6 +415,46 @@ mod tests {
         let a = StubPipeline.generate(&req(1, 16, 16)).expect("gen");
         let b = StubPipeline.generate(&req(2, 16, 16)).expect("gen");
         assert_ne!(a.rgba, b.rgba);
+    }
+
+    /// Minimal safetensors prelude: 8 B LE header len plus a JSON header.
+    fn header_bytes(keys: &[&str]) -> Vec<u8> {
+        let tensors: serde_json::Map<String, serde_json::Value> = keys
+            .iter()
+            .map(|k| ((*k).to_string(), serde_json::json!({"dtype": "F32"})))
+            .collect();
+        let body = serde_json::to_vec(&tensors).expect("json");
+        let mut out = (body.len() as u64).to_le_bytes().to_vec();
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn prefixed_header_stays_on_model_slot() {
+        let header = header_bytes(&["model.diffusion_model.txt_in.weight"]);
+        assert!(!safetensors_header_is_prefixless(&header));
+    }
+
+    #[test]
+    fn prefixless_header_routes_to_diffusion_slot() {
+        let header = header_bytes(&["txt_in.text_norm.weight", "decoder.conv.weight"]);
+        assert!(safetensors_header_is_prefixless(&header));
+    }
+
+    #[test]
+    fn garbage_header_falls_back_to_model_slot() {
+        // GGUF magic decodes as a giant len: no header can match.
+        assert!(!safetensors_header_is_prefixless(b"GGUF\x03\0\0\0rest"));
+        assert!(!safetensors_header_is_prefixless(&[]));
+        assert!(!safetensors_header_is_prefixless(&[1, 2, 3]));
+        // Declared len longer than the body (truncated file).
+        let mut truncated = 999u64.to_le_bytes().to_vec();
+        truncated.extend_from_slice(b"{}");
+        assert!(!safetensors_header_is_prefixless(&truncated));
+        // Valid JSON but not a tensor map.
+        let mut arr = 2u64.to_le_bytes().to_vec();
+        arr.extend_from_slice(b"[]");
+        assert!(!safetensors_header_is_prefixless(&arr));
     }
 
     #[test]

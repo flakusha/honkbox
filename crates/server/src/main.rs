@@ -52,29 +52,39 @@ enum Command {
         action: ModelsAction,
     },
     /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; picks `--backend`).
-    Generate {
-        /// Model slug from `models show`.
-        #[arg(long)]
-        model: String,
-        /// Text prompt.
-        #[arg(long)]
-        prompt: String,
-        /// RNG seed; same seed = byte-identical output on either backend (both deterministic).
-        #[arg(long, default_value_t = 42)]
-        seed: u64,
-        /// Diffusion steps.
-        #[arg(long, default_value_t = 20)]
-        steps: u32,
-        /// Image size as `WxH`; longest edge capped at 2048.
-        #[arg(long, default_value = "1024x1024")]
-        size: String,
-        /// Image container (`final_00` extension + sidecar `format`).
-        #[arg(long, value_enum, default_value = "png")]
-        format: Format,
-        /// Which pipeline samples the image (`sd-cpp` decodes the real checkpoint).
-        #[arg(long, value_enum, default_value = "sd-cpp")]
-        backend: Backend,
-    },
+    Generate(GenerateArgs),
+}
+
+/// `generate` flags (one struct: the handler takes a single argument).
+#[derive(Debug, clap::Args)]
+struct GenerateArgs {
+    /// Model slug from `models show`.
+    #[arg(long)]
+    model: String,
+    /// Text prompt.
+    #[arg(long)]
+    prompt: String,
+    /// RNG seed; same seed = byte-identical output on either backend (both deterministic).
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+    /// Diffusion steps.
+    #[arg(long, default_value_t = 20)]
+    steps: u32,
+    /// Image size as `WxH`; longest edge capped at 2048.
+    #[arg(long, default_value = "1024x1024")]
+    size: String,
+    /// Image container (`final_00` extension + sidecar `format`).
+    #[arg(long, value_enum, default_value = "png")]
+    format: Format,
+    /// Which pipeline samples the image (`sd-cpp` decodes the real checkpoint).
+    #[arg(long, value_enum, default_value = "sd-cpp")]
+    backend: Backend,
+    /// Text-encoder slug from `models show` (new archs: Qwen-VL-class file).
+    #[arg(long)]
+    clip: Option<String>,
+    /// Standalone VAE slug from `models show`.
+    #[arg(long)]
+    vae: Option<String>,
 }
 
 /// `generate` output containers (clap-level; mapped to sd-core).
@@ -133,15 +143,7 @@ async fn main() {
                 serde_json::to_string_pretty(&doc).expect("serialize openapi")
             );
         }
-        Command::Generate {
-            model,
-            prompt,
-            seed,
-            steps,
-            size,
-            format,
-            backend,
-        } => generate(model, prompt, seed, steps, &size, format, backend),
+        Command::Generate(args) => generate(args),
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
@@ -150,13 +152,7 @@ async fn main() {
 
 /// `models show`: load config (loud exit-1 on error), scan, print table/`--json`.
 fn models_show(config: Option<PathBuf>, json: bool) {
-    let cfg = match config::load(config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let cfg = or_exit(config::load(config));
     let mut found = sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dir: cfg.comfyui_dir,
@@ -212,18 +208,39 @@ fn human_size(bytes: u64) -> String {
     };
     format!("{}.{}{}", bytes / div, (bytes % div) * 10 / div, unit)
 }
+/// Registry slug → model path; unknown slug is a loud exit-1.
+fn resolve_model(found: &[sd_rip_registry::FoundModel], slug: &str) -> PathBuf {
+    if let Some(m) = found.iter().find(|m| m.slug == slug) {
+        m.path.clone()
+    } else {
+        eprintln!("error: unknown model {slug:?}; see `sd-rip models show`");
+        std::process::exit(1);
+    }
+}
+
+/// Unwrap a fallible CLI step; `Err` is a loud exit-1 naming the cause.
+fn or_exit<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
+    result.unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    })
+}
+
 /// `generate`: slug check, single-slot reserve, sample, bundle write.
 ///
 /// Every failure is a loud exit-1 naming the cause; success prints the job dir.
-fn generate(
-    model: String,
-    prompt: String,
-    seed: u64,
-    steps: u32,
-    size: &str,
-    format: Format,
-    backend: Backend,
-) {
+fn generate(args: GenerateArgs) {
+    let GenerateArgs {
+        model,
+        prompt,
+        seed,
+        steps,
+        size,
+        format,
+        backend,
+        clip,
+        vae,
+    } = args;
     logging::init(None);
     let started = std::time::Instant::now();
     info!(
@@ -235,67 +252,38 @@ fn generate(
             "hint: GGML_VK_VISIBLE_DEVICES unset — sd.cpp uses Vulkan device 0 (on multi-GPU boxes this may be the iGPU: slow, and 1024² aborts with context-lost; export the dGPU index, e.g. 1)"
         );
     }
-    let cfg = match config::load(None) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
-    let (width, height) = match jobs::parse_size(size) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let cfg = or_exit(config::load(None));
+    let (width, height) = or_exit(jobs::parse_size(&size));
     let found = sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dir: cfg.comfyui_dir,
     });
-    let Some(m) = found.iter().find(|m| m.slug == model) else {
-        eprintln!("error: unknown model {model:?}; see `sd-rip models show`");
-        std::process::exit(1);
-    };
-    let model_path = m.path.clone();
-    let _lease = match sd_rip_residency::global().try_reserve() {
-        Ok(lease) => lease,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let model_path = resolve_model(&found, &model);
+    // Optional split-file inputs: same registry, unknown slug is a loud exit-1.
+    let clip = clip.as_deref().map(|s| resolve_model(&found, s));
+    let vae = vae.as_deref().map(|s| resolve_model(&found, s));
+    let _lease = or_exit(sd_rip_residency::global().try_reserve());
     let pipeline: Box<dyn sd_rip_sd_core::SdPipeline> = match backend {
         Backend::Stub => Box::new(sd_rip_sd_core::StubPipeline),
         Backend::SdCpp => Box::new(sd_rip_sd_core::SdCppPipeline::new(model_path)),
     };
-    let img = match pipeline.generate(&sd_rip_sd_core::Txt2ImgRequest {
+    let img = or_exit(pipeline.generate(&sd_rip_sd_core::Txt2ImgRequest {
         prompt: prompt.clone(),
         seed,
         steps,
         width,
         height,
         model_slug: model.clone(),
-    }) {
-        Ok(img) => img,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
+        clip,
+        vae,
+    }));
     let format = match format {
         Format::Png => sd_rip_sd_core::OutputFormat::Png,
         Format::Jpeg => sd_rip_sd_core::OutputFormat::Jpeg,
         Format::Webp => sd_rip_sd_core::OutputFormat::Webp,
     };
-    let bytes = match sd_rip_sd_core::encode_image(img, format) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
-    match jobs::write_bundle(
+    let bytes = or_exit(sd_rip_sd_core::encode_image(img, format));
+    let dir = or_exit(jobs::write_bundle(
         &jobs::BundleInputs {
             model_slug: model,
             prompt,
@@ -308,11 +296,6 @@ fn generate(
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    ) {
-        Ok(dir) => println!("{}", dir.display()),
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    }
+    ));
+    println!("{}", dir.display());
 }
