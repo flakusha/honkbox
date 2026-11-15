@@ -11,3 +11,6 @@ workspace = true
 [features]
 # ash backend deps (ash, gpu-allocator) arrive with the first experimental code (spike B).
 ash-backend = []
+
+[dependencies]
+image = { workspace = true }

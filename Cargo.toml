@@ -24,6 +24,10 @@ home = "0.5"
 toml = "1"
 sd-rip-registry = { path = "crates/registry" }
 
+image = { version = "0.25", default-features = false, features = ["png"] }
+ulid = "1"
+sd-rip-residency = { path = "crates/residency" }
+sd-rip-sd-core = { path = "crates/sd-core" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

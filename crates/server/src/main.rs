@@ -1,6 +1,7 @@
 //! `sd-rip` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
 mod config;
+mod jobs;
 mod logging;
 mod routes;
 
@@ -50,6 +51,24 @@ enum Command {
         #[command(subcommand)]
         action: ModelsAction,
     },
+    /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; stub pixels).
+    Generate {
+        /// Model slug from `models show`.
+        #[arg(long)]
+        model: String,
+        /// Text prompt.
+        #[arg(long)]
+        prompt: String,
+        /// RNG seed; same seed = byte-identical PNG from the stub backend.
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+        /// Diffusion steps.
+        #[arg(long, default_value_t = 20)]
+        steps: u32,
+        /// Image size as `WxH`; longest edge capped at 2048.
+        #[arg(long, default_value = "1024x1024")]
+        size: String,
+    },
 }
 
 /// Model-list actions.
@@ -93,6 +112,13 @@ async fn main() {
                 serde_json::to_string_pretty(&doc).expect("serialize openapi")
             );
         }
+        Command::Generate {
+            model,
+            prompt,
+            seed,
+            steps,
+            size,
+        } => generate(model, prompt, seed, steps, &size),
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
@@ -162,4 +188,84 @@ fn human_size(bytes: u64) -> String {
         (GB, "GB")
     };
     format!("{}.{}{}", bytes / div, (bytes % div) * 10 / div, unit)
+}
+/// `generate`: slug check, single-slot reserve, stub sample, bundle write.
+///
+/// Every failure is a loud exit-1 naming the cause; success prints the job dir.
+fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str) {
+    use sd_rip_sd_core::SdPipeline as _;
+
+    logging::init(None);
+    let started = std::time::Instant::now();
+    info!("sd-rip generate model={model} seed={seed} steps={steps} size={size}");
+    let cfg = match config::load(None) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let (width, height) = match jobs::parse_size(size) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let found = sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+        llm_dirs: cfg.llm_dirs,
+        comfyui_dir: cfg.comfyui_dir,
+    });
+    if !found.iter().any(|m| m.slug == model) {
+        eprintln!("error: unknown model {model:?}; see `sd-rip models show`");
+        std::process::exit(1);
+    }
+    let _lease = match sd_rip_residency::global().try_reserve() {
+        Ok(lease) => lease,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let pipeline = sd_rip_sd_core::StubPipeline;
+    let img = match pipeline.generate(&sd_rip_sd_core::Txt2ImgRequest {
+        prompt: prompt.clone(),
+        seed,
+        steps,
+        width,
+        height,
+        model_slug: model.clone(),
+    }) {
+        Ok(img) => img,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let png = match sd_rip_sd_core::encode_png(img) {
+        Ok(png) => png,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
+    match jobs::write_bundle(
+        &jobs::BundleInputs {
+            model_slug: model,
+            prompt,
+            seed,
+            steps,
+            width,
+            height,
+            backend_id: pipeline.backend_id(),
+        },
+        &png,
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    ) {
+        Ok(dir) => println!("{}", dir.display()),
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }
