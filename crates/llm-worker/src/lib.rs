@@ -69,7 +69,8 @@ impl Default for LlmOptions {
         Self {
             n_ctx: 8192,
             n_gpu_layers: u32::MAX,
-            threads: std::thread::available_parallelism().map_or(4, |n| n.get() as u32),
+            threads: std::thread::available_parallelism()
+                .map_or(4, |n| u32::try_from(n.get()).unwrap_or(u32::MAX)),
         }
     }
 }
@@ -133,8 +134,8 @@ impl LlmPipeline for StubLlm {
         };
         Ok(ChatResponse {
             backend_id: self.backend_id().to_string(),
-            tokens: text.split_whitespace().count() as u32,
-            millis: start.elapsed().as_millis() as u64,
+            tokens: u32::try_from(text.split_whitespace().count()).unwrap_or(u32::MAX),
+            millis: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             text,
         })
     }
@@ -200,4 +201,3 @@ mod tests {
         assert!(matches!(err, LlmError::Load(_)));
     }
 }
-

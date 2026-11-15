@@ -1,5 +1,5 @@
 #!/bin/sh
-# sd-rip pre-commit hook — staged files only (fast).
+# honkbox pre-commit hook — staged files only (fast).
 # Install: git config core.hooksPath .githooks
 #
 # REUSE compliance lives in REUSE.toml (project-wide [[annotations]] catch-all);
@@ -11,10 +11,12 @@ failures=0
 
 STAGED_FMT=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|json|md)$' || true)
 STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.tsx?$' || true)
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.rs$' || true)
 STAGED_SH=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.sh$' || true)
-HOOK_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -x '.githooks/pre-commit' || true)
+HOOK_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -x -e '.githooks/pre-commit' -e '.githooks/pre-push' || true)
 
-if [ -z "$STAGED_FMT" ] && [ -z "$STAGED_TS" ] && [ -z "$STAGED_SH" ] && [ -z "$HOOK_STAGED" ]; then
+if [ -z "$STAGED_FMT" ] && [ -z "$STAGED_TS" ] && [ -z "$STAGED_RS" ] \
+   && [ -z "$STAGED_SH" ] && [ -z "$HOOK_STAGED" ]; then
   echo "No staged files for file gates — skipping"
   exit 0
 fi
@@ -38,6 +40,16 @@ if [ -n "$STAGED_TS" ]; then
   fi
 fi
 
+if [ -n "$STAGED_RS" ]; then
+  # cargo fmt is workspace-wide but near-instant once the toolchain is warm.
+  if cargo fmt --all -- --check >/dev/null 2>&1; then
+    echo "PASS: cargo fmt"
+  else
+    echo "FAIL: cargo fmt — run 'cargo fmt --all' and re-stage"
+    failures=$((failures + 1))
+  fi
+fi
+
 if [ -n "$STAGED_SH" ]; then
   ok=1
   for f in $STAGED_SH; do
@@ -54,7 +66,7 @@ if [ -n "$STAGED_SH" ]; then
 fi
 
 if [ -n "$HOOK_STAGED" ]; then
-  if sh -n .githooks/pre-commit; then
+  if sh -n .githooks/pre-commit && { [ ! -f .githooks/pre-push ] || sh -n .githooks/pre-push; }; then
     echo "PASS: hook self-check (sh -n)"
   else
     echo "FAIL: hook self-check (sh -n)"

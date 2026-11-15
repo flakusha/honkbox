@@ -93,7 +93,9 @@ function parseNested(value: unknown): Nested[] {
     if (typeof rev !== "string" || !isFullSha(rev)) {
       throw new Error(`${where}.rev must be a full commit SHA`);
     }
-    if (prune !== undefined && (!Array.isArray(prune) || !prune.every((p) => typeof p === "string"))) {
+    if (
+      prune !== undefined && (!Array.isArray(prune) || !prune.every((p) => typeof p === "string"))
+    ) {
       throw new Error(`${where}.prune must be a list of strings`);
     }
     return { path, url, rev, prune: (prune as string[] | undefined) ?? [] };
@@ -111,14 +113,18 @@ function parseManifest(text: string): Manifest {
     throw new Error("manifest: missing [vendor] table");
   }
   const table: unknown = data.vendor;
-  if (typeof table !== "object" || table === null) throw new Error("manifest: [vendor] must be a table");
+  if (typeof table !== "object" || table === null) {
+    throw new Error("manifest: [vendor] must be a table");
+  }
   for (const key of Object.keys(table)) {
     if (key !== "url" && key !== "rev" && key !== "patches" && key !== "nested") {
       throw new Error(`manifest: unknown [vendor] key: ${key}`);
     }
   }
   const { url, rev, patches, nested } = table as Record<string, unknown>;
-  if (typeof url !== "string" || url === "") throw new Error("manifest: [vendor].url must be a string");
+  if (typeof url !== "string" || url === "") {
+    throw new Error("manifest: [vendor].url must be a string");
+  }
   if (typeof rev !== "string" || !isFullSha(rev)) {
     throw new Error("manifest: [vendor].rev must be a full commit SHA");
   }
@@ -166,7 +172,9 @@ function dirtRefusal(repo: Repo, allowed: Set<string>): string | null {
     "--porcelain",
     "--ignore-submodules=all",
   ]);
-  if (status.rc !== 0) return `${repo.dir}: cannot read worktree status: ${status.err || status.out}`;
+  if (status.rc !== 0) {
+    return `${repo.dir}: cannot read worktree status: ${status.err || status.out}`;
+  }
   const bad: string[] = [];
   for (const line of status.out.split("\n")) {
     if (line === "") continue;
@@ -178,12 +186,14 @@ function dirtRefusal(repo: Repo, allowed: Set<string>): string | null {
     const arrow = p.indexOf(" -> ");
     if (arrow !== -1) p = p.slice(arrow + 4);
     // Porcelain C-quotes paths with spaces (quotePath only covers non-ASCII).
-    if (p.startsWith('"') && p.endsWith('"')) {
-      p = p.slice(1, -1).replace(/\\\\/g, "\\").replace(/\\"/g, '"');
+    if (p.startsWith("\"") && p.endsWith("\"")) {
+      p = p.slice(1, -1).replace(/\\\\/g, "\\").replace(/\\"/g, "\"");
     }
     // Patch paths are ROOT-relative; status paths are repo-relative.
     if (allowed.has(join(repo.dir, p))) continue;
-    if (!repo.top && (code === " D" || code === "D ") && repo.prune.some((d) => p.startsWith(`${d}/`))) continue;
+    if (
+      !repo.top && (code === " D" || code === "D ") && repo.prune.some((d) => p.startsWith(`${d}/`))
+    ) continue;
     bad.push(p);
   }
   if (bad.length === 0) return null;
@@ -215,7 +225,9 @@ function ensureRepo(repo: Repo, dryRun: boolean): string {
     result = git(dir, ["fetch", "--depth", "1", "origin", repo.rev]);
     if (result.rc !== 0) {
       rmSync(dir, { recursive: true, force: true });
-      fail(`cannot fetch ${repo.url}@${repo.rev.slice(0, 12)} (network?): ${result.err || result.out}`);
+      fail(
+        `cannot fetch ${repo.url}@${repo.rev.slice(0, 12)} (network?): ${result.err || result.out}`,
+      );
     }
     result = git(dir, ["checkout", "-q", repo.rev]);
     if (result.rc !== 0) {
@@ -258,7 +270,13 @@ if (missing !== undefined) fail(`declared patch file not found: ${missing}`);
 
 const repos: Repo[] = [
   { dir: join(VENDOR_DIR, TOP_NAME), url: manifest.url, rev: manifest.rev, prune: [], top: true },
-  ...manifest.nested.map((n) => ({ dir: join(VENDOR_DIR, n.path), url: n.url, rev: n.rev, prune: n.prune, top: false })),
+  ...manifest.nested.map((n) => ({
+    dir: join(VENDOR_DIR, n.path),
+    url: n.url,
+    rev: n.rev,
+    prune: n.prune,
+    top: false,
+  })),
 ];
 
 const allowed = new Set(files.flatMap(patchTouched));
@@ -273,9 +291,13 @@ if (dryRun) {
       continue;
     }
     const head = git(dir, ["rev-parse", "HEAD"]);
-    if (head.rc !== 0 || head.out === "") fail(`${repo.dir}: no HEAD; rm -rf ${VENDOR_DIR}/ + sync to recover`);
+    if (head.rc !== 0 || head.out === "") {
+      fail(`${repo.dir}: no HEAD; rm -rf ${VENDOR_DIR}/ + sync to recover`);
+    }
     if (head.out !== repo.rev) {
-      console.log(`${NODE}: would move ${repo.dir} ${head.out.slice(0, 12)}..${repo.rev.slice(0, 12)}`);
+      console.log(
+        `${NODE}: would move ${repo.dir} ${head.out.slice(0, 12)}..${repo.rev.slice(0, 12)}`,
+      );
       changes++;
       continue;
     }
@@ -295,7 +317,9 @@ if (dryRun) {
       console.log(`${NODE}: would apply: ${file}`);
       pending++;
     } else {
-      fail(`patch does not apply (and is not applied): ${file}; rm -rf ${VENDOR_DIR}/ + sync, then report`);
+      fail(
+        `patch does not apply (and is not applied): ${file}; rm -rf ${VENDOR_DIR}/ + sync, then report`,
+      );
     }
   }
   if (changes > 0 || pending > 0) {
@@ -313,12 +337,22 @@ for (const repo of repos) {
     const refusal = dirtRefusal(repo, allowed);
     if (refusal !== null) {
       const at = git(dir, ["rev-parse", "HEAD"]).out.slice(0, 12);
-      fail(`${repo.dir} at ${at} has local changes; move to ${repo.rev.slice(0, 12)} refused: ${refusal}`);
+      fail(
+        `${repo.dir} at ${at} has local changes; move to ${
+          repo.rev.slice(0, 12)
+        } refused: ${refusal}`,
+      );
     }
     const result = git(dir, ["fetch", "--depth", "1", "origin", repo.rev]);
-    if (result.rc !== 0) fail(`cannot fetch ${repo.url}@${repo.rev.slice(0, 12)} (network?): ${result.err || result.out}`);
+    if (result.rc !== 0) {
+      fail(
+        `cannot fetch ${repo.url}@${repo.rev.slice(0, 12)} (network?): ${result.err || result.out}`,
+      );
+    }
     const checkout = git(dir, ["checkout", "-q", repo.rev]);
-    if (checkout.rc !== 0) fail(`cannot check out ${repo.rev} in ${repo.dir}: ${checkout.err || checkout.out}`);
+    if (checkout.rc !== 0) {
+      fail(`cannot check out ${repo.rev} in ${repo.dir}: ${checkout.err || checkout.out}`);
+    }
     pruneRepo(repo);
     console.log(`${NODE}: moved ${repo.dir} to ${repo.rev.slice(0, 12)}`);
   } else if (state === "created") {
@@ -341,7 +375,9 @@ for (const repo of repos) {
 function appliedPrefix(): number {
   for (let i = files.length - 1; i >= 0; i--) {
     const file = files[i];
-    if (file !== undefined && git(ROOT, ["apply", "--check", "--reverse", "--", file]).rc === 0) return i + 1;
+    if (file !== undefined && git(ROOT, ["apply", "--check", "--reverse", "--", file]).rc === 0) {
+      return i + 1;
+    }
   }
   return 0;
 }
@@ -364,4 +400,6 @@ for (const file of files.slice(skipped)) {
   }
   appliedThisRun.push(file);
 }
-console.log(`${NODE}: patches already applied (${skipped}), applied now (${appliedThisRun.length}), total ${files.length}`);
+console.log(
+  `${NODE}: patches already applied (${skipped}), applied now (${appliedThisRun.length}), total ${files.length}`,
+);

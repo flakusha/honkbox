@@ -1,0 +1,75 @@
+#!/bin/sh
+# honkbox pre-push hook — repo-state gates too slow for pre-commit but too
+# cheap-to-skip to leave solely to CI.
+# Install (user-run): git config core.hooksPath .githooks
+# Skip once with: git push --no-verify
+# POSIX sh so `sh -n .githooks/pre-push` passes cleanly.
+set -u
+
+# Range being pushed: everything not yet on the remote.
+# stdin lines: <local-ref> <local-oid> <remote-ref> <remote-oid>
+local=""
+range=""
+while read -r lref loid rref roid; do
+  local="$loid"
+  range="$roid..$loid"
+done
+# Pushing a deletion or nothing: nothing to check.
+[ -n "$local" ] || exit 0
+[ "$local" != "0000000000000000000000000000000000000000" ] || exit 0
+
+failures=0
+
+changed() { git diff --name-only "$range" -- "$@"; }
+
+# --- tsc: whole-project typecheck (~5-10 s) -------------------------------
+if [ -n "$(changed '*.ts' '*.tsx')" ]; then
+  if bunx tsc --noEmit; then
+    echo "PASS: tsc --noEmit"
+  else
+    echo "FAIL: tsc --noEmit — fix type errors before pushing"
+    failures=$((failures + 1))
+  fi
+fi
+
+# --- clippy: the heavyweight gate (~1-5 min warm) --------------------------
+if [ -n "$(changed '*.rs' 'Cargo.toml' 'Cargo.lock' '**/Cargo.toml')" ]; then
+  echo "Running clippy (workspace, -D warnings)..."
+  if cargo clippy --workspace --all-targets --locked -- -D warnings; then
+    echo "PASS: clippy"
+  else
+    echo "FAIL: clippy — run 'bun run lint:rs'"
+    failures=$((failures + 1))
+  fi
+fi
+
+# --- codegen drift: builds server (minutes) — only when relevant -----------
+if [ -n "$(changed 'packages/web-ui/src/gen/**' 'crates/api-types/**' \
+                'crates/server/src/**' 'scripts/codegen-openapi-check.ts')" ]; then
+  if bun run codegen:check; then
+    echo "PASS: codegen:check"
+  else
+    echo "FAIL: codegen:check — run 'bun run codegen' (or regenerate) and commit"
+    failures=$((failures + 1))
+  fi
+fi
+
+# --- cargo-deny: only when the dep graph or policy changed -----------------
+if [ -n "$(changed 'Cargo.lock' 'Cargo.toml' 'deny.toml' 'vendor.manifest.toml')" ]; then
+  if command -v cargo-deny >/dev/null 2>&1; then
+    if cargo deny check licenses bans advisories; then
+      echo "PASS: cargo deny"
+    else
+      echo "FAIL: cargo deny — see 'bun run deny'"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "SKIP: cargo deny (cargo-deny not installed; CI will run it)"
+  fi
+fi
+
+if [ "$failures" -gt 0 ]; then
+  echo "$failures check(s) failed — push blocked (use --no-verify to override deliberately)"
+  exit 1
+fi
+echo "Push preflight OK"

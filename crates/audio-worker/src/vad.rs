@@ -32,10 +32,13 @@ impl SileroVad {
     /// Load a Silero ONNX model from `model_path`.
     pub fn load(model_path: &Path) -> Result<Self, VadError> {
         if !model_path.is_file() {
-            return Err(VadError::Io(format!("vad model not found: {}", model_path.display())));
+            return Err(VadError::Io(format!(
+                "vad model not found: {}",
+                model_path.display()
+            )));
         }
         let env = ort::init()
-            .with_name("sd-rip-silero-vad")
+            .with_name("honkbox-silero-vad")
             .build()
             .map_err(|e| VadError::Model(e.to_string()))?;
         let mut builder =
@@ -43,7 +46,9 @@ impl SileroVad {
         let session = builder
             .commit_from_file(model_path)
             .map_err(|e| VadError::Model(e.to_string()))?;
-        Ok(Self { session: Mutex::new(session) })
+        Ok(Self {
+            session: Mutex::new(session),
+        })
     }
 
     /// Speech spans over mono PCM16 at `sample_rate` Hz (resampled to 16 kHz).
@@ -73,9 +78,10 @@ impl SileroVad {
             let state_in = Tensor::from_array(([2usize, 1, 128], state.clone().into_boxed_slice()))
                 .map_err(|e| VadError::Inference(e.to_string()))?
                 .into_dyn();
-            let sr = Tensor::from_array(([1usize], vec![i64::from(SAMPLE_RATE)].into_boxed_slice()))
-                .map_err(|e| VadError::Inference(e.to_string()))?
-                .into_dyn();
+            let sr =
+                Tensor::from_array(([1usize], vec![i64::from(SAMPLE_RATE)].into_boxed_slice()))
+                    .map_err(|e| VadError::Inference(e.to_string()))?
+                    .into_dyn();
             let outputs = session
                 .run(ort::inputs!["input" => input, "state" => state_in, "sr" => sr])
                 .map_err(|e| VadError::Inference(e.to_string()))?;
@@ -99,12 +105,18 @@ impl SileroVad {
                     open = Some(t);
                 }
             } else if let Some(start) = open.take() {
-                spans.push(VadSpan { start_ms: start, end_ms: t });
+                spans.push(VadSpan {
+                    start_ms: start,
+                    end_ms: t,
+                });
             }
         }
         if let Some(start) = open.take() {
             let total = (audio.len() as u64 * 1000 / u64::from(SAMPLE_RATE)) as u32;
-            spans.push(VadSpan { start_ms: start, end_ms: total });
+            spans.push(VadSpan {
+                start_ms: start,
+                end_ms: total,
+            });
         }
         Ok(spans)
     }

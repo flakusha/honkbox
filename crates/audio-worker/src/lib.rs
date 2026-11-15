@@ -144,6 +144,13 @@ pub trait TtsPipeline: Send + Sync {
 /// Naive linear resampler for mono f32 PCM (whisper/vad downmix + TTS rate
 /// honors; replace with a proper filter only if quality measurably matters).
 // ponytail: O(n) lerp, no anti-aliasing; add rubato/sinc if aliasing shows up.
+// Indices are derived from `i < out_len`, so every float→int value here is
+// bounded by `input.len()` and cannot truncate or go negative.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub(crate) fn resample_linear_f32(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if input.is_empty() || from_rate == 0 || to_rate == 0 || from_rate == to_rate {
         return input.to_vec();
@@ -166,7 +173,7 @@ pub fn encode_wav(sample_rate: u32, pcm: &[i16]) -> Vec<u8> {
     let data_len = pcm.len() * 2;
     let mut out = Vec::with_capacity(44 + data_len);
     out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len as u32).to_le_bytes());
+    out.extend_from_slice(&(36 + u32::try_from(data_len).unwrap_or(u32::MAX)).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
     out.extend_from_slice(&1u16.to_le_bytes());
@@ -176,7 +183,7 @@ pub fn encode_wav(sample_rate: u32, pcm: &[i16]) -> Vec<u8> {
     out.extend_from_slice(&2u16.to_le_bytes());
     out.extend_from_slice(&16u16.to_le_bytes());
     out.extend_from_slice(b"data");
-    out.extend_from_slice(&(data_len as u32).to_le_bytes());
+    out.extend_from_slice(&u32::try_from(data_len).unwrap_or(u32::MAX).to_le_bytes());
     for s in pcm {
         out.extend_from_slice(&s.to_le_bytes());
     }
@@ -211,7 +218,9 @@ pub fn decode_wav(bytes: &[u8]) -> Result<(u32, Vec<i16>), SttError> {
                 if format != 1 || channels != 1 || bits != 16 {
                     return Err(bad("only mono PCM16 supported"));
                 }
-                rate = Some(u32::from_le_bytes(bytes[body + 4..body + 8].try_into().unwrap()));
+                rate = Some(u32::from_le_bytes(
+                    bytes[body + 4..body + 8].try_into().unwrap(),
+                ));
             }
             b"data" => data = Some(&bytes[body..end]),
             _ => {}
@@ -226,7 +235,11 @@ pub fn decode_wav(bytes: &[u8]) -> Result<(u32, Vec<i16>), SttError> {
     }
     Ok((
         rate,
-        data.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect(),
+        data.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| i16::from_le_bytes(c))
+            .collect(),
     ))
 }
 
@@ -236,7 +249,9 @@ mod tests {
 
     #[test]
     fn wav_roundtrip_identity() {
-        let pcm: Vec<i16> = (0..1600).map(|i| (i * 37 % 1000 - 500) as i16).collect();
+        let pcm: Vec<i16> = (0..1600)
+            .map(|i| i16::try_from(i * 37 % 1000 - 500).unwrap_or(i16::MAX))
+            .collect();
         let (rate, back) = decode_wav(&encode_wav(16_000, &pcm)).unwrap();
         assert_eq!(rate, 16_000);
         assert_eq!(back, pcm);
@@ -256,4 +271,3 @@ mod tests {
         assert!(decode_wav(&wav).is_err());
     }
 }
-

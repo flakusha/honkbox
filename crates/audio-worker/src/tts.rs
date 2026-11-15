@@ -17,13 +17,18 @@ impl TtsPipeline for StubTts {
         if rate == 0 {
             return Err(TtsError::Format("sample rate must be non-zero".into()));
         }
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        // rate is small and amplitude stays within ±16383.5
         let pcm16 = (0..rate as usize)
             .map(|i| {
                 let t = i as f32 / rate as f32;
                 (0.5 * (2.0 * PI * t * 440.0).sin() * f32::from(i16::MAX)) as i16
             })
             .collect();
-        Ok(SynthesizedAudio { sample_rate: rate, pcm16 })
+        Ok(SynthesizedAudio {
+            sample_rate: rate,
+            pcm16,
+        })
     }
 
     fn backend_id(&self) -> &'static str {
@@ -47,12 +52,17 @@ impl KokoroTts {
     /// Load Kokoro weights from disk (no downloads: offline resolve only).
     pub fn load(model_path: &Path) -> Result<Self, TtsError> {
         if !model_path.exists() {
-            return Err(TtsError::Io(format!("model not found: {}", model_path.display())));
+            return Err(TtsError::Io(format!(
+                "model not found: {}",
+                model_path.display()
+            )));
         }
         let dir = if model_path.is_dir() {
             model_path.to_path_buf()
         } else {
-            model_path.parent().map(Path::to_path_buf).unwrap_or_else(|| Path::new(".").to_path_buf())
+            model_path
+                .parent()
+                .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf)
         };
         let config = any_tts::TtsConfig::new(any_tts::ModelType::Kokoro)
             .with_model_path(dir.display().to_string())
@@ -62,8 +72,12 @@ impl KokoroTts {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)] // input clamped to [-1.0, 1.0] first
 fn f32_to_i16(samples: &[f32]) -> Vec<i16> {
-    samples.iter().map(|s| (s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16).collect()
+    samples
+        .iter()
+        .map(|s| (s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)
+        .collect()
 }
 
 impl TtsPipeline for KokoroTts {
@@ -78,19 +92,20 @@ impl TtsPipeline for KokoroTts {
         if let Some(voice) = req.voice.as_deref() {
             synth = synth.with_voice(voice);
         }
-        let audio = self.model.synthesize(&synth).map_err(|e| TtsError::Inference(e.to_string()))?;
+        let audio = self
+            .model
+            .synthesize(&synth)
+            .map_err(|e| TtsError::Inference(e.to_string()))?;
         if audio.sample_rate == 0 || audio.samples.is_empty() {
             return Err(TtsError::Inference("backend returned no audio".into()));
         }
         // Honor the requested rate only for trivial integer-ratio resamples.
         let native = audio.sample_rate;
         let (pcm16, sample_rate) = match req.sample_rate {
-            Some(want)
-                if want != native
-                    && (want % native == 0 || native % want == 0) =>
-            {
-                (f32_to_i16(&resample_linear_f32(&audio.samples, native, want)), want)
-            }
+            Some(want) if want != native && (want % native == 0 || native % want == 0) => (
+                f32_to_i16(&resample_linear_f32(&audio.samples, native, want)),
+                want,
+            ),
             _ => (f32_to_i16(&audio.samples), native),
         };
         Ok(SynthesizedAudio { sample_rate, pcm16 })
@@ -106,7 +121,12 @@ mod tests {
     use super::*;
 
     fn req(text: &str) -> SynthesizeRequest {
-        SynthesizeRequest { model: "stub".into(), text: text.into(), voice: None, sample_rate: None }
+        SynthesizeRequest {
+            model: "stub".into(),
+            text: text.into(),
+            voice: None,
+            sample_rate: None,
+        }
     }
 
     #[test]
@@ -120,14 +140,22 @@ mod tests {
         // deterministic: same input, same output
         assert_eq!(out.pcm16, tts.synthesize(&req("hello")).unwrap().pcm16);
         // honors requested rate
-        let out8 = tts.synthesize(&SynthesizeRequest { sample_rate: Some(8000), ..req("hi") }).unwrap();
+        let out8 = tts
+            .synthesize(&SynthesizeRequest {
+                sample_rate: Some(8000),
+                ..req("hi")
+            })
+            .unwrap();
         assert_eq!((out8.sample_rate, out8.pcm16.len()), (8000, 8000));
     }
 
     #[test]
     fn stub_rejects_empty() {
         assert!(matches!(StubTts.synthesize(&req("")), Err(TtsError::Empty)));
-        assert!(matches!(StubTts.synthesize(&req("   ")), Err(TtsError::Empty)));
+        assert!(matches!(
+            StubTts.synthesize(&req("   ")),
+            Err(TtsError::Empty)
+        ));
     }
 
     #[test]
