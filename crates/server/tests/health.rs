@@ -11,6 +11,9 @@ use axum::{
 use tower::ServiceExt as _;
 
 use routes::{AppConfig, app};
+use sd_rip_audio_worker::{StubStt, StubTts};
+use sd_rip_llm_worker::StubLlm;
+use std::sync::Arc;
 
 /// Release-shaped app (embedded bundle; `web-dist/` is empty at init).
 #[tokio::test]
@@ -18,6 +21,9 @@ async fn health_returns_ok() {
     let response = app(AppConfig {
         dev: false,
         web_dist_dir: "web-dist".into(),
+        llm: Arc::new(StubLlm),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
     })
     .oneshot(
         Request::builder()

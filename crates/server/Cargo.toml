@@ -29,6 +29,9 @@ sd-rip-registry = { workspace = true }
 sd-rip-residency = { workspace = true }
 sd-rip-sd-core = { workspace = true }
 ulid = { workspace = true }
+sd-rip-llm-worker = { path = "../llm-worker" }
+sd-rip-audio-worker = { path = "../audio-worker" }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

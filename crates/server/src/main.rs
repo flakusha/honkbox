@@ -1,5 +1,6 @@
 //! `sd-rip` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
+mod backends;
 mod config;
 mod jobs;
 mod logging;
@@ -8,6 +9,7 @@ mod routes;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use backends::{LlmBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
 use routes::{ApiDoc, AppConfig, app};
 use tracing::info;
@@ -42,6 +44,24 @@ enum Command {
         /// Log file (JSONL); falls back to `SD_RIP_LOG_FILE`, then `~/.sd-rip/logs/sd-rip.log`.
         #[arg(long, env = "SD_RIP_LOG_FILE")]
         log_file: Option<PathBuf>,
+        /// Chat backend (`stub` needs no model/GPU).
+        #[arg(long, value_enum, default_value = "stub")]
+        llm_backend: LlmBackend,
+        /// Transcription backend (`stub` needs no model/GPU).
+        #[arg(long, value_enum, default_value = "stub")]
+        stt_backend: SttBackend,
+        /// Synthesis backend (`stub` needs no model/GPU).
+        #[arg(long, value_enum, default_value = "stub")]
+        tts_backend: TtsBackend,
+        /// Registry slug for the chat model (file backends only).
+        #[arg(long)]
+        llm_model: Option<String>,
+        /// Registry slug for the transcription model (file backends only).
+        #[arg(long)]
+        stt_model: Option<String>,
+        /// Registry slug for the synthesis model (file backends only).
+        #[arg(long)]
+        tts_model: Option<String>,
     },
     /// Print the `OpenAPI` document to stdout.
     Openapi,
@@ -53,6 +73,12 @@ enum Command {
     },
     /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; picks `--backend`).
     Generate(GenerateArgs),
+    /// Chat once via the LLM pipeline; prints `ChatResponse` JSON.
+    Chat(ChatArgs),
+    /// Transcribe a wav file; prints `Transcript` JSON.
+    Transcribe(TranscribeArgs),
+    /// Synthesize text to wav; writes `--out`, prints a JSON summary.
+    Synthesize(SynthesizeArgs),
 }
 
 /// `generate` flags (one struct: the handler takes a single argument).
@@ -102,6 +128,69 @@ enum Backend {
     SdCpp,
 }
 
+/// `chat` flags: one prompt through the chat pipeline.
+#[derive(Debug, clap::Args)]
+struct ChatArgs {
+    /// Model slug from `models show` (file backends only; stub ignores it).
+    #[arg(long)]
+    model: String,
+    /// User prompt.
+    #[arg(long)]
+    prompt: String,
+    /// Max completion tokens (default 512).
+    #[arg(long)]
+    max_tokens: Option<u32>,
+    /// Sampling temperature (default 0.7).
+    #[arg(long)]
+    temperature: Option<f32>,
+    /// Which pipeline answers (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    llm_backend: LlmBackend,
+}
+
+/// `transcribe` flags: wav file in, transcript JSON out.
+#[derive(Debug, clap::Args)]
+struct TranscribeArgs {
+    /// Model slug from `models show` (file backends only; stub ignores it).
+    #[arg(long)]
+    model: String,
+    /// Input `.wav` file (PCM16).
+    #[arg(long)]
+    input: PathBuf,
+    /// Language hint (e.g. `en`).
+    #[arg(long)]
+    language: Option<String>,
+    /// Which pipeline transcribes (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    stt_backend: SttBackend,
+    /// Also write the transcript JSON to this file.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+/// `synthesize` flags: text in, wav file + JSON summary out.
+#[derive(Debug, clap::Args)]
+struct SynthesizeArgs {
+    /// Model slug from `models show` (file backends only; stub ignores it).
+    #[arg(long)]
+    model: String,
+    /// Text to speak.
+    #[arg(long)]
+    text: String,
+    /// Voice hint (backend-specific).
+    #[arg(long)]
+    voice: Option<String>,
+    /// WAV output path.
+    #[arg(long, default_value = "synthesize.wav")]
+    out: PathBuf,
+    /// Which pipeline synthesizes (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    tts_backend: TtsBackend,
+    /// Output sample rate hint (backend may keep its native rate).
+    #[arg(long)]
+    sample_rate: Option<u32>,
+}
+
 /// Model-list actions.
 #[derive(Debug, Subcommand)]
 enum ModelsAction {
@@ -122,6 +211,12 @@ async fn main() {
             dev,
             web_dist_dir,
             log_file,
+            llm_backend,
+            stt_backend,
+            tts_backend,
+            llm_model,
+            stt_model,
+            tts_model,
         } => {
             logging::init(log_file);
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -129,9 +224,31 @@ async fn main() {
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .expect("bind address");
+            // File backends resolve slugs via the registry once; the
+            // stub-default serve skips the scan (no model/GPU needed).
+            let all_stub = matches!(llm_backend, LlmBackend::Stub)
+                && matches!(stt_backend, SttBackend::Stub)
+                && matches!(tts_backend, TtsBackend::Stub);
+            let found = if all_stub {
+                Vec::new()
+            } else {
+                let cfg = or_exit(config::load(config));
+                sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+                    llm_dirs: cfg.llm_dirs,
+                    comfyui_dir: cfg.comfyui_dir,
+                })
+            };
+            let resolve = |slug: &str| resolve_model(&found, slug);
             axum::serve(
                 listener,
-                app(AppConfig { dev, web_dist_dir }).into_make_service(),
+                app(AppConfig {
+                    dev,
+                    web_dist_dir,
+                    llm: backends::make_llm(llm_backend, llm_model.as_deref(), &resolve),
+                    stt: backends::make_stt(stt_backend, stt_model.as_deref(), &resolve),
+                    tts: backends::make_tts(tts_backend, tts_model.as_deref(), &resolve),
+                })
+                .into_make_service(),
             )
             .await
             .expect("serve app");
@@ -144,6 +261,9 @@ async fn main() {
             );
         }
         Command::Generate(args) => generate(args),
+        Command::Chat(args) => chat(args),
+        Command::Transcribe(args) => transcribe(args),
+        Command::Synthesize(args) => synthesize(args),
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
@@ -298,4 +418,150 @@ fn generate(args: GenerateArgs) {
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     ));
     println!("{}", dir.display());
+}
+
+/// Registry scan for file backends (stubs never reach here: no model/GPU).
+fn scan_models() -> Vec<sd_rip_registry::FoundModel> {
+    let cfg = or_exit(config::load(None));
+    sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+        llm_dirs: cfg.llm_dirs,
+        comfyui_dir: cfg.comfyui_dir,
+    })
+}
+
+/// `chat`: one prompt through the chat pipeline; prints `ChatResponse` JSON.
+///
+/// Every failure is a loud exit-1 naming the cause.
+fn chat(args: ChatArgs) {
+    logging::init(None);
+    let ChatArgs {
+        model,
+        prompt,
+        max_tokens,
+        temperature,
+        llm_backend,
+    } = args;
+    info!("sd-rip chat model={model} backend={llm_backend:?}");
+    let found = match llm_backend {
+        LlmBackend::Stub => Vec::new(),
+        LlmBackend::LlamaCpp => scan_models(),
+    };
+    let resolve = |slug: &str| resolve_model(&found, slug);
+    let pipe = backends::make_llm(llm_backend, Some(model.as_str()), &resolve);
+    let _lease = or_exit(sd_rip_residency::global().try_reserve());
+    let reply = or_exit(pipe.complete(&sd_rip_llm_worker::ChatRequest {
+        model,
+        messages: vec![sd_rip_llm_worker::ChatMessage {
+            role: sd_rip_llm_worker::Role::User,
+            content: prompt,
+        }],
+        max_tokens,
+        temperature,
+    }));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&sd_rip_api_types::ChatResponse {
+            backend_id: reply.backend_id,
+            text: reply.text,
+            tokens: reply.tokens,
+            millis: reply.millis,
+        })
+        .expect("serialize chat response")
+    );
+}
+
+/// `transcribe`: decode the `<input>` wav, run the STT pipeline, print
+/// `Transcript` JSON (`--out` also writes it to a file).
+///
+/// Every failure is a loud exit-1 naming the cause.
+fn transcribe(args: TranscribeArgs) {
+    logging::init(None);
+    let TranscribeArgs {
+        model,
+        input,
+        language,
+        stt_backend,
+        out,
+    } = args;
+    info!("sd-rip transcribe model={model} backend={stt_backend:?}");
+    let bytes = or_exit(
+        std::fs::read(&input).map_err(|err| format!("read {}: {err}", input.display())),
+    );
+    let (sample_rate, pcm) = or_exit(sd_rip_audio_worker::decode_wav(&bytes));
+    let found = match stt_backend {
+        SttBackend::Stub => Vec::new(),
+        SttBackend::Whisper => scan_models(),
+    };
+    let resolve = |slug: &str| resolve_model(&found, slug);
+    let pipe = backends::make_stt(stt_backend, Some(model.as_str()), &resolve);
+    let _lease = or_exit(sd_rip_residency::global().try_reserve());
+    let out_tx = or_exit(pipe.transcribe(
+        &pcm,
+        sample_rate,
+        &sd_rip_audio_worker::TranscribeRequest { model, language },
+    ));
+    let transcript = sd_rip_api_types::Transcript {
+        backend_id: out_tx.backend_id,
+        text: out_tx.text,
+        segments: out_tx
+            .segments
+            .into_iter()
+            .map(|segment| sd_rip_api_types::TranscriptSegment {
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                text: segment.text,
+            })
+            .collect(),
+        millis: out_tx.millis,
+    };
+    let json = serde_json::to_string_pretty(&transcript).expect("serialize transcript");
+    if let Some(path) = out {
+        or_exit(
+            std::fs::write(&path, &json).map_err(|err| format!("write {}: {err}", path.display())),
+        );
+    }
+    println!("{json}");
+}
+
+/// `synthesize`: run the TTS pipeline, write WAV to `--out`, print a JSON summary.
+///
+/// Every failure is a loud exit-1 naming the cause.
+fn synthesize(args: SynthesizeArgs) {
+    logging::init(None);
+    let SynthesizeArgs {
+        model,
+        text,
+        voice,
+        out,
+        tts_backend,
+        sample_rate,
+    } = args;
+    info!("sd-rip synthesize model={model} backend={tts_backend:?}");
+    let found = match tts_backend {
+        TtsBackend::Stub => Vec::new(),
+        TtsBackend::Kokoro => scan_models(),
+    };
+    let resolve = |slug: &str| resolve_model(&found, slug);
+    let pipe = backends::make_tts(tts_backend, Some(model.as_str()), &resolve);
+    let started = std::time::Instant::now();
+    let _lease = or_exit(sd_rip_residency::global().try_reserve());
+    let audio = or_exit(pipe.synthesize(&sd_rip_audio_worker::SynthesizeRequest {
+        model,
+        text,
+        voice,
+        sample_rate,
+    }));
+    let millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let wav = sd_rip_audio_worker::encode_wav(audio.sample_rate, &audio.pcm16);
+    or_exit(std::fs::write(&out, &wav).map_err(|err| format!("write {}: {err}", out.display())));
+    println!(
+        "{}",
+        serde_json::json!({
+            "backend_id": pipe.backend_id(),
+            "sample_rate": audio.sample_rate,
+            "samples": audio.pcm16.len(),
+            "millis": millis,
+            "out": out,
+        })
+    );
 }
