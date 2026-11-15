@@ -205,6 +205,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ash"
+version = "0.38.0+1.3.281"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2074,6 +2083,86 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
 dependencies = [
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "honkbox-api-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "ts-rs",
+ "utoipa",
+]
+
+[[package]]
+name = "honkbox-ash-backend"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "honkbox-sd-core",
+]
+
+[[package]]
+name = "honkbox-audio-worker"
+version = "0.1.0"
+dependencies = [
+ "any-tts",
+ "ort",
+ "whisper-rs",
+]
+
+[[package]]
+name = "honkbox-llm-worker"
+version = "0.1.0"
+dependencies = [
+ "llama-cpp-4",
+]
+
+[[package]]
+name = "honkbox-registry"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "honkbox-residency"
+version = "0.1.0"
+
+[[package]]
+name = "honkbox-sd-core"
+version = "0.1.0"
+dependencies = [
+ "diffusion-rs",
+ "image",
+ "serde_json",
+]
+
+[[package]]
+name = "honkbox-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "home",
+ "honkbox-api-types",
+ "honkbox-audio-worker",
+ "honkbox-llm-worker",
+ "honkbox-registry",
+ "honkbox-residency",
+ "honkbox-sd-core",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "utoipa",
 ]
 
 [[package]]
@@ -4370,77 +4459,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "sd-rip-api-types"
-version = "0.1.0"
-dependencies = [
- "serde",
- "ts-rs",
- "utoipa",
-]
-
-[[package]]
-name = "sd-rip-audio-worker"
-version = "0.1.0"
-dependencies = [
- "any-tts",
- "ort",
- "whisper-rs",
-]
-
-[[package]]
-name = "sd-rip-llm-worker"
-version = "0.1.0"
-dependencies = [
- "llama-cpp-4",
-]
-
-[[package]]
-name = "sd-rip-registry"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "sd-rip-residency"
-version = "0.1.0"
-
-[[package]]
-name = "sd-rip-sd-core"
-version = "0.1.0"
-dependencies = [
- "diffusion-rs",
- "image",
- "serde_json",
-]
-
-[[package]]
-name = "sd-rip-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "home",
- "rust-embed",
- "sd-rip-api-types",
- "sd-rip-audio-worker",
- "sd-rip-llm-worker",
- "sd-rip-registry",
- "sd-rip-residency",
- "sd-rip-sd-core",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "utoipa",
-]
 
 [[package]]
 name = "security-framework"

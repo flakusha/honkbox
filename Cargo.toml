@@ -23,13 +23,18 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 home = "0.5"
 toml = "1"
 llama-cpp-4 = "0.11"
-sd-rip-registry = { path = "crates/registry" }
+honkbox-registry = { path = "crates/registry" }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 diffusion-rs = "=0.1.20"
 ulid = "1"
-sd-rip-residency = { path = "crates/residency" }
-sd-rip-sd-core = { path = "crates/sd-core" }
+honkbox-residency = { path = "crates/residency" }
+honkbox-sd-core = { path = "crates/sd-core" }
+honkbox-ash-backend = { path = "crates/ash-backend" }
+# Experimental direct-Vulkan bindings (crates/ash-backend): `loaded` dlopens
+# libvulkan at runtime, so loader-less machines build and tests skip
+# gracefully; `debug` derives Debug on the vk types we expose.
+ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

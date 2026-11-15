@@ -2,29 +2,29 @@
 
 ## Project Overview
 
-`sd-rip` — local-first generative studio in Rust: Stable-Diffusion image generation (txt2img today; LLM chat + Whisper STT / Kokoro TTS planned) behind a single Axum server with an embedded Bun/Vite web UI. Vulkan-first with CPU fallback, backed by a vendored `diffusion-rs` (stable-diffusion.cpp FFI). Early-stage: only the SD txt2img path is implemented; LLM/audio workers are doc-stubs. Design record lives in `.tmp/research/Reviewed*.md` — read before architecture changes. License: AGPL-3.0-or-later (REUSE.toml; GPL-family dependencies banned via `deny.toml`).
+`honkbox` — local-first generative studio in Rust: Stable-Diffusion image generation (txt2img today; LLM chat + Whisper STT / Kokoro TTS planned) behind a single Axum server with an embedded Bun/Vite web UI. Vulkan-first with CPU fallback, backed by a vendored `diffusion-rs` (stable-diffusion.cpp FFI). Early-stage: only the SD txt2img path is implemented; LLM/audio workers are doc-stubs. Design record lives in `.tmp/research/Reviewed*.md` — read before architecture changes. License: AGPL-3.0-or-later (REUSE.toml; GPL-family dependencies banned via `deny.toml`).
 
 ## Architecture & Data Flow
 
 ```
 CLI (clap) / HTTP (axum)
-  → config::ModelConfig::load        crates/server/src/config.rs   (defaults → ~/.sd-rip/sd-rip.toml → SD_RIP_* env)
+  → config::ModelConfig::load        crates/server/src/config.rs   (defaults → ~/.honkbox/honkbox.toml → HONKBOX_* env, one-release `~/.sd-rip` / `SD_RIP_*` compat)
   → registry::scan_roots             crates/registry/src/lib.rs    (model-dir scan; slugs llm:<rel> / comfy:<rel>)
   → residency::global().try_reserve  crates/residency/src/lib.rs   (process-wide single GPU slot, RAII Lease)
   → dyn SdPipeline                   crates/sd-core/src/lib.rs:84  (StubPipeline | SdCppPipeline via diffusion-rs)
-  → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (~/.sd-rip/jobs/<ulid>/, .part + fsync + rename)
+  → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (~/.honkbox/jobs/<ulid>/, .part + fsync + rename)
 ```
 
-- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `experimental-ash-sd` is an empty placeholder for the planned direct-Vulkan backend.
+- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `experimental-ash-sd` gates the direct-Vulkan skeleton in `crates/ash-backend` (`honkbox-ash-backend`, empty until the server forwards the flag; `generate` still returns an unimplemented error).
 - TS types flow one way: `crates/api-types` (serde + ts-rs + utoipa) → generated `packages/web-ui/src/gen/` (never hand-edit); CI gates drift via `bun run codegen:check` and the server `openapi` subcommand.
 
 ## Key Directories
 
 | Path | Purpose |
 |---|---|
-| `crates/server` (`sd-rip-server`) | Only binary (`bin` name `sd-rip`): main.rs (clap subcommands `serve`/`openapi`/`models show`/`generate`), routes.rs, config.rs, jobs.rs, logging.rs |
+| `crates/server` (`honkbox-server`) | Only binary (`bin` name `honkbox`, shell alias `hbx` documented in README): main.rs (clap subcommands `serve`/`openapi`/`models show`/`generate`), routes.rs, metrics.rs, config.rs, jobs.rs, logging.rs |
 | `crates/sd-core` | Diffusion pipeline trait + Stub/SdCpp impls |
-| `crates/registry` | Model-dir scanner (std+serde only; SQLite/hf-hub are planned, NOT built) |
+| `crates/registry` | Model-dir scanner (std + serde; serde_json only for GGUF/safetensors header metadata; SQLite/hf-hub are planned, NOT built) |
 | `crates/residency` | GPU-slot ledger (`LazyLock` global, `Mutex` slot, RAII) |
 | `crates/api-types` | DTOs shared Rust↔TS via ts-rs codegen |
 | `crates/llm-worker`, `crates/audio-worker` | Zero-dep doc stubs |
@@ -43,7 +43,7 @@ bun run ci             # check + test + build (full local gate)
 bun run lint:rs        # cargo clippy --workspace --all-targets -- -D warnings
 bun run deny           # cargo deny check licenses bans advisories
 bun run spdx           # reuse lint
-cargo run -p sd-rip-server -- serve --dev   # server alone; openapi/models show subcommands too
+cargo run -p honkbox-server -- serve --dev   # server alone; openapi/models show subcommands too
 ```
 
 Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-headers`; `LIBCLANG_PATH` must be exported in every shell.
@@ -76,9 +76,9 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 ## Testing & QA
 
-- Rust: inline `#[cfg(test)]` modules per crate + one integration test `crates/server/tests/health.rs` (axum `tower::ServiceExt::oneshot` against `/health`; uses `#[path = "../src/routes.rs"]` since server is bin-only).
+- Rust: inline `#[cfg(test)]` modules per crate + integration tests `crates/server/tests/{health,models,metrics,cancel}.rs` (axum `tower::ServiceExt::oneshot`; use `#[path = "../src/routes.rs"]` + `#[path = "../src/metrics.rs"]` since server is bin-only).
 - TS: `bun test --isolate --pass-with-no-tests` (no `*.test.ts` files yet).
-- Per-crate: `bun run test:core|test:server|test:registry|…` (each `cargo test --locked -p sd-rip-<crate>`).
+- Per-crate: `bun run test:core|test:server|test:registry|…` (each `cargo test --locked -p honkbox-<crate>`).
 - CI matrix: `test-rs` 3-OS (Linux Vulkan default features; Windows/macOS `--no-default-features` CPU-only) + `lavapipe` CPU-Vulkan smoke + lcov coverage (collected, **no threshold gate**).
-- Known gap: `bun run test:parity` targets `-p sd-rip-sd-core --test parity` but `crates/sd-core/tests/parity.rs` does not exist yet — planned parity harness.
+- Known gap: `bun run test:parity` targets `-p honkbox-sd-core --test parity` but `crates/sd-core/tests/parity.rs` does not exist yet — planned parity harness.
 - License gates: `deny.toml` (GPL/LGPL/AGPL incoming denied), `reuse lint`, `cargo about generate about.hbs -o NOTICE`; `doc` job runs `RUSTDOCFLAGS=-D warnings`.

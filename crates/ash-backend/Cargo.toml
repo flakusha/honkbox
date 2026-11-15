@@ -1,0 +1,40 @@
+[package]
+name = "honkbox-ash-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Local mirror of [workspace.lints] (see root Cargo.toml). The crate does NOT
+# use `lints.workspace = true` because workspace lint inheritance is
+# all-or-nothing — cargo rejects per-lint overrides alongside it — and this
+# crate must flip one lint (see below). Keep the tables in sync with the
+# workspace when workspace lints change.
+[lints.rust]
+# Workspace-wide `unsafe_code = "forbid"` cannot be lifted in-source either
+# (a `forbid` lint cannot be re-allowed by any attribute), and Vulkan is a C
+# ABI: no Vulkan operation is expressible without `unsafe`. This crate is the
+# one sanctioned exception: `allow` here, then a crate-root
+# `#![deny(unsafe_code)]` confining every `unsafe` block to src/raw.rs (each
+# with a SAFETY comment) — unsafe anywhere else stays a compile error.
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[features]
+default = []
+# Experimental direct-Vulkan path (ReviewedAsh-FeaturePlan §2): one flag for
+# the whole ash surface. `server/experimental-ash-sd` forwards here (server
+# wiring is a later ticket), and this forwards `ash-backend` to sd-core,
+# mirroring how `server/vulkan → sd-core/vulkan`.
+experimental-ash-sd = ["dep:ash", "dep:honkbox-sd-core", "honkbox-sd-core/ash-backend"]
+
+[dependencies]
+ash = { workspace = true, optional = true }
+honkbox-sd-core = { workspace = true, optional = true }
