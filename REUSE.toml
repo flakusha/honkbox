@@ -9,10 +9,6 @@ precedence = "override"
 SPDX-FileCopyrightText = "2026 sd-rip contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
-# --- Vendored diffusion-rs (local-first soft-fork; no upstream remote). ---
-# Per-path licensing recorded from the license texts inside vendor/, not memory.
-# Our own diffs on top live in vendor_patches/** (workspace AGPL, like our tree).
-
 [[annotations]]
 path = "vendor.manifest.toml"
 precedence = "closest"
@@ -25,118 +21,7 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2026 sd-rip contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
 
-# Rust FFI crate files (src/**, sys/build.rs, sys/src/**, Cargo.tomls, cli/**,
-# gui/** except cargokit below, docs/dotfiles): MIT (Flavio Bizzarri).
-[[annotations]]
-path = "vendor/diffusion-rs/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2024 Flavio Bizzarri"
-SPDX-License-Identifier = "MIT"
+# vendor/ is fetched scratch (gitignored, never committed): no annotations.
+# Vendored sources are covered in NOTICE via the static Vendored-sources
+# section in about.hbs, not by REUSE.
 
-# stable-diffusion.cpp C++ core: MIT (leejet).
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2023 leejet"
-SPDX-License-Identifier = "MIT"
-
-# ggml snapshot: MIT (ggml authors). Files carrying their own SPDX headers
-# (ggml-sycl MIT/Apache-LLVM dual, openvino Apache-2.0, kleidiai MIT) merge
-# with this annotation; see .tmp/C2-licenses.md.
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/ggml/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2023-2026 The ggml authors"
-SPDX-License-Identifier = "MIT"
-
-# CUDA sageattention kernel: Apache-2.0 (Jintao Zhang, Haofeng Huang).
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/src/core/cuda/sageattention/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2024 Jintao Zhang, Haofeng Huang"
-SPDX-License-Identifier = "Apache-2.0"
-
-# cargokit (flutter_rust_bridge build tool under gui/): dual MIT/Apache-2.0.
-[[annotations]]
-path = "vendor/diffusion-rs/gui/rust_builder/cargokit/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2022 Matej Knopp"
-SPDX-License-Identifier = "MIT OR Apache-2.0"
-
-# --- thirdparty/bundled C/C++ libs (each from its in-tree text) ---
-[[annotations]]
-path = [
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/darts.h",
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/LICENSE.darts_clone.txt",
-]
-precedence = "closest"
-SPDX-FileCopyrightText = "2008-2011 Susumu Yata"
-SPDX-License-Identifier = "BSD-3-Clause"
-
-# stb_*: dual MIT/Public-Domain, choose either; recorded as Unlicense.
-[[annotations]]
-path = [
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/stb_image.h",
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/stb_image_resize.h",
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/stb_image_write.h",
-]
-precedence = "closest"
-SPDX-FileCopyrightText = ["Sean Barrett", "2014 Jorge L Rodriguez"]
-SPDX-License-Identifier = "Unlicense"
-
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/httplib.h"
-precedence = "closest"
-SPDX-FileCopyrightText = "2025 Yuji Hirose"
-SPDX-License-Identifier = "MIT"
-
-# utf8proc lib: MIT; the derived data table alone: Unicode-3.0.
-# (json.hpp needs no annotation: its own SPDX MIT agrees with the parent.)
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/utf8proc/**"
-precedence = "closest"
-SPDX-FileCopyrightText = ["2014-2021 Steven G. Johnson and contributors", "2009, 2013 Public Software Group e. V."]
-SPDX-License-Identifier = "MIT"
-
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/utf8proc/utf8proc_data.c"
-precedence = "closest"
-SPDX-FileCopyrightText = "1991-2007 Unicode, Inc."
-SPDX-License-Identifier = "Unicode-3.0"
-
-# zip.c/zip.h carry only a warranty disclaimer, no grant or copyright line
-# (upstream kuba--/zip is Unlicense); NONE = no in-file holder by design.
-[[annotations]]
-path = [
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/zip.c",
-  "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/zip.h",
-]
-precedence = "closest"
-SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "Unlicense"
-
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/miniz.h"
-precedence = "closest"
-SPDX-FileCopyrightText = ["2010-2014 Rich Geldreich and Tenacious Software LLC", "2013-2014 RAD Game Tools and Valve Software"]
-SPDX-License-Identifier = "Unlicense"
-
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/oniguruma/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2002-2021 K.Kosako"
-SPDX-License-Identifier = "BSD-2-Clause"
-
-# libwebm/libwebp: BSD-3-Clause (Google) plus a separate PATENTS grant file
-# (defensive-termination patent license; see .tmp/C2-licenses.md).
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/libwebm/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2010 Google Inc."
-SPDX-License-Identifier = "BSD-3-Clause"
-
-[[annotations]]
-path = "vendor/diffusion-rs/sys/stable-diffusion.cpp/thirdparty/libwebp/**"
-precedence = "closest"
-SPDX-FileCopyrightText = "2010 Google Inc."
-SPDX-License-Identifier = "BSD-3-Clause"

@@ -13,3 +13,18 @@ Template vars per the cargo-about book (generate » output » Types):
 {{text}}
 
 {{/each}}
+
+================================================================================
+Vendored sources (fetched, not crates.io dependencies)
+================================================================================
+- diffusion-rs @ 89dcf933f754a173c31b2db30ca3df14ec899dac (MIT, (c) 2024 Flavio Bizzarri):
+  https://github.com/newfla/diffusion-rs — high-level Rust API + sys FFI crate.
+  Local stack in vendor_patches/: 0000 adapts upstream sd.cpp to our C ABI,
+  0001 guards null-context free, 0002 wires the sd.cpp log callback.
+- stable-diffusion.cpp @ 5dcfa79801213f23e27b3e83617350ebb8ea93aa (MIT, (c) 2023 leejet):
+  https://github.com/leejet/stable-diffusion.cpp — C++ inference core,
+  materialized inside the diffusion-rs checkout with docs/examples pruned.
+- Third-party bundles inside stable-diffusion.cpp (ggml @ eeda9ec48fc8, libwebp @
+  0c9546f7efc6, libwebm @ 5bf12267eea7, plus darts/stb/httplib/utf8proc/zip/miniz/
+  oniguruma/cutlass): each keeps its own in-tree license text; see the pinned
+  checkouts after `bun scripts/vendor-patches.ts sync`.

@@ -7,6 +7,10 @@
 # Pins: BUN_VERSION below; Rust comes from rust-toolchain.toml (channel 1.99.0),
 # so the dtolnay action takes NO `toolchain:` input — the root pin is what
 # makes local and CI agree. No rust-cache/sccache at init (adopt on evidence).
+
+# Vendor rule: every job invoking cargo needs `bun scripts/vendor-patches.ts sync`
+# first (workspace [patch.crates-io] points at gitignored vendor/). TS-only jobs
+# (lint-ts, typecheck, test-ts) and reuse never resolve the workspace: no fetch.
 name: CI
 
 on:
@@ -37,6 +41,8 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Check TS/JSON/MD formatting
         run: bunx dprint check
@@ -99,6 +105,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
@@ -111,11 +124,22 @@ jobs:
     name: Test Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # llama-cpp-sys builds shared libs by default (dynamic-link); the test
+    # binaries then need the .so at runtime. Static keeps tests hermetic.
+    env:
+      LLAMA_BUILD_SHARED_LIBS: "OFF"
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps (Linux)
         if: runner.os == 'Linux'
@@ -139,8 +163,18 @@ jobs:
     name: Lavapipe (CPU Vulkan smoke)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Same hermetic-static reason as test-rs.
+    env:
+      LLAMA_BUILD_SHARED_LIBS: "OFF"
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Mesa Vulkan drivers
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers cmake clang libvulkan-dev glslang-tools spirv-headers
@@ -154,6 +188,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked --version 0.20.2
@@ -177,6 +218,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-about
         run: cargo install cargo-about --locked --version 0.9.3 --features cli
@@ -190,6 +238,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
@@ -209,6 +264,8 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
@@ -228,9 +285,11 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      # Network-free: only `git apply --check` / diff / index plumbing.
-      - name: Verify vendor patch stack
-        run: bun scripts/vendor-patches.ts sync --dry-run
+      # Real sync: proves every manifest pin is fetchable end to end.
+      - name: Sync vendored sources
+        run: bun scripts/vendor-patches.ts sync
+      - name: Re-sync is a no-op
+        run: bun scripts/vendor-patches.ts sync
   experimental:
     name: Experimental ash-sd (allow-fail)
     runs-on: ubuntu-latest
@@ -238,6 +297,13 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
@@ -259,6 +325,8 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
       - name: Install native build deps (Linux)
         if: runner.os == 'Linux'

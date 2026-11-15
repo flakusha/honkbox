@@ -1,0 +1,28 @@
+diff --git b/vendor/diffusion-rs/src/api.rs a/vendor/diffusion-rs/src/api.rs
+index 955f4d9..6ff1548 100644
+--- b/vendor/diffusion-rs/src/api.rs
++++ a/vendor/diffusion-rs/src/api.rs
+@@ -837,7 +837,10 @@ impl ModelConfig {
+             // leading to an assertion error in sdcpp
+             if let Some((sd_ctx, _, _)) = self.diffusion_ctx.as_ref() {
+                 sd_set_progress_callback(None, null_mut());
+-                free_sd_ctx(*sd_ctx);
++                // new_sd_ctx can fail (unknown version, missing parts): never free null.
++                if !(*sd_ctx).is_null() {
++                    free_sd_ctx(*sd_ctx);
++                }
+                 self.diffusion_ctx = None;
+             }
+             if self.diffusion_ctx.is_none() {
+@@ -919,7 +922,10 @@ impl Drop for ModelConfig {
+         //Cleanup CTX section
+         unsafe {
+             if let Some((sd_ctx, _, _)) = self.diffusion_ctx {
+-                free_sd_ctx(sd_ctx);
++                // See diffusion_ctx(): a failed new_sd_ctx caches null; freeing it segfaults.
++                if !sd_ctx.is_null() {
++                    free_sd_ctx(sd_ctx);
++                }
+             }
+ 
+             if let Some(upscaler_ctx) = self.upscaler_ctx {

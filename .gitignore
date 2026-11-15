@@ -28,6 +28,10 @@ weights/
 *.ckpt
 *.onnx
 
+# Fetched vendored sources (never committed): `bun scripts/vendor-patches.ts sync`
+# converges vendor/ from vendor.manifest.toml pins + vendor_patches/ stack.
+/vendor/
+
 # Env / secrets
 .env*
 .credentials.env

@@ -1,0 +1,220 @@
+--- a/vendor/diffusion-rs/.gitmodules
++++ /dev/null
+@@ -1,3 +0,0 @@
+-[submodule "sys/stable-diffusion.cpp"]
+-	path = sys/stable-diffusion.cpp
+-	url = https://github.com/leejet/stable-diffusion.cpp
+--- a/vendor/diffusion-rs/src/api.rs
++++ b/vendor/diffusion-rs/src/api.rs
+@@ -12,18 +12,21 @@
+ 
+ use chrono::Local;
+ use derive_builder::Builder;
+-use diffusion_rs_sys::free_sd_images;
++use diffusion_rs_sys::free_sd_image_generation_result;
+ use diffusion_rs_sys::free_upscaler_ctx;
+ use diffusion_rs_sys::generate_image;
+ use diffusion_rs_sys::new_upscaler_ctx;
+ use diffusion_rs_sys::sd_cache_mode_t;
+ use diffusion_rs_sys::sd_cache_params_t;
++use diffusion_rs_sys::sd_control_type_t;
+ use diffusion_rs_sys::sd_ctx_params_t;
+ use diffusion_rs_sys::sd_embedding_t;
+ use diffusion_rs_sys::sd_get_default_sample_method;
+ use diffusion_rs_sys::sd_get_default_scheduler;
+ use diffusion_rs_sys::sd_guidance_params_t;
+ use diffusion_rs_sys::sd_hires_params_t;
++use diffusion_rs_sys::sd_image_generation_result_t;
++use diffusion_rs_sys::sd_image_preprocess_params_t;
+ use diffusion_rs_sys::sd_image_t;
+ use diffusion_rs_sys::sd_img_gen_params_t;
+ use diffusion_rs_sys::sd_img_gen_params_to_str;
+@@ -40,7 +43,6 @@
+ use image::ImageError;
+ use image::ImageReader;
+ use image::RgbImage;
+-use libc::free;
+ use little_exif::exif_tag::ExifTag;
+ use little_exif::metadata::Metadata;
+ use thiserror::Error;
+@@ -573,10 +575,6 @@
+     #[builder(default = "(None, CLibString::default())", setter(custom))]
+     extra_tiling_args: (Option<HashMap<String, String>>, CLibString),
+ 
+-    /// Enable residency+prefetch streaming on top of [ModelConfigBuilder::max_vram] (no effect without [ModelConfigBuilder::max_vram]; defaults to false)
+-    #[builder(default = "false")]
+-    stream_layers: bool,
+-
+     /// Load all params into the params backend at model-load time instead of lazily on first use (defaults to false)
+     #[builder(default = "false")]
+     eager_load: bool,
+@@ -880,8 +878,9 @@
+                     params_backend: self.params_backend.1.as_ptr(),
+                     embeddings_connectors_path: self.embeddings_connectors.as_ptr(),
+                     audio_vae_path: self.audio_vae.as_ptr(),
++                    audio_encoder_path: null(),
+                     vae_format: self.vae_format,
+-                    stream_layers: self.stream_layers,
++                    disable_prefetch: false,
+                     rpc_servers: null(),
+                     split_mode: null(),
+                     pulid_weights_path: self.pulid_weights_path.as_ptr(),
+@@ -890,6 +889,15 @@
+                     model_args: model_args.as_ptr(),
+                     motion_module_path: null(),
+                     ip_adapter_path: self.ip_adapter.as_ptr(),
++                    disable_segmented_compute: false,
++                    batched_cfg: false,
++                    linear_scale: 0.0,
++                    attn_scale: 0.0,
++                    tokenizer: null(),
++                    sage_attn: false,
++                    conditioning_cache_size: 4,
++                    flash_attn_mode: null(),
++                    conv_direct_mode: null(),
+                 };
+                 let ctx = new_sd_ctx(&sd_ctx_params);
+                 self.diffusion_ctx = Some((ctx, sd_ctx_params, model_args))
+@@ -1366,37 +1374,28 @@
+     }
+ }
+ 
+-unsafe fn upscale(
+-    upscale_repeats: i32,
+-    upscaler_ctx: Option<*mut upscaler_ctx_t>,
++/// Run one ESRGAN upscale pass. The returned result owns its pixels: copy
++/// them (e.g. via `save_img`) before freeing it with
++/// `free_sd_image_generation_result`.
++unsafe fn upscale_raw(
++    upscaler_ctx: *mut upscaler_ctx_t,
+     data: sd_image_t,
+-) -> Result<sd_image_t, DiffusionError> {
++) -> Result<*mut sd_image_generation_result_t, DiffusionError> {
+     unsafe {
+-        match upscaler_ctx {
+-            Some(upscaler_ctx) => {
+-                let upscale_factor = 4; // unused for RealESRGAN_x4plus_anime_6B.pth
+-                let mut current_image = data;
+-                for _ in 0..upscale_repeats {
+-                    let upscaled_image = null_mut();
+-                    let mut upscale_count = 1;
+-
+-                    if !diffusion_rs_sys::upscale(
+-                        upscaler_ctx,
+-                        current_image,
+-                        upscale_factor,
+-                        upscaled_image,
+-                        &mut upscale_count,
+-                    ) {
+-                        return Err(DiffusionError::Upscaler);
+-                    }
+-
+-                    free(current_image.data as *mut c_void);
+-                    current_image = *(*(upscaled_image));
+-                }
+-                Ok(current_image)
++        let upscale_factor = 4; // unused for RealESRGAN_x4plus_anime_6B.pth
++        let mut result_out: *mut sd_image_generation_result_t = null_mut();
++        let ok = diffusion_rs_sys::upscale(upscaler_ctx, data, upscale_factor, &mut result_out);
++        if !ok
++            || result_out.is_null()
++            || (*result_out).count < 1
++            || (*(*result_out).items).image.data.is_null()
++        {
++            if !result_out.is_null() {
++                free_sd_image_generation_result(result_out);
+             }
+-            None => Ok(data),
++            return Err(DiffusionError::Upscaler);
+         }
++        Ok(result_out)
+     }
+ }
+ 
+@@ -1483,11 +1482,11 @@
+         };
+         let vae_tiling_params = sd_tiling_params_t {
+             enabled: model_config.vae_tiling,
+-            tile_size_x: model_config.vae_tile_size.0,
+-            tile_size_y: model_config.vae_tile_size.1,
++            tile_size_w: model_config.vae_tile_size.0,
++            tile_size_h: model_config.vae_tile_size.1,
+             target_overlap: model_config.vae_tile_overlap,
+-            rel_size_x: model_config.vae_relative_tile_size.0,
+-            rel_size_y: model_config.vae_relative_tile_size.1,
++            rel_size_w: model_config.vae_relative_tile_size.0,
++            rel_size_h: model_config.vae_relative_tile_size.1,
+             temporal_tiling: model_config.vae_temporal_tiling,
+             extra_tiling_args: model_config.extra_tiling_args.1.as_ptr(),
+         };
+@@ -1722,42 +1721,51 @@
+             ref_image_args: ref_image_args.as_ptr(),
+             ip_adapter_strength: config.ip_adapter_strength,
+             ip_adapter_image: ip_image,
++            image_preprocess: sd_image_preprocess_params_t { rules: null() },
++            control_type: sd_control_type_t::SD_CONTROL_TYPE_NONE,
+         };
+ 
+         let params_str = CString::from_raw(sd_img_gen_params_to_str(&sd_img_gen_params))
+             .into_string()
+             .unwrap();
+-        let mut images_out = null_mut();
+-        let mut images_out_count = 0;
+-        let gen_result = generate_image(
+-            sd_ctx,
+-            &sd_img_gen_params,
+-            &mut images_out,
+-            &mut images_out_count,
+-        );
++        let mut result_out: *mut sd_image_generation_result_t = null_mut();
++        let gen_result = generate_image(sd_ctx, &sd_img_gen_params, &mut result_out);
+         let ret = {
+-            if !gen_result || images_out.is_null() {
++            if !gen_result || result_out.is_null() {
+                 return Err(DiffusionError::Forward);
+             }
+-            for (img, path) in slice::from_raw_parts(images_out, images_out_count as usize)
+-                .iter()
+-                .zip(files)
+-            {
++            let items =
++                slice::from_raw_parts((*result_out).items, (*result_out).count as usize);
++            for (item, path) in items.iter().zip(files) {
+                 // img.data will be null on OOM or other generation errors,
+                 // in which case we skip saving and just return an error
+-                if img.data.is_null() {
++                if item.image.data.is_null() {
+                     return Err(DiffusionError::Forward);
+                 }
+-                match upscale(model_config.upscale_repeats, upscaler_ctx, *img) {
+-                    Ok(img) => save_img(img, &path, Some(&params_str))?,
+-                    Err(err) => {
+-                        return Err(err);
++                // Optional ESRGAN passes: each step result owns its pixels,
++                // so keep it alive until the pixels are consumed, then free
++                // it. The final image is copied by save_img before any free.
++                let mut current = item.image;
++                let mut owned_result: *mut sd_image_generation_result_t = null_mut();
++                if let Some(ctx) = upscaler_ctx {
++                    for _ in 0..model_config.upscale_repeats {
++                        let step_result = upscale_raw(ctx, current)?;
++                        current = (*(*step_result).items).image;
++                        if !owned_result.is_null() {
++                            free_sd_image_generation_result(owned_result);
++                        }
++                        owned_result = step_result;
+                     }
+                 }
++                let saved = save_img(current, &path, Some(&params_str));
++                if !owned_result.is_null() {
++                    free_sd_image_generation_result(owned_result);
++                }
++                saved?;
+             }
+             Ok(())
+         };
+-        free_sd_images(images_out, images_out_count);
++        free_sd_image_generation_result(result_out);
+         ret
+     }
+ }

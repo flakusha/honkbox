@@ -1,0 +1,32 @@
+diff --git a/vendor/diffusion-rs/src/api.rs b/vendor/diffusion-rs/src/api.rs
+--- a/vendor/diffusion-rs/src/api.rs
++++ b/vendor/diffusion-rs/src/api.rs
+@@ -34,6 +34,7 @@ use diffusion_rs_sys::sd_lora_t;
+ use diffusion_rs_sys::sd_pm_params_t;
+ use diffusion_rs_sys::sd_pulid_params_t;
+ use diffusion_rs_sys::sd_sample_params_t;
++use diffusion_rs_sys::sd_set_log_callback;
+ use diffusion_rs_sys::sd_set_preview_callback;
+ use diffusion_rs_sys::sd_set_progress_callback;
+ use diffusion_rs_sys::sd_slg_params_t;
+@@ -902,6 +902,20 @@ impl ModelConfig {
+                     flash_attn_mode: null(),
+                     conv_direct_mode: null(),
+                 };
++                // Env-gated sd.cpp log wire: SD_RIP_SD_LOG=1 forwards C++
++                // logs to stderr; off by default (silent unless asked).
++                if std::env::var_os("SD_RIP_SD_LOG").as_deref() == Some(std::ffi::OsStr::new("1")) {
++                    unsafe extern "C" fn sd_log_forwarder(
++                        _level: diffusion_rs_sys::sd_log_level_t,
++                        text: *const c_char,
++                        _data: *mut c_void,
++                    ) {
++                        if !text.is_null() {
++                            eprint!("{}", unsafe { std::ffi::CStr::from_ptr(text).to_string_lossy() });
++                        }
++                    }
++                    sd_set_log_callback(Some(sd_log_forwarder), null_mut());
++                }
+                 let ctx = new_sd_ctx(&sd_ctx_params);
+                 self.diffusion_ctx = Some((ctx, sd_ctx_params, model_args))
+             }

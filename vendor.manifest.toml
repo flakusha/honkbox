@@ -1,0 +1,56 @@
+# Dynamic-fetch pins for vendor/diffusion-rs, consumed by
+#   bun scripts/vendor-patches.ts sync
+# vendor/ is gitignored scratch (never committed): sync converges it from
+# these pins, then applies the patch stack. No upstream remote is recorded
+# in the main repo; each entry below is a full clone URL + full commit SHA.
+#
+# Format: one [vendor] table.
+#   url  clone URL for vendor/diffusion-rs (remote "origin")
+#   rev  detached checkout: the diffusion-rs commit the tree converges to
+#   patches  ordered plain unified diffs, relative to vendor_patches/
+#        (an absolute path is used literally), applied with `git apply`
+#        in order after the fetch. A missing file or a failed hunk is a
+#        loud error naming the patch, never a silent skip. Idempotence:
+#        an already-applied patch (reverse --check passes) is skipped, so
+#        re-running sync is safe. A patch may also DELETE files (0000
+#        drops the upstream .gitmodules the fetch lands but the blessed
+#        tree must not keep).
+#   [[vendor.nested]]  plain-file copies that live INSIDE the diffusion-rs
+#        checkout (upstream tracks them as git submodules; the tool lands
+#        them at the pinned revs with no submodule step, so the tree stays
+#        submodule-free and builds offline after sync). Order matters:
+#        parents before children. prune lists top-level dirs dropped after
+#        checkout (docs/examples/CI furniture the build never reads).
+#        The cutlass dir stays as the empty stub the diffusion-rs checkout
+#        lands (its submodule is never initialized) — no entry needed.
+#
+# Move-the-base flow: bump a rev, re-verify the pins fetch, regenerate any
+# patch whose context drifted (0000 first: it adapts upstream to our C ABI),
+# then rm -rf vendor/ + sync. A rev move under a dirty tree is refused —
+# the escape hatch doubles as the standard move flow.
+[vendor]
+url = "https://github.com/newfla/diffusion-rs"
+rev = "89dcf933f754a173c31b2db30ca3df14ec899dac"
+patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch"]
+
+[[vendor.nested]]
+path = "diffusion-rs/sys/stable-diffusion.cpp"
+url = "https://github.com/leejet/stable-diffusion.cpp"
+rev = "5dcfa79801213f23e27b3e83617350ebb8ea93aa"
+prune = [".github", "assets", "docker", "docs", "examples", "github"]
+
+[[vendor.nested]]
+path = "diffusion-rs/sys/stable-diffusion.cpp/ggml"
+url = "https://github.com/leejet/ggml"
+rev = "eeda9ec48fc84a3df0bb9dcc19ae9053075a2539"
+prune = ["docs", "examples"]
+
+[[vendor.nested]]
+path = "diffusion-rs/sys/stable-diffusion.cpp/thirdparty/libwebp"
+url = "https://github.com/webmproject/libwebp"
+rev = "0c9546f7efc61eac7f79ae115c3f99c91c21c443"
+
+[[vendor.nested]]
+path = "diffusion-rs/sys/stable-diffusion.cpp/thirdparty/libwebm"
+url = "https://github.com/webmproject/libwebm"
+rev = "5bf12267eea773a32fcf4949de52b0add158a8d5"

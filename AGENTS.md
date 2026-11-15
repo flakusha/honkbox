@@ -29,8 +29,8 @@ CLI (clap) / HTTP (axum)
 | `crates/api-types` | DTOs shared Rust↔TS via ts-rs codegen |
 | `crates/llm-worker`, `crates/audio-worker` | Zero-dep doc stubs |
 | `packages/web-ui` | Bun/Vite frontend; `src/gen/` is generated |
-| `scripts/` | Bun helpers: `dev.ts` (Vite :5173 + cargo-watch :8080), `vendor-patches.ts` (applies `vendor.manifest.toml` diff stack onto `vendor/diffusion-rs`), `codegen-openapi-check.ts` |
-| `vendor/diffusion-rs` | Vendored, patch-managed — edit only via `vendor_patches/` + `vendor.manifest.toml` |
+| `scripts/` | Bun helpers: `dev.ts` (Vite :5173 + cargo-watch :8080), `vendor-patches.ts` (fetches `vendor/` from `vendor.manifest.toml` pins, then applies the `vendor_patches/` stack), `codegen-openapi-check.ts` |
+| `vendor/` | Fetched scratch (gitignored, never committed) — run `bun scripts/vendor-patches.ts sync` before any cargo command; edit only via `vendor_patches/` + `vendor.manifest.toml` |
 | `.tmp/research/Reviewed*.md` | Canonical design docs (~25) |
 
 ## Development Commands
@@ -64,7 +64,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 - `rust-toolchain.toml` — Rust 1.99.0 (minimal profile + clippy/rustfmt/rust-analyzer)
 - `crates/sd-core/src/lib.rs:84` — `SdPipeline` trait (the seam)
 - `crates/server/src/main.rs` — CLI + pipeline construction (line ~288)
-- `vendor.manifest.toml` — ordered vendor patch stack
+- `vendor.manifest.toml` — fetch pins (full-SHA revs) + ordered vendor patch stack
 - `.github/workflows/ci.yml` — gate job list; release build requires all gates green
 
 ## Runtime/Tooling Preferences
