@@ -52,6 +52,18 @@ must_use_candidate = "allow"
 # (when binary size/panic-unwind cost measured and abort acceptable); custom profiles
 # e.g. dist/release-fast (when a second release tradeoff is actually used);
 # per-package overrides (when one crate provably needs different opts).
+# Optimize dependency code in dev builds too: Cargo's default opt-level 0 makes
+# pure-Rust compute deps (e.g. image decode/resize in honkbox-sd-core) unusably
+# slow at inference time. Workspace crates stay at opt-level 0, so incremental
+# rebuilds of our own code stay fast; only the initial cold dep build costs more.
+# NOTE: this does NOT speed up the C/C++ backends. stable-diffusion.cpp
+# (vendor/diffusion-rs), llama.cpp (llama-cpp-sys), whisper.cpp (whisper-rs) and
+# ONNX Runtime (ort) are cmake/foreign builds — their optimization is governed
+# by their own build flags (vendor_patches / vendor.manifest.toml and
+# .cargo/config.toml env), not by Rust opt-level.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 strip = "debuginfo"
 lto = "thin"
