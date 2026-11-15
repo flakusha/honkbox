@@ -282,7 +282,7 @@ if (dryRun) {
     const refusal = dirtRefusal(repo, allowed);
     if (refusal !== null) fail(refusal);
   }
-  if (!existsSync(join(ROOT, repos[0].dir, ".git"))) {
+  if (!existsSync(join(ROOT, repos[0]?.dir ?? "", ".git"))) {
     console.log(`${NODE}: would apply ${files.length} patch(es) after fetch`);
     process.exit(1);
   }
@@ -340,7 +340,8 @@ for (const repo of repos) {
 // Stacks land in order, so a reverse-applying patch implies its predecessors.
 function appliedPrefix(): number {
   for (let i = files.length - 1; i >= 0; i--) {
-    if (git(ROOT, ["apply", "--check", "--reverse", "--", files[i]]).rc === 0) return i + 1;
+    const file = files[i];
+    if (file !== undefined && git(ROOT, ["apply", "--check", "--reverse", "--", file]).rc === 0) return i + 1;
   }
   return 0;
 }
