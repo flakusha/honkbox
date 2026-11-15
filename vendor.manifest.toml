@@ -31,7 +31,7 @@
 [vendor]
 url = "https://github.com/newfla/diffusion-rs"
 rev = "89dcf933f754a173c31b2db30ca3df14ec899dac"
-patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch"]
+patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch", "0003-sys-cargo-lints-allow.patch"]
 
 [[vendor.nested]]
 path = "diffusion-rs/sys/stable-diffusion.cpp"
