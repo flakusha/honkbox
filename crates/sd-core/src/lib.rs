@@ -52,7 +52,7 @@ pub enum SdError {
         /// The offending `width.max(height)`.
         edge: u32,
     },
-    /// PNG encoding failed.
+    /// Image encoding failed.
     Encode(String),
 }
 
@@ -108,15 +108,74 @@ impl SdPipeline for StubPipeline {
     }
 }
 
-/// Encode an image as (deterministic) PNG bytes; consumes the image.
-pub fn encode_png(img: GeneratedImage) -> Result<Vec<u8>, SdError> {
+/// Output container for [`encode_image`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Lossless PNG (default; deterministic bytes for a fixed seed).
+    Png,
+    /// Lossy JPEG, quality 90.
+    Jpeg,
+    /// Lossless WebP (`image` 0.25 has no lossy knob).
+    Webp,
+}
+
+impl OutputFormat {
+    /// File extension for bundle art (`jpg`, not `jpeg`).
+    pub fn extension(self) -> &'static str {
+        match self {
+            OutputFormat::Png => "png",
+            OutputFormat::Jpeg => "jpg",
+            OutputFormat::Webp => "webp",
+        }
+    }
+
+    /// Full lowercase name recorded in bundle sidecars (`jpeg`, not `jpg`).
+    pub fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Png => "png",
+            OutputFormat::Jpeg => "jpeg",
+            OutputFormat::Webp => "webp",
+        }
+    }
+}
+
+/// Encode an image in the requested container; consumes the image.
+///
+/// JPEG uses quality 90; WebP is lossless-only in `image` 0.25 (no quality knob).
+pub fn encode_image(img: GeneratedImage, format: OutputFormat) -> Result<Vec<u8>, SdError> {
     let buf: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
         image::ImageBuffer::from_raw(img.width, img.height, img.rgba)
             .ok_or_else(|| SdError::Encode("bad pixel buffer length".to_string()))?;
     let mut out = Vec::new();
-    image::DynamicImage::ImageRgba8(buf)
-        .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
-        .map_err(|e| SdError::Encode(e.to_string()))?;
+    match format {
+        // Byte settings unchanged from the original `encode_png`.
+        OutputFormat::Png => {
+            image::DynamicImage::ImageRgba8(buf)
+                .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+                .map_err(|e| SdError::Encode(e.to_string()))?;
+        }
+        OutputFormat::Jpeg => {
+            let rgb = image::DynamicImage::ImageRgba8(buf).to_rgb8();
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90);
+            enc.encode(
+                rgb.as_raw(),
+                img.width,
+                img.height,
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| SdError::Encode(e.to_string()))?;
+        }
+        OutputFormat::Webp => {
+            image::codecs::webp::WebPEncoder::new_lossless(&mut out)
+                .encode(
+                    &buf.into_raw(),
+                    img.width,
+                    img.height,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| SdError::Encode(e.to_string()))?;
+        }
+    }
     Ok(out)
 }
 
@@ -149,8 +208,8 @@ mod tests {
         let a = StubPipeline.generate(&req(42, 32, 32)).expect("gen");
         let b = StubPipeline.generate(&req(42, 32, 32)).expect("gen");
         assert_eq!(a.rgba, b.rgba);
-        let pa = encode_png(a).expect("png");
-        let pb = encode_png(b).expect("png");
+        let pa = encode_image(a, OutputFormat::Png).expect("png");
+        let pb = encode_image(b, OutputFormat::Png).expect("png");
         assert_eq!(pa, pb);
         assert_ne!(pa, [] as [u8; 0]);
     }
@@ -174,5 +233,40 @@ mod tests {
         let a = StubPipeline.generate(&req(1, 16, 16)).expect("gen");
         let b = StubPipeline.generate(&req(2, 16, 16)).expect("gen");
         assert_ne!(a.rgba, b.rgba);
+    }
+
+    #[test]
+    fn formats_roundtrip_dims_and_pixels() {
+        for format in [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp] {
+            let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+            let bytes = encode_image(img, format).expect("encode");
+            assert!(!bytes.is_empty(), "{format:?}");
+            let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
+            assert_eq!((decoded.width(), decoded.height()), (16, 16), "{format:?}");
+        }
+        // Lossless containers preserve every pixel.
+        for format in [OutputFormat::Png, OutputFormat::Webp] {
+            let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+            let want = img.rgba.clone();
+            let bytes = encode_image(img, format).expect("encode");
+            let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
+            assert_eq!(decoded.as_raw(), &want, "{format:?}");
+        }
+        // JPEG quality 90 on noise: small mean error, not garbage.
+        let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+        let want = img.rgba.clone();
+        let bytes = encode_image(img, OutputFormat::Jpeg).expect("encode");
+        let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
+        let err: u64 = decoded
+            .as_raw()
+            .iter()
+            .zip(want.iter())
+            .map(|(a, b)| u64::from(a.abs_diff(*b)))
+            .sum();
+        assert!(
+            err < 40 * want.len() as u64,
+            "jpeg mean abs error {}",
+            err / want.len() as u64
+        );
     }
 }

@@ -68,7 +68,18 @@ enum Command {
         /// Image size as `WxH`; longest edge capped at 2048.
         #[arg(long, default_value = "1024x1024")]
         size: String,
+        /// Image container (`final_00` extension + sidecar `format`).
+        #[arg(long, value_enum, default_value = "png")]
+        format: Format,
     },
+}
+
+/// `generate` output containers (clap-level; mapped to sd-core).
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum Format {
+    Png,
+    Jpeg,
+    Webp,
 }
 
 /// Model-list actions.
@@ -118,7 +129,8 @@ async fn main() {
             seed,
             steps,
             size,
-        } => generate(model, prompt, seed, steps, &size),
+            format,
+        } => generate(model, prompt, seed, steps, &size, format),
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
@@ -192,7 +204,7 @@ fn human_size(bytes: u64) -> String {
 /// `generate`: slug check, single-slot reserve, stub sample, bundle write.
 ///
 /// Every failure is a loud exit-1 naming the cause; success prints the job dir.
-fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str) {
+fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str, format: Format) {
     use sd_rip_sd_core::SdPipeline as _;
 
     logging::init(None);
@@ -242,8 +254,13 @@ fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str) {
             std::process::exit(1);
         }
     };
-    let png = match sd_rip_sd_core::encode_png(img) {
-        Ok(png) => png,
+    let format = match format {
+        Format::Png => sd_rip_sd_core::OutputFormat::Png,
+        Format::Jpeg => sd_rip_sd_core::OutputFormat::Jpeg,
+        Format::Webp => sd_rip_sd_core::OutputFormat::Webp,
+    };
+    let bytes = match sd_rip_sd_core::encode_image(img, format) {
+        Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(1);
@@ -257,9 +274,10 @@ fn generate(model: String, prompt: String, seed: u64, steps: u32, size: &str) {
             steps,
             width,
             height,
+            format,
             backend_id: pipeline.backend_id(),
         },
-        &png,
+        &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     ) {
         Ok(dir) => println!("{}", dir.display()),

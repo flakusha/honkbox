@@ -1,6 +1,6 @@
 //! `generate` bundle writer: `~/.sd-rip/jobs/{ulid}/` + atomic writes.
 //!
-//! Layout per job dir: `request.json` (full params + slug), `final_00.png` +
+//! Layout per job dir: `request.json` (full params + slug), `final_00.{png,jpg,webp}` +
 //! sidecar `final_00.json`, `metrics.jsonl` (one line), `run.log`. Every file
 //! lands via `<name>.part` + best-effort fsync + rename; `*.part` leftovers
 //! are sweepable garbage.
@@ -23,6 +23,8 @@ pub struct BundleInputs {
     pub width: u32,
     /// Image height in pixels.
     pub height: u32,
+    /// Output container: art file `final_00.{ext}` + sidecar `format` field.
+    pub format: sd_rip_sd_core::OutputFormat,
     /// `SdPipeline::backend_id` (currently `"stub"`).
     pub backend_id: &'static str,
 }
@@ -42,7 +44,7 @@ pub fn parse_size(raw: &str) -> Result<(u32, u32), String> {
 /// Write a full job bundle under `~/.sd-rip/jobs/{ulid}/`; returns the job dir.
 pub fn write_bundle(
     inputs: &BundleInputs,
-    png_bytes: &[u8],
+    image_bytes: &[u8],
     elapsed_ms: u64,
 ) -> Result<PathBuf, String> {
     let jobs = home::home_dir()
@@ -51,7 +53,7 @@ pub fn write_bundle(
     let dir = jobs.join(ulid::Ulid::new().to_string());
     fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create job dir {}: {e}", dir.display()))?;
-    write_bundle_into(&dir, inputs, png_bytes, elapsed_ms)?;
+    write_bundle_into(&dir, inputs, image_bytes, elapsed_ms)?;
     Ok(dir)
 }
 
@@ -59,16 +61,18 @@ pub fn write_bundle(
 pub fn write_bundle_into(
     dir: &Path,
     inputs: &BundleInputs,
-    png_bytes: &[u8],
+    image_bytes: &[u8],
     elapsed_ms: u64,
 ) -> Result<(), String> {
     let size = format!("{}x{}", inputs.width, inputs.height);
+    let art = format!("final_00.{}", inputs.format.extension());
     let request = serde_json::json!({
         "model": inputs.model_slug,
         "prompt": inputs.prompt,
         "seed": inputs.seed,
         "steps": inputs.steps,
         "size": size,
+        "format": inputs.format.name(),
     });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
@@ -78,6 +82,7 @@ pub fn write_bundle_into(
         "scheduler": "normal",
         "size": size,
         "model_slug": inputs.model_slug,
+        "format": inputs.format.name(),
         "backend_id": inputs.backend_id,
     });
     let metrics = serde_json::json!({
@@ -99,7 +104,7 @@ pub fn write_bundle_into(
             .map_err(|e| format!("cannot encode request.json: {e}"))?
             .as_bytes(),
     )?;
-    write_atomic(dir, "final_00.png", png_bytes)?;
+    write_atomic(dir, &art, image_bytes)?;
     write_atomic(
         dir,
         "final_00.json",
@@ -138,6 +143,7 @@ mod tests {
             steps: 20,
             width: 16,
             height: 16,
+            format: sd_rip_sd_core::OutputFormat::Png,
             backend_id: "stub",
         }
     }
@@ -152,6 +158,32 @@ mod tests {
     fn parse_size_rejects() {
         for bad in ["", "1024", "0x64", "1024x0", "axb", "1024x", "x1024"] {
             assert!(parse_size(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn format_changes_art_filename_and_sidecar() {
+        for (format, ext, name) in [
+            (sd_rip_sd_core::OutputFormat::Png, "final_00.png", "png"),
+            (sd_rip_sd_core::OutputFormat::Jpeg, "final_00.jpg", "jpeg"),
+            (sd_rip_sd_core::OutputFormat::Webp, "final_00.webp", "webp"),
+        ] {
+            let dir = std::env::temp_dir().join(format!(
+                "sd-rip-jobs-fmt-{}-{}",
+                std::process::id(),
+                name
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("test dir");
+            let mut bundle = inputs();
+            bundle.format = format;
+            write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
+            assert!(fs::read(dir.join(ext)).is_ok(), "{ext}");
+            let side: serde_json::Value =
+                serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                    .expect("sidecar json");
+            assert_eq!(side["format"], name, "{ext}");
+            fs::remove_dir_all(&dir).ok();
         }
     }
 
@@ -176,7 +208,12 @@ mod tests {
         assert_eq!(side["sampler"], "euler");
         assert_eq!(side["scheduler"], "normal");
         assert_eq!(side["backend_id"], "stub");
+        assert_eq!(side["format"], "png");
         assert_eq!(side["model_slug"], "comfy:checkpoints/x.safetensors");
+        let req: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("request.json")).expect("request"))
+                .expect("request json");
+        assert_eq!(req["format"], "png");
         let metrics = fs::read_to_string(dir.join("metrics.jsonl")).expect("metrics");
         assert_eq!(metrics.lines().count(), 1);
         assert!(serde_json::from_str::<serde_json::Value>(metrics.trim()).is_ok());
