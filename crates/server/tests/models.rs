@@ -51,7 +51,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
         llm_model: None,
         stt_model: None,
         tts_model: None,
-        llm: Arc::new(StubLlm),
+        llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
     })
@@ -65,11 +65,13 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
         roots: honkbox_registry::ModelRoots {
             llm_dirs: Vec::new(),
             comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
         },
         llm_model,
         stt_model: None,
         tts_model: None,
-        llm: Arc::new(StubLlm),
+        llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
     })
@@ -192,6 +194,8 @@ async fn refresh_rescans_roots_and_updates_snapshot() {
         honkbox_registry::ModelRoots {
             llm_dirs: vec![llm.clone()],
             comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
         },
     );
 
@@ -248,6 +252,74 @@ async fn refresh_rescans_roots_and_updates_snapshot() {
     std::fs::remove_dir_all(&base).ok();
 }
 
+/// Audio roots ride the same scan + refresh machinery: STT/TTS files under the
+/// configured roots surface as `stt:`/`tts:` catalog entries with `stt`/`tts`
+/// kinds after `POST /v1/models/refresh`.
+#[tokio::test]
+async fn refresh_picks_up_audio_roots() {
+    let base = std::env::temp_dir().join(format!("honkbox-audio-refresh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let stt = base.join("stt");
+    let tts = base.join("tts");
+    std::fs::create_dir_all(&stt).expect("create test stt root");
+    std::fs::create_dir_all(&tts).expect("create test tts root");
+    let app = test_app_with_roots(
+        catalog_with(&[]),
+        honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: vec![stt.clone()],
+            tts_dirs: vec![tts.clone()],
+        },
+    );
+
+    // Audio weights appear under the configured roots.
+    std::fs::write(stt.join("whisper-base.bin"), b"x").expect("write stt model");
+    std::fs::write(tts.join("kokoro.safetensors"), b"yy").expect("write tts model");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/models/refresh")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+    let body = String::from_utf8_lossy(&body);
+    assert!(
+        body.contains("stt:whisper-base.bin"),
+        "refresh body: {body}"
+    );
+    assert!(
+        body.contains("tts:kokoro.safetensors"),
+        "refresh body: {body}"
+    );
+    assert!(body.contains("\"kind\":\"stt\""), "refresh body: {body}");
+    assert!(body.contains("\"kind\":\"tts\""), "refresh body: {body}");
+
+    // GET serves the refreshed snapshot with the audio entries.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), 16 * 1024).await.unwrap();
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("stt:whisper-base.bin"));
+    assert!(body.contains("tts:kokoro.safetensors"));
+
+    std::fs::remove_dir_all(&base).ok();
+}
+
 #[tokio::test]
 async fn refresh_is_idempotent_on_missing_roots() {
     // A root that does not exist refreshes to an empty catalog, never an error.
@@ -259,6 +331,8 @@ async fn refresh_is_idempotent_on_missing_roots() {
                     .join(format!("honkbox-refresh-missing-{}", std::process::id())),
             ],
             comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
         },
     );
     for _ in 0..2 {

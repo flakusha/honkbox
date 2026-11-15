@@ -17,6 +17,7 @@ use routes::{ApiDoc, AppConfig, app, build_catalog};
 use tracing::info;
 use utoipa::OpenApi as _;
 
+
 /// Local-first generative studio.
 #[derive(Debug, Parser)]
 #[command(name = "honkbox", version, about = "Local-first generative studio")]
@@ -235,6 +236,8 @@ async fn main() {
             let roots = honkbox_registry::ModelRoots {
                 llm_dirs: cfg.llm_dirs,
                 comfyui_dirs: cfg.comfyui_dirs,
+                stt_dirs: cfg.stt_dirs,
+                tts_dirs: cfg.tts_dirs,
             };
             let found = honkbox_registry::scan_roots(&roots);
             info!("discovered {} models across configured roots", found.len());
@@ -288,6 +291,8 @@ fn models_show(config: Option<PathBuf>, json: bool) {
     let mut found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dirs: cfg.comfyui_dirs,
+        stt_dirs: cfg.stt_dirs,
+        tts_dirs: cfg.tts_dirs,
     });
     found.sort_by(|a, b| a.slug.cmp(&b.slug));
     if json {
@@ -302,6 +307,8 @@ fn models_show(config: Option<PathBuf>, json: bool) {
             let kind = match m.root {
                 honkbox_registry::RootKind::Llm => "llm",
                 honkbox_registry::RootKind::Comfy => "comfy",
+                honkbox_registry::RootKind::Stt => "stt",
+                honkbox_registry::RootKind::Tts => "tts",
             };
             println!(
                 "{:<64} {:<6} {:>10}  {}",
@@ -379,6 +386,8 @@ fn generate(args: GenerateArgs) {
     let found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dirs: cfg.comfyui_dirs,
+        stt_dirs: cfg.stt_dirs,
+        tts_dirs: cfg.tts_dirs,
     });
     let model_path = resolve_model(&found, &model);
     // Optional split-file inputs: same registry, unknown slug is a loud exit-1.
@@ -428,6 +437,8 @@ fn scan_models() -> Vec<honkbox_registry::FoundModel> {
     honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dirs: cfg.comfyui_dirs,
+        stt_dirs: cfg.stt_dirs,
+        tts_dirs: cfg.tts_dirs,
     })
 }
 

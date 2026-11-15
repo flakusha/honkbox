@@ -2,8 +2,9 @@
 //! `~/.honkbox/honkbox.toml`, env wins over file.
 //!
 //! Precedence: built-in defaults → config file → env (`HONKBOX_LLM_DIRS`,
-//! `HONKBOX_COMFYUI_DIR`, `HONKBOX_DISCOVERY_LLM_DIRS`,
-//! `HONKBOX_DISCOVERY_COMFYUI_DIRS`).
+//! `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`, `HONKBOX_TTS_DIRS`,
+//! `HONKBOX_DISCOVERY_LLM_DIRS`, `HONKBOX_DISCOVERY_COMFYUI_DIRS`,
+//! `HONKBOX_DISCOVERY_STT_DIRS`, `HONKBOX_DISCOVERY_TTS_DIRS`).
 //!
 //! ONE-RELEASE compat: when the new path / env vars are absent, the old
 //! `~/.sd-rip/sd-rip.toml` / `SD_RIP_*` vars are honored once with a `warn!`
@@ -21,8 +22,11 @@ pub struct ModelConfig {
     pub llm_dirs: Vec<PathBuf>,
     /// `ComfyUI` base folders; every entry is scanned.
     pub comfyui_dirs: Vec<PathBuf>,
+    /// Speech-to-text weight directories; every entry is scanned.
+    pub stt_dirs: Vec<PathBuf>,
+    /// Text-to-speech weight directories; every entry is scanned.
+    pub tts_dirs: Vec<PathBuf>,
 }
-
 /// Load model roots: defaults, then `config_path` (or `~/.honkbox/honkbox.toml`),
 /// then env overrides. `[discovery]` extras are appended to the `[models]`
 /// base roots. A missing file falls back to defaults; invalid TOML is an
@@ -46,6 +50,18 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
             if let Some(dirs) = file.discovery.comfyui_dirs {
                 staged.extra_comfyui = dirs.iter().map(|d| expand_home(d)).collect();
             }
+            if let Some(dirs) = file.models.stt_dirs {
+                staged.stt = dirs.iter().map(|d| expand_home(d)).collect();
+            }
+            if let Some(dirs) = file.models.tts_dirs {
+                staged.tts = dirs.iter().map(|d| expand_home(d)).collect();
+            }
+            if let Some(dirs) = file.discovery.stt_dirs {
+                staged.extra_stt = dirs.iter().map(|d| expand_home(d)).collect();
+            }
+            if let Some(dirs) = file.discovery.tts_dirs {
+                staged.extra_tts = dirs.iter().map(|d| expand_home(d)).collect();
+            }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot read config {}: {e}", path.display())),
@@ -58,6 +74,10 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
         std::env::var("HONKBOX_DISCOVERY_COMFYUI_DIRS")
             .ok()
             .as_deref(),
+        env_or_compat("HONKBOX_STT_DIRS", "SD_RIP_STT_DIRS").as_deref(),
+        env_or_compat("HONKBOX_TTS_DIRS", "SD_RIP_TTS_DIRS").as_deref(),
+        std::env::var("HONKBOX_DISCOVERY_STT_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
     )
     .merged())
 }
@@ -68,8 +88,12 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
 struct RootStages {
     llm: Vec<PathBuf>,
     comfyui: Vec<PathBuf>,
+    stt: Vec<PathBuf>,
+    tts: Vec<PathBuf>,
     extra_llm: Vec<PathBuf>,
     extra_comfyui: Vec<PathBuf>,
+    extra_stt: Vec<PathBuf>,
+    extra_tts: Vec<PathBuf>,
 }
 
 impl RootStages {
@@ -78,8 +102,12 @@ impl RootStages {
         Self {
             llm: vec![expand_home("~/.cache/huggingface")],
             comfyui: vec![expand_home("~/git-ai/ai-models/Data/Models")],
+            stt: vec![expand_home("~/.honkbox/models/stt")],
+            tts: vec![expand_home("~/.honkbox/models/tts")],
             extra_llm: Vec::new(),
             extra_comfyui: Vec::new(),
+            extra_stt: Vec::new(),
+            extra_tts: Vec::new(),
         }
     }
 
@@ -90,9 +118,15 @@ impl RootStages {
         llm_dirs.extend(self.extra_llm);
         let mut comfyui_dirs = self.comfyui;
         comfyui_dirs.extend(self.extra_comfyui);
+        let mut stt_dirs = self.stt;
+        stt_dirs.extend(self.extra_stt);
+        let mut tts_dirs = self.tts;
+        tts_dirs.extend(self.extra_tts);
         ModelConfig {
             llm_dirs,
             comfyui_dirs,
+            stt_dirs,
+            tts_dirs,
         }
     }
 }
@@ -112,15 +146,23 @@ fn env_or_compat(new_key: &str, old_key: &str) -> Option<String> {
 
 /// Env wins over file, per stage: `HONKBOX_LLM_DIRS` (path-separated via
 /// `split_paths`) replaces the `[models]` `llm_dirs`, `HONKBOX_COMFYUI_DIR`
-/// replaces the `[models]` `comfyui_dir`, `HONKBOX_DISCOVERY_LLM_DIRS` /
-/// `HONKBOX_DISCOVERY_COMFYUI_DIRS` replace the `[discovery]` extras.
-/// Pure (args instead of process env) so tests stay thread-safe.
+/// replaces the `[models]` `comfyui_dir`, `HONKBOX_STT_DIRS` /
+/// `HONKBOX_TTS_DIRS` replace the `[models]` `stt_dirs` / `tts_dirs`, and
+/// `HONKBOX_DISCOVERY_LLM_DIRS` / `HONKBOX_DISCOVERY_COMFYUI_DIRS` /
+/// `HONKBOX_DISCOVERY_STT_DIRS` / `HONKBOX_DISCOVERY_TTS_DIRS` replace the
+/// `[discovery]` extras. Pure (args instead of process env) so tests stay
+/// thread-safe.
+#[allow(clippy::too_many_arguments)]
 fn apply_env(
     mut staged: RootStages,
     llm_dirs: Option<&str>,
     comfyui_dir: Option<&str>,
     extra_llm_dirs: Option<&str>,
     extra_comfyui_dirs: Option<&str>,
+    stt_dirs: Option<&str>,
+    tts_dirs: Option<&str>,
+    extra_stt_dirs: Option<&str>,
+    extra_tts_dirs: Option<&str>,
 ) -> RootStages {
     if let Some(v) = llm_dirs
         && !v.is_empty()
@@ -141,6 +183,26 @@ fn apply_env(
         && !v.is_empty()
     {
         staged.extra_comfyui = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = stt_dirs
+        && !v.is_empty()
+    {
+        staged.stt = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = tts_dirs
+        && !v.is_empty()
+    {
+        staged.tts = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = extra_stt_dirs
+        && !v.is_empty()
+    {
+        staged.extra_stt = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = extra_tts_dirs
+        && !v.is_empty()
+    {
+        staged.extra_tts = std::env::split_paths(v).collect();
     }
     staged
 }
@@ -201,21 +263,30 @@ struct FileModels {
     llm_dirs: Option<Vec<String>>,
     #[serde(default)]
     comfyui_dir: Option<String>,
+    #[serde(default)]
+    stt_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    tts_dirs: Option<Vec<String>>,
 }
 
 /// Optional `[discovery]` extras APPENDED to the `[models]` roots (P0 of the
 /// llama-swap parity plan); mirrors `[models]` with a plural `comfyui_dirs`
-/// so extra `ComfyUI` trees can be added without replacing the base one. The
-/// research doc's `roots = [{kind, path}]` table plus `cache`/
-/// `rescan_seconds`, and audio (stt/tts) roots, land with the P1 adapter
-/// work — the scanner has no audio-root kind yet, so unknown `[discovery]`
-/// keys are ignored today.
+/// so extra `ComfyUI` trees can be added without replacing the base one.
+/// Audio parity: `stt_dirs` / `tts_dirs` work exactly like the `[models]`
+/// keys. The research doc's `roots = [{kind, path}]` table plus `cache`/
+/// `rescan_seconds` still land with the P1 adapter work; unknown
+/// `[discovery]` keys are ignored.
 #[derive(Debug, Default, serde::Deserialize)]
+#[allow(clippy::struct_field_names)]
 struct FileDiscovery {
     #[serde(default)]
     llm_dirs: Option<Vec<String>>,
     #[serde(default)]
     comfyui_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    stt_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    tts_dirs: Option<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -231,11 +302,17 @@ mod tests {
             cfg.comfyui_dirs,
             vec![home.join("git-ai/ai-models/Data/Models")]
         );
+        assert_eq!(cfg.stt_dirs, vec![home.join(".honkbox/models/stt")]);
+        assert_eq!(cfg.tts_dirs, vec![home.join(".honkbox/models/tts")]);
 
         let staged = apply_env(
             RootStages::defaults(),
             Some("/tmp/honkbox-a:/tmp/honkbox-b"),
             Some("/tmp/honkbox-comfy"),
+            Some(""),
+            Some(""),
+            Some("/tmp/honkbox-stt:/tmp/honkbox-stt2"),
+            Some("/tmp/honkbox-tts"),
             Some(""),
             Some(""),
         );
@@ -248,11 +325,32 @@ mod tests {
             ]
         );
         assert_eq!(over.comfyui_dirs, vec![PathBuf::from("/tmp/honkbox-comfy")]);
+        assert_eq!(
+            over.stt_dirs,
+            vec![
+                PathBuf::from("/tmp/honkbox-stt"),
+                PathBuf::from("/tmp/honkbox-stt2")
+            ]
+        );
+        assert_eq!(over.tts_dirs, vec![PathBuf::from("/tmp/honkbox-tts")]);
 
         // Empty values keep the file/default values.
-        let kept = apply_env(staged, Some(""), Some(""), Some(""), Some("")).merged();
+        let kept = apply_env(
+            staged,
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+        )
+        .merged();
         assert_eq!(kept.llm_dirs, over.llm_dirs);
         assert_eq!(kept.comfyui_dirs, over.comfyui_dirs);
+        assert_eq!(kept.stt_dirs, over.stt_dirs);
+        assert_eq!(kept.tts_dirs, over.tts_dirs);
 
         // A missing file loads (defaults + ambient env), never errors.
         assert!(load(Some(PathBuf::from("/nonexistent-honkbox-config.toml"))).is_ok());
@@ -271,6 +369,10 @@ mod tests {
             Some("/tmp/base-comfy"),
             Some(""),
             Some("/tmp/replacement-comfy:/tmp/second-comfy"),
+            Some(""),
+            Some(""),
+            Some("/tmp/replacement-stt"),
+            Some("/tmp/replacement-tts"),
         )
         .merged();
         assert_eq!(
@@ -288,6 +390,9 @@ mod tests {
                 PathBuf::from("/tmp/second-comfy"),
             ]
         );
+        // Audio stages behave the same: extras replace, base env does not touch them.
+        assert_eq!(merged.stt_dirs, vec![PathBuf::from("/tmp/replacement-stt")]);
+        assert_eq!(merged.tts_dirs, vec![PathBuf::from("/tmp/replacement-tts")]);
     }
 
     #[test]
@@ -298,7 +403,7 @@ mod tests {
         let path = base.join("honkbox.toml");
         std::fs::write(
             &path,
-            "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\n",
+            "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\nstt_dirs = [\"/tmp/base-stt\"]\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\nstt_dirs = [\"/tmp/extra-stt\"]\ntts_dirs = [\"/tmp/extra-tts\"]\n",
         )
         .expect("write config");
         let cfg = load(Some(path)).expect("load config");
@@ -309,6 +414,9 @@ mod tests {
             cfg.comfyui_dirs
                 .contains(&PathBuf::from("/tmp/extra-comfy"))
         );
+        assert!(cfg.stt_dirs.contains(&PathBuf::from("/tmp/base-stt")));
+        assert!(cfg.stt_dirs.contains(&PathBuf::from("/tmp/extra-stt")));
+        assert!(cfg.tts_dirs.contains(&PathBuf::from("/tmp/extra-tts")));
     }
 
     #[test]

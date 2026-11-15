@@ -270,6 +270,8 @@ fn catalog_entry(entry: honkbox_registry::CatalogEntry) -> ModelCatalogEntry {
             honkbox_registry::ModelKind::Lora => ModelKind::Lora,
             honkbox_registry::ModelKind::Embedding => ModelKind::Embedding,
             honkbox_registry::ModelKind::Vae => ModelKind::Vae,
+            honkbox_registry::ModelKind::Stt => ModelKind::Stt,
+            honkbox_registry::ModelKind::Tts => ModelKind::Tts,
         },
         category: entry.category,
         path: entry.path.display().to_string(),

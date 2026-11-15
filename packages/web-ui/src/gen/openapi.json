@@ -105,7 +105,7 @@
       "post": {
         "tags": [],
         "summary": "`POST /v1/chat/stream`: same blocking call, tokens forwarded as SSE\n(`data: {\"token\":\"...\"}` + `data: [DONE]`) over an unbounded channel so\nthe sink never blocks the worker thread.",
-        "description": "Disconnect handling: dropping the SSE body sets a cancel flag and the\nworker notices at its **next token boundary** — token delivery stops and\nthe GPU residency lease is freed immediately, but the synchronous FFI\ncall itself runs to completion (aborting it needs an abort hook on the\n`LlmPipeline` trait, which does not exist yet).",
+        "description": "Disconnect handling: dropping the SSE body sets a cancel flag and calls\nthe pipeline `abort` hook; the worker notices at its **next token\nboundary** — token delivery stops, the GPU residency lease is freed, and\nthe synchronous FFI loop exits at its next internal checkpoint (per-token\ndecode returns to our loop, so early return needs no FFI-level abort).",
         "operationId": "post_chat_stream",
         "requestBody": {
           "content": {
@@ -463,13 +463,15 @@
       },
       "ModelKind": {
         "type": "string",
-        "description": "Model modality as discovered on disk (`GET /v1/models` entries). Mirrors\nthe registry's on-disk kinds; audio kinds arrive with P1 audio roots.",
+        "description": "Model modality as discovered on disk (`GET /v1/models` entries). Mirrors\nthe registry's on-disk kinds.",
         "enum": [
           "llm",
           "sd",
           "lora",
           "embedding",
-          "vae"
+          "vae",
+          "stt",
+          "tts"
         ]
       },
       "ModelMetadata": {

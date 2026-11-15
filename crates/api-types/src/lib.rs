@@ -112,7 +112,7 @@ pub struct SynthesizeRequest {
 }
 
 /// Model modality as discovered on disk (`GET /v1/models` entries). Mirrors
-/// the registry's on-disk kinds; audio kinds arrive with P1 audio roots.
+/// the registry's on-disk kinds.
 #[derive(Debug, Clone, Copy, Serialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelKind {
@@ -126,6 +126,10 @@ pub enum ModelKind {
     Embedding,
     /// Standalone VAE weights.
     Vae,
+    /// Speech-to-text weights (STT root).
+    Stt,
+    /// Text-to-speech weights (TTS root).
+    Tts,
 }
 
 /// GGUF header summary (`GET /v1/models` entry `metadata`).

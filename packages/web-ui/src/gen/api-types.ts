@@ -104,7 +104,7 @@ voice?: string | null,
  * Output sample rate in Hz; backend default when absent.
  */
 sample_rate?: number | null, };
-type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae";
+type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae" | "stt" | "tts";
 type GgufMetadata = { 
 /**
  * GGUF spec version.
