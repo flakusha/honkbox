@@ -1,38 +1,46 @@
-//! HTTP surface: `/health`, `/api/version`, `/v1/openapi.json`, UI fallback.
+//! HTTP surface: `/health`, `/api/version`, `/v1/models`(+`/refresh`),
+//! `/metrics`, `/v1/openapi.json`, chat/transcribe/synthesize, UI fallback.
 //!
 //! The `OpenAPI` document is served as plain JSON via `Json` — no
 //! `utoipa-axum` router glue.
 
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::task::{Context, Poll};
+use std::time::Instant;
 
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Query, State},
+    extract::{Query, Request, State},
     http::{HeaderMap, StatusCode, Uri, header},
+    middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, Sse},
     },
     routing::{get, post},
 };
-use rust_embed::Embed;
-use sd_rip_api_types::{
-    ChatMessage, ChatRequest, ChatResponse, ChatRole, Health, SynthesizeRequest, Transcript,
-    TranscriptSegment, Version,
+use honkbox_api_types::{
+    ChatMessage, ChatRequest, ChatResponse, ChatRole, GgufMetadata, Health, ModelCatalog,
+    ModelCatalogEntry, ModelKind, ModelMetadata, SafetensorsMetadata, SynthesizeRequest,
+    Transcript, TranscriptSegment, Version,
 };
-use sd_rip_audio_worker::{
-    SttPipeline, SynthesizeRequest as WorkerSynthRequest, TranscribeRequest as WorkerTranscribeRequest,
-    Transcript as WorkerTranscript, TtsPipeline, decode_wav, encode_wav,
+use honkbox_audio_worker::{
+    SttPipeline, SynthesizeRequest as WorkerSynthRequest,
+    TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript, TtsPipeline,
+    decode_wav, encode_wav,
 };
-use sd_rip_llm_worker::{
+use honkbox_llm_worker::{
     ChatMessage as WorkerChatMessage, ChatRequest as WorkerChatRequest, LlmPipeline, Role,
 };
+use rust_embed::Embed;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::{Stream, wrappers::UnboundedReceiverStream};
 use utoipa::OpenApi;
 
 /// Compile-time UI bundle (release always embeds; dev serves from disk instead).
@@ -46,7 +54,10 @@ struct EmbeddedUi;
     paths(
         health,
         get_version,
+        get_models,
+        refresh_models,
         openapi_json,
+        metrics_endpoint,
         post_chat,
         post_chat_stream,
         post_transcribe,
@@ -61,7 +72,13 @@ struct EmbeddedUi;
         ChatRole,
         Transcript,
         TranscriptSegment,
-        SynthesizeRequest
+        SynthesizeRequest,
+        ModelKind,
+        GgufMetadata,
+        SafetensorsMetadata,
+        ModelMetadata,
+        ModelCatalogEntry,
+        ModelCatalog
     ))
 )]
 pub struct ApiDoc;
@@ -76,6 +93,23 @@ pub struct AppConfig {
     pub dev: bool,
     /// Directory served in dev mode (Vite output).
     pub web_dist_dir: PathBuf,
+    /// Model catalog from the registry scan: served by `GET /v1/models`,
+    /// swapped by `POST /v1/models/refresh`, and used to validate per-request
+    /// `model` fields. `RwLock<Arc<_>>` cheap-swap: readers clone the `Arc`
+    /// under a short read lock, refresh swaps it wholesale. P1 replaces the
+    /// scan snapshot with live load state (swap manager).
+    pub catalog: Arc<RwLock<Arc<ModelCatalog>>>,
+    /// Registry roots re-scanned by `POST /v1/models/refresh` (startup
+    /// configuration; file-level changes are picked up, root config changes
+    /// need a restart).
+    pub roots: honkbox_registry::ModelRoots,
+    /// Startup-configured chat slug (`--llm-model`); accepted as a request
+    /// `model` alongside the catalog.
+    pub llm_model: Option<String>,
+    /// Startup-configured transcription slug (`--stt-model`).
+    pub stt_model: Option<String>,
+    /// Startup-configured synthesis slug (`--tts-model`).
+    pub tts_model: Option<String>,
     /// Shared chat pipeline (`stub-llm` or `llama-cpp-*`).
     pub llm: Arc<dyn LlmPipeline>,
     /// Shared transcription pipeline (`stub-stt` or `whisper-*`).
@@ -84,18 +118,42 @@ pub struct AppConfig {
     pub tts: Arc<dyn TtsPipeline>,
 }
 
+impl AppConfig {
+    /// Current catalog snapshot: a cheap `Arc` clone under a short read lock.
+    fn catalog_snapshot(&self) -> Arc<ModelCatalog> {
+        self.catalog
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/version", get(get_version))
+        .route("/v1/models", get(get_models))
+        .route("/v1/models/refresh", post(refresh_models))
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
+        .route("/metrics", get(metrics_endpoint))
         .fallback(fallback)
+        .layer(middleware::from_fn(track_metrics))
         .with_state(config)
+}
+
+/// Per-request metrics: one route/code counter + one duration observation
+/// (see `metrics`); no per-request allocation.
+async fn track_metrics(req: Request, next: Next) -> Response {
+    let route = crate::metrics::route_label(req.uri().path());
+    let started = Instant::now();
+    let response = next.run(req).await;
+    crate::metrics::record_request(route, response.status().as_u16(), started.elapsed());
+    response
 }
 
 /// Liveness probe.
@@ -110,7 +168,7 @@ async fn health() -> Json<Health> {
 #[utoipa::path(get, path = "/api/version", responses((status = 200, description = "Binary name and version", body = Version)))]
 async fn get_version() -> Json<Version> {
     Json(Version {
-        name: "sd-rip".to_owned(),
+        name: "honkbox".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
     })
 }
@@ -119,6 +177,148 @@ async fn get_version() -> Json<Version> {
 #[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, description = "OpenAPI document")))]
 async fn openapi_json() -> impl IntoResponse {
     Json(ApiDoc::openapi())
+}
+
+/// `GET /metrics`: minimal Prometheus text exposition (vLLM-vocabulary
+/// subset; see `metrics`).
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    responses((status = 200, description = "Prometheus text exposition", content_type = "text/plain"))
+)]
+async fn metrics_endpoint() -> Response {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::exposition(),
+    )
+        .into_response()
+}
+
+/// `GET /v1/models`: the discovered-model catalog as an OpenAI-style list
+/// envelope (`{object: "list", data: [...]}`). Served from the shared scan
+/// snapshot; `POST /v1/models/refresh` re-scans and swaps it.
+#[utoipa::path(get, path = "/v1/models", responses((status = 200, description = "Discovered model catalog", body = ModelCatalog)))]
+async fn get_models(State(config): State<AppConfig>) -> Response {
+    let catalog = config.catalog_snapshot();
+    // Serialized inline from the shared snapshot (`Arc<T>` only serializes
+    // with serde's `rc` feature, so `Json(Arc<…>)` is not `IntoResponse`);
+    // one `String` allocation beats cloning every entry into an owned `Json`.
+    match serde_json::to_string(&*catalog) {
+        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("catalog serialize failed: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /v1/models/refresh`: re-scan the configured registry roots and
+/// swap the shared catalog snapshot, returning the fresh body. Idempotent;
+/// missing or unreadable roots never fail the request (the scan is lenient —
+/// they contribute empty results). Root *configuration* still needs a
+/// restart; refresh picks up files added under the configured roots.
+#[utoipa::path(post, path = "/v1/models/refresh", responses((status = 200, description = "Freshly scanned model catalog", body = ModelCatalog)))]
+async fn refresh_models(State(config): State<AppConfig>) -> Response {
+    let roots = config.roots.clone();
+    let found =
+        match tokio::task::spawn_blocking(move || honkbox_registry::scan_roots(&roots)).await {
+            Ok(found) => found,
+            Err(err) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("refresh scan failed: {err}"),
+                )
+                    .into_response();
+            }
+        };
+    let catalog = build_catalog(&found);
+    *config
+        .catalog
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(catalog.clone());
+    match serde_json::to_string(&catalog) {
+        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("catalog serialize failed: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Registry scan hits → `/v1/models` body. Also feeds `models show --json`
+/// so the CLI output and the endpoint agree (P0 exit of the parity plan).
+#[must_use]
+pub fn build_catalog(found: &[honkbox_registry::FoundModel]) -> ModelCatalog {
+    ModelCatalog {
+        object: "list".to_owned(),
+        data: found.iter().map(|m| catalog_entry(m.into())).collect(),
+    }
+}
+
+/// Registry catalog entry → response DTO (the only registry→wire mapping).
+fn catalog_entry(entry: honkbox_registry::CatalogEntry) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        id: entry.slug,
+        kind: match entry.kind {
+            honkbox_registry::ModelKind::Llm => ModelKind::Llm,
+            honkbox_registry::ModelKind::Sd => ModelKind::Sd,
+            honkbox_registry::ModelKind::Lora => ModelKind::Lora,
+            honkbox_registry::ModelKind::Embedding => ModelKind::Embedding,
+            honkbox_registry::ModelKind::Vae => ModelKind::Vae,
+        },
+        category: entry.category,
+        path: entry.path.display().to_string(),
+        bytes: entry.bytes,
+        metadata: entry.metadata.map(catalog_metadata),
+    }
+}
+
+/// Registry header metadata → response DTO (part of the registry→wire mapping).
+fn catalog_metadata(metadata: honkbox_registry::ModelFileMetadata) -> ModelMetadata {
+    match metadata {
+        honkbox_registry::ModelFileMetadata::Gguf(meta) => ModelMetadata::Gguf(GgufMetadata {
+            version: meta.version,
+            tensor_count: meta.tensor_count,
+            name: meta.name,
+            architecture: meta.architecture,
+        }),
+        honkbox_registry::ModelFileMetadata::Safetensors(meta) => {
+            ModelMetadata::Safetensors(SafetensorsMetadata {
+                tensor_count: meta.tensor_count,
+                dtypes: meta.dtypes,
+            })
+        }
+    }
+}
+
+/// Per-request model targeting (P0 of the llama-swap parity plan).
+///
+/// The request `model` field is **validated only**: a non-empty value must
+/// be either the startup-configured slug for the modality or any catalog
+/// slug. Nothing is loaded, swapped, or re-routed here — the pipeline loaded
+/// at startup keeps serving (that is P1, the swap manager). Empty/missing
+/// keeps the startup-configured model, exactly as before this check
+/// existed. With no catalog entries and no configured slug (stub backends,
+/// empty scan) any value passes, so zero-config stub servers keep working.
+fn validate_model(
+    model: Option<&str>,
+    configured: Option<&str>,
+    catalog: &ModelCatalog,
+) -> Result<(), String> {
+    let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+        return Ok(());
+    };
+    if configured.is_some_and(|c| c == model) || catalog.data.iter().any(|e| e.id == model) {
+        return Ok(());
+    }
+    Err(format!(
+        "unknown model {model:?}: not a catalog slug (see GET /v1/models) and not the configured model"
+    ))
 }
 
 /// Embedded `web-dist/` asset when present, dev-disk file in `--dev`,
@@ -180,6 +380,15 @@ fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
     }
 }
 
+/// Try to reserve the process-wide GPU slot; a `Busy` rejection counts the
+/// `honkbox_gpu_slot_busy_rejections_total` metric and maps to a 429.
+fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, String)> {
+    honkbox_residency::global().try_reserve().map_err(|err| {
+        crate::metrics::note_gpu_slot_busy();
+        (StatusCode::TOO_MANY_REQUESTS, err.to_string())
+    })
+}
+
 /// `POST /v1/chat`: sync worker call inside `spawn_blocking`; the residency
 /// lease is held across the call. Only the server edge is async.
 #[utoipa::path(
@@ -188,6 +397,7 @@ fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
     request_body = ChatRequest,
     responses(
         (status = 200, description = "Chat completion", body = ChatResponse),
+        (status = 400, description = "Unknown model slug"),
         (status = 429, description = "GPU slot busy"),
         (status = 500, description = "Inference failed")
     )
@@ -196,6 +406,9 @@ async fn post_chat(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    let catalog = config.catalog_snapshot();
+    validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
@@ -203,8 +416,7 @@ async fn post_chat(
         temperature: req.temperature,
     };
     let pipe = config.llm.clone();
-    let reply = tokio::task::spawn_blocking(move || match sd_rip_residency::global().try_reserve()
-    {
+    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
             pipe.complete(&worker_req).map_err(|err| {
@@ -214,7 +426,7 @@ async fn post_chat(
                 )
             })
         }
-        Err(err) => Err((StatusCode::TOO_MANY_REQUESTS, err.to_string())),
+        Err(rejection) => Err(rejection),
     })
     .await
     .map_err(|err| {
@@ -231,15 +443,58 @@ async fn post_chat(
     }))
 }
 
+/// Drop the GPU residency lease immediately (the disconnect path): the slot
+/// frees even though the synchronous FFI call keeps running to completion —
+/// `LlmPipeline` has no abort hook yet, so cancellation is at token-boundary
+/// granularity.
+fn free_gpu_lease(slot: &Mutex<Option<honkbox_residency::Lease<'static>>>) {
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+/// SSE body wrapper: dropping the body (client disconnect, or the stream
+/// ending normally) marks the request cancelled; the worker `JoinHandle`
+/// lives exactly as long as the body it feeds.
+struct CancelOnDrop<S> {
+    /// Wrapped token stream.
+    inner: S,
+    /// Set on drop; checked by the worker at each token boundary.
+    cancelled: Arc<AtomicBool>,
+    /// Blocking worker task feeding `inner`.
+    _worker: tokio::task::JoinHandle<()>,
+}
+
+impl<S: Stream + Unpin> Stream for CancelOnDrop<S> {
+    type Item = S::Item;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl<S> Drop for CancelOnDrop<S> {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
 /// `POST /v1/chat/stream`: same blocking call, tokens forwarded as SSE
 /// (`data: {"token":"..."}` + `data: [DONE]`) over an unbounded channel so
 /// the sink never blocks the worker thread.
+///
+/// Disconnect handling: dropping the SSE body sets a cancel flag and the
+/// worker notices at its **next token boundary** — token delivery stops and
+/// the GPU residency lease is freed immediately, but the synchronous FFI
+/// call itself runs to completion (aborting it needs an abort hook on the
+/// `LlmPipeline` trait, which does not exist yet).
 #[utoipa::path(
     post,
     path = "/v1/chat/stream",
     request_body = ChatRequest,
     responses(
         (status = 200, description = "SSE token stream"),
+        (status = 400, description = "Unknown model slug"),
         (status = 429, description = "GPU slot busy"),
         (status = 500, description = "Inference failed")
     )
@@ -247,7 +502,13 @@ async fn post_chat(
 async fn post_chat_stream(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
-) -> Result<Sse<UnboundedReceiverStream<Result<Event, Infallible>>>, (StatusCode, String)> {
+) -> Result<
+    Sse<CancelOnDrop<UnboundedReceiverStream<Result<Event, Infallible>>>>,
+    (StatusCode, String),
+> {
+    let catalog = config.catalog_snapshot();
+    validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
@@ -255,30 +516,50 @@ async fn post_chat_stream(
         temperature: req.temperature,
     };
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    // The lease sits in a slot the token sink can drain: once the client is
+    // gone, the next token boundary frees the slot right away. The handler
+    // returns the SSE body without awaiting the worker, so tokens stream as
+    // they are produced.
+    let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
     let pipe = config.llm.clone();
-    // The lease lives inside the blocking task so a client disconnect cannot
-    // free the slot mid-generation; the handler returns the SSE body without
-    // awaiting the worker, so tokens stream as they are produced.
-    tokio::task::spawn_blocking(move || match sd_rip_residency::global().try_reserve() {
+    let worker_cancelled = cancelled.clone();
+    let worker = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
-            let _lease = lease;
+            *lease_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
             let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
+                if worker_cancelled.load(Ordering::Relaxed) {
+                    free_gpu_lease(&lease_slot);
+                    return;
+                }
                 let data = serde_json::json!({ "token": token }).to_string();
-                let _ = tx.send(Ok(Event::default().data(data)));
+                if tx.send(Ok(Event::default().data(data))).is_err() {
+                    // Receiver gone without the drop guard (drop raced the send).
+                    worker_cancelled.store(true, Ordering::Relaxed);
+                    free_gpu_lease(&lease_slot);
+                }
             });
+            // A disconnect between the last token and completion frees here.
+            free_gpu_lease(&lease_slot);
             if let Err(err) = result {
-                let _ = tx.send(Ok(
-                    Event::default().event("error").data(format!("chat failed: {err}")),
-                ));
+                let _ = tx.send(Ok(Event::default()
+                    .event("error")
+                    .data(format!("chat failed: {err}"))));
             }
             let _ = tx.send(Ok(Event::default().data("[DONE]")));
         }
-        Err(err) => {
-            let _ = tx.send(Ok(Event::default().event("error").data(err.to_string())));
+        Err((_, message)) => {
+            let _ = tx.send(Ok(Event::default().event("error").data(message)));
             let _ = tx.send(Ok(Event::default().data("[DONE]")));
         }
     });
-    Ok(Sse::new(UnboundedReceiverStream::new(rx)))
+    Ok(Sse::new(CancelOnDrop {
+        inner: UnboundedReceiverStream::new(rx),
+        cancelled,
+        _worker: worker,
+    }))
 }
 
 /// `POST /v1/transcribe`: content-type dispatch (`audio/wav` → `decode_wav`,
@@ -289,7 +570,7 @@ async fn post_chat_stream(
     path = "/v1/transcribe",
     responses(
         (status = 200, description = "Transcription", body = Transcript),
-        (status = 400, description = "Bad audio or missing sample_rate"),
+        (status = 400, description = "Unknown model, bad audio, or missing sample_rate"),
         (status = 415, description = "Use audio/wav or audio/pcm-s16le"),
         (status = 429, description = "GPU slot busy"),
         (status = 500, description = "Transcription failed")
@@ -301,6 +582,13 @@ async fn post_transcribe(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<Transcript>, (StatusCode, String)> {
+    let catalog = config.catalog_snapshot();
+    validate_model(
+        query.model.as_deref(),
+        config.stt_model.as_deref(),
+        &catalog,
+    )
+    .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -318,16 +606,14 @@ async fn post_transcribe(
                 StatusCode::BAD_REQUEST,
                 "audio/pcm-s16le requires ?sample_rate=".to_owned(),
             ))?;
-            if body.len() % 2 != 0 {
+            if !body.len().is_multiple_of(2) {
                 return Err((
                     StatusCode::BAD_REQUEST,
                     "odd audio/pcm-s16le length".to_owned(),
                 ));
             }
-            let pcm = body
-                .chunks_exact(2)
-                .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
-                .collect();
+            let (pairs, _) = body.as_chunks::<2>();
+            let pcm = pairs.iter().map(|pair| i16::from_le_bytes(*pair)).collect();
             (sample_rate, pcm)
         }
         other => {
@@ -342,26 +628,26 @@ async fn post_transcribe(
         language: query.language,
     };
     let pipe = config.stt.clone();
-    let out: WorkerTranscript =
-        tokio::task::spawn_blocking(move || match sd_rip_residency::global().try_reserve() {
-            Ok(lease) => {
-                let _lease = lease;
-                pipe.transcribe(&pcm, sample_rate, &worker_req).map_err(|err| {
+    let out: WorkerTranscript = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+        Ok(lease) => {
+            let _lease = lease;
+            pipe.transcribe(&pcm, sample_rate, &worker_req)
+                .map_err(|err| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("transcribe failed: {err}"),
                     )
                 })
-            }
-            Err(err) => Err((StatusCode::TOO_MANY_REQUESTS, err.to_string())),
-        })
-        .await
-        .map_err(|err| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("transcribe task failed: {err}"),
-            )
-        })??;
+        }
+        Err(rejection) => Err(rejection),
+    })
+    .await
+    .map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("transcribe task failed: {err}"),
+        )
+    })??;
     Ok(Json(Transcript {
         backend_id: out.backend_id,
         text: out.text,
@@ -385,6 +671,7 @@ async fn post_transcribe(
     request_body = SynthesizeRequest,
     responses(
         (status = 200, description = "WAV audio"),
+        (status = 400, description = "Unknown model slug"),
         (status = 429, description = "GPU slot busy"),
         (status = 500, description = "Synthesis failed")
     )
@@ -393,6 +680,9 @@ async fn post_synthesize(
     State(config): State<AppConfig>,
     Json(req): Json<SynthesizeRequest>,
 ) -> Result<Response, (StatusCode, String)> {
+    let catalog = config.catalog_snapshot();
+    validate_model(Some(&req.model), config.tts_model.as_deref(), &catalog)
+        .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     let worker_req = WorkerSynthRequest {
         model: req.model,
         text: req.text,
@@ -400,8 +690,7 @@ async fn post_synthesize(
         sample_rate: req.sample_rate,
     };
     let pipe = config.tts.clone();
-    let audio = tokio::task::spawn_blocking(move || match sd_rip_residency::global().try_reserve()
-    {
+    let audio = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
             pipe.synthesize(&worker_req).map_err(|err| {
@@ -411,7 +700,7 @@ async fn post_synthesize(
                 )
             })
         }
-        Err(err) => Err((StatusCode::TOO_MANY_REQUESTS, err.to_string())),
+        Err(rejection) => Err(rejection),
     })
     .await
     .map_err(|err| {

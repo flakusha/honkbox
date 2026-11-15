@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "sd-rip-server",
+    "title": "honkbox-server",
     "description": "",
     "license": {
       "name": "AGPL-3.0-or-later",
@@ -48,6 +48,21 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /metrics`: minimal Prometheus text exposition (vLLM-vocabulary\nsubset; see `metrics`).",
+        "operationId": "metrics_endpoint",
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        }
+      }
+    },
     "/v1/chat": {
       "post": {
         "tags": [],
@@ -74,6 +89,9 @@
               }
             }
           },
+          "400": {
+            "description": "Unknown model slug"
+          },
           "429": {
             "description": "GPU slot busy"
           },
@@ -87,6 +105,7 @@
       "post": {
         "tags": [],
         "summary": "`POST /v1/chat/stream`: same blocking call, tokens forwarded as SSE\n(`data: {\"token\":\"...\"}` + `data: [DONE]`) over an unbounded channel so\nthe sink never blocks the worker thread.",
+        "description": "Disconnect handling: dropping the SSE body sets a cancel flag and the\nworker notices at its **next token boundary** — token delivery stops and\nthe GPU residency lease is freed immediately, but the synchronous FFI\ncall itself runs to completion (aborting it needs an abort hook on the\n`LlmPipeline` trait, which does not exist yet).",
         "operationId": "post_chat_stream",
         "requestBody": {
           "content": {
@@ -102,11 +121,52 @@
           "200": {
             "description": "SSE token stream"
           },
+          "400": {
+            "description": "Unknown model slug"
+          },
           "429": {
             "description": "GPU slot busy"
           },
           "500": {
             "description": "Inference failed"
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/models`: the discovered-model catalog as an OpenAI-style list\nenvelope (`{object: \"list\", data: [...]}`). Served from the shared scan\nsnapshot; `POST /v1/models/refresh` re-scans and swaps it.",
+        "operationId": "get_models",
+        "responses": {
+          "200": {
+            "description": "Discovered model catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalog"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models/refresh": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/models/refresh`: re-scan the configured registry roots and\nswap the shared catalog snapshot, returning the fresh body. Idempotent;\nmissing or unreadable roots never fail the request (the scan is lenient —\nthey contribute empty results). Root *configuration* still needs a\nrestart; refresh picks up files added under the configured roots.",
+        "operationId": "refresh_models",
+        "responses": {
+          "200": {
+            "description": "Freshly scanned model catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalog"
+                }
+              }
+            }
           }
         }
       }
@@ -142,6 +202,9 @@
           "200": {
             "description": "WAV audio"
           },
+          "400": {
+            "description": "Unknown model slug"
+          },
           "429": {
             "description": "GPU slot busy"
           },
@@ -168,7 +231,7 @@
             }
           },
           "400": {
-            "description": "Bad audio or missing sample_rate"
+            "description": "Unknown model, bad audio, or missing sample_rate"
           },
           "415": {
             "description": "Use audio/wav or audio/pcm-s16le"
@@ -194,10 +257,12 @@
         ],
         "properties": {
           "content": {
-            "type": "string"
+            "type": "string",
+            "description": "Message text."
           },
           "role": {
-            "$ref": "#/components/schemas/ChatRole"
+            "$ref": "#/components/schemas/ChatRole",
+            "description": "Who said it."
           }
         }
       },
@@ -215,23 +280,27 @@
               "null"
             ],
             "format": "int32",
+            "description": "Max tokens to generate; backend default when absent.",
             "minimum": 0
           },
           "messages": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ChatMessage"
-            }
+            },
+            "description": "Conversation turns."
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Model id (informational; the backend is chosen by the server)."
           },
           "temperature": {
             "type": [
               "number",
               "null"
             ],
-            "format": "float"
+            "format": "float",
+            "description": "Sampling temperature; backend default when absent."
           }
         }
       },
@@ -246,19 +315,23 @@
         ],
         "properties": {
           "backend_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Which backend produced this."
           },
           "millis": {
             "type": "integer",
             "format": "int64",
+            "description": "Wall-clock time in milliseconds.",
             "minimum": 0
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "Generated text."
           },
           "tokens": {
             "type": "integer",
             "format": "int32",
+            "description": "Number of generated tokens.",
             "minimum": 0
           }
         }
@@ -271,6 +344,42 @@
           "assistant",
           "system"
         ]
+      },
+      "GgufMetadata": {
+        "type": "object",
+        "description": "GGUF header summary (`GET /v1/models` entry `metadata`).",
+        "required": [
+          "version",
+          "tensor_count"
+        ],
+        "properties": {
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`general.architecture` KV string, when present."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`general.name` KV string, when present."
+          },
+          "tensor_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tensor count declared in the header.",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "GGUF spec version.",
+            "minimum": 0
+          }
+        }
       },
       "Health": {
         "type": "object",
@@ -285,6 +394,158 @@
           }
         }
       },
+      "ModelCatalog": {
+        "type": "object",
+        "description": "Model catalog: OpenAI-style list envelope (`GET /v1/models`).",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelCatalogEntry"
+            },
+            "description": "Discovered models, sorted by id."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"` (OpenAI-compatible envelope)."
+          }
+        }
+      },
+      "ModelCatalogEntry": {
+        "type": "object",
+        "description": "One discovered model in the catalog (`GET /v1/models`).",
+        "required": [
+          "id",
+          "kind",
+          "category",
+          "path",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size in bytes.",
+            "minimum": 0
+          },
+          "category": {
+            "type": "string",
+            "description": "Directory category (`checkpoints`, `loras`, LLM parent dir, or `root`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Registry slug, the stable request-facing id (`llm:…` / `comfy:…`)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ModelKind",
+            "description": "Modality derived from the scanned root."
+          },
+          "metadata": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ModelMetadata",
+                "description": "Header-derived metadata (GGUF/safetensors); absent when the file has\nno probeable header or the header is invalid."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "Absolute path to the weight file."
+          }
+        }
+      },
+      "ModelKind": {
+        "type": "string",
+        "description": "Model modality as discovered on disk (`GET /v1/models` entries). Mirrors\nthe registry's on-disk kinds; audio kinds arrive with P1 audio roots.",
+        "enum": [
+          "llm",
+          "sd",
+          "lora",
+          "embedding",
+          "vae"
+        ]
+      },
+      "ModelMetadata": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GgufMetadata",
+                "description": "`.gguf`: llama.cpp container header."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "format"
+                ],
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "gguf"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "`.gguf`: llama.cpp container header."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SafetensorsMetadata",
+                "description": "`.safetensors`: `HuggingFace` container header."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "format"
+                ],
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "safetensors"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "`.safetensors`: `HuggingFace` container header."
+          }
+        ],
+        "description": "Optional on-disk header metadata, tagged by container format."
+      },
+      "SafetensorsMetadata": {
+        "type": "object",
+        "description": "Safetensors header summary (`GET /v1/models` entry `metadata`).",
+        "required": [
+          "tensor_count",
+          "dtypes"
+        ],
+        "properties": {
+          "dtypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Unique dtype names, sorted (`F32`, `F16`, `BF16`, …)."
+          },
+          "tensor_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tensor entries in the JSON header (`__metadata__` excluded).",
+            "minimum": 0
+          }
+        }
+      },
       "SynthesizeRequest": {
         "type": "object",
         "description": "Speech synthesis request.",
@@ -294,7 +555,8 @@
         ],
         "properties": {
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Model id (informational; the backend is chosen by the server)."
           },
           "sample_rate": {
             "type": [
@@ -302,16 +564,19 @@
               "null"
             ],
             "format": "int32",
+            "description": "Output sample rate in Hz; backend default when absent.",
             "minimum": 0
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "Text to synthesize."
           },
           "voice": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Voice name; backend default when absent."
           }
         }
       },
@@ -326,21 +591,25 @@
         ],
         "properties": {
           "backend_id": {
-            "type": "string"
+            "type": "string",
+            "description": "Which backend produced this."
           },
           "millis": {
             "type": "integer",
             "format": "int64",
+            "description": "Wall-clock time in milliseconds.",
             "minimum": 0
           },
           "segments": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/TranscriptSegment"
-            }
+            },
+            "description": "Timestamped segments, in order."
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "Full transcription text."
           }
         }
       },
@@ -356,15 +625,18 @@
           "end_ms": {
             "type": "integer",
             "format": "int32",
+            "description": "Segment end, milliseconds from the audio start.",
             "minimum": 0
           },
           "start_ms": {
             "type": "integer",
             "format": "int32",
+            "description": "Segment start, milliseconds from the audio start.",
             "minimum": 0
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "Segment text."
           }
         }
       },
@@ -378,7 +650,7 @@
         "properties": {
           "name": {
             "type": "string",
-            "description": "Binary name, always `\"sd-rip\"`."
+            "description": "Binary name, always `\"honkbox\"`."
           },
           "version": {
             "type": "string",

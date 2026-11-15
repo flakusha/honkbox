@@ -1,7 +1,8 @@
 import { mountChat } from "./chat";
+import { mountPlayground } from "./playground";
 import { mountVoice } from "./voice";
 
-// Contract: GET /api/version → 200 {"name":"sd-rip","version":"0.1.0"}.
+// Contract: GET /api/version → 200 {"name":"honkbox","version":"0.1.0"}.
 // NOTE: packages/web-ui/src/gen/api-types.ts (written by `bun run codegen:check`)
 // will own this shape; this local stand-in is replaced — not widened —
 // once the first codegen run lands gen/.
@@ -39,7 +40,7 @@ function render(version: Version | null): void {
   const status = version === null ? "unreachable" : `${version.name} ${version.version}`;
   app.innerHTML = "";
   const heading = document.createElement("h1");
-  heading.textContent = "sd-rip";
+  heading.textContent = "honkbox";
   const para = document.createElement("p");
   para.textContent = `server: ${status}`;
   const nav = document.createElement("nav");
@@ -55,10 +56,13 @@ function render(version: Version | null): void {
   chatBtn.textContent = "Chat";
   const voiceBtn = document.createElement("button");
   voiceBtn.textContent = "Voice";
-  tabs.append(chatBtn, voiceBtn);
+  const playgroundBtn = document.createElement("button");
+  playgroundBtn.textContent = "Playground";
+  tabs.append(chatBtn, voiceBtn, playgroundBtn);
   const panel = document.createElement("div");
   chatBtn.addEventListener("click", () => mountChat(panel));
   voiceBtn.addEventListener("click", () => mountVoice(panel));
+  playgroundBtn.addEventListener("click", () => mountPlayground(panel));
   app.append(heading, para, nav, tabs, panel);
   mountChat(panel);
 }

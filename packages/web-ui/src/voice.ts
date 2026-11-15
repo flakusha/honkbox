@@ -1,4 +1,21 @@
-const MODEL_KEY = "sd-rip.voice.model";
+const MODEL_KEY = "honkbox.voice.model";
+// ONE-RELEASE compat: fall back to the old `sd-rip.*` key once, then rewrite
+// under `honkbox.*`.
+const LEGACY_MODEL_KEY = "sd-rip.voice.model";
+
+function loadModel(): string {
+  const current = localStorage.getItem(MODEL_KEY);
+  if (current !== null) {
+    return current;
+  }
+  const legacy = localStorage.getItem(LEGACY_MODEL_KEY);
+  if (legacy === null) {
+    return "";
+  }
+  localStorage.setItem(MODEL_KEY, legacy);
+  localStorage.removeItem(LEGACY_MODEL_KEY);
+  return legacy;
+}
 const RATE = 16000;
 
 function encodeWav(samples: Float32Array): Blob {
@@ -71,10 +88,8 @@ export function mountVoice(host: HTMLElement): void {
   host.innerHTML = "";
   const slug = document.createElement("input");
   slug.placeholder = "model slug";
-  slug.value = localStorage.getItem(MODEL_KEY) ?? "";
-  slug.addEventListener("change", () =>
-    localStorage.setItem(MODEL_KEY, slug.value),
-  );
+  slug.value = loadModel();
+  slug.addEventListener("change", () => localStorage.setItem(MODEL_KEY, slug.value));
   const lang = document.createElement("input");
   lang.placeholder = "language (optional)";
   const btn = document.createElement("button");
@@ -109,7 +124,7 @@ export function mountVoice(host: HTMLElement): void {
           body: encodeWav(samples),
         });
         if (!tres.ok) throw new Error(`transcribe ${tres.status}`);
-        const t = (await tres.json()) as { text: string };
+        const t = (await tres.json()) as { text: string; };
         host.append(Object.assign(document.createElement("p"), { textContent: `you: ${t.text}` }));
         status.textContent = "chatting…";
         const cres = await fetch("/v1/chat", {
@@ -121,8 +136,10 @@ export function mountVoice(host: HTMLElement): void {
           }),
         });
         if (!cres.ok) throw new Error(`chat ${cres.status}`);
-        const c = (await cres.json()) as { text: string };
-        host.append(Object.assign(document.createElement("p"), { textContent: `assistant: ${c.text}` }));
+        const c = (await cres.json()) as { text: string; };
+        host.append(
+          Object.assign(document.createElement("p"), { textContent: `assistant: ${c.text}` }),
+        );
         status.textContent = "synthesizing…";
         const sres = await fetch("/v1/synthesize", {
           method: "POST",
