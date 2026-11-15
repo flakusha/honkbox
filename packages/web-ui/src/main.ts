@@ -1,4 +1,5 @@
-export {};
+import { mountChat } from "./chat";
+import { mountVoice } from "./voice";
 
 // Contract: GET /api/version → 200 {"name":"sd-rip","version":"0.1.0"}.
 // NOTE: packages/web-ui/src/gen/api-types.ts (written by `bun run codegen:check`)
@@ -49,7 +50,17 @@ function render(version: Version | null): void {
   openapi.href = "/v1/openapi.json";
   openapi.textContent = "openapi";
   nav.append(health, " · ", openapi);
-  app.append(heading, para, nav);
+  const tabs = document.createElement("div");
+  const chatBtn = document.createElement("button");
+  chatBtn.textContent = "Chat";
+  const voiceBtn = document.createElement("button");
+  voiceBtn.textContent = "Voice";
+  tabs.append(chatBtn, voiceBtn);
+  const panel = document.createElement("div");
+  chatBtn.addEventListener("click", () => mountChat(panel));
+  voiceBtn.addEventListener("click", () => mountVoice(panel));
+  app.append(heading, para, nav, tabs, panel);
+  mountChat(panel);
 }
 
 await loadVersion().then(render);

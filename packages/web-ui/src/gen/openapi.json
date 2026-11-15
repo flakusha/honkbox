@@ -48,6 +48,69 @@
         }
       }
     },
+    "/v1/chat": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/chat`: sync worker call inside `spawn_blocking`; the residency\nlease is held across the call. Only the server edge is async.",
+        "operationId": "post_chat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy"
+          },
+          "500": {
+            "description": "Inference failed"
+          }
+        }
+      }
+    },
+    "/v1/chat/stream": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/chat/stream`: same blocking call, tokens forwarded as SSE\n(`data: {\"token\":\"...\"}` + `data: [DONE]`) over an unbounded channel so\nthe sink never blocks the worker thread.",
+        "operationId": "post_chat_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "SSE token stream"
+          },
+          "429": {
+            "description": "GPU slot busy"
+          },
+          "500": {
+            "description": "Inference failed"
+          }
+        }
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "tags": [],
@@ -59,10 +122,156 @@
           }
         }
       }
+    },
+    "/v1/synthesize": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/synthesize`: JSON in, WAV bytes out (`audio/wav`).",
+        "operationId": "post_synthesize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SynthesizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "WAV audio"
+          },
+          "429": {
+            "description": "GPU slot busy"
+          },
+          "500": {
+            "description": "Synthesis failed"
+          }
+        }
+      }
+    },
+    "/v1/transcribe": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/transcribe`: content-type dispatch (`audio/wav` → `decode_wav`,\n`audio/pcm-s16le` → raw LE bytes + required `?sample_rate=`), then the\nsync worker call inside `spawn_blocking`.",
+        "operationId": "post_transcribe",
+        "responses": {
+          "200": {
+            "description": "Transcription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Transcript"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad audio or missing sample_rate"
+          },
+          "415": {
+            "description": "Use audio/wav or audio/pcm-s16le"
+          },
+          "429": {
+            "description": "GPU slot busy"
+          },
+          "500": {
+            "description": "Transcription failed"
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "ChatMessage": {
+        "type": "object",
+        "description": "One chat message.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChatRole"
+          }
+        }
+      },
+      "ChatRequest": {
+        "type": "object",
+        "description": "Chat completion request.",
+        "required": [
+          "model",
+          "messages"
+        ],
+        "properties": {
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "ChatResponse": {
+        "type": "object",
+        "description": "Chat completion response.",
+        "required": [
+          "backend_id",
+          "text",
+          "tokens",
+          "millis"
+        ],
+        "properties": {
+          "backend_id": {
+            "type": "string"
+          },
+          "millis": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ChatRole": {
+        "type": "string",
+        "description": "Chat role.",
+        "enum": [
+          "user",
+          "assistant",
+          "system"
+        ]
+      },
       "Health": {
         "type": "object",
         "description": "Liveness probe response.",
@@ -73,6 +282,89 @@
           "status": {
             "type": "string",
             "description": "Always `\"ok\"` while the server is alive."
+          }
+        }
+      },
+      "SynthesizeRequest": {
+        "type": "object",
+        "description": "Speech synthesis request.",
+        "required": [
+          "model",
+          "text"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "sample_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Transcript": {
+        "type": "object",
+        "description": "Transcription result.",
+        "required": [
+          "backend_id",
+          "text",
+          "segments",
+          "millis"
+        ],
+        "properties": {
+          "backend_id": {
+            "type": "string"
+          },
+          "millis": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            }
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "TranscriptSegment": {
+        "type": "object",
+        "description": "One transcript segment.",
+        "required": [
+          "start_ms",
+          "end_ms",
+          "text"
+        ],
+        "properties": {
+          "end_ms": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "start_ms": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
           }
         }
       },
