@@ -18,7 +18,11 @@ exceptions = [] # any exception needs a dated comment + ticket
 # - RUSTSEC-2026-0194/0195 quick-xml 0.37 XML-DoS (little_exif PNG-EXIF path): untrusted
 #   XML unreachable (txt2img takes no image input); little_exif pins 0.37, blocks 0.41.
 # Pin bump: RUSTSEC-2025-0119 (number_prefix) dropped - crate no longer in lock (deny advisory-not-detected).
-ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+# 2026-11-15, all transitive via any-tts→audio-worker→server; revisit on any-tts/lindera/candle bump:
+# - RUSTSEC-2021-0153 encoding unmaintained (lindera-dictionary 2.3.4): no fixed release exists.
+# - RUSTSEC-2024-0449 unsafe-libyaml unmaintained (serde_yaml_ng 0.10.0→lindera 2.3.4): upstream archived, no fixed release.
+# - RUSTSEC-2026-0367/0368/0369/0429 zip 7.4.0 (any-tts requires "7.2", candle-core requires "7.2.0"): fix is 9.0.0 major, outside both caret ranges.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2021-0153", "RUSTSEC-2024-0449", "RUSTSEC-2026-0367", "RUSTSEC-2026-0368", "RUSTSEC-2026-0369", "RUSTSEC-2026-0429"]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
