@@ -1,6 +1,6 @@
 //! llama.cpp-backed [`LlmPipeline`](super::LlmPipeline) (GGUF via llama-cpp-4).
 
-use super::{ChatRequest, ChatResponse, LlmError, LlmOptions, LlmPipeline, Role};
+use super::{AbortState, ChatRequest, ChatResponse, LlmError, LlmOptions, LlmPipeline, Role};
 use llama_cpp_4::model::LlamaChatMessage;
 use llama_cpp_4::{
     AddBos, LlamaBackend, LlamaBatch, LlamaContextParams, LlamaModel, LlamaModelParams,
@@ -8,6 +8,7 @@ use llama_cpp_4::{
 };
 use std::num::NonZeroU32;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// GGUF model session. Owns the llama backend guard, so it is `Send + Sync`.
@@ -17,6 +18,8 @@ pub struct LlamaCppLlm {
     backend: LlamaBackend,
     model: LlamaModel,
     opts: LlmOptions,
+    /// Cancel signal: shared with `abort`; checked at each token step.
+    abort: Arc<AbortState>,
 }
 
 impl std::fmt::Debug for LlamaCppLlm {
@@ -50,6 +53,7 @@ impl LlamaCppLlm {
             backend,
             model,
             opts: opts.clone(),
+            abort: Arc::default(),
         })
     }
 
@@ -83,6 +87,7 @@ impl LlamaCppLlm {
         let max_tokens = req.max_tokens.unwrap_or(512);
         let temperature = req.temperature.unwrap_or(0.7);
         let start = Instant::now();
+        let generation = self.abort.begin();
 
         let prompt = self.render(req)?;
         let prompt_tokens = self
@@ -133,6 +138,12 @@ impl LlamaCppLlm {
         let mut pos = i32::try_from(prompt_tokens.len()).unwrap_or(i32::MAX);
         let mut step = LlamaBatch::new(1, 1);
         while generated < max_tokens {
+            // Abort checkpoint: the per-token decode returns to this loop, so
+            // checking here stops generation one token after `abort` fires —
+            // no FFI-level abort needed.
+            if self.abort.aborted_since(generation) {
+                break;
+            }
             if pos >= i32::try_from(self.opts.n_ctx).unwrap_or(i32::MAX) {
                 break;
             }
@@ -178,6 +189,10 @@ impl LlmPipeline for LlamaCppLlm {
         sink: &mut dyn FnMut(&str),
     ) -> Result<ChatResponse, LlmError> {
         self.run(req, Some(sink))
+    }
+
+    fn abort(&self) {
+        self.abort.abort();
     }
 
     fn backend_id(&self) -> &'static str {

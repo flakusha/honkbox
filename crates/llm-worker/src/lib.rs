@@ -5,6 +5,8 @@ mod backend;
 pub use backend::LlamaCppLlm;
 
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Role of a single chat message.
@@ -117,13 +119,54 @@ pub trait LlmPipeline: Send + Sync {
         req: &ChatRequest,
         sink: &mut dyn FnMut(&str),
     ) -> Result<ChatResponse, LlmError>;
+    /// Best-effort cancel of any in-flight generation on this pipeline.
+    ///
+    /// Contract:
+    /// - returns promptly (atomics only; no locks the worker holds, no join);
+    /// - must not panic when no generation is running (a no-op is valid);
+    /// - ordering relative to `complete`/`complete_stream` is relaxed: the
+    ///   abort is observed at the generation's next internal checkpoint, and
+    ///   an abort arriving before the run captures its generation may be
+    ///   missed (the caller still owns shutdown semantics).
+    ///
+    /// Backends return the partial result as `Ok` rather than an error: the
+    /// caller requested the cancellation, so a mid-stream error event would
+    /// be noise for an already-disconnected client.
+    fn abort(&self) {}
     /// Backend id (`stub-llm` | `llama-cpp-vulkan` | `llama-cpp-cuda`).
     fn backend_id(&self) -> &'static str;
 }
 
+/// Shared abort state for backends: a generation counter. [`AbortState::abort`]
+/// bumps it; a run that captured the counter at entry is cancelled once it
+/// changed. Atomics only, so `abort` can never deadlock with the worker.
+#[derive(Debug, Default)]
+pub(crate) struct AbortState {
+    generation: AtomicU64,
+}
+
+impl AbortState {
+    /// Capture the generation at run start.
+    fn begin(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    /// True once an `abort` happened after `generation` was captured.
+    fn aborted_since(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::Relaxed) != generation
+    }
+
+    /// Cancel the current (or next) generation.
+    fn abort(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Deterministic stub backend: canned text, no model, no GPU.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct StubLlm;
+#[derive(Debug, Default, Clone)]
+pub struct StubLlm {
+    abort: Arc<AbortState>,
+}
 
 impl LlmPipeline for StubLlm {
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, LlmError> {
@@ -145,9 +188,29 @@ impl LlmPipeline for StubLlm {
         req: &ChatRequest,
         sink: &mut dyn FnMut(&str),
     ) -> Result<ChatResponse, LlmError> {
+        let generation = self.abort.begin();
         let resp = self.complete(req)?;
-        sink(&resp.text);
-        Ok(resp)
+        // Token-by-word stream so an abort is observable between pieces.
+        let mut text = String::new();
+        let mut tokens = 0u32;
+        for word in resp.text.split_inclusive(' ') {
+            if self.abort.aborted_since(generation) {
+                break;
+            }
+            sink(word);
+            text.push_str(word);
+            tokens += 1;
+        }
+        Ok(ChatResponse {
+            backend_id: resp.backend_id,
+            tokens,
+            millis: resp.millis,
+            text,
+        })
+    }
+
+    fn abort(&self) {
+        self.abort.abort();
     }
 
     fn backend_id(&self) -> &'static str {
@@ -180,7 +243,7 @@ mod tests {
 
     #[test]
     fn stub_round_trip() {
-        let llm = StubLlm;
+        let llm = StubLlm::default();
         assert_eq!(llm.backend_id(), "stub-llm");
         let resp = llm.complete(&req()).unwrap();
         assert_eq!(resp.backend_id, "stub-llm");
@@ -192,6 +255,39 @@ mod tests {
             .unwrap();
         assert_eq!(streamed.text, resp.text);
         assert_eq!(streamed.text, pieces.concat());
+    }
+
+    #[test]
+    fn abort_stops_stub_stream_and_returns_partial() {
+        let llm = StubLlm::default();
+        let mut pieces = Vec::new();
+        // Abort before the run captures its generation: contract says this
+        // may be missed, so abort mid-stream via the sink callback instead.
+        let llm2 = std::sync::Arc::new(StubLlm::default());
+        let llm3 = std::sync::Arc::clone(&llm2);
+        let streamed = llm2
+            .complete_stream(&req(), &mut |s: &str| {
+                pieces.push(s.to_string());
+                // Cancel after the first piece: the loop must stop at the
+                // next checkpoint and return the partial text as `Ok`.
+                llm3.abort();
+            })
+            .unwrap();
+        assert_eq!(pieces.len(), 1, "stream stopped right after the abort");
+        assert_eq!(streamed.text, pieces.concat());
+        assert_eq!(streamed.tokens, 1);
+        // `complete` is unaffected by a stale abort from a finished run.
+        let fresh = llm.complete(&req()).unwrap();
+        assert!(fresh.text.contains("hello"));
+    }
+
+    #[test]
+    fn abort_with_no_generation_is_noop() {
+        let llm = StubLlm::default();
+        llm.abort();
+        llm.abort();
+        let resp = llm.complete_stream(&req(), &mut |_| {}).unwrap();
+        assert!(resp.text.contains("hello"));
     }
 
     #[test]

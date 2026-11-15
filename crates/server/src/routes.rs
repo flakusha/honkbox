@@ -444,9 +444,8 @@ async fn post_chat(
 }
 
 /// Drop the GPU residency lease immediately (the disconnect path): the slot
-/// frees even though the synchronous FFI call keeps running to completion —
-/// `LlmPipeline` has no abort hook yet, so cancellation is at token-boundary
-/// granularity.
+/// frees at the token boundary while `abort()` stops the FFI loop one token
+/// later.
 fn free_gpu_lease(slot: &Mutex<Option<honkbox_residency::Lease<'static>>>) {
     *slot
         .lock()
@@ -454,13 +453,17 @@ fn free_gpu_lease(slot: &Mutex<Option<honkbox_residency::Lease<'static>>>) {
 }
 
 /// SSE body wrapper: dropping the body (client disconnect, or the stream
-/// ending normally) marks the request cancelled; the worker `JoinHandle`
-/// lives exactly as long as the body it feeds.
+/// ending normally) marks the request cancelled and calls the pipeline's
+/// `abort` hook so the synchronous FFI generation stops at its next token
+/// step; the worker `JoinHandle` lives exactly as long as the body it feeds.
 struct CancelOnDrop<S> {
     /// Wrapped token stream.
     inner: S,
     /// Set on drop; checked by the worker at each token boundary.
     cancelled: Arc<AtomicBool>,
+    /// Pipeline `abort` hook (atomics-only state: cannot deadlock with the
+    /// blocking worker, which holds no lock across `complete_stream`).
+    pipe: Arc<dyn LlmPipeline>,
     /// Blocking worker task feeding `inner`.
     _worker: tokio::task::JoinHandle<()>,
 }
@@ -476,6 +479,7 @@ impl<S: Stream + Unpin> Stream for CancelOnDrop<S> {
 impl<S> Drop for CancelOnDrop<S> {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);
+        self.pipe.abort();
     }
 }
 
@@ -483,11 +487,11 @@ impl<S> Drop for CancelOnDrop<S> {
 /// (`data: {"token":"..."}` + `data: [DONE]`) over an unbounded channel so
 /// the sink never blocks the worker thread.
 ///
-/// Disconnect handling: dropping the SSE body sets a cancel flag and the
-/// worker notices at its **next token boundary** — token delivery stops and
-/// the GPU residency lease is freed immediately, but the synchronous FFI
-/// call itself runs to completion (aborting it needs an abort hook on the
-/// `LlmPipeline` trait, which does not exist yet).
+/// Disconnect handling: dropping the SSE body sets a cancel flag and calls
+/// the pipeline `abort` hook; the worker notices at its **next token
+/// boundary** — token delivery stops, the GPU residency lease is freed, and
+/// the synchronous FFI loop exits at its next internal checkpoint (per-token
+/// decode returns to our loop, so early return needs no FFI-level abort).
 #[utoipa::path(
     post,
     path = "/v1/chat/stream",
@@ -523,6 +527,9 @@ async fn post_chat_stream(
     // they are produced.
     let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
     let pipe = config.llm.clone();
+    // Separate handle for the SSE body: the worker closure consumes its own
+    // clone, the drop path calls `abort` through this one.
+    let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
     let worker = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
@@ -531,6 +538,8 @@ async fn post_chat_stream(
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
             let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
                 if worker_cancelled.load(Ordering::Relaxed) {
+                    // Also abort the FFI loop itself, not just delivery.
+                    pipe.abort();
                     free_gpu_lease(&lease_slot);
                     return;
                 }
@@ -538,6 +547,7 @@ async fn post_chat_stream(
                 if tx.send(Ok(Event::default().data(data))).is_err() {
                     // Receiver gone without the drop guard (drop raced the send).
                     worker_cancelled.store(true, Ordering::Relaxed);
+                    pipe.abort();
                     free_gpu_lease(&lease_slot);
                 }
             });
@@ -558,6 +568,7 @@ async fn post_chat_stream(
     Ok(Sse::new(CancelOnDrop {
         inner: UnboundedReceiverStream::new(rx),
         cancelled,
+        pipe: abort_pipe,
         _worker: worker,
     }))
 }

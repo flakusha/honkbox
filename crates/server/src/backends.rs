@@ -50,7 +50,7 @@ pub fn make_llm(
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
 ) -> Arc<dyn LlmPipeline> {
     match backend {
-        LlmBackend::Stub => Arc::new(StubLlm),
+        LlmBackend::Stub => Arc::new(StubLlm::default()),
         LlmBackend::LlamaCpp => {
             let slug = model.unwrap_or_else(|| {
                 eprintln!("error: --llm-model <slug> is required with --llm-backend llama-cpp");
