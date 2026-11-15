@@ -1,5 +1,7 @@
 //! Model roots config: `[models]` + optional `[discovery]` in
-//! `~/.honkbox/honkbox.toml`, env wins over file.
+//! `~/.honkbox/honkbox.toml`, env wins over file. Also `[jobs]` GC settings
+//! (`gc_ttl` / `gc_max_bytes`, seconds / bytes, env `HONKBOX_GC_TTL` /
+//! `HONKBOX_GC_MAX_BYTES`).
 //!
 //! Precedence: built-in defaults → config file → env (`HONKBOX_LLM_DIRS`,
 //! `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`, `HONKBOX_TTS_DIRS`,
@@ -11,8 +13,11 @@
 //! pointing at the move to `~/.honkbox`.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tracing::warn;
+
+use crate::jobs::{DEFAULT_GC_MAX_BYTES, DEFAULT_GC_TTL};
 
 /// Model roots handed to `honkbox_registry::scan_roots`: the `[models]`
 /// base roots plus any `[discovery]` extras, merged in that order.
@@ -26,7 +31,55 @@ pub struct ModelConfig {
     pub stt_dirs: Vec<PathBuf>,
     /// Text-to-speech weight directories; every entry is scanned.
     pub tts_dirs: Vec<PathBuf>,
+    /// `[jobs]` GC settings (startup garbage collection of job bundles).
+    pub jobs: JobsConfig,
 }
+
+/// `[jobs]` section: startup GC of `~/.honkbox/jobs` + stale temp PNGs.
+#[derive(Debug, Clone)]
+pub struct JobsConfig {
+    /// Age past which job bundles and stale temp files are removed.
+    pub gc_ttl: Duration,
+    /// Total size cap across job bundles; oldest bundles evicted first.
+    pub gc_max_bytes: u64,
+}
+
+impl Default for JobsConfig {
+    fn default() -> Self {
+        Self {
+            gc_ttl: DEFAULT_GC_TTL,
+            gc_max_bytes: DEFAULT_GC_MAX_BYTES,
+        }
+    }
+}
+
+/// Resolve GC settings: defaults → `[jobs]` file keys → env overrides.
+/// `gc_ttl` / `HONKBOX_GC_TTL` are seconds; `gc_max_bytes` /
+/// `HONKBOX_GC_MAX_BYTES` are bytes. Invalid values warn and keep the
+/// previous stage. Pure (env as args) so tests stay thread-safe.
+fn gc_settings(file: &FileJobs, ttl_env: Option<&str>, max_env: Option<&str>) -> JobsConfig {
+    let mut cfg = JobsConfig::default();
+    if let Some(secs) = file.gc_ttl {
+        cfg.gc_ttl = Duration::from_secs(secs);
+    }
+    if let Some(bytes) = file.gc_max_bytes {
+        cfg.gc_max_bytes = bytes;
+    }
+    if let Some(v) = ttl_env
+        && !v.is_empty()
+        && let Ok(secs) = v.parse::<u64>()
+    {
+        cfg.gc_ttl = Duration::from_secs(secs);
+    }
+    if let Some(v) = max_env
+        && !v.is_empty()
+        && let Ok(bytes) = v.parse::<u64>()
+    {
+        cfg.gc_max_bytes = bytes;
+    }
+    cfg
+}
+
 /// Load model roots: defaults, then `config_path` (or `~/.honkbox/honkbox.toml`),
 /// then env overrides. `[discovery]` extras are appended to the `[models]`
 /// base roots. A missing file falls back to defaults; invalid TOML is an
@@ -34,6 +87,7 @@ pub struct ModelConfig {
 pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
     let path = config_path.unwrap_or_else(default_path);
     let mut staged = RootStages::defaults();
+    let mut file_jobs = FileJobs::default();
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             let file: FileConfig =
@@ -62,10 +116,16 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
             if let Some(dirs) = file.discovery.tts_dirs {
                 staged.extra_tts = dirs.iter().map(|d| expand_home(d)).collect();
             }
+            file_jobs = file.jobs;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot read config {}: {e}", path.display())),
     }
+    let jobs = gc_settings(
+        &file_jobs,
+        std::env::var("HONKBOX_GC_TTL").ok().as_deref(),
+        std::env::var("HONKBOX_GC_MAX_BYTES").ok().as_deref(),
+    );
     Ok(apply_env(
         staged,
         env_or_compat("HONKBOX_LLM_DIRS", "SD_RIP_LLM_DIRS").as_deref(),
@@ -79,7 +139,7 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
         std::env::var("HONKBOX_DISCOVERY_STT_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
     )
-    .merged())
+    .merged(jobs))
 }
 
 /// Staged roots before the final merge: the `[models]` base plus the
@@ -113,7 +173,7 @@ impl RootStages {
 
     /// Merge: base roots first, `[discovery]` extras appended (the scan
     /// dedupes equal canonical paths across roots).
-    fn merged(self) -> ModelConfig {
+    fn merged(self, jobs: JobsConfig) -> ModelConfig {
         let mut llm_dirs = self.llm;
         llm_dirs.extend(self.extra_llm);
         let mut comfyui_dirs = self.comfyui;
@@ -127,6 +187,7 @@ impl RootStages {
             comfyui_dirs,
             stt_dirs,
             tts_dirs,
+            jobs,
         }
     }
 }
@@ -247,13 +308,16 @@ fn select_path(new_path: PathBuf, old_path: PathBuf) -> PathBuf {
     old_path
 }
 
-/// Whole-file shape: `[models]` (base roots) + optional `[discovery]`.
+/// Whole-file shape: `[models]` (base roots) + optional `[discovery]` +
+/// optional `[jobs]`.
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileConfig {
     #[serde(default)]
     models: FileModels,
     #[serde(default)]
     discovery: FileDiscovery,
+    #[serde(default)]
+    jobs: FileJobs,
 }
 
 /// `[models]` keys; each missing key keeps its default.
@@ -289,6 +353,16 @@ struct FileDiscovery {
     tts_dirs: Option<Vec<String>>,
 }
 
+/// `[jobs]` GC keys: `gc_ttl` (seconds) and `gc_max_bytes` (bytes); each
+/// missing key keeps its default.
+#[derive(Debug, Default, Clone, Copy, serde::Deserialize)]
+struct FileJobs {
+    #[serde(default)]
+    gc_ttl: Option<u64>,
+    #[serde(default)]
+    gc_max_bytes: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,7 +370,7 @@ mod tests {
     #[test]
     fn defaults_and_env_precedence() {
         let home = home::home_dir().expect("test needs $HOME");
-        let cfg = RootStages::defaults().merged();
+        let cfg = RootStages::defaults().merged(JobsConfig::default());
         assert_eq!(cfg.llm_dirs, vec![home.join(".cache/huggingface")]);
         assert_eq!(
             cfg.comfyui_dirs,
@@ -316,7 +390,7 @@ mod tests {
             Some(""),
             Some(""),
         );
-        let over = staged.clone().merged();
+        let over = staged.clone().merged(JobsConfig::default());
         assert_eq!(
             over.llm_dirs,
             vec![
@@ -346,7 +420,7 @@ mod tests {
             Some(""),
             Some(""),
         )
-        .merged();
+        .merged(JobsConfig::default());
         assert_eq!(kept.llm_dirs, over.llm_dirs);
         assert_eq!(kept.comfyui_dirs, over.comfyui_dirs);
         assert_eq!(kept.stt_dirs, over.stt_dirs);
@@ -374,7 +448,7 @@ mod tests {
             Some("/tmp/replacement-stt"),
             Some("/tmp/replacement-tts"),
         )
-        .merged();
+        .merged(JobsConfig::default());
         assert_eq!(
             merged.llm_dirs,
             vec![
@@ -435,5 +509,41 @@ mod tests {
         std::fs::write(&new, "[models]\n").expect("new config");
         assert_eq!(select_path(new.clone(), old.clone()), new);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// GC settings: defaults, then `[jobs]` keys, then env overrides win.
+    #[test]
+    fn gc_settings_precedence() {
+        // Defaults.
+        let d = gc_settings(&FileJobs::default(), None, None);
+        assert_eq!(d.gc_ttl, DEFAULT_GC_TTL);
+        assert_eq!(d.gc_max_bytes, DEFAULT_GC_MAX_BYTES);
+        // File keys.
+        let f = gc_settings(
+            &FileJobs {
+                gc_ttl: Some(3600),
+                gc_max_bytes: Some(1000),
+            },
+            None,
+            None,
+        );
+        assert_eq!(f.gc_ttl, Duration::from_secs(3600));
+        assert_eq!(f.gc_max_bytes, 1000);
+        // Env wins over file; empty env keeps the file value.
+        let e = gc_settings(&e_file(), Some("60"), Some("7"));
+        assert_eq!(e.gc_ttl, Duration::from_secs(60));
+        assert_eq!(e.gc_max_bytes, 7);
+        let kept = gc_settings(&e_file(), Some(""), Some(""));
+        assert_eq!(kept.gc_ttl, Duration::from_secs(3600));
+        // Invalid env keeps the file value.
+        let bad = gc_settings(&e_file(), Some("abc"), Some("-3"));
+        assert_eq!(bad.gc_ttl, Duration::from_secs(3600));
+    }
+
+    fn e_file() -> FileJobs {
+        FileJobs {
+            gc_ttl: Some(3600),
+            gc_max_bytes: None,
+        }
     }
 }

@@ -10,6 +10,7 @@ mod routes;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use backends::{LlmBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
@@ -17,6 +18,10 @@ use routes::{ApiDoc, AppConfig, app, build_catalog};
 use tracing::info;
 use utoipa::OpenApi as _;
 
+/// `gc` TTL default: 7 days in seconds.
+const GC_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+/// `gc` size-cap default: 4 GiB in bytes.
+const GC_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Local-first generative studio.
 #[derive(Debug, Parser)]
@@ -83,6 +88,16 @@ enum Command {
     Transcribe(TranscribeArgs),
     /// Synthesize text to wav; writes `--out`, prints a JSON summary.
     Synthesize(SynthesizeArgs),
+    /// Run job-bundle GC once: expire old bundles, enforce the size cap,
+    /// sweep `*.part` and stale `$TMPDIR/honkbox-*.png` leftovers.
+    Gc {
+        /// Age (seconds) past which job bundles and temp files are removed.
+        #[arg(long, default_value_t = GC_TTL_SECS)]
+        max_age_secs: u64,
+        /// Total size cap across job bundles (bytes); oldest evicted first.
+        #[arg(long, default_value_t = GC_MAX_BYTES)]
+        max_bytes: u64,
+    },
 }
 
 /// `generate` flags (one struct: the handler takes a single argument).
@@ -233,6 +248,11 @@ async fn main() {
             // roots stay in `AppConfig` so `POST /v1/models/refresh` can
             // re-scan them on demand.
             let cfg = or_exit(config::load(config));
+            // Startup GC of job bundles + stale temp files, off the async
+            // runtime; removals log at `debug!`.
+            let gc_ttl = cfg.jobs.gc_ttl;
+            let gc_max_bytes = cfg.jobs.gc_max_bytes;
+            tokio::task::spawn_blocking(move || jobs::gc_jobs(gc_ttl, gc_max_bytes));
             let roots = honkbox_registry::ModelRoots {
                 llm_dirs: cfg.llm_dirs,
                 comfyui_dirs: cfg.comfyui_dirs,
@@ -279,6 +299,15 @@ async fn main() {
         Command::Chat(args) => chat(args),
         Command::Transcribe(args) => transcribe(args),
         Command::Synthesize(args) => synthesize(args),
+        Command::Gc {
+            max_age_secs,
+            max_bytes,
+        } => {
+            logging::init(None);
+            info!("honkbox gc max_age={max_age_secs}s max_bytes={max_bytes}");
+            jobs::gc_jobs(Duration::from_secs(max_age_secs), max_bytes);
+            println!("gc done");
+        }
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, json),
         },
