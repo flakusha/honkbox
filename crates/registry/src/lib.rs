@@ -1,12 +1,19 @@
-//! Model-dir scan: find LLM + `ComfyUI` weight files under configured roots.
+//! Model-dir scan: find LLM + `ComfyUI` weight files under configured roots
+//! and collect them into a unified catalog (`catalog`).
 //!
-//! Sync, std-only. Slug contract: `llm:<posix-relative-path>` for files
-//! under an `llm_dir`, `comfy:<posix-relative-path>` for files under the
+//! Sync; std (+ `serde_json` for safetensors headers only). Slug contract:
+//! `llm:<posix-relative-path>` for files
+//! under an `llm_dir`, `comfy:<posix-relative-path>` for files under a
 //! `comfyui_dir` (e.g. `comfy:checkpoints/sdxl.safetensors`). Relative paths
 //! are measured from the root; separators are always `/`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+mod metadata;
+
+use metadata::probe;
+pub use metadata::{GgufMetadata, ModelFileMetadata, SafetensorsMetadata};
 
 /// Which kind of root a model file was found under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,8 +29,9 @@ pub enum RootKind {
 pub struct ModelRoots {
     /// LLM roots (e.g. `~/.cache/huggingface/`); every entry is scanned.
     pub llm_dirs: Vec<PathBuf>,
-    /// `ComfyUI` base folder (e.g. `~/git-ai/ai-models/Data/Models/`).
-    pub comfyui_dir: PathBuf,
+    /// `ComfyUI` base folders (`checkpoints/`, `loras/`, … beneath each);
+    /// every entry is scanned.
+    pub comfyui_dirs: Vec<PathBuf>,
 }
 
 /// One discovered model file.
@@ -48,6 +56,85 @@ impl serde::Serialize for RootKind {
             RootKind::Llm => "llm",
             RootKind::Comfy => "comfy",
         })
+    }
+}
+
+/// Modality of a catalog entry, derived from the root kind plus (for `ComfyUI`
+/// files) the category directory. Audio kinds (stt/tts) do not exist yet:
+/// there are no audio roots to scan — they arrive with the P1 discovery
+/// work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelKind {
+    /// Language-model weights under an LLM root.
+    Llm,
+    /// Stable-Diffusion weights: `ComfyUI` `checkpoints`/`diffusion_models`
+    /// categories and unclassified root-level files.
+    Sd,
+    /// `LoRA` adapter (`loras` category).
+    Lora,
+    /// Embedding / textual-inversion weights (`embeddings` category).
+    Embedding,
+    /// Standalone VAE weights (`vae` category).
+    Vae,
+}
+
+impl serde::Serialize for ModelKind {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match self {
+            ModelKind::Llm => "llm",
+            ModelKind::Sd => "sd",
+            ModelKind::Lora => "lora",
+            ModelKind::Embedding => "embedding",
+            ModelKind::Vae => "vae",
+        })
+    }
+}
+
+/// One unified catalog entry: a scan hit plus its modality. Same walk as
+/// `FoundModel`; the kind mapping lives in one place (`From<&FoundModel>`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CatalogEntry {
+    /// `llm:` / `comfy:` + posix-style path relative to the root (stable id).
+    pub slug: String,
+    /// Modality derived from the root kind and category.
+    pub kind: ModelKind,
+    /// `ComfyUI` category or the LLM parent-dir name (see `FoundModel`).
+    pub category: String,
+    /// Absolute path to the file.
+    pub path: PathBuf,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// Optional header-derived metadata (GGUF / safetensors), probed at
+    /// catalog-build time; `None` for other extensions or unreadable headers.
+    pub metadata: Option<ModelFileMetadata>,
+}
+
+/// Reads a few KB of header per file (GGUF/safetensors probing, see
+/// `metadata::probe`); any probe failure is a silent `None`, never an error.
+impl From<&FoundModel> for CatalogEntry {
+    fn from(m: &FoundModel) -> Self {
+        let ext = ext_of(&m.path).unwrap_or_default();
+        Self {
+            slug: m.slug.clone(),
+            kind: model_kind(m.root, &m.category),
+            category: m.category.clone(),
+            path: m.path.clone(),
+            bytes: m.bytes,
+            metadata: probe(&m.path, &ext),
+        }
+    }
+}
+
+/// Modality from root kind + `ComfyUI` category (see `ModelKind`).
+fn model_kind(root: RootKind, category: &str) -> ModelKind {
+    match root {
+        RootKind::Llm => ModelKind::Llm,
+        RootKind::Comfy => match category {
+            "loras" => ModelKind::Lora,
+            "embeddings" => ModelKind::Embedding,
+            "vae" => ModelKind::Vae,
+            _ => ModelKind::Sd,
+        },
     }
 }
 
@@ -131,9 +218,19 @@ pub fn scan_roots(roots: &ModelRoots) -> Vec<FoundModel> {
     for dir in &roots.llm_dirs {
         scan_one(dir, RootKind::Llm, &mut visited, &mut out);
     }
-    scan_one(&roots.comfyui_dir, RootKind::Comfy, &mut visited, &mut out);
+    for dir in &roots.comfyui_dirs {
+        scan_one(dir, RootKind::Comfy, &mut visited, &mut out);
+    }
     out.sort_by(|a, b| a.slug.cmp(&b.slug));
     out
+}
+
+/// Scan all configured roots into the unified model catalog (sorted by slug;
+/// see `scan_roots` for walk semantics). Missing roots yield empty results,
+/// never an error.
+#[must_use]
+pub fn catalog(roots: &ModelRoots) -> Vec<CatalogEntry> {
+    scan_roots(roots).iter().map(CatalogEntry::from).collect()
 }
 
 /// Handle one directory entry: push subdirs onto the stack, push model files
@@ -234,7 +331,7 @@ mod tests {
 
     #[test]
     fn scan_tmp_tree() {
-        let base = std::env::temp_dir().join(format!("sd-rip-scan-test-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("honkbox-scan-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let llm = base.join("llm");
         let comfy = base.join("comfy");
@@ -251,7 +348,7 @@ mod tests {
         std::fs::write(comfy.join(".hidden.safetensors"), b"no").unwrap();
         let roots = ModelRoots {
             llm_dirs: vec![llm.clone(), base.join("missing-root")],
-            comfyui_dir: comfy.clone(),
+            comfyui_dirs: vec![comfy.clone()],
         };
         let found = scan_roots(&roots);
         // Cleanup before asserting: no debris even when an assert fails.
@@ -269,5 +366,67 @@ mod tests {
         assert_eq!(found[1].category, "model");
         assert_eq!(found[2].category, "root");
         assert_eq!(found[0].bytes, 3);
+    }
+
+    #[test]
+    fn catalog_maps_kinds() {
+        let base =
+            std::env::temp_dir().join(format!("honkbox-catalog-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let llm = base.join("llm");
+        let comfy = base.join("comfy");
+        std::fs::create_dir_all(llm.join("qwen")).unwrap();
+        std::fs::create_dir_all(comfy.join("checkpoints")).unwrap();
+        std::fs::create_dir_all(comfy.join("loras")).unwrap();
+        std::fs::create_dir_all(comfy.join("embeddings")).unwrap();
+        std::fs::create_dir_all(comfy.join("vae")).unwrap();
+        std::fs::write(llm.join("qwen/q.gguf"), b"x").unwrap();
+        std::fs::write(comfy.join("checkpoints/sd.safetensors"), b"yy").unwrap();
+        std::fs::write(comfy.join("loras/a.ckpt"), b"z").unwrap();
+        std::fs::write(comfy.join("embeddings/e.bin"), b"w").unwrap();
+        std::fs::write(comfy.join("vae/v.safetensors"), b"v").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: vec![llm],
+            comfyui_dirs: vec![comfy],
+        });
+        // Cleanup before asserting: no debris even when an assert fails.
+        std::fs::remove_dir_all(&base).unwrap();
+        let kinds: Vec<(String, ModelKind)> =
+            entries.iter().map(|e| (e.slug.clone(), e.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("comfy:checkpoints/sd.safetensors".to_owned(), ModelKind::Sd),
+                ("comfy:embeddings/e.bin".to_owned(), ModelKind::Embedding),
+                ("comfy:loras/a.ckpt".to_owned(), ModelKind::Lora),
+                ("comfy:vae/v.safetensors".to_owned(), ModelKind::Vae),
+                ("llm:qwen/q.gguf".to_owned(), ModelKind::Llm),
+            ]
+        );
+    }
+
+    #[test]
+    fn multiple_comfy_roots_scan() {
+        let base = std::env::temp_dir().join(format!("honkbox-comfy2-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let a = base.join("a");
+        let b = base.join("b");
+        std::fs::create_dir_all(a.join("checkpoints")).unwrap();
+        std::fs::create_dir_all(b.join("loras")).unwrap();
+        std::fs::write(a.join("checkpoints/x.safetensors"), b"1").unwrap();
+        std::fs::write(b.join("loras/y.safetensors"), b"22").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: vec![a, b],
+        });
+        std::fs::remove_dir_all(&base).unwrap();
+        let slugs: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
+        assert_eq!(
+            slugs,
+            [
+                "comfy:checkpoints/x.safetensors",
+                "comfy:loras/y.safetensors"
+            ]
+        );
     }
 }

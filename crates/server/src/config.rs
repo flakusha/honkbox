@@ -1,75 +1,148 @@
-//! Model roots config: `[models]` in `~/.sd-rip/sd-rip.toml`, env wins over file.
+//! Model roots config: `[models]` + optional `[discovery]` in
+//! `~/.honkbox/honkbox.toml`, env wins over file.
 //!
-//! Precedence: built-in defaults → config file → env (`SD_RIP_LLM_DIRS`,
-//! `SD_RIP_COMFYUI_DIR`).
+//! Precedence: built-in defaults → config file → env (`HONKBOX_LLM_DIRS`,
+//! `HONKBOX_COMFYUI_DIR`, `HONKBOX_DISCOVERY_LLM_DIRS`,
+//! `HONKBOX_DISCOVERY_COMFYUI_DIRS`).
+//!
+//! ONE-RELEASE compat: when the new path / env vars are absent, the old
+//! `~/.sd-rip/sd-rip.toml` / `SD_RIP_*` vars are honored once with a `warn!`
+//! pointing at the move to `~/.honkbox`.
 
 use std::path::PathBuf;
 
-/// Model roots handed to `sd_rip_registry::scan_roots`.
+use tracing::warn;
+
+/// Model roots handed to `honkbox_registry::scan_roots`: the `[models]`
+/// base roots plus any `[discovery]` extras, merged in that order.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
     /// LLM roots (HuggingFace-cache layout); every entry is scanned.
     pub llm_dirs: Vec<PathBuf>,
-    /// `ComfyUI` base folder.
-    pub comfyui_dir: PathBuf,
+    /// `ComfyUI` base folders; every entry is scanned.
+    pub comfyui_dirs: Vec<PathBuf>,
 }
 
-/// Load model roots: defaults, then `config_path` (or `~/.sd-rip/sd-rip.toml`),
-/// then env overrides. A missing file falls back to defaults; invalid TOML
-/// is an `Err`.
+/// Load model roots: defaults, then `config_path` (or `~/.honkbox/honkbox.toml`),
+/// then env overrides. `[discovery]` extras are appended to the `[models]`
+/// base roots. A missing file falls back to defaults; invalid TOML is an
+/// `Err`.
 pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
     let path = config_path.unwrap_or_else(default_path);
-    let mut cfg = ModelConfig::defaults();
+    let mut staged = RootStages::defaults();
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             let file: FileConfig =
                 toml::from_str(&text).map_err(|e| format!("bad config {}: {e}", path.display()))?;
             if let Some(dirs) = file.models.llm_dirs {
-                cfg.llm_dirs = dirs.iter().map(|d| expand_home(d)).collect();
+                staged.llm = dirs.iter().map(|d| expand_home(d)).collect();
             }
             if let Some(dir) = file.models.comfyui_dir {
-                cfg.comfyui_dir = expand_home(&dir);
+                staged.comfyui = vec![expand_home(&dir)];
+            }
+            if let Some(dirs) = file.discovery.llm_dirs {
+                staged.extra_llm = dirs.iter().map(|d| expand_home(d)).collect();
+            }
+            if let Some(dirs) = file.discovery.comfyui_dirs {
+                staged.extra_comfyui = dirs.iter().map(|d| expand_home(d)).collect();
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("cannot read config {}: {e}", path.display())),
     }
     Ok(apply_env(
-        cfg,
-        std::env::var("SD_RIP_LLM_DIRS").ok().as_deref(),
-        std::env::var("SD_RIP_COMFYUI_DIR").ok().as_deref(),
-    ))
+        staged,
+        env_or_compat("HONKBOX_LLM_DIRS", "SD_RIP_LLM_DIRS").as_deref(),
+        env_or_compat("HONKBOX_COMFYUI_DIR", "SD_RIP_COMFYUI_DIR").as_deref(),
+        std::env::var("HONKBOX_DISCOVERY_LLM_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_DISCOVERY_COMFYUI_DIRS")
+            .ok()
+            .as_deref(),
+    )
+    .merged())
 }
 
-impl ModelConfig {
+/// Staged roots before the final merge: the `[models]` base plus the
+/// `[discovery]` extras, each stage replaceable by its env var.
+#[derive(Debug, Clone, Default)]
+struct RootStages {
+    llm: Vec<PathBuf>,
+    comfyui: Vec<PathBuf>,
+    extra_llm: Vec<PathBuf>,
+    extra_comfyui: Vec<PathBuf>,
+}
+
+impl RootStages {
     /// Built-in defaults used when no config file is present.
     fn defaults() -> Self {
         Self {
-            llm_dirs: vec![expand_home("~/.cache/huggingface")],
-            comfyui_dir: expand_home("~/git-ai/ai-models/Data/Models"),
+            llm: vec![expand_home("~/.cache/huggingface")],
+            comfyui: vec![expand_home("~/git-ai/ai-models/Data/Models")],
+            extra_llm: Vec::new(),
+            extra_comfyui: Vec::new(),
+        }
+    }
+
+    /// Merge: base roots first, `[discovery]` extras appended (the scan
+    /// dedupes equal canonical paths across roots).
+    fn merged(self) -> ModelConfig {
+        let mut llm_dirs = self.llm;
+        llm_dirs.extend(self.extra_llm);
+        let mut comfyui_dirs = self.comfyui;
+        comfyui_dirs.extend(self.extra_comfyui);
+        ModelConfig {
+            llm_dirs,
+            comfyui_dirs,
         }
     }
 }
 
-/// Env wins over file: `SD_RIP_LLM_DIRS` (path-separated via `split_paths`)
-/// replaces `llm_dirs`, `SD_RIP_COMFYUI_DIR` replaces `comfyui_dir`.
+/// New `HONKBOX_*` env wins; the old `SD_RIP_*` name is honored once with a
+/// `warn!` when the new one is absent (one-release compat).
+fn env_or_compat(new_key: &str, old_key: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(new_key) {
+        return Some(v);
+    }
+    let old = std::env::var(old_key).ok()?;
+    warn!(
+        "{old_key} is deprecated; use {new_key} (one-release compat: the old name will stop working)"
+    );
+    Some(old)
+}
+
+/// Env wins over file, per stage: `HONKBOX_LLM_DIRS` (path-separated via
+/// `split_paths`) replaces the `[models]` `llm_dirs`, `HONKBOX_COMFYUI_DIR`
+/// replaces the `[models]` `comfyui_dir`, `HONKBOX_DISCOVERY_LLM_DIRS` /
+/// `HONKBOX_DISCOVERY_COMFYUI_DIRS` replace the `[discovery]` extras.
 /// Pure (args instead of process env) so tests stay thread-safe.
 fn apply_env(
-    mut cfg: ModelConfig,
+    mut staged: RootStages,
     llm_dirs: Option<&str>,
     comfyui_dir: Option<&str>,
-) -> ModelConfig {
+    extra_llm_dirs: Option<&str>,
+    extra_comfyui_dirs: Option<&str>,
+) -> RootStages {
     if let Some(v) = llm_dirs
         && !v.is_empty()
     {
-        cfg.llm_dirs = std::env::split_paths(v).collect();
+        staged.llm = std::env::split_paths(v).collect();
     }
     if let Some(v) = comfyui_dir
         && !v.is_empty()
     {
-        cfg.comfyui_dir = PathBuf::from(v);
+        staged.comfyui = vec![PathBuf::from(v)];
     }
-    cfg
+    if let Some(v) = extra_llm_dirs
+        && !v.is_empty()
+    {
+        staged.extra_llm = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = extra_comfyui_dirs
+        && !v.is_empty()
+    {
+        staged.extra_comfyui = std::env::split_paths(v).collect();
+    }
+    staged
 }
 
 /// A leading `~` expands to `$HOME`; anything else passes through.
@@ -86,20 +159,39 @@ fn expand_home(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-/// `~/.sd-rip/sd-rip.toml` (unexpanded when `$HOME` is unknown, which then
+/// `~/.honkbox/honkbox.toml` (unexpanded when `$HOME` is unknown, which then
 /// just falls back to defaults as a missing file).
 fn default_path() -> PathBuf {
     match home::home_dir() {
-        Some(h) => h.join(".sd-rip/sd-rip.toml"),
-        None => PathBuf::from("~/.sd-rip/sd-rip.toml"),
+        Some(h) => select_path(
+            h.join(".honkbox/honkbox.toml"),
+            h.join(".sd-rip/sd-rip.toml"),
+        ),
+        None => PathBuf::from("~/.honkbox/honkbox.toml"),
     }
 }
 
-/// Whole-file shape: only `[models]` is read.
+/// New path wins; the old `~/.sd-rip` path is honored once with a `warn!`
+/// when the new one is absent (one-release compat).
+fn select_path(new_path: PathBuf, old_path: PathBuf) -> PathBuf {
+    if new_path.exists() || !old_path.exists() {
+        return new_path;
+    }
+    warn!(
+        "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
+        old_path.display(),
+        new_path.display()
+    );
+    old_path
+}
+
+/// Whole-file shape: `[models]` (base roots) + optional `[discovery]`.
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileConfig {
     #[serde(default)]
     models: FileModels,
+    #[serde(default)]
+    discovery: FileDiscovery,
 }
 
 /// `[models]` keys; each missing key keeps its default.
@@ -111,6 +203,21 @@ struct FileModels {
     comfyui_dir: Option<String>,
 }
 
+/// Optional `[discovery]` extras APPENDED to the `[models]` roots (P0 of the
+/// llama-swap parity plan); mirrors `[models]` with a plural `comfyui_dirs`
+/// so extra `ComfyUI` trees can be added without replacing the base one. The
+/// research doc's `roots = [{kind, path}]` table plus `cache`/
+/// `rescan_seconds`, and audio (stt/tts) roots, land with the P1 adapter
+/// work — the scanner has no audio-root kind yet, so unknown `[discovery]`
+/// keys are ignored today.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileDiscovery {
+    #[serde(default)]
+    llm_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    comfyui_dirs: Option<Vec<String>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,30 +225,107 @@ mod tests {
     #[test]
     fn defaults_and_env_precedence() {
         let home = home::home_dir().expect("test needs $HOME");
-        let cfg = ModelConfig::defaults();
+        let cfg = RootStages::defaults().merged();
         assert_eq!(cfg.llm_dirs, vec![home.join(".cache/huggingface")]);
-        assert_eq!(cfg.comfyui_dir, home.join("git-ai/ai-models/Data/Models"));
-
-        let over = apply_env(
-            cfg,
-            Some("/tmp/sd-rip-a:/tmp/sd-rip-b"),
-            Some("/tmp/sd-rip-comfy"),
+        assert_eq!(
+            cfg.comfyui_dirs,
+            vec![home.join("git-ai/ai-models/Data/Models")]
         );
+
+        let staged = apply_env(
+            RootStages::defaults(),
+            Some("/tmp/honkbox-a:/tmp/honkbox-b"),
+            Some("/tmp/honkbox-comfy"),
+            Some(""),
+            Some(""),
+        );
+        let over = staged.clone().merged();
         assert_eq!(
             over.llm_dirs,
             vec![
-                PathBuf::from("/tmp/sd-rip-a"),
-                PathBuf::from("/tmp/sd-rip-b")
+                PathBuf::from("/tmp/honkbox-a"),
+                PathBuf::from("/tmp/honkbox-b")
             ]
         );
-        assert_eq!(over.comfyui_dir, PathBuf::from("/tmp/sd-rip-comfy"));
+        assert_eq!(over.comfyui_dirs, vec![PathBuf::from("/tmp/honkbox-comfy")]);
 
         // Empty values keep the file/default values.
-        let kept = apply_env(over.clone(), Some(""), Some(""));
+        let kept = apply_env(staged, Some(""), Some(""), Some(""), Some("")).merged();
         assert_eq!(kept.llm_dirs, over.llm_dirs);
-        assert_eq!(kept.comfyui_dir, over.comfyui_dir);
+        assert_eq!(kept.comfyui_dirs, over.comfyui_dirs);
 
         // A missing file loads (defaults + ambient env), never errors.
-        assert!(load(Some(PathBuf::from("/nonexistent-sd-rip-config.toml"))).is_ok());
+        assert!(load(Some(PathBuf::from("/nonexistent-honkbox-config.toml"))).is_ok());
+    }
+
+    #[test]
+    fn discovery_extras_append_per_stage() {
+        // Discovery extras are a separate stage: base env does not touch them.
+        let merged = apply_env(
+            RootStages {
+                extra_llm: vec![PathBuf::from("/tmp/extra-llm")],
+                extra_comfyui: vec![PathBuf::from("/tmp/extra-comfy")],
+                ..RootStages::default()
+            },
+            Some("/tmp/base-llm"),
+            Some("/tmp/base-comfy"),
+            Some(""),
+            Some("/tmp/replacement-comfy:/tmp/second-comfy"),
+        )
+        .merged();
+        assert_eq!(
+            merged.llm_dirs,
+            vec![
+                PathBuf::from("/tmp/base-llm"),
+                PathBuf::from("/tmp/extra-llm")
+            ]
+        );
+        assert_eq!(
+            merged.comfyui_dirs,
+            vec![
+                PathBuf::from("/tmp/base-comfy"),
+                PathBuf::from("/tmp/replacement-comfy"),
+                PathBuf::from("/tmp/second-comfy"),
+            ]
+        );
+    }
+
+    #[test]
+    fn discovery_table_appends_to_models() {
+        let base = std::env::temp_dir().join(format!("honkbox-discovery-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(
+            &path,
+            "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\n",
+        )
+        .expect("write config");
+        let cfg = load(Some(path)).expect("load config");
+        std::fs::remove_dir_all(&base).ok();
+        // `contains` keeps the test robust against ambient HONKBOX_* env.
+        assert!(cfg.llm_dirs.contains(&PathBuf::from("/tmp/extra-llm")));
+        assert!(
+            cfg.comfyui_dirs
+                .contains(&PathBuf::from("/tmp/extra-comfy"))
+        );
+    }
+
+    #[test]
+    fn compat_path_prefers_new() {
+        let base = std::env::temp_dir().join(format!("honkbox-compat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let new = base.join("honkbox.toml");
+        let old = base.join("sd-rip.toml");
+        // Neither exists → new (a missing file falls back to defaults).
+        assert_eq!(select_path(new.clone(), old.clone()), new);
+        // Only old exists → old (one-release compat).
+        std::fs::write(&old, "[models]\n").expect("old config");
+        assert_eq!(select_path(new.clone(), old.clone()), old);
+        // New exists → new even when old lingers.
+        std::fs::write(&new, "[models]\n").expect("new config");
+        assert_eq!(select_path(new.clone(), old.clone()), new);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

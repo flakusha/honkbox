@@ -1,28 +1,30 @@
-//! `sd-rip` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
+//! `honkbox` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
 mod backends;
 mod config;
 mod jobs;
 mod logging;
+mod metrics;
 mod routes;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use backends::{LlmBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
-use routes::{ApiDoc, AppConfig, app};
+use routes::{ApiDoc, AppConfig, app, build_catalog};
 use tracing::info;
 use utoipa::OpenApi as _;
 
 /// Local-first generative studio.
 #[derive(Debug, Parser)]
-#[command(name = "sd-rip", version, about = "Local-first generative studio")]
+#[command(name = "honkbox", version, about = "Local-first generative studio")]
 struct Cli {
     /// What to run.
     #[command(subcommand)]
     command: Command,
-    /// Config file (`[models]`); defaults to `~/.sd-rip/sd-rip.toml`.
+    /// Config file (`[models]`); defaults to `~/.honkbox/honkbox.toml`.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 }
@@ -41,8 +43,9 @@ enum Command {
         /// Directory served in dev mode.
         #[arg(long, default_value = "web-dist")]
         web_dist_dir: PathBuf,
-        /// Log file (JSONL); falls back to `SD_RIP_LOG_FILE`, then `~/.sd-rip/logs/sd-rip.log`.
-        #[arg(long, env = "SD_RIP_LOG_FILE")]
+        /// Log file (JSONL); falls back to `HONKBOX_LOG_FILE`, then `~/.honkbox/logs/honkbox.log`
+        /// (`SD_RIP_LOG_FILE` / `~/.honkbox` honored once as one-release compat).
+        #[arg(long, env = "HONKBOX_LOG_FILE")]
         log_file: Option<PathBuf>,
         /// Chat backend (`stub` needs no model/GPU).
         #[arg(long, value_enum, default_value = "stub")]
@@ -71,7 +74,7 @@ enum Command {
         #[command(subcommand)]
         action: ModelsAction,
     },
-    /// Render an image into `~/.sd-rip/jobs/{ulid}/` (sync; picks `--backend`).
+    /// Render an image into `~/.honkbox/jobs/{ulid}/` (sync; picks `--backend`).
     Generate(GenerateArgs),
     /// Chat once via the LLM pipeline; prints `ChatResponse` JSON.
     Chat(ChatArgs),
@@ -194,9 +197,9 @@ struct SynthesizeArgs {
 /// Model-list actions.
 #[derive(Debug, Subcommand)]
 enum ModelsAction {
-    /// Show discovered models as a table, or `--json` for an array.
+    /// Show discovered models as a table, or `--json` for the catalog.
     Show {
-        /// Emit `{slug, kind, bytes, path}` JSON instead of the human table.
+        /// Emit the `GET /v1/models` catalog JSON (`{object, data}`) instead of the human table.
         #[arg(long)]
         json: bool,
     },
@@ -220,33 +223,42 @@ async fn main() {
         } => {
             logging::init(log_file);
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            info!("sd-rip serving on http://{addr} (dev: {dev})");
+            info!("honkbox serving on http://{addr} (dev: {dev})");
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .expect("bind address");
-            // File backends resolve slugs via the registry once; the
-            // stub-default serve skips the scan (no model/GPU needed).
-            let all_stub = matches!(llm_backend, LlmBackend::Stub)
-                && matches!(stt_backend, SttBackend::Stub)
-                && matches!(tts_backend, TtsBackend::Stub);
-            let found = if all_stub {
-                Vec::new()
-            } else {
-                let cfg = or_exit(config::load(config));
-                sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
-                    llm_dirs: cfg.llm_dirs,
-                    comfyui_dir: cfg.comfyui_dir,
-                })
+            // One registry scan feeds both slug resolution for file backends
+            // (stubs never call `resolve`) and the `/v1/models` catalog. The
+            // roots stay in `AppConfig` so `POST /v1/models/refresh` can
+            // re-scan them on demand.
+            let cfg = or_exit(config::load(config));
+            let roots = honkbox_registry::ModelRoots {
+                llm_dirs: cfg.llm_dirs,
+                comfyui_dirs: cfg.comfyui_dirs,
             };
+            let found = honkbox_registry::scan_roots(&roots);
+            info!("discovered {} models across configured roots", found.len());
+            let catalog = Arc::new(RwLock::new(Arc::new(build_catalog(&found))));
             let resolve = |slug: &str| resolve_model(&found, slug);
+            // Pipelines are built from the configured slugs before the strings
+            // move into `AppConfig` (they are accepted as request `model`
+            // values alongside the catalog).
+            let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
+            let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
+            let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
             axum::serve(
                 listener,
                 app(AppConfig {
                     dev,
                     web_dist_dir,
-                    llm: backends::make_llm(llm_backend, llm_model.as_deref(), &resolve),
-                    stt: backends::make_stt(stt_backend, stt_model.as_deref(), &resolve),
-                    tts: backends::make_tts(tts_backend, tts_model.as_deref(), &resolve),
+                    catalog,
+                    roots,
+                    llm_model,
+                    stt_model,
+                    tts_model,
+                    llm,
+                    stt,
+                    tts,
                 })
                 .into_make_service(),
             )
@@ -273,33 +285,23 @@ async fn main() {
 /// `models show`: load config (loud exit-1 on error), scan, print table/`--json`.
 fn models_show(config: Option<PathBuf>, json: bool) {
     let cfg = or_exit(config::load(config));
-    let mut found = sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+    let mut found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
-        comfyui_dir: cfg.comfyui_dir,
+        comfyui_dirs: cfg.comfyui_dirs,
     });
     found.sort_by(|a, b| a.slug.cmp(&b.slug));
     if json {
-        let out: Vec<serde_json::Value> = found
-            .iter()
-            .map(|m| {
-                serde_json::json!({
-                    "slug": m.slug,
-                    "kind": m.root,
-                    "bytes": m.bytes,
-                    "path": m.path,
-                })
-            })
-            .collect();
+        // Same shape as `GET /v1/models` (P0 exit of the parity plan).
         println!(
             "{}",
-            serde_json::to_string_pretty(&out).expect("serialize models")
+            serde_json::to_string_pretty(&build_catalog(&found)).expect("serialize models")
         );
     } else {
         println!("{:<64} {:<6} {:>10}  PATH", "SLUG", "KIND", "SIZE");
         for m in &found {
             let kind = match m.root {
-                sd_rip_registry::RootKind::Llm => "llm",
-                sd_rip_registry::RootKind::Comfy => "comfy",
+                honkbox_registry::RootKind::Llm => "llm",
+                honkbox_registry::RootKind::Comfy => "comfy",
             };
             println!(
                 "{:<64} {:<6} {:>10}  {}",
@@ -329,11 +331,11 @@ fn human_size(bytes: u64) -> String {
     format!("{}.{}{}", bytes / div, (bytes % div) * 10 / div, unit)
 }
 /// Registry slug → model path; unknown slug is a loud exit-1.
-fn resolve_model(found: &[sd_rip_registry::FoundModel], slug: &str) -> PathBuf {
+fn resolve_model(found: &[honkbox_registry::FoundModel], slug: &str) -> PathBuf {
     if let Some(m) = found.iter().find(|m| m.slug == slug) {
         m.path.clone()
     } else {
-        eprintln!("error: unknown model {slug:?}; see `sd-rip models show`");
+        eprintln!("error: unknown model {slug:?}; see `honkbox models show`");
         std::process::exit(1);
     }
 }
@@ -364,7 +366,7 @@ fn generate(args: GenerateArgs) {
     logging::init(None);
     let started = std::time::Instant::now();
     info!(
-        "sd-rip generate model={model} seed={seed} steps={steps} size={size} backend={backend:?}"
+        "honkbox generate model={model} seed={seed} steps={steps} size={size} backend={backend:?}"
     );
     #[cfg(feature = "vulkan")]
     if matches!(backend, Backend::SdCpp) && std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_none() {
@@ -374,20 +376,20 @@ fn generate(args: GenerateArgs) {
     }
     let cfg = or_exit(config::load(None));
     let (width, height) = or_exit(jobs::parse_size(&size));
-    let found = sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+    let found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
-        comfyui_dir: cfg.comfyui_dir,
+        comfyui_dirs: cfg.comfyui_dirs,
     });
     let model_path = resolve_model(&found, &model);
     // Optional split-file inputs: same registry, unknown slug is a loud exit-1.
     let clip = clip.as_deref().map(|s| resolve_model(&found, s));
     let vae = vae.as_deref().map(|s| resolve_model(&found, s));
-    let _lease = or_exit(sd_rip_residency::global().try_reserve());
-    let pipeline: Box<dyn sd_rip_sd_core::SdPipeline> = match backend {
-        Backend::Stub => Box::new(sd_rip_sd_core::StubPipeline),
-        Backend::SdCpp => Box::new(sd_rip_sd_core::SdCppPipeline::new(model_path)),
+    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    let pipeline: Box<dyn honkbox_sd_core::SdPipeline> = match backend {
+        Backend::Stub => Box::new(honkbox_sd_core::StubPipeline),
+        Backend::SdCpp => Box::new(honkbox_sd_core::SdCppPipeline::new(model_path)),
     };
-    let img = or_exit(pipeline.generate(&sd_rip_sd_core::Txt2ImgRequest {
+    let img = or_exit(pipeline.generate(&honkbox_sd_core::Txt2ImgRequest {
         prompt: prompt.clone(),
         seed,
         steps,
@@ -398,11 +400,11 @@ fn generate(args: GenerateArgs) {
         vae,
     }));
     let format = match format {
-        Format::Png => sd_rip_sd_core::OutputFormat::Png,
-        Format::Jpeg => sd_rip_sd_core::OutputFormat::Jpeg,
-        Format::Webp => sd_rip_sd_core::OutputFormat::Webp,
+        Format::Png => honkbox_sd_core::OutputFormat::Png,
+        Format::Jpeg => honkbox_sd_core::OutputFormat::Jpeg,
+        Format::Webp => honkbox_sd_core::OutputFormat::Webp,
     };
-    let bytes = or_exit(sd_rip_sd_core::encode_image(img, format));
+    let bytes = or_exit(honkbox_sd_core::encode_image(img, format));
     let dir = or_exit(jobs::write_bundle(
         &jobs::BundleInputs {
             model_slug: model,
@@ -421,11 +423,11 @@ fn generate(args: GenerateArgs) {
 }
 
 /// Registry scan for file backends (stubs never reach here: no model/GPU).
-fn scan_models() -> Vec<sd_rip_registry::FoundModel> {
+fn scan_models() -> Vec<honkbox_registry::FoundModel> {
     let cfg = or_exit(config::load(None));
-    sd_rip_registry::scan_roots(&sd_rip_registry::ModelRoots {
+    honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
-        comfyui_dir: cfg.comfyui_dir,
+        comfyui_dirs: cfg.comfyui_dirs,
     })
 }
 
@@ -441,18 +443,18 @@ fn chat(args: ChatArgs) {
         temperature,
         llm_backend,
     } = args;
-    info!("sd-rip chat model={model} backend={llm_backend:?}");
+    info!("honkbox chat model={model} backend={llm_backend:?}");
     let found = match llm_backend {
         LlmBackend::Stub => Vec::new(),
         LlmBackend::LlamaCpp => scan_models(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_llm(llm_backend, Some(model.as_str()), &resolve);
-    let _lease = or_exit(sd_rip_residency::global().try_reserve());
-    let reply = or_exit(pipe.complete(&sd_rip_llm_worker::ChatRequest {
+    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    let reply = or_exit(pipe.complete(&honkbox_llm_worker::ChatRequest {
         model,
-        messages: vec![sd_rip_llm_worker::ChatMessage {
-            role: sd_rip_llm_worker::Role::User,
+        messages: vec![honkbox_llm_worker::ChatMessage {
+            role: honkbox_llm_worker::Role::User,
             content: prompt,
         }],
         max_tokens,
@@ -460,7 +462,7 @@ fn chat(args: ChatArgs) {
     }));
     println!(
         "{}",
-        serde_json::to_string_pretty(&sd_rip_api_types::ChatResponse {
+        serde_json::to_string_pretty(&honkbox_api_types::ChatResponse {
             backend_id: reply.backend_id,
             text: reply.text,
             tokens: reply.tokens,
@@ -483,30 +485,29 @@ fn transcribe(args: TranscribeArgs) {
         stt_backend,
         out,
     } = args;
-    info!("sd-rip transcribe model={model} backend={stt_backend:?}");
-    let bytes = or_exit(
-        std::fs::read(&input).map_err(|err| format!("read {}: {err}", input.display())),
-    );
-    let (sample_rate, pcm) = or_exit(sd_rip_audio_worker::decode_wav(&bytes));
+    info!("honkbox transcribe model={model} backend={stt_backend:?}");
+    let bytes =
+        or_exit(std::fs::read(&input).map_err(|err| format!("read {}: {err}", input.display())));
+    let (sample_rate, pcm) = or_exit(honkbox_audio_worker::decode_wav(&bytes));
     let found = match stt_backend {
         SttBackend::Stub => Vec::new(),
         SttBackend::Whisper => scan_models(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_stt(stt_backend, Some(model.as_str()), &resolve);
-    let _lease = or_exit(sd_rip_residency::global().try_reserve());
+    let _lease = or_exit(honkbox_residency::global().try_reserve());
     let out_tx = or_exit(pipe.transcribe(
         &pcm,
         sample_rate,
-        &sd_rip_audio_worker::TranscribeRequest { model, language },
+        &honkbox_audio_worker::TranscribeRequest { model, language },
     ));
-    let transcript = sd_rip_api_types::Transcript {
+    let transcript = honkbox_api_types::Transcript {
         backend_id: out_tx.backend_id,
         text: out_tx.text,
         segments: out_tx
             .segments
             .into_iter()
-            .map(|segment| sd_rip_api_types::TranscriptSegment {
+            .map(|segment| honkbox_api_types::TranscriptSegment {
                 start_ms: segment.start_ms,
                 end_ms: segment.end_ms,
                 text: segment.text,
@@ -536,7 +537,7 @@ fn synthesize(args: SynthesizeArgs) {
         tts_backend,
         sample_rate,
     } = args;
-    info!("sd-rip synthesize model={model} backend={tts_backend:?}");
+    info!("honkbox synthesize model={model} backend={tts_backend:?}");
     let found = match tts_backend {
         TtsBackend::Stub => Vec::new(),
         TtsBackend::Kokoro => scan_models(),
@@ -544,15 +545,15 @@ fn synthesize(args: SynthesizeArgs) {
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_tts(tts_backend, Some(model.as_str()), &resolve);
     let started = std::time::Instant::now();
-    let _lease = or_exit(sd_rip_residency::global().try_reserve());
-    let audio = or_exit(pipe.synthesize(&sd_rip_audio_worker::SynthesizeRequest {
+    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    let audio = or_exit(pipe.synthesize(&honkbox_audio_worker::SynthesizeRequest {
         model,
         text,
         voice,
         sample_rate,
     }));
     let millis = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let wav = sd_rip_audio_worker::encode_wav(audio.sample_rate, &audio.pcm16);
+    let wav = honkbox_audio_worker::encode_wav(audio.sample_rate, &audio.pcm16);
     or_exit(std::fs::write(&out, &wav).map_err(|err| format!("write {}: {err}", out.display())));
     println!(
         "{}",
