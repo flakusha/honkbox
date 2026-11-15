@@ -1,0 +1,40 @@
+# Rust build output
+/target/
+
+# TS / bun
+node_modules/
+dist/
+bun.lockb
+
+# Generated web bundle: keep the dir (rust-embed needs it), ignore contents
+web-dist/*
+
+# Local data
+*.db*
+*.db-journal
+*.sqlite*
+
+# Models / weights (vendored or downloaded, never committed)
+models/
+weights/
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Env / secrets
+.env*
+
+# Scratch research + coverage
+.tmp/
+coverage/
+lcov.info
+
+# Re-include repo dirs shadowed by global `.*/` dot-dir ignores (core.excludesFile).
+# .github/ (CI) and .githooks/ (hooks) MUST be tracked; repo .gitignore wins
+# over the global file by precedence, and negating the dir re-includes it.
+!.github/
+!.githooks/

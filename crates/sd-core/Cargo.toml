@@ -1,0 +1,13 @@
+[package]
+name = "sd-rip-sd-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# ash backend deps (ash, gpu-allocator) arrive with the first experimental code (spike B).
+ash-backend = []

@@ -1,0 +1,70 @@
+#!/bin/sh
+# sd-rip pre-commit hook — staged files only (fast).
+# Install: git config core.hooksPath .githooks
+#
+# REUSE compliance lives in REUSE.toml (project-wide [[annotations]] catch-all);
+# no per-file SPDX headers are required, so none are checked here.
+# Written in POSIX sh so `sh -n .githooks/pre-commit` passes cleanly.
+set -u
+
+failures=0
+
+STAGED_FMT=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|json|md)$' || true)
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.tsx?$' || true)
+STAGED_SH=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.sh$' || true)
+HOOK_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -x '.githooks/pre-commit' || true)
+
+if [ -z "$STAGED_FMT" ] && [ -z "$STAGED_TS" ] && [ -z "$STAGED_SH" ] && [ -z "$HOOK_STAGED" ]; then
+  echo "No staged files for file gates — skipping"
+  exit 0
+fi
+
+if [ -n "$STAGED_FMT" ]; then
+  if echo "$STAGED_FMT" | xargs bunx dprint fmt >/dev/null 2>&1; then
+    echo "$STAGED_FMT" | xargs git add 2>/dev/null
+    echo "PASS: dprint fmt (restaged)"
+  else
+    echo "FAIL: dprint fmt — run 'bun install' then retry"
+    failures=$((failures + 1))
+  fi
+fi
+
+if [ -n "$STAGED_TS" ]; then
+  if echo "$STAGED_TS" | xargs bunx oxlint >/dev/null 2>&1; then
+    echo "PASS: oxlint"
+  else
+    echo "FAIL: oxlint — fix the findings above, re-stage, and retry"
+    failures=$((failures + 1))
+  fi
+fi
+
+if [ -n "$STAGED_SH" ]; then
+  ok=1
+  for f in $STAGED_SH; do
+    if ! sh -n "$f"; then
+      echo "FAIL: sh -n syntax error in $f"
+      ok=0
+    fi
+  done
+  if [ "$ok" -eq 1 ]; then
+    echo "PASS: sh -n"
+  else
+    failures=$((failures + 1))
+  fi
+fi
+
+if [ -n "$HOOK_STAGED" ]; then
+  if sh -n .githooks/pre-commit; then
+    echo "PASS: hook self-check (sh -n)"
+  else
+    echo "FAIL: hook self-check (sh -n)"
+    failures=$((failures + 1))
+  fi
+fi
+
+if [ "$failures" -gt 0 ]; then
+  echo "$failures check(s) failed — commit blocked"
+  exit 1
+fi
+
+echo "Staged files OK (REUSE: REUSE.toml covers licensing, no headers needed)"

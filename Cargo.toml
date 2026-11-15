@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+axum = "0.8.9"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-embed = "8.14.0"
+ts-rs = "12.0.1"
+utoipa = "6.0.0"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+home = "0.5"
+toml = "1"
+sd-rip-registry = { path = "crates/registry" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+# Profiles: dev stays Cargo default (fast incremental rebuilds).
+# Deferred (add only when measured): fat LTO (when thin-LTO gains plateau and slower links affordable);
+# codegen-units = 1 (when single-digit % runtime beats link parallelism); panic = "abort"
+# (when binary size/panic-unwind cost measured and abort acceptable); custom profiles
+# e.g. dist/release-fast (when a second release tradeoff is actually used);
+# per-package overrides (when one crate provably needs different opts).
+[profile.release]
+strip = "debuginfo"
+lto = "thin"
