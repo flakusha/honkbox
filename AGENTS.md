@@ -22,7 +22,7 @@ CLI (clap) / HTTP (axum)
 
 | Path | Purpose |
 |---|---|
-| `crates/server` (`honkbox-server`) | Only binary (`bin` name `honkbox`, shell alias `hbx` documented in README): main.rs (clap subcommands `serve`/`openapi`/`models show`/`generate`), routes.rs, metrics.rs, config.rs, jobs.rs, logging.rs |
+| `crates/server` (`honkbox-server`) | Only binary (`bin` name `honkbox`, shell alias `hbx` documented in README): main.rs (clap subcommands `serve`/`openapi`/`models show`/`generate`), routes.rs, metrics.rs, config.rs, jobs.rs, logging.rs, downloads.rs (`/v1/downloads` supervisor: `.part` + resume + cancel into `<data_dir>/models`)
 | `crates/sd-core` | Diffusion pipeline trait + Stub/SdCpp impls |
 | `crates/registry` | Model-dir scanner (std + serde; serde_json only for GGUF/safetensors header metadata; SQLite/hf-hub are planned, NOT built) |
 | `crates/residency` | GPU-slot ledger (`LazyLock` global, `Mutex` slot, RAII) |
@@ -76,7 +76,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 ## Testing & QA
 
-- Rust: inline `#[cfg(test)]` modules per crate + integration tests `crates/server/tests/{health,models,metrics,cancel}.rs` (axum `tower::ServiceExt::oneshot`; use `#[path = "../src/routes.rs"]` + `#[path = "../src/metrics.rs"]` since server is bin-only).
+- Rust: inline `#[cfg(test)]` modules per crate + integration tests `crates/server/tests/{health,models,metrics,cancel,downloads,swap}.rs` (axum `tower::ServiceExt::oneshot`; use `#[path = "../src/routes.rs"]` + `#[path = "../src/metrics.rs"]` since server is bin-only).
 - TS: `bun test --isolate --pass-with-no-tests` (no `*.test.ts` files yet).
 - Per-crate: `bun run test:core|test:server|test:registry|…` (each `cargo test --locked -p honkbox-<crate>`).
 - CI matrix: `test-rs` 3-OS (Linux Vulkan default features; Windows/macOS `--no-default-features` CPU-only) + `lavapipe` CPU-Vulkan smoke + lcov coverage (collected, **no threshold gate**).

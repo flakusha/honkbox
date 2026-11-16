@@ -2,6 +2,7 @@
 
 mod backends;
 mod config;
+mod downloads;
 mod jobs;
 mod logging;
 mod metrics;
@@ -405,27 +406,41 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
     let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
-    axum::serve(
-        listener,
-        app(AppConfig {
-            dev,
-            web_dist_dir,
-            catalog,
-            roots,
-            llm_model,
-            stt_model,
-            tts_model,
-            llm,
-            stt,
-            tts,
-            swap,
-            swap_max_ttl: swap_cfg.max_ttl,
-            data_dir,
-        })
-        .into_make_service(),
-    )
-    .await
-    .expect("serve app");
+    // Managed download supervisor: fetches into <data_dir>/models and fires
+    // a rescan on every commit (stale *.part files are kept for resume; the
+    // count is logged so leftovers stay visible).
+    let models_root = data_dir.as_deref().map(|base| base.join("models"));
+    let downloads = std::sync::Arc::new(
+        crate::downloads::DownloadManager::new(models_root.clone()).expect("download manager"),
+    );
+    info!(
+        stale = crate::downloads::count_stale_parts(models_root.as_deref()),
+        "stale download *.part files (kept for resume)"
+    );
+    let app_config = AppConfig {
+        dev,
+        web_dist_dir,
+        catalog,
+        roots,
+        llm_model,
+        stt_model,
+        tts_model,
+        llm,
+        stt,
+        tts,
+        swap,
+        swap_max_ttl: swap_cfg.max_ttl,
+        data_dir,
+        downloads,
+    };
+    let rescan_signal = app_config.downloads.rescan_signal();
+    tokio::spawn(routes::rescan_on_downloads(
+        app_config.clone(),
+        rescan_signal,
+    ));
+    axum::serve(listener, app(app_config).into_make_service())
+        .await
+        .expect("serve app");
 }
 
 /// `models show`: load config (loud exit-1 on error), scan, print table/`--json`.

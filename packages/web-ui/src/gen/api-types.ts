@@ -185,3 +185,82 @@ object: string,
  * Discovered models, sorted by id.
  */
 data: Array<ModelCatalogEntry>, };
+type DownloadKind = "llm" | "sd" | "stt" | "tts";
+type DownloadStatus = "queued" | "running" | "resuming" | "done" | "failed" | "cancelled";
+type DownloadRequest = { 
+/**
+ * `HuggingFace` repo id (`owner/name`); together with `file` it derives
+ * the source URL `https://huggingface.co/{repo}/resolve/main/{file}`
+ * and enables the LFS sha256 checksum check when the API reports one.
+ */
+repo?: string | null, 
+/**
+ * File path inside `repo` (its last segment becomes the local file
+ * name).
+ */
+file?: string | null, 
+/**
+ * Direct download URL; the alternative to `repo` + `file`. Exactly one
+ * source form must be present.
+ */
+url?: string | null, 
+/**
+ * Target modality (see `DownloadKind`).
+ */
+kind: DownloadKind, };
+type DownloadAccepted = { 
+/**
+ * Download id (`dl_<ulid>`); poll/cancel with it.
+ */
+id: string, 
+/**
+ * State at acceptance: `queued` normally, `done` when the target file
+ * already existed (`already_present`), or the in-flight state when an
+ * identical download is already running (single-flight join).
+ */
+state: DownloadStatus, };
+type DownloadState = { 
+/**
+ * Download id (`dl_<ulid>`).
+ */
+id: string, 
+/**
+ * Lifecycle state.
+ */
+state: DownloadStatus, 
+/**
+ * Bytes committed to the `.part` file so far.
+ */
+bytes_done: bigint, 
+/**
+ * Expected total size; absent until the server reports a length
+ * (and on terminal states where none was ever learned).
+ */
+bytes_total: bigint | null, 
+/**
+ * Source URL the bytes are fetched from.
+ */
+source: string, 
+/**
+ * Final file path under the managed models root.
+ */
+target_path: string | null, 
+/**
+ * Failure reason (only when `state` is `failed`).
+ */
+error: string | null, 
+/**
+ * Ranged resume is possible for this source: the server supplied a
+ * strong `ETag` (usable as `If-Range` validator) and advertised
+ * `Accept-Ranges: bytes`. `false` means the next pull cold-restarts.
+ */
+resumable: boolean, 
+/**
+ * `done` because the target file already existed (no bytes fetched).
+ */
+already_present?: boolean, };
+type DownloadList = { 
+/**
+ * Known downloads, sorted by id.
+ */
+downloads: Array<DownloadState>, };

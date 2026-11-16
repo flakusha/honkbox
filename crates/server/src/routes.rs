@@ -25,9 +25,10 @@ use axum::{
     routing::{get, post},
 };
 use honkbox_api_types::{
-    ChatMessage, ChatRequest, ChatResponse, ChatRole, GgufMetadata, Health, ModelCatalog,
-    ModelCatalogEntry, ModelKind, ModelMetadata, SafetensorsMetadata, SynthesizeRequest,
-    Transcript, TranscriptSegment, Version,
+    ChatMessage, ChatRequest, ChatResponse, ChatRole, DownloadAccepted, DownloadKind,
+    DownloadList, DownloadRequest, DownloadState, DownloadStatus, GgufMetadata, Health,
+    ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, SafetensorsMetadata,
+    SynthesizeRequest, Transcript, TranscriptSegment, Version,
 };
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest,
@@ -39,7 +40,7 @@ use honkbox_llm_worker::{
 };
 use rust_embed::Embed;
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio_stream::{Stream, wrappers::UnboundedReceiverStream};
 use utoipa::OpenApi;
 
@@ -61,7 +62,11 @@ struct EmbeddedUi;
         post_chat,
         post_chat_stream,
         post_transcribe,
-        post_synthesize
+        post_synthesize,
+        post_download,
+        list_downloads,
+        get_download,
+        delete_download
     ),
     components(schemas(
         Health,
@@ -78,7 +83,13 @@ struct EmbeddedUi;
         SafetensorsMetadata,
         ModelMetadata,
         ModelCatalogEntry,
-        ModelCatalog
+        ModelCatalog,
+        DownloadKind,
+        DownloadStatus,
+        DownloadRequest,
+        DownloadAccepted,
+        DownloadState,
+        DownloadList
     ))
 )]
 pub struct ApiDoc;
@@ -134,6 +145,10 @@ pub struct AppConfig {
     /// (`<data_dir>/registry.sqlite3`) on refresh. `None` disables the
     /// cache default (explicit `HONKBOX_REGISTRY_DB` still wins).
     pub data_dir: Option<PathBuf>,
+    /// Managed download supervisor (`/v1/downloads`): fetches model files
+    /// into `<data_dir>/models/{llm,sd,stt,tts}` and fires the rescan
+    /// signal on every commit.
+    pub downloads: Arc<crate::downloads::DownloadManager>,
 }
 
 impl AppConfig {
@@ -158,6 +173,11 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
+        .route("/v1/downloads", post(post_download).get(list_downloads))
+        .route(
+            "/v1/downloads/{id}",
+            get(get_download).delete(delete_download),
+        )
         .route("/metrics", get(metrics_endpoint))
         .fallback(fallback)
         .layer(middleware::from_fn(track_metrics))
@@ -205,12 +225,14 @@ async fn openapi_json() -> impl IntoResponse {
     responses((status = 200, description = "Prometheus text exposition", content_type = "text/plain"))
 )]
 async fn metrics_endpoint() -> Response {
+    // The download metric families live in `downloads.rs` (its own
+    // AtomicU64 grids); their exposition fragment is appended here.
     (
         [(
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        crate::metrics::exposition(),
+        crate::metrics::exposition() + &crate::downloads::exposition(),
     )
         .into_response()
 }
@@ -241,30 +263,47 @@ async fn get_models(State(config): State<AppConfig>) -> Response {
 /// restart; refresh picks up files added under the configured roots.
 #[utoipa::path(post, path = "/v1/models/refresh", responses((status = 200, description = "Freshly scanned model catalog", body = ModelCatalog)))]
 async fn refresh_models(State(config): State<AppConfig>) -> Response {
+    match rescan_catalog(&config).await {
+        Ok(catalog) => match serde_json::to_string(&catalog) {
+            Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("catalog serialize failed: {err}"),
+            )
+                .into_response(),
+        },
+        Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    }
+}
+
+/// Registry re-scan + shared catalog snapshot swap: the body of
+/// `POST /v1/models/refresh`, also driven by the download manager's
+/// completion signal (`rescan_on_downloads`).
+async fn rescan_catalog(config: &AppConfig) -> Result<ModelCatalog, String> {
     let roots = config.roots.clone();
-    let found =
-        match tokio::task::spawn_blocking(move || honkbox_registry::scan_roots(&roots)).await {
-            Ok(found) => found,
-            Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("refresh scan failed: {err}"),
-                )
-                    .into_response();
-            }
-        };
+    let found = tokio::task::spawn_blocking(move || honkbox_registry::scan_roots(&roots))
+        .await
+        .map_err(|err| format!("refresh scan failed: {err}"))?;
     let catalog = refresh_catalog(&found, config.data_dir.as_deref());
     *config
         .catalog
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(catalog.clone());
-    match serde_json::to_string(&catalog) {
-        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("catalog serialize failed: {err}"),
-        )
-            .into_response(),
+    Ok(catalog)
+}
+
+/// Rescan the registry whenever the download manager commits a file, so a
+/// completed download appears in `GET /v1/models` under its normal slug
+/// without a manual refresh. Detached loop; failures log and keep waiting.
+/// (`allow(dead_code)` only silences the route-test binaries that include
+/// `routes.rs` without driving this loop.)
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn rescan_on_downloads(config: AppConfig, signal: Arc<Notify>) {
+    loop {
+        signal.notified().await;
+        if let Err(err) = rescan_catalog(&config).await {
+            tracing::warn!(%err, "post-download rescan failed");
+        }
     }
 }
 
@@ -497,6 +536,108 @@ fn clamp_ttl_seconds(max: Duration, value: Option<u64>) -> Option<u64> {
         return Some(cap);
     }
     Some(secs)
+}
+
+/// Map an enqueue error onto the HTTP contract: caller payload problems are
+/// 400, server-side root/IO problems are 500 (same split as
+/// `swap_rejection`'s unknown-vs-failed).
+fn enqueue_rejection(err: &crate::downloads::EnqueueError) -> (StatusCode, String) {
+    let message = err.to_string();
+    let status = match err {
+        crate::downloads::EnqueueError::NoModelsRoot
+        | crate::downloads::EnqueueError::CreateDir(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (status, message)
+}
+
+/// `POST /v1/downloads`: start one managed download into the configured
+/// models root. `{repo, file, kind}` derives the `HuggingFace` resolve URL
+/// (and enforces the LFS sha256 when the repo API publishes one); `url` is
+/// the direct-source alternative. A second pull of the same target file
+/// joins the in-flight download (same id); a target that already exists
+/// resolves immediately as `done` + `already_present`.
+#[utoipa::path(
+    post,
+    path = "/v1/downloads",
+    request_body = DownloadRequest,
+    responses(
+        (status = 202, description = "Download accepted", body = DownloadAccepted),
+        (status = 400, description = "Missing/ambiguous source, bad repo id, or unusable file name"),
+        (status = 500, description = "No managed models root or target directory create failed")
+    )
+)]
+async fn post_download(
+    State(config): State<AppConfig>,
+    Json(request): Json<DownloadRequest>,
+) -> Response {
+    match config.downloads.enqueue(request).await {
+        Ok(accepted) => (StatusCode::ACCEPTED, Json(accepted)).into_response(),
+        Err(err) => enqueue_rejection(&err).into_response(),
+    }
+}
+
+/// `GET /v1/downloads`: every known download with its progress (poll
+/// contract; no SSE).
+#[utoipa::path(
+    get,
+    path = "/v1/downloads",
+    responses(
+        (status = 200, description = "Known downloads", body = DownloadList),
+    )
+)]
+async fn list_downloads(State(config): State<AppConfig>) -> Json<DownloadList> {
+    Json(DownloadList {
+        downloads: config.downloads.states(),
+    })
+}
+
+/// `GET /v1/downloads/{id}`: one download's progress; 404 for an unknown id.
+#[utoipa::path(
+    get,
+    path = "/v1/downloads/{id}",
+    params(("id" = String, Path, description = "Download id from the POST acceptance body")),
+    responses(
+        (status = 200, description = "Download state", body = DownloadState),
+        (status = 404, description = "Unknown download id")
+    )
+)]
+async fn get_download(
+    State(config): State<AppConfig>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match config.downloads.state(&id) {
+        Some(state) => Json(state).into_response(),
+        None => (StatusCode::NOT_FOUND, format!("unknown download id {id:?}")).into_response(),
+    }
+}
+
+/// `DELETE /v1/downloads/{id}`: cancel a download (204). The task stops at
+/// the next chunk boundary, deletes the `.part` + meta sidecar, and lands
+/// in `cancelled`; a queued download never starts. 409 once terminal.
+#[utoipa::path(
+    delete,
+    path = "/v1/downloads/{id}",
+    params(("id" = String, Path, description = "Download id from the POST acceptance body")),
+    responses(
+        (status = 204, description = "Cancellation triggered"),
+        (status = 404, description = "Unknown download id"),
+        (status = 409, description = "Download already finished")
+    )
+)]
+async fn delete_download(
+    State(config): State<AppConfig>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match config.downloads.cancel(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(crate::downloads::CancelError::Unknown(_)) => {
+            (StatusCode::NOT_FOUND, format!("unknown download id {id:?}")).into_response()
+        }
+        Err(crate::downloads::CancelError::Terminal) => {
+            (StatusCode::CONFLICT, "download already finished".to_owned()).into_response()
+        }
+    }
 }
 
 /// Map a swap error onto the HTTP contract: an unknown / non-LLM slug is a

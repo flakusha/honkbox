@@ -133,6 +133,118 @@
         }
       }
     },
+    "/v1/downloads": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/downloads`: every known download with its progress (poll\ncontract; no SSE).",
+        "operationId": "list_downloads",
+        "responses": {
+          "200": {
+            "description": "Known downloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/downloads`: start one managed download into the configured\nmodels root. `{repo, file, kind}` derives the `HuggingFace` resolve URL\n(and enforces the LFS sha256 when the repo API publishes one); `url` is\nthe direct-source alternative. A second pull of the same target file\njoins the in-flight download (same id); a target that already exists\nresolves immediately as `done` + `already_present`.",
+        "operationId": "post_download",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Download accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/ambiguous source, bad repo id, or unusable file name"
+          },
+          "500": {
+            "description": "No managed models root or target directory create failed"
+          }
+        }
+      }
+    },
+    "/v1/downloads/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/downloads/{id}`: one download's progress; 404 for an unknown id.",
+        "operationId": "get_download",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Download id from the POST acceptance body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown download id"
+          }
+        }
+      },
+      "delete": {
+        "tags": [],
+        "summary": "`DELETE /v1/downloads/{id}`: cancel a download (204). The task stops at\nthe next chunk boundary, deletes the `.part` + meta sidecar, and lands\nin `cancelled`; a queued download never starts. 409 once terminal.",
+        "operationId": "delete_download",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Download id from the POST acceptance body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancellation triggered"
+          },
+          "404": {
+            "description": "Unknown download id"
+          },
+          "409": {
+            "description": "Download already finished"
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "tags": [],
@@ -352,6 +464,158 @@
           "user",
           "assistant",
           "system"
+        ]
+      },
+      "DownloadAccepted": {
+        "type": "object",
+        "description": "202 acceptance body (`POST /v1/downloads`).",
+        "required": [
+          "id",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Download id (`dl_<ulid>`); poll/cancel with it."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DownloadStatus",
+            "description": "State at acceptance: `queued` normally, `done` when the target file\nalready existed (`already_present`), or the in-flight state when an\nidentical download is already running (single-flight join)."
+          }
+        }
+      },
+      "DownloadKind": {
+        "type": "string",
+        "description": "Download modality target (`POST /v1/downloads`): picks the managed\n`<data_dir>/models` subdir the completed file lands in (and labels the\ndownload metrics). The on-disk `ModelKind` set is wider (`lora`,\n`embedding`, `vae` come from `ComfyUI` category dirs); downloads only\ntarget the four root modalities.",
+        "enum": [
+          "llm",
+          "sd",
+          "stt",
+          "tts"
+        ]
+      },
+      "DownloadList": {
+        "type": "object",
+        "description": "Download list envelope (`GET /v1/downloads`).",
+        "required": [
+          "downloads"
+        ],
+        "properties": {
+          "downloads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DownloadState"
+            },
+            "description": "Known downloads, sorted by id."
+          }
+        }
+      },
+      "DownloadRequest": {
+        "type": "object",
+        "description": "Start one managed download (`POST /v1/downloads`).",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File path inside `repo` (its last segment becomes the local file\nname)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DownloadKind",
+            "description": "Target modality (see `DownloadKind`)."
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`HuggingFace` repo id (`owner/name`); together with `file` it derives\nthe source URL `https://huggingface.co/{repo}/resolve/main/{file}`\nand enables the LFS sha256 checksum check when the API reports one."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Direct download URL; the alternative to `repo` + `file`. Exactly one\nsource form must be present."
+          }
+        }
+      },
+      "DownloadState": {
+        "type": "object",
+        "description": "One managed download's progress (`GET /v1/downloads[/id]`).",
+        "required": [
+          "id",
+          "state",
+          "bytes_done",
+          "source",
+          "resumable"
+        ],
+        "properties": {
+          "already_present": {
+            "type": "boolean",
+            "description": "`done` because the target file already existed (no bytes fetched)."
+          },
+          "bytes_done": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes committed to the `.part` file so far.",
+            "minimum": 0
+          },
+          "bytes_total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Expected total size; absent until the server reports a length\n(and on terminal states where none was ever learned).",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Failure reason (only when `state` is `failed`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Download id (`dl_<ulid>`)."
+          },
+          "resumable": {
+            "type": "boolean",
+            "description": "Ranged resume is possible for this source: the server supplied a\nstrong `ETag` (usable as `If-Range` validator) and advertised\n`Accept-Ranges: bytes`. `false` means the next pull cold-restarts."
+          },
+          "source": {
+            "type": "string",
+            "description": "Source URL the bytes are fetched from."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DownloadStatus",
+            "description": "Lifecycle state."
+          },
+          "target_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Final file path under the managed models root."
+          }
+        }
+      },
+      "DownloadStatus": {
+        "type": "string",
+        "description": "Download lifecycle state (`GET /v1/downloads` polling).",
+        "enum": [
+          "queued",
+          "running",
+          "resuming",
+          "done",
+          "failed",
+          "cancelled"
         ]
       },
       "GgufMetadata": {

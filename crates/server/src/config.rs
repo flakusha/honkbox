@@ -11,7 +11,9 @@
 //! relative env/XDG values are treated as unset; fallback
 //! `$HOME/.local/state/honkbox`). Everything derives from it:
 //! `<data_dir>/honkbox.toml` (config), `jobs/`, `logs/honkbox.log`,
-//! `registry.sqlite3`, `models/{stt,tts}`. The file-*locating* default is
+//! `registry.sqlite3`, `models/{llm,sd,stt,tts}` (the audio starters plus
+//! the managed download roots appended by `append_managed_roots`). The
+//! file-*locating* default is
 //! pure-env (no file read, no cwd), so the config file lives inside the data
 //! dir without circularity; a file `[core] data_dir` refines the derived
 //! roots but cannot move the file itself (one-pass).
@@ -373,7 +375,7 @@ pub fn load(
         std::env::var("HONKBOX_SWAP_MAX_TTL").ok().as_deref(),
         std::env::var("HONKBOX_SWAP_PIN").ok().as_deref(),
     );
-    let models = apply_env(
+    let mut models = apply_env(
         staged,
         std::env::var("HONKBOX_LLM_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_COMFYUI_DIR").ok().as_deref(),
@@ -387,7 +389,34 @@ pub fn load(
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
     )
     .merged(jobs, swap);
+    // Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
+    // stay part of the scan no matter what file/env configured, so a
+    // completed download shows up in `GET /v1/models` after the rescan
+    // (exact-path dedupe keeps the starter dirs from doubling up).
+    if let Some(base) = &data_dir {
+        append_managed_roots(&mut models, base);
+    }
     Ok(LoadedConfig { models, data_dir })
+}
+
+/// Append the managed download roots under `base/models` to a resolved
+/// `ModelConfig`: `llm` under `models/llm`, `sd` as a `ComfyUI` base under
+/// `models/sd` (its download subdir `models/sd/checkpoints` is inside it),
+/// `stt` under `models/stt`, `tts` under `models/tts`. Exact-path dedupe:
+/// the starter `stt`/`tts` dirs already equal these paths.
+fn append_managed_roots(models: &mut ModelConfig, base: &Path) {
+    push_unique(&mut models.llm_dirs, base.join("models/llm"));
+    push_unique(&mut models.comfyui_dirs, base.join("models/sd"));
+    push_unique(&mut models.stt_dirs, base.join("models/stt"));
+    push_unique(&mut models.tts_dirs, base.join("models/tts"));
+}
+
+/// Push `path` unless an identical entry exists (the registry scan dedupes
+/// canonical paths too; this keeps config output honest).
+fn push_unique(dirs: &mut Vec<PathBuf>, path: PathBuf) {
+    if !dirs.contains(&path) {
+        dirs.push(path);
+    }
 }
 
 /// Staged roots before the final merge: the `[models]` base plus the
@@ -934,6 +963,58 @@ mod tests {
         assert_eq!(bad.llm_ttl, Duration::from_secs(30));
         assert_eq!(bad.llm_max_loaded, 1);
         assert_eq!(bad.max_ttl, Duration::from_secs(600));
+    }
+
+    /// Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
+    /// are appended to whatever file/env configured (exact-path dedupe keeps
+    /// the starter audio dirs from doubling up); no data dir → no managed
+    /// roots.
+    #[test]
+    fn managed_download_roots_appended() {
+        let base = std::env::temp_dir().join(format!("honkbox-managed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(
+            &path,
+            "[models]\nllm_dirs = [\"/custom/llm\"]\n\n[discovery]\ncomfyui_dirs = [\"/extra/comfy\"]\n",
+        )
+        .expect("write config");
+        let cfg = load(Some(path), Some(base.clone()))
+            .expect("load config")
+            .models;
+        // Custom roots survive; the managed roots ride along after them.
+        assert!(cfg.llm_dirs.contains(&PathBuf::from("/custom/llm")));
+        assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
+        assert!(cfg.comfyui_dirs.contains(&PathBuf::from("/extra/comfy")));
+        assert!(cfg.comfyui_dirs.contains(&base.join("models/sd")));
+        // The starter audio roots ARE the managed roots (deduped).
+        assert_eq!(cfg.stt_dirs, vec![base.join("models/stt")]);
+        assert_eq!(cfg.tts_dirs, vec![base.join("models/tts")]);
+
+        // No explicit data dir: the located XDG default is still the data
+        // dir, so exactly its managed root is the one appended.
+        let plain = base.join("plain.toml");
+        std::fs::write(&plain, "[models]\n").expect("write config");
+        let cfg = load(Some(plain), None).expect("load config").models;
+        let resolved = resolve_data_dir(
+            None,
+            std::env::var_os(DATA_DIR_ENV),
+            std::env::var_os("XDG_STATE_HOME"),
+            std::env::var_os("HOME"),
+        );
+        let managed = cfg
+            .llm_dirs
+            .iter()
+            .filter(|d| d.ends_with("models/llm"))
+            .count();
+        if let Some(base) = resolved {
+            assert_eq!(managed, 1);
+            assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
+        } else {
+            assert_eq!(managed, 0);
+        }
+        std::fs::remove_dir_all(&base).ok();
     }
 
     fn f_file() -> FileSwap {

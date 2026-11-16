@@ -33,6 +33,17 @@ honkbox-registry = { path = "crates/registry" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 diffusion-rs = "=0.1.20"
 ulid = "1"
+# Downloads (crates/server/src/downloads.rs): rustls TLS only (no
+# native-tls), streaming response bodies, and sha2 for the HF LFS sha256
+# checksum; tokio-util provides the per-download CancellationToken.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "stream",
+    "http2",
+    "json",
+] }
+tokio-util = "0.7"
+sha2 = "0.11"
 honkbox-residency = { path = "crates/residency" }
 honkbox-sd-core = { path = "crates/sd-core" }
 honkbox-ash-backend = { path = "crates/ash-backend" }

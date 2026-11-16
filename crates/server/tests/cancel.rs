@@ -5,6 +5,9 @@
 //! completion.
 
 // No lib target on this binary crate, so include the modules directly.
+#[allow(dead_code)]
+#[path = "../src/downloads.rs"]
+mod downloads;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -201,6 +204,9 @@ async fn dropped_stream_body_frees_gpu_slot() {
         swap: None,
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
     });
 
     let response = app
@@ -283,6 +289,9 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         swap: None,
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
     });
 
     let response = app

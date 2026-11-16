@@ -1,6 +1,9 @@
 //! `/health` contract: 200 + `{"status":"ok"}`.
 
 // No lib target on this binary crate, so include the routes module directly.
+#[allow(dead_code)]
+#[path = "../src/downloads.rs"]
+mod downloads;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -48,6 +51,9 @@ async fn health_returns_ok() {
         swap: None,
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
     })
     .oneshot(
         Request::builder()

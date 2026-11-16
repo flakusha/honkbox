@@ -208,6 +208,112 @@ pub struct ModelCatalog {
     pub data: Vec<ModelCatalogEntry>,
 }
 
+/// Download modality target (`POST /v1/downloads`): picks the managed
+/// `<data_dir>/models` subdir the completed file lands in (and labels the
+/// download metrics). The on-disk `ModelKind` set is wider (`lora`,
+/// `embedding`, `vae` come from `ComfyUI` category dirs); downloads only
+/// target the four root modalities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadKind {
+    /// Language-model weights (`<data_dir>/models/llm`).
+    Llm,
+    /// Stable-Diffusion weights (`<data_dir>/models/sd/checkpoints` - the
+    /// registry classifies SD `.gguf` only under a checkpoints dir).
+    Sd,
+    /// Speech-to-text weights (`<data_dir>/models/stt`).
+    Stt,
+    /// Text-to-speech weights (`<data_dir>/models/tts`).
+    Tts,
+}
+
+/// Download lifecycle state (`GET /v1/downloads` polling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadStatus {
+    /// Accepted, waiting for a concurrency slot (max 2).
+    Queued,
+    /// Fetching bytes from scratch.
+    Running,
+    /// Appending to an existing sibling `.part` via a ranged `GET`.
+    Resuming,
+    /// File committed to its final path; a catalog rescan was triggered.
+    Done,
+    /// Terminal failure; the `.part` + meta sidecar are kept for a later
+    /// resume (except checksum mismatch, which deletes them).
+    Failed,
+    /// Cancelled via `DELETE /v1/downloads/{id}`; `.part` + meta deleted.
+    Cancelled,
+}
+
+/// Start one managed download (`POST /v1/downloads`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct DownloadRequest {
+    /// `HuggingFace` repo id (`owner/name`); together with `file` it derives
+    /// the source URL `https://huggingface.co/{repo}/resolve/main/{file}`
+    /// and enables the LFS sha256 checksum check when the API reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// File path inside `repo` (its last segment becomes the local file
+    /// name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Direct download URL; the alternative to `repo` + `file`. Exactly one
+    /// source form must be present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Target modality (see `DownloadKind`).
+    pub kind: DownloadKind,
+}
+
+/// 202 acceptance body (`POST /v1/downloads`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct DownloadAccepted {
+    /// Download id (`dl_<ulid>`); poll/cancel with it.
+    pub id: String,
+    /// State at acceptance: `queued` normally, `done` when the target file
+    /// already existed (`already_present`), or the in-flight state when an
+    /// identical download is already running (single-flight join).
+    pub state: DownloadStatus,
+}
+
+/// One managed download's progress (`GET /v1/downloads[/id]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct DownloadState {
+    /// Download id (`dl_<ulid>`).
+    pub id: String,
+    /// Lifecycle state.
+    pub state: DownloadStatus,
+    /// Bytes committed to the `.part` file so far.
+    pub bytes_done: u64,
+    /// Expected total size; absent until the server reports a length
+    /// (and on terminal states where none was ever learned).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_total: Option<u64>,
+    /// Source URL the bytes are fetched from.
+    pub source: String,
+    /// Final file path under the managed models root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_path: Option<String>,
+    /// Failure reason (only when `state` is `failed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Ranged resume is possible for this source: the server supplied a
+    /// strong `ETag` (usable as `If-Range` validator) and advertised
+    /// `Accept-Ranges: bytes`. `false` means the next pull cold-restarts.
+    pub resumable: bool,
+    /// `done` because the target file already existed (no bytes fetched).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub already_present: bool,
+}
+
+/// Download list envelope (`GET /v1/downloads`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct DownloadList {
+    /// Known downloads, sorted by id.
+    pub downloads: Vec<DownloadState>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +343,12 @@ mod tests {
             ModelMetadata::decl(&config),
             ModelCatalogEntry::decl(&config),
             ModelCatalog::decl(&config),
+            DownloadKind::decl(&config),
+            DownloadStatus::decl(&config),
+            DownloadRequest::decl(&config),
+            DownloadAccepted::decl(&config),
+            DownloadState::decl(&config),
+            DownloadList::decl(&config),
         ] {
             out.push_str(&decl);
             out.push('\n');
