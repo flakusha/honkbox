@@ -60,6 +60,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     })
 }
@@ -82,6 +83,7 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     })
 }

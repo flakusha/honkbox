@@ -41,14 +41,16 @@ max_tokens?: number | null,
  */
 temperature?: number | null, 
 /**
- * Per-request idle-TTL override for this model's swap entry, in seconds
- * (NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). Overrides
- * the configured `[swap] llm_ttl_secs` from this request until the entry
- * is touched again; `0` = free to evict at the next eviction sweep.
- * Ignored when the swap manager is off (stub backends, `[swap] enabled
- * = false`).
+ * Per-request residency budget for this model's swap entry, in seconds
+ * (NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). The entry's
+ * effective window is `max(remaining, this)`, capped at
+ * `[swap] max_ttl_secs`; `0` = use-then-unload, still shielded by the
+ * remaining window so it cannot thrash. Values over the cap are clamped
+ * at the route (`warn!`, never a 400); `[swap] pin` entries ignore it
+ * entirely. Ignored when the swap manager is off (stub backends,
+ * `[swap] enabled = false`).
  */
-keep_alive?: bigint | null, };
+ttl_seconds?: bigint | null, };
 type ChatResponse = { 
 /**
  * Which backend produced this.
@@ -112,7 +114,14 @@ voice?: string | null,
 /**
  * Output sample rate in Hz; backend default when absent.
  */
-sample_rate?: number | null, };
+sample_rate?: number | null, 
+/**
+ * Per-request residency budget for this model's swap entry, in seconds
+ * (NEW-8; same contract as [`ChatRequest::ttl_seconds`]). Over-cap
+ * values are clamped at the route; audio pipelines are startup-loaded
+ * today, so the advice takes effect once per-kind swap lands.
+ */
+ttl_seconds?: bigint | null, };
 type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae" | "stt" | "tts";
 type GgufMetadata = { 
 /**

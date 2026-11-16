@@ -1,8 +1,9 @@
 //! LLM swap manager (P1 of the llama-swap parity plan): load-on-demand
-//! caching, TTL + LRU eviction, per-request `keep_alive`, HTTP error
-//! mapping, and the untouched stub path. Eviction is exercised through the
-//! exposed `evict_idle` hook with short TTLs — no sleeps on reaper periods,
-//! so the tests stay deterministic.
+//! caching, TTL + LRU eviction, per-request `ttl_seconds` (NEW-8: clamp
+//! bounds, pin precedence, use-then-unload), HTTP error mapping, and the
+//! untouched stub path. Eviction is exercised through the exposed
+//! `evict_idle` hook with short TTLs — no sleeps on reaper periods, so the
+//! tests stay deterministic.
 
 // No lib target on this binary crate, so include the modules directly.
 #[path = "../src/metrics.rs"]
@@ -107,14 +108,26 @@ fn counting_loader(probe: &Arc<Probe>, broken: &[&str]) -> LlmLoader {
     })
 }
 
+/// Swap settings from the pieces the tests vary; unpinned/unbounded except
+/// where a test needs the cap or a pin.
+fn settings(ttl: Duration, max_loaded: usize, max_ttl: Duration, pinned: &[&str]) -> SwapSettings {
+    SwapSettings {
+        llm_ttl: ttl,
+        llm_max_loaded: max_loaded,
+        max_ttl,
+        pinned: pinned.iter().map(|slug| (*slug).to_owned()).collect(),
+    }
+}
+
+fn manager_with(swap_settings: SwapSettings, loader: LlmLoader) -> Arc<SwapManager> {
+    Arc::new(SwapManager::new(swap_settings, loader))
+}
+
 fn manager(ttl: Duration, max_loaded: usize, loader: LlmLoader) -> Arc<SwapManager> {
-    Arc::new(SwapManager::new(
-        SwapSettings {
-            llm_ttl: ttl,
-            llm_max_loaded: max_loaded,
-        },
+    manager_with(
+        settings(ttl, max_loaded, Duration::from_hours(24), &[]),
         loader,
-    ))
+    )
 }
 
 /// Catalog with fake paths — the counting loader never stats them.
@@ -135,7 +148,13 @@ fn catalog_with(entries: &[(&str, ModelKind)]) -> ModelCatalog {
     }
 }
 
-fn swap_app(catalog: ModelCatalog, loader: LlmLoader, ttl: Duration, max_loaded: usize) -> Router {
+fn swap_app(
+    catalog: ModelCatalog,
+    loader: LlmLoader,
+    ttl: Duration,
+    max_loaded: usize,
+    max_ttl: Duration,
+) -> Router {
     app(AppConfig {
         dev: false,
         web_dist_dir: "web-dist".into(),
@@ -154,19 +173,23 @@ fn swap_app(catalog: ModelCatalog, loader: LlmLoader, ttl: Duration, max_loaded:
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
-        swap: Some(manager(ttl, max_loaded, loader)),
+        swap: Some(manager_with(
+            settings(ttl, max_loaded, max_ttl, &[]),
+            loader,
+        )),
+        swap_max_ttl: max_ttl,
         data_dir: None,
     })
 }
 
-/// `POST /v1/chat` with `model` + optional `keep_alive`; status + body.
-async fn chat(app: Router, model: &str, keep_alive: Option<u64>) -> (StatusCode, String) {
+/// `POST /v1/chat` with `model` + optional `ttl_seconds`; status + body.
+async fn chat(app: Router, model: &str, ttl_seconds: Option<u64>) -> (StatusCode, String) {
     let mut body = serde_json::json!({
         "model": model,
         "messages": [{"role": "user", "content": "hi"}]
     });
-    if let Some(keep) = keep_alive {
-        body["keep_alive"] = serde_json::json!(keep);
+    if let Some(ttl) = ttl_seconds {
+        body["ttl_seconds"] = serde_json::json!(ttl);
     }
     let response = app
         .oneshot(
@@ -195,6 +218,7 @@ async fn load_on_demand_caches_across_requests() {
         counting_loader(&probe, &[]),
         Duration::from_secs(3600),
         2,
+        Duration::from_hours(24),
     );
     let (status, _) = chat(app.clone(), "llm:fake.gguf", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -268,10 +292,11 @@ async fn lru_evicts_beyond_max_loaded() {
     );
 }
 
-/// Per-request `keep_alive = 0` makes the entry evictable at the very next
-/// sweep despite a long configured TTL.
+/// Per-request `ttl_seconds = 0` on a fresh load = use-then-unload (Ollama
+/// semantics): the entry is evictable at the very next sweep despite a long
+/// configured TTL.
 #[tokio::test]
-async fn keep_alive_zero_unloads_at_next_sweep() {
+async fn ttl_zero_unloads_at_next_sweep() {
     let probe = Arc::new(Probe::default());
     let mgr = manager(Duration::from_secs(3600), 2, counting_loader(&probe, &[]));
     let pipe = mgr.get("llm:a.gguf", Some(0)).await.unwrap();
@@ -280,18 +305,43 @@ async fn keep_alive_zero_unloads_at_next_sweep() {
     assert_eq!(
         mgr.evict_idle(),
         1,
-        "keep_alive = 0 evicts at the next sweep"
+        "ttl_seconds = 0 evicts at the next sweep"
     );
     assert_eq!(probe.live.load(Ordering::Relaxed), 0);
 }
 
-/// A `keep_alive` override extends (shields) the entry past the configured
-/// default TTL; the next default-budget touch reverts it.
+/// `ttl_seconds = 0` cannot thrash an entry another touch shielded: the
+/// effective window is `max(remaining, own)` (NEW-8 anti-thrash), so the
+/// entry only use-then-unloads once the remaining budget is spent.
 #[tokio::test]
-async fn keep_alive_override_extends_the_default_window() {
+async fn ttl_zero_cannot_shrink_a_live_window() {
     let probe = Arc::new(Probe::default());
     let mgr = manager(Duration::from_millis(100), 2, counting_loader(&probe, &[]));
-    let pipe = mgr.get("llm:a.gguf", Some(3600)).await.unwrap();
+    let pipe = mgr.get("llm:a.gguf", None).await.unwrap(); // default 100ms budget
+    drop(pipe);
+    let pipe = mgr.get("llm:a.gguf", Some(0)).await.unwrap();
+    drop(pipe);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        mgr.evict_idle(),
+        0,
+        "ttl 0 must not shorten the remaining window"
+    );
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(mgr.evict_idle(), 1, "the window decays and the entry frees");
+    assert_eq!(probe.live.load(Ordering::Relaxed), 0);
+}
+
+/// A `ttl_seconds` override raises the window past the configured default;
+/// with `max(remaining, own)` semantics a later default touch neither
+/// extends nor shortens it, and once the override budget decays the entry
+/// evicts again. (Advice is whole seconds: `Some(1)` = a 1s window against
+/// the 100ms configured default.)
+#[tokio::test]
+async fn ttl_override_extends_then_decays_back_to_default() {
+    let probe = Arc::new(Probe::default());
+    let mgr = manager(Duration::from_millis(100), 2, counting_loader(&probe, &[]));
+    let pipe = mgr.get("llm:a.gguf", Some(1)).await.unwrap();
     drop(pipe);
     std::thread::sleep(Duration::from_millis(300)); // well past the default TTL
     mgr.evict_idle();
@@ -302,13 +352,140 @@ async fn keep_alive_override_extends_the_default_window() {
     );
     let pipe = mgr.get("llm:a.gguf", None).await.unwrap();
     drop(pipe);
+    // ~700ms of override budget remains: a default-budget touch keeps it.
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(
         mgr.evict_idle(),
+        0,
+        "remaining override budget still shields after a default touch"
+    );
+    std::thread::sleep(Duration::from_millis(500)); // past the remaining budget
+    assert_eq!(mgr.evict_idle(), 1, "the window decays back to eviction");
+    assert_eq!(probe.live.load(Ordering::Relaxed), 0);
+}
+
+/// Over-cap `ttl_seconds` advice is capped by the manager's `max_ttl` even
+/// if the route clamp were bypassed — the manager owns the clock (the
+/// route-level clamp is covered by `ttl_above_cap_is_clamped_not_rejected`).
+#[tokio::test]
+async fn ttl_above_manager_cap_is_capped() {
+    let probe = Arc::new(Probe::default());
+    let mgr = manager_with(
+        settings(
+            Duration::from_secs(3600),
+            2,
+            Duration::from_millis(200),
+            &[],
+        ),
+        counting_loader(&probe, &[]),
+    );
+    let pipe = mgr.get("llm:a.gguf", Some(u64::MAX)).await.unwrap();
+    drop(pipe);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        mgr.evict_idle(),
         1,
-        "a default-budget touch reverts the entry to the short TTL"
+        "window capped at max_ttl, not the requested u64::MAX seconds"
     );
     assert_eq!(probe.live.load(Ordering::Relaxed), 0);
+}
+
+/// Pinned slugs ignore per-request `ttl_seconds` entirely and never
+/// auto-evict (TTL or LRU capacity trims) — pin outranks client advice.
+#[tokio::test]
+async fn pinned_slug_ignores_ttl_and_capacity_trims() {
+    let probe = Arc::new(Probe::default());
+    let mgr = manager_with(
+        settings(
+            Duration::from_millis(100),
+            1,
+            Duration::from_hours(24),
+            &["llm:pin.gguf"],
+        ),
+        counting_loader(&probe, &[]),
+    );
+    let pin = mgr.get("llm:pin.gguf", Some(0)).await.unwrap(); // advice ignored
+    drop(pin);
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(mgr.evict_idle(), 0, "pinned entry never TTL-evicts");
+    assert_eq!(probe.live.load(Ordering::Relaxed), 1);
+    // Capacity `max_loaded = 1` (keep = 0): the pinned resident survives the
+    // pre-load trim while the incoming load swaps in.
+    let other = mgr.get("llm:other.gguf", None).await.unwrap();
+    drop(other);
+    assert_eq!(
+        probe.live.load(Ordering::Relaxed),
+        2,
+        "pinned resident survives the LRU trim"
+    );
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(mgr.evict_idle(), 1, "only the non-pinned entry TTL-evicts");
+    assert_eq!(probe.live.load(Ordering::Relaxed), 1);
+}
+
+/// Numeric tail of the first exposition line with the given prefix.
+fn metric_value(body: &str, prefix: &str) -> u64 {
+    body.lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("missing series line: {prefix}"))
+        .rsplit(' ')
+        .next()
+        .expect("series line has a value")
+        .parse()
+        .expect("series value parses as u64")
+}
+
+/// Swap events emit the kind-labeled metrics (kind `llm` — the manager's
+/// only modality): load commit + duration on load, ttl unload on sweep,
+/// eviction on the capacity trim.
+#[tokio::test]
+async fn swap_events_emit_kind_metrics() {
+    let probe = Arc::new(Probe::default());
+    let mgr = manager(Duration::from_secs(3600), 1, counting_loader(&probe, &[]));
+    let pipe = mgr.get("llm:a.gguf", None).await.unwrap();
+    drop(pipe);
+    let other = mgr.get("llm:b.gguf", Some(0)).await.unwrap(); // use-then-unload; LRU-evicts a
+    drop(other);
+    let body = metrics::exposition();
+    assert!(
+        metric_value(
+            &body,
+            "honkbox_model_loads_total{kind=\"llm\",reason=\"request\"}"
+        ) >= 2,
+        "both load commits counted"
+    );
+    assert!(
+        metric_value(
+            &body,
+            "honkbox_model_load_duration_seconds_count{kind=\"llm\"}"
+        ) >= 2,
+        "both load durations observed"
+    );
+    assert!(
+        metric_value(
+            &body,
+            "honkbox_model_unloads_total{kind=\"llm\",reason=\"evict\"}"
+        ) >= 1,
+        "the LRU swap-out counted as an evict unload"
+    );
+    assert!(
+        metric_value(&body, "honkbox_swap_evictions_total{kind=\"llm\"}") >= 1,
+        "the LRU swap-out counted on the evictions family"
+    );
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        mgr.evict_idle(),
+        1,
+        "b evicts by TTL for the unload counter"
+    );
+    let body = metrics::exposition();
+    assert!(
+        metric_value(
+            &body,
+            "honkbox_model_unloads_total{kind=\"llm\",reason=\"ttl\"}"
+        ) >= 1,
+        "the idle sweep counted as a ttl unload"
+    );
 }
 
 /// Route-level contract: constructor failures 500 with the cache staying
@@ -327,6 +504,7 @@ async fn slug_errors_map_to_status_codes_and_cache_stays_consistent() {
         counting_loader(&probe, &["llm:bad.gguf"]),
         Duration::from_secs(3600),
         2,
+        Duration::from_hours(24),
     );
     let (status, _) = chat(app.clone(), "llm:ok.gguf", None).await;
     assert_eq!(status, StatusCode::OK, "warm the cache first");
@@ -445,6 +623,7 @@ async fn chat_stream_resolves_through_swap_manager() {
         counting_loader(&probe, &[]),
         Duration::from_secs(3600),
         1,
+        Duration::from_hours(24),
     );
     let response = app
         .oneshot(
@@ -496,9 +675,32 @@ async fn stub_path_unaffected_without_swap_manager() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     });
     let (status, body) = chat(app, "", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"stub-llm\""), "stub reply: {body}");
+}
+
+/// Route-level clamp: `ttl_seconds` above `[swap] max_ttl_secs` is clamped
+/// with a `warn!` and the request is served — never a 400.
+#[tokio::test]
+async fn ttl_above_cap_is_clamped_not_rejected() {
+    let _slot_guard = SLOT_LOCK.lock().await;
+    let probe = Arc::new(Probe::default());
+    let app = swap_app(
+        catalog_with(&[("llm:fake.gguf", ModelKind::Llm)]),
+        counting_loader(&probe, &[]),
+        Duration::from_secs(3600),
+        2,
+        Duration::from_secs(1),
+    );
+    let (status, body) = chat(app, "llm:fake.gguf", Some(999_999)).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "over-cap ttl clamps, never rejects: {body}"
+    );
+    assert_eq!(probe.loads.load(Ordering::Relaxed), 1);
 }

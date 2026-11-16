@@ -2,8 +2,9 @@
 //! `<data_dir>/honkbox.toml`, env wins over file. Also `[jobs]` GC settings
 //! (`gc_ttl` / `gc_max_bytes`, seconds / bytes, env `HONKBOX_GC_TTL` /
 //! `HONKBOX_GC_MAX_BYTES`), `[swap]` LLM swap settings (`enabled`,
-//! `llm_ttl_secs`, `llm_max_loaded`, env `HONKBOX_SWAP_LLM_TTL` /
-//! `HONKBOX_SWAP_LLM_MAX_LOADED`), and `[core] data_dir`.
+//! `llm_ttl_secs`, `llm_max_loaded`, `max_ttl_secs`, `pin`, env
+//! `HONKBOX_SWAP_LLM_TTL` / `HONKBOX_SWAP_LLM_MAX_LOADED` /
+//! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), and `[core] data_dir`.
 //!
 //! The ONE data-dir knob resolves `--data-dir` CLI flag > `HONKBOX_DATA_DIR`
 //! env > `[core] data_dir` file key > `$XDG_STATE_HOME/honkbox` (empty or
@@ -53,6 +54,10 @@ pub const DEFAULT_SWAP_TTL_SECS: u64 = 600;
 /// Default `[swap]` warm capacity: one resident LLM (matches the
 /// single-GPU residency slot; loading another slug swaps, not coexists).
 pub const DEFAULT_SWAP_MAX_LOADED: usize = 1;
+/// Per-request `ttl_seconds` cap (`max_ttl_secs`): 24 h. Advice above the cap
+/// is clamped at the route with a `warn!` (never a 400) so a third-party
+/// client cannot out-stay the residency budget a server operator chose.
+pub const DEFAULT_SWAP_MAX_TTL_SECS: u64 = 86_400;
 
 /// `[swap]` section: LLM load-on-demand + idle eviction (P1 of the
 /// llama-swap parity plan). Effective only when the chat backend is a real
@@ -65,11 +70,20 @@ pub struct SwapConfig {
     /// stub server keeps its zero-cost stub.
     pub enabled: bool,
     /// Idle time before an LLM pipeline is evictable (`llm_ttl_secs`); a
-    /// request's `keep_alive` overrides it per entry.
+    /// request's `ttl_seconds` advice raises the entry's window per touch
+    /// (`max(remaining, own)`), never past `max_ttl`.
     pub llm_ttl: Duration,
     /// Warm-pipeline LRU capacity (`llm_max_loaded`, clamped to >= 1);
     /// `1` = the incoming model replaces the resident.
     pub llm_max_loaded: usize,
+    /// Ceiling on any per-entry residency window (`max_ttl_secs`, at least
+    /// 1s): per-request `ttl_seconds` over the cap is clamped at the route,
+    /// and the swap manager re-caps defensively.
+    pub max_ttl: Duration,
+    /// Slugs that never auto-evict and ignore per-request `ttl_seconds`
+    /// entirely (`pin`; llama-swap `persistent`) — pin outranks client
+    /// advice.
+    pub pin: Vec<String>,
 }
 
 /// `[jobs]` section: startup GC of `<data_dir>/jobs` + stale temp PNGs.
@@ -91,16 +105,29 @@ impl Default for JobsConfig {
 }
 
 /// Resolve `[swap]` settings: defaults → file keys → env overrides.
-/// `llm_ttl_secs` / `HONKBOX_SWAP_LLM_TTL` are seconds; `llm_max_loaded` /
-/// `HONKBOX_SWAP_LLM_MAX_LOADED` is a count clamped to at least 1 (a `0`
-/// capacity would evict every entry immediately, including the one a request
-/// just asked for). Invalid env values warn-and-keep, matching the GC knobs.
-/// Pure (env as args) so tests stay thread-safe.
-fn swap_settings(file: &FileSwap, ttl_env: Option<&str>, max_env: Option<&str>) -> SwapConfig {
+/// `llm_ttl_secs` / `HONKBOX_SWAP_LLM_TTL` and `max_ttl_secs` /
+/// `HONKBOX_SWAP_MAX_TTL` are seconds (`max_ttl` clamped to at least 1: a
+/// `0` cap would use-then-unload every entry, silently overriding
+/// `llm_ttl_secs`); `llm_max_loaded` / `HONKBOX_SWAP_LLM_MAX_LOADED` is a
+/// count clamped to at least 1 (a `0` capacity would evict every entry
+/// immediately, including the one a request just asked for). `pin` /
+/// `HONKBOX_SWAP_PIN` is a slug list; the env form is comma-separated and
+/// replaces the file key. Invalid env values warn-and-keep, matching the GC
+/// knobs. Pure (env as args) so tests stay thread-safe.
+#[allow(clippy::too_many_arguments)]
+fn swap_settings(
+    file: &FileSwap,
+    ttl_env: Option<&str>,
+    max_env: Option<&str>,
+    max_ttl_env: Option<&str>,
+    pin_env: Option<&str>,
+) -> SwapConfig {
     let mut cfg = SwapConfig {
         enabled: true,
         llm_ttl: Duration::from_secs(DEFAULT_SWAP_TTL_SECS),
         llm_max_loaded: DEFAULT_SWAP_MAX_LOADED,
+        max_ttl: Duration::from_secs(DEFAULT_SWAP_MAX_TTL_SECS),
+        pin: Vec::new(),
     };
     if let Some(enabled) = file.enabled {
         cfg.enabled = enabled;
@@ -110,6 +137,12 @@ fn swap_settings(file: &FileSwap, ttl_env: Option<&str>, max_env: Option<&str>) 
     }
     if let Some(count) = file.llm_max_loaded {
         cfg.llm_max_loaded = count.max(1);
+    }
+    if let Some(secs) = file.max_ttl_secs {
+        cfg.max_ttl = Duration::from_secs(secs.max(1));
+    }
+    if let Some(slugs) = &file.pin {
+        cfg.pin = clean_slugs(slugs);
     }
     if let Some(v) = ttl_env
         && !v.is_empty()
@@ -123,7 +156,27 @@ fn swap_settings(file: &FileSwap, ttl_env: Option<&str>, max_env: Option<&str>) 
     {
         cfg.llm_max_loaded = count.max(1);
     }
+    if let Some(v) = max_ttl_env
+        && !v.is_empty()
+        && let Ok(secs) = v.parse::<u64>()
+    {
+        cfg.max_ttl = Duration::from_secs(secs.max(1));
+    }
+    if let Some(v) = pin_env
+        && !v.is_empty()
+    {
+        cfg.pin = clean_slugs(v.split(','));
+    }
     cfg
+}
+
+/// Trim whitespace and drop empty entries from a configured slug list.
+fn clean_slugs<I: IntoIterator<Item = S>, S: AsRef<str>>(slugs: I) -> Vec<String> {
+    slugs
+        .into_iter()
+        .map(|slug| slug.as_ref().trim().to_owned())
+        .filter(|slug| !slug.is_empty())
+        .collect()
 }
 
 /// Resolve GC settings: defaults → `[jobs]` file keys → env overrides.
@@ -317,6 +370,8 @@ pub fn load(
         &file_swap,
         std::env::var("HONKBOX_SWAP_LLM_TTL").ok().as_deref(),
         std::env::var("HONKBOX_SWAP_LLM_MAX_LOADED").ok().as_deref(),
+        std::env::var("HONKBOX_SWAP_MAX_TTL").ok().as_deref(),
+        std::env::var("HONKBOX_SWAP_PIN").ok().as_deref(),
     );
     let models = apply_env(
         staged,
@@ -530,8 +585,9 @@ struct FileJobs {
 }
 
 /// `[swap]` keys: `enabled`, `llm_ttl_secs` (seconds), `llm_max_loaded`
-/// (count); each missing key keeps its default.
-#[derive(Debug, Default, Clone, Copy, serde::Deserialize)]
+/// (count), `max_ttl_secs` (seconds), `pin` (slug list); each missing key
+/// keeps its default.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
 struct FileSwap {
     #[serde(default)]
     enabled: Option<bool>,
@@ -539,6 +595,10 @@ struct FileSwap {
     llm_ttl_secs: Option<u64>,
     #[serde(default)]
     llm_max_loaded: Option<usize>,
+    #[serde(default)]
+    max_ttl_secs: Option<u64>,
+    #[serde(default)]
+    pin: Option<Vec<String>>,
 }
 
 impl Default for SwapConfig {
@@ -547,6 +607,8 @@ impl Default for SwapConfig {
             enabled: true,
             llm_ttl: Duration::from_secs(DEFAULT_SWAP_TTL_SECS),
             llm_max_loaded: DEFAULT_SWAP_MAX_LOADED,
+            max_ttl: Duration::from_secs(DEFAULT_SWAP_MAX_TTL_SECS),
+            pin: Vec::new(),
         }
     }
 }
@@ -813,39 +875,65 @@ mod tests {
     }
 
     /// Swap settings: defaults, then `[swap]` keys, then env overrides win;
-    /// `llm_max_loaded` clamps to >= 1 and invalid env keeps the file value.
+    /// `llm_max_loaded` clamps to >= 1, `max_ttl_secs` to >= 1s, and invalid
+    /// env keeps the file value.
     #[test]
     fn swap_settings_precedence() {
-        // Defaults: enabled, 10-minute idle TTL, single-resident capacity.
-        let d = swap_settings(&FileSwap::default(), None, None);
+        // Defaults: enabled, 10-minute idle TTL, single-resident capacity,
+        // 24 h per-request TTL cap, nothing pinned.
+        let d = swap_settings(&FileSwap::default(), None, None, None, None);
         assert!(d.enabled);
         assert_eq!(d.llm_ttl, Duration::from_secs(DEFAULT_SWAP_TTL_SECS));
         assert_eq!(d.llm_max_loaded, DEFAULT_SWAP_MAX_LOADED);
+        assert_eq!(d.max_ttl, Duration::from_secs(DEFAULT_SWAP_MAX_TTL_SECS));
+        assert_eq!(d.max_ttl, Duration::from_hours(24));
+        assert_eq!(d.pin, Vec::<String>::new());
         // File keys.
         let f = swap_settings(
             &FileSwap {
                 enabled: Some(false),
                 llm_ttl_secs: Some(30),
                 llm_max_loaded: Some(3),
+                max_ttl_secs: Some(0),
+                pin: Some(vec![
+                    " llm:a.gguf ".to_owned(),
+                    String::new(),
+                    "llm:b".to_owned(),
+                ]),
             },
+            None,
+            None,
             None,
             None,
         );
         assert!(!f.enabled);
         assert_eq!(f.llm_ttl, Duration::from_secs(30));
         assert_eq!(f.llm_max_loaded, 3);
+        assert_eq!(f.max_ttl, Duration::from_secs(1), "a 0 cap clamps to 1s");
+        assert_eq!(f.pin, vec!["llm:a.gguf", "llm:b"]);
         // Env wins over file; empty env keeps the file value.
-        let e = swap_settings(&f_file(), Some("5"), Some("4"));
+        let e = swap_settings(
+            &f_file(),
+            Some("5"),
+            Some("4"),
+            Some("120"),
+            Some("llm:c,llm:d"),
+        );
         assert!(e.enabled);
         assert_eq!(e.llm_ttl, Duration::from_secs(5));
         assert_eq!(e.llm_max_loaded, 4);
-        let kept = swap_settings(&f_file(), Some(""), Some(""));
+        assert_eq!(e.max_ttl, Duration::from_secs(120));
+        assert_eq!(e.pin, vec!["llm:c", "llm:d"]);
+        let kept = swap_settings(&f_file(), Some(""), Some(""), Some(""), Some(""));
         assert_eq!(kept.llm_ttl, Duration::from_secs(30));
         assert_eq!(kept.llm_max_loaded, 3);
+        assert_eq!(kept.max_ttl, Duration::from_secs(600));
+        assert_eq!(kept.pin, vec!["llm:a"]);
         // Invalid env keeps the file value; a `0` capacity clamps to 1.
-        let bad = swap_settings(&f_file(), Some("abc"), Some("0"));
+        let bad = swap_settings(&f_file(), Some("abc"), Some("0"), Some("abc"), None);
         assert_eq!(bad.llm_ttl, Duration::from_secs(30));
         assert_eq!(bad.llm_max_loaded, 1);
+        assert_eq!(bad.max_ttl, Duration::from_secs(600));
     }
 
     fn f_file() -> FileSwap {
@@ -853,6 +941,8 @@ mod tests {
             enabled: None,
             llm_ttl_secs: Some(30),
             llm_max_loaded: Some(3),
+            max_ttl_secs: Some(600),
+            pin: Some(vec!["llm:a".to_owned()]),
         }
     }
 

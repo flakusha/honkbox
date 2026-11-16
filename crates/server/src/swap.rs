@@ -10,9 +10,17 @@
 //!   [`LlmLoader`] seam and caches it; cached slugs reuse the pipeline. A
 //!   second request never re-constructs.
 //! - **TTL**: idle time since the entry's last use; a request resets the
-//!   timer. An optional per-request `keep_alive` overrides the configured
-//!   budget for that bump (NEW-8). `keep_alive = 0` makes the entry evictable
-//!   at the very next sweep.
+//!   timer. A per-request `ttl_seconds` (NEW-8, clamped to `max_ttl` at the
+//!   route) raises *that residency's* budget: the effective window is
+//!   `max(remaining, own)`, re-capped at `max_ttl`. Windows never shrink on
+//!   a touch, so `ttl_seconds = 0` (Ollama use-then-unload semantics) only
+//!   bites once the previously granted budget is spent — the anti-thrash
+//!   shield that keeps mixed-TTL traffic from reload-per-request ping-pong
+//!   (parity §6.3). Eviction is lazy, so `ttl = 0` frees at the next sweep,
+//!   never mid-request.
+//! - **Pin** (`pinned` slugs from `[swap].pin`): never auto-evict (TTL or
+//!   LRU) and ignore per-request `ttl_seconds` entirely — pin outranks
+//!   client advice. Pinning past `llm_max_loaded` accepts the co-residency.
 //! - **LRU beyond `llm_max_loaded`**: enforced *before* a slow load, not
 //!   after — the previous resident is dropped first, so the GPU is never
 //!   double-committed mid-swap (parity §6.2). `llm_max_loaded = 1` (the
@@ -21,6 +29,10 @@
 //!   ([`SwapManager::spawn_reaper`], started by `serve`) for pure idle
 //!   expiry; sweep granularity bounds how soon an expired entry actually
 //!   frees.
+//!
+//! Metrics: load commits, removals, capacity evictions, and load durations
+//! are emitted through [`crate::metrics`] with kind `llm` (the manager's
+//! only modality — [`catalog_llm_loader`] refuses every other kind).
 //!
 //! Arc lifetime (in-flight safety): eviction removes the entry from the map,
 //! dropping only the cache's `Arc`. Every in-flight request holds its own
@@ -40,7 +52,7 @@
 //! constructors differ (diffusion-rs/whisper/kokoro assemblies) and each
 //! needs its own eviction cost model; tight scope per the P1 ticket.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -48,6 +60,16 @@ use std::time::{Duration, Instant};
 use honkbox_api_types::{ModelCatalog, ModelKind};
 use honkbox_llm_worker::{LlamaCppLlm, LlmOptions, LlmPipeline};
 use tokio::sync::Mutex as AsyncMutex;
+
+use crate::metrics::{
+    LoadReason, UnloadReason, note_model_load, note_model_load_duration, note_model_unload,
+    note_swap_eviction,
+};
+
+/// The manager's only modality: [`catalog_llm_loader`] refuses every other
+/// catalog kind, so all swap-metric observations carry this kind. Per-kind
+/// swap actors for sd/stt/tts (P2) will pass their own kinds.
+const SWAP_KIND: ModelKind = ModelKind::Llm;
 
 /// Slug → pipeline constructor seam. Production: catalog-backed llama.cpp
 /// load ([`catalog_llm_loader`]); tests: counting stubs. Called on the
@@ -58,10 +80,17 @@ pub type LlmLoader = Arc<dyn Fn(&str) -> Result<Arc<dyn LlmPipeline>, SwapError>
 #[derive(Debug, Clone)]
 pub struct SwapSettings {
     /// Idle time before an entry is evictable; the default applied when a
-    /// request carries no `keep_alive` override.
+    /// request carries no `ttl_seconds` advice.
     pub llm_ttl: Duration,
     /// Warm-pipeline capacity; LRU evicts beyond it. `1` = classic swap.
     pub llm_max_loaded: usize,
+    /// Ceiling on any per-entry residency window: per-request `ttl_seconds`
+    /// advice is capped here (the route clamps first; this re-caps
+    /// defensively). Also caps a configured `llm_ttl` above it.
+    pub max_ttl: Duration,
+    /// Slugs that never auto-evict and ignore per-request `ttl_seconds`
+    /// entirely (pin outranks client advice).
+    pub pinned: HashSet<String>,
 }
 
 /// Swap failures, mapped to HTTP by the routes (`UnknownSlug` → 400, the
@@ -91,8 +120,10 @@ struct Entry {
     pipe: Arc<dyn LlmPipeline>,
     /// Last request touch (or load time); the TTL window start.
     last_use: Instant,
-    /// Idle budget for this entry: the configured TTL, or the `keep_alive`
-    /// override of the most recent touch.
+    /// Idle budget for this entry: the configured TTL, or the `ttl_seconds`
+    /// advice of the most recent touch, `max`-ed with the remaining window
+    /// and capped at `max_ttl`. Unused for pinned entries (they never
+    /// TTL-evict).
     ttl: Duration,
 }
 
@@ -127,16 +158,20 @@ impl SwapManager {
     /// present entry wins — seeding never clobbers a loaded pipeline.
     pub fn seed(&self, slug: &str, pipe: Arc<dyn LlmPipeline>) {
         let mut entries = self.lock_entries();
-        entries.entry(slug.to_owned()).or_insert_with(|| Entry {
-            pipe,
-            last_use: Instant::now(),
-            ttl: self.settings.llm_ttl,
+        entries.entry(slug.to_owned()).or_insert_with(|| {
+            note_model_load(SWAP_KIND, LoadReason::Preload);
+            Entry {
+                pipe,
+                last_use: Instant::now(),
+                ttl: self.settings.llm_ttl.min(self.settings.max_ttl),
+            }
         });
     }
 
-    /// Pipeline for `slug`, loading it on demand. `keep_alive` (seconds)
-    /// overrides the configured TTL for this touch; `Some(0)` makes the
-    /// entry evictable at the next sweep.
+    /// Pipeline for `slug`, loading it on demand. `ttl_seconds` (NEW-8)
+    /// raises this residency's budget to `max(remaining, own)`, capped at
+    /// `max_ttl`; `Some(0)` = use-then-unload, effective once the remaining
+    /// budget is spent. Pinned slugs ignore the advice entirely.
     ///
     /// # Errors
     /// [`SwapError::UnknownSlug`] when the loader rejects the slug;
@@ -144,16 +179,16 @@ impl SwapManager {
     pub async fn get(
         &self,
         slug: &str,
-        keep_alive: Option<u64>,
+        ttl_seconds: Option<u64>,
     ) -> Result<Arc<dyn LlmPipeline>, SwapError> {
-        let ttl = keep_alive.map_or(self.settings.llm_ttl, Duration::from_secs);
-        if let Some(pipe) = self.touch(slug, ttl) {
+        let requested = ttl_seconds.map_or(self.settings.llm_ttl, Duration::from_secs);
+        if let Some(pipe) = self.touch(slug, requested) {
             return Ok(pipe);
         }
         // Slow path: serialize constructions, then re-check — a racing
         // request may have loaded the slug while we waited on the gate.
         let gate = self.load_gate.lock().await;
-        if let Some(pipe) = self.touch(slug, ttl) {
+        if let Some(pipe) = self.touch(slug, requested) {
             drop(gate);
             return Ok(pipe);
         }
@@ -164,53 +199,81 @@ impl SwapManager {
         self.trim_for_load();
         let loader = Arc::clone(&self.loader);
         let owned_slug = slug.to_owned();
+        let started = Instant::now();
         let pipe = tokio::task::spawn_blocking(move || loader(&owned_slug))
             .await
             .map_err(|err| SwapError::Load(format!("model load task failed: {err}")))??;
+        note_model_load(SWAP_KIND, LoadReason::Request);
+        note_model_load_duration(SWAP_KIND, started.elapsed());
         self.lock_entries().insert(
             slug.to_owned(),
             Entry {
                 pipe: Arc::clone(&pipe),
                 last_use: Instant::now(),
-                ttl,
+                ttl: requested.min(self.settings.max_ttl),
             },
         );
         drop(gate);
         Ok(pipe)
     }
 
-    /// Bump last-use + TTL budget for a cached slug; `None` when absent.
-    fn touch(&self, slug: &str, ttl: Duration) -> Option<Arc<dyn LlmPipeline>> {
+    /// Bump last-use + window budget for a cached slug; `None` when absent.
+    /// The effective window is `max(remaining, own)`, capped — advice never
+    /// shortens a window another touch granted (`ttl_seconds = 0` cannot
+    /// thrash an entry that still has budget left). Pinned slugs keep their
+    /// configured window (they never TTL-evict anyway).
+    fn touch(&self, slug: &str, requested: Duration) -> Option<Arc<dyn LlmPipeline>> {
         let mut entries = self.lock_entries();
         entries.get_mut(slug).map(|entry| {
-            entry.last_use = Instant::now();
-            entry.ttl = ttl;
+            let now = Instant::now();
+            if !self.settings.pinned.contains(slug) {
+                let remaining = entry.ttl.saturating_sub(now.duration_since(entry.last_use));
+                entry.ttl = remaining.max(requested).min(self.settings.max_ttl);
+            }
+            entry.last_use = now;
             Arc::clone(&entry.pipe)
         })
     }
 
-    /// Evict every entry idle beyond its TTL budget. Called by the reaper;
-    /// exposed for deterministic tests (they pass short TTLs and call this
-    /// directly instead of sleeping on the reaper period).
+    /// Evict every non-pinned entry idle beyond its TTL budget. Called by
+    /// the reaper; exposed for deterministic tests (they pass short TTLs and
+    /// call this directly instead of sleeping on the reaper period).
     ///
     /// Returns the number of entries evicted.
     pub fn evict_idle(&self) -> usize {
         let now = Instant::now();
         let mut entries = self.lock_entries();
         let before = entries.len();
-        entries.retain(|_slug, entry| now.duration_since(entry.last_use) <= entry.ttl);
+        entries.retain(|slug, entry| {
+            if self.settings.pinned.contains(slug)
+                || now.duration_since(entry.last_use) <= entry.ttl
+            {
+                return true;
+            }
+            note_model_unload(SWAP_KIND, UnloadReason::Ttl);
+            false
+        });
         before - entries.len()
     }
 
     /// Pre-load capacity trim: TTL-expired entries go first, then LRU down
-    /// to `llm_max_loaded - 1` (keeping room for the incoming load). Called
-    /// under the load gate with the target slug absent from the map.
+    /// to `llm_max_loaded - 1` (keeping room for the incoming load). Pinned
+    /// entries never auto-evict. Called under the load gate with the target
+    /// slug absent from the map.
     fn trim_for_load(&self) {
         let keep = self.settings.llm_max_loaded.saturating_sub(1);
         let now = Instant::now();
         let mut entries = self.lock_entries();
-        entries.retain(|_slug, entry| now.duration_since(entry.last_use) <= entry.ttl);
-        trim_lru(&mut entries, keep);
+        entries.retain(|slug, entry| {
+            if self.settings.pinned.contains(slug)
+                || now.duration_since(entry.last_use) <= entry.ttl
+            {
+                return true;
+            }
+            note_model_unload(SWAP_KIND, UnloadReason::Ttl);
+            false
+        });
+        trim_lru(&mut entries, keep, &self.settings.pinned);
     }
 
     /// Short-lock helper mapping poisoning back into a guard (a poisoned
@@ -224,7 +287,10 @@ impl SwapManager {
 }
 
 /// Drop the least-recently-used entries until at most `keep` remain.
-fn trim_lru(entries: &mut HashMap<String, Entry>, keep: usize) {
+/// Pinned slugs never auto-evict (pin outranks capacity: the user accepted
+/// the co-residency when pinning); every capacity swap-out counts an
+/// unload (`evict`) plus a `honkbox_swap_evictions_total` observation.
+fn trim_lru(entries: &mut HashMap<String, Entry>, keep: usize, pinned: &HashSet<String>) {
     if entries.len() <= keep {
         return;
     }
@@ -239,7 +305,12 @@ fn trim_lru(entries: &mut HashMap<String, Entry>, keep: usize) {
         if entries.len() <= keep {
             break;
         }
+        if pinned.contains(&slug) {
+            continue;
+        }
         entries.remove(&slug);
+        note_model_unload(SWAP_KIND, UnloadReason::Evict);
+        note_swap_eviction(SWAP_KIND);
     }
 }
 
@@ -310,9 +381,13 @@ mod tests {
         let settings = SwapSettings {
             llm_ttl: Duration::from_secs(600),
             llm_max_loaded: 1,
+            max_ttl: Duration::from_hours(24),
+            pinned: HashSet::from(["llm:pin.gguf".to_owned()]),
         };
         let cloned = settings.clone();
         assert_eq!(cloned.llm_ttl, settings.llm_ttl);
         assert_eq!(cloned.llm_max_loaded, settings.llm_max_loaded);
+        assert_eq!(cloned.max_ttl, settings.max_ttl);
+        assert_eq!(cloned.pinned, settings.pinned);
     }
 }

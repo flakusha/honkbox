@@ -46,6 +46,7 @@ fn test_app() -> Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     })
 }
@@ -100,5 +101,22 @@ async fn metrics_lines_present_after_request() {
     assert!(body.contains("honkbox_request_duration_seconds_sum "));
     assert!(body.contains("# TYPE honkbox_gpu_slot_busy_rejections_total counter"));
     assert!(body.contains("honkbox_gpu_slot_busy_rejections_total "));
+    // Kind-labeled swap families render their full bounded grid. Counts in
+    // this process depend on which in-module unit tests ran first (the
+    // statics are process-wide, see `metrics.rs` tests), so only presence +
+    // untouched-slot zeros are asserted here; count behavior is covered in
+    // tests/swap.rs `swap_events_emit_kind_metrics`.
+    assert!(body.contains("# TYPE honkbox_model_loads_total counter"));
+    assert!(body.contains("honkbox_model_loads_total{kind=\"llm\",reason=\"request\"}"));
+    assert!(body.contains("# TYPE honkbox_model_unloads_total counter"));
+    assert!(body.contains("honkbox_model_unloads_total{kind=\"llm\",reason=\"ttl\"}"));
+    assert!(body.contains("# TYPE honkbox_swap_evictions_total counter"));
+    assert!(body.contains("honkbox_swap_evictions_total{kind=\"llm\"}"));
+    assert!(body.contains("# TYPE honkbox_model_load_duration_seconds histogram"));
+    assert!(body.contains("honkbox_model_load_duration_seconds_bucket{kind=\"llm\",le=\"+Inf\"}"));
+    assert!(body.contains("honkbox_model_load_duration_seconds_count{kind=\"llm\"}"));
+    // Slots nothing in this process can touch stay at exact zero.
+    assert!(body.contains("honkbox_model_loads_total{kind=\"vae\",reason=\"manual\"} 0"));
+    assert!(body.contains("honkbox_swap_evictions_total{kind=\"vae\"} 0"));
     assert!(body.ends_with('\n'));
 }

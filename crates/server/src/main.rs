@@ -281,6 +281,8 @@ fn build_swap_manager(
         swap::SwapSettings {
             llm_ttl: swap_cfg.llm_ttl,
             llm_max_loaded: swap_cfg.llm_max_loaded,
+            max_ttl: swap_cfg.max_ttl,
+            pinned: swap_cfg.pin.iter().cloned().collect(),
         },
         swap::catalog_llm_loader(Arc::clone(catalog)),
     ));
@@ -417,6 +419,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
             stt,
             tts,
             swap,
+            swap_max_ttl: swap_cfg.max_ttl,
             data_dir,
         })
         .into_make_service(),

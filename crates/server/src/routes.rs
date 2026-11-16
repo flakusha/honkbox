@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json, Router,
@@ -125,6 +125,11 @@ pub struct AppConfig {
     /// `[swap] enabled = false`). 429 semantics are unchanged either way —
     /// the residency slot stays the only inference gate.
     pub swap: Option<Arc<crate::swap::SwapManager>>,
+    /// Ceiling on per-request `ttl_seconds` advice (`[swap] max_ttl_secs`):
+    /// over-cap values are clamped here with a `warn!` — never rejected.
+    /// Known even when the swap manager is off, so every route applies the
+    /// same policy to the advice field.
+    pub swap_max_ttl: Duration,
     /// Resolved data dir; supplies the registry-cache DB default
     /// (`<data_dir>/registry.sqlite3`) on refresh. `None` disables the
     /// cache default (explicit `HONKBOX_REGISTRY_DB` still wins).
@@ -442,11 +447,15 @@ fn asset_response(file: &str, bytes: Vec<u8>) -> Response {
 
 /// `POST /v1/transcribe` query: model slug + language for the worker request;
 /// `sample_rate` is required only for raw `audio/pcm-s16le` bodies.
+/// `ttl_seconds` is per-request residency advice (NEW-8): clamped at this
+/// route, consumed once per-kind swap actors land (audio pipelines are
+/// startup-loaded today).
 #[derive(Debug, Deserialize)]
 struct TranscribeQuery {
     model: Option<String>,
     language: Option<String>,
     sample_rate: Option<u32>,
+    ttl_seconds: Option<u64>,
 }
 
 /// `api-types` message → worker message (only the role enum differs).
@@ -471,6 +480,25 @@ fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, 
     })
 }
 
+/// Clamp over-cap per-request `ttl_seconds` advice down to the configured
+/// cap (`[swap] max_ttl_secs`) with a `warn!` — never a 400: third-party
+/// clients send arbitrary values and the clamp is exactly as safe as a
+/// rejection would be. `None` passes through (no advice); the swap manager
+/// re-caps defensively when it applies the budget.
+fn clamp_ttl_seconds(max: Duration, value: Option<u64>) -> Option<u64> {
+    let secs = value?;
+    let cap = max.as_secs();
+    if secs > cap {
+        tracing::warn!(
+            requested = secs,
+            cap,
+            "ttl_seconds above [swap] max_ttl_secs; clamping (never rejected)"
+        );
+        return Some(cap);
+    }
+    Some(secs)
+}
+
 /// Map a swap error onto the HTTP contract: an unknown / non-LLM slug is a
 /// 400 (same semantics as `validate_model`), a failed construction is a 500
 /// naming the cause (the cache stays consistent — nothing was inserted).
@@ -482,15 +510,15 @@ fn swap_rejection(err: crate::swap::SwapError) -> (StatusCode, String) {
 }
 
 /// Resolve the chat pipeline for a request: through the swap manager when
-/// active (per-request `keep_alive` rides along as the entry's TTL budget),
-/// otherwise the startup-configured static pipeline.
+/// active (the clamped per-request `ttl_seconds` rides along as the entry's
+/// window budget), otherwise the startup-configured static pipeline.
 async fn chat_pipeline(
     config: &AppConfig,
     model: &str,
-    keep_alive: Option<u64>,
+    ttl_seconds: Option<u64>,
 ) -> Result<Arc<dyn LlmPipeline>, (StatusCode, String)> {
     match &config.swap {
-        Some(swap) => swap.get(model, keep_alive).await.map_err(swap_rejection),
+        Some(swap) => swap.get(model, ttl_seconds).await.map_err(swap_rejection),
         None => Ok(config.llm.clone()),
     }
 }
@@ -515,7 +543,12 @@ async fn post_chat(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
+    let pipe = chat_pipeline(
+        &config,
+        &req.model,
+        clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
+    )
+    .await?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
@@ -619,7 +652,12 @@ async fn post_chat_stream(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
-    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
+    let pipe = chat_pipeline(
+        &config,
+        &req.model,
+        clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
+    )
+    .await?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
@@ -706,6 +744,7 @@ async fn post_transcribe(
         &catalog,
     )
     .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let _ttl = clamp_ttl_seconds(config.swap_max_ttl, query.ttl_seconds);
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -800,6 +839,7 @@ async fn post_synthesize(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.tts_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let _ttl = clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds);
     let worker_req = WorkerSynthRequest {
         model: req.model,
         text: req.text,

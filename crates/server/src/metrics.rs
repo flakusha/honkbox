@@ -5,11 +5,27 @@
 //! vLLM-vocabulary subset — `honkbox_requests_total{route,code}`,
 //! `honkbox_request_duration_seconds`,
 //! `honkbox_gpu_slot_busy_rejections_total`, `honkbox_build_info{version}`.
+//!
+//! Swap/residency events are labeled by **kind, not slug**
+//! (NEW-items §4): the label set is closed by `api-types::ModelKind` (7
+//! kinds), so every kind-labeled grid is fixed at compile time and series
+//! counts stay bounded no matter how large the catalog grows —
+//! `honkbox_model_loads_total{kind,reason}` and
+//! `honkbox_model_unloads_total{kind,reason}` are 7 × 3 = 21 series each,
+//! `honkbox_swap_evictions_total{kind}` is 7, and
+//! `honkbox_model_load_duration_seconds{kind}` re-uses the existing 11
+//! buckets (7 × 13 lines with `count`/`sum`). Unpopulated kinds render `0`;
+//! the swap manager serves `llm` today, other kinds light up when per-kind
+//! swap actors land. Request metrics stay slug-free by design (the safe
+//! label is `kind`: 100 models × route × code would multiply `requests_total`
+//! into the thousands).
 
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use honkbox_api_types::ModelKind;
 
 /// Known route labels (bounded cardinality); everything else counts under
 /// `"other"` so arbitrary fallback paths cannot explode the series set.
@@ -56,6 +72,73 @@ const CODE_SLOTS: usize = CODES.len() + 1;
 /// Pre-declared histogram buckets.
 const BUCKETS: usize = BUCKET_EDGES_NS.len();
 
+/// Kind labels, matching `api-types::ModelKind` serde names one for one
+/// (`KIND_LABELS[kind_slot(k)]`). The closed 7-kind enum is the cardinality
+/// bound; the grids below never grow with the catalog.
+const KIND_LABELS: [&str; 7] = ["llm", "sd", "lora", "embedding", "vae", "stt", "tts"];
+/// Load reasons (`request` = load-on-demand, `preload` = startup seed,
+/// `manual` = reserved for a future explicit load endpoint).
+const LOAD_REASONS: [&str; 3] = ["request", "preload", "manual"];
+/// Unload reasons (`ttl` = idle expiry, `evict` = LRU capacity swap-out,
+/// `explicit` = reserved for a future unload endpoint).
+const UNLOAD_REASONS: [&str; 3] = ["ttl", "explicit", "evict"];
+
+const KIND_SLOTS: usize = KIND_LABELS.len();
+const LOAD_REASON_SLOTS: usize = LOAD_REASONS.len();
+const UNLOAD_REASON_SLOTS: usize = UNLOAD_REASONS.len();
+
+/// Why a model was loaded (emitted at the swap manager's load-commit).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoadReason {
+    /// A request asked for an uncached slug.
+    Request,
+    /// Startup pre-warm seed (llama-swap `preload` analog).
+    Preload,
+    /// Reserved: an explicit operator/API-triggered load.
+    #[allow(dead_code)] // reserved slot in the bounded exposition set
+    Manual,
+}
+
+/// Why a model was unloaded (emitted at every swap-manager removal site).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UnloadReason {
+    /// Idle TTL expired (reaper sweep or pre-load trim).
+    Ttl,
+    /// Reserved: an explicit operator/API-triggered unload.
+    #[allow(dead_code)] // reserved slot in the bounded exposition set
+    Explicit,
+    /// LRU capacity trim made room for an incoming load.
+    Evict,
+}
+
+fn kind_slot(kind: ModelKind) -> usize {
+    match kind {
+        ModelKind::Llm => 0,
+        ModelKind::Sd => 1,
+        ModelKind::Lora => 2,
+        ModelKind::Embedding => 3,
+        ModelKind::Vae => 4,
+        ModelKind::Stt => 5,
+        ModelKind::Tts => 6,
+    }
+}
+
+fn load_reason_slot(reason: LoadReason) -> usize {
+    match reason {
+        LoadReason::Request => 0,
+        LoadReason::Preload => 1,
+        LoadReason::Manual => 2,
+    }
+}
+
+fn unload_reason_slot(reason: UnloadReason) -> usize {
+    match reason {
+        UnloadReason::Ttl => 0,
+        UnloadReason::Explicit => 1,
+        UnloadReason::Evict => 2,
+    }
+}
+
 /// One route row of `requests_total` cells.
 type CodeCells = [AtomicU64; CODE_SLOTS];
 
@@ -73,6 +156,27 @@ struct Histogram {
     buckets: [AtomicU64; BUCKETS],
 }
 
+impl Histogram {
+    const fn new() -> Self {
+        Self {
+            count: AtomicU64::new(0),
+            sum_ns: AtomicU64::new(0),
+            buckets: [const { AtomicU64::new(0) }; BUCKETS],
+        }
+    }
+
+    /// One observation: count + sum + every bucket at or above the value.
+    fn observe(&self, nanos: u64) {
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.sum_ns.fetch_add(nanos, Ordering::Relaxed);
+        for (slot, edge) in BUCKET_EDGES_NS.iter().enumerate() {
+            if nanos <= *edge {
+                self.buckets[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 /// Global request-duration histogram (no labels; route breakdown lives on
 /// `requests_total` only, to keep the series set small).
 static REQUEST_DURATION: LazyLock<Histogram> = LazyLock::new(|| Histogram {
@@ -83,6 +187,23 @@ static REQUEST_DURATION: LazyLock<Histogram> = LazyLock::new(|| Histogram {
 
 /// 429 GPU-slot rejections (residency `Busy`), process-wide.
 static GPU_SLOT_BUSY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// `loads_total` cells: `[kind][load reason]`, zero-initialized at first use.
+static MODEL_LOADS: LazyLock<[[AtomicU64; LOAD_REASON_SLOTS]; KIND_SLOTS]> =
+    LazyLock::new(|| [const { [const { AtomicU64::new(0) }; LOAD_REASON_SLOTS] }; KIND_SLOTS]);
+
+/// `unloads_total` cells: `[kind][unload reason]`.
+static MODEL_UNLOADS: LazyLock<[[AtomicU64; UNLOAD_REASON_SLOTS]; KIND_SLOTS]> =
+    LazyLock::new(|| [const { [const { AtomicU64::new(0) }; UNLOAD_REASON_SLOTS] }; KIND_SLOTS]);
+
+/// `swap_evictions_total` cells: `[kind]` (capacity-driven swap-outs).
+static SWAP_EVICTIONS: LazyLock<[AtomicU64; KIND_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; KIND_SLOTS]);
+
+/// Per-kind pipeline-construction duration histograms (the same 11 buckets
+/// as the global request duration).
+static LOAD_DURATION: LazyLock<[Histogram; KIND_SLOTS]> =
+    LazyLock::new(|| [const { Histogram::new() }; KIND_SLOTS]);
 
 /// Request route label for a raw URI path: the path itself for known routes,
 /// `"other"` for anything else (fallback hits, escapes, probes).
@@ -113,19 +234,122 @@ fn code_slot(code: u16) -> usize {
 pub(crate) fn record_request(route: &'static str, code: u16, elapsed: Duration) {
     REQUESTS[route_slot(route)][code_slot(code)].fetch_add(1, Ordering::Relaxed);
     let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
-    let hist = &*REQUEST_DURATION;
-    hist.count.fetch_add(1, Ordering::Relaxed);
-    hist.sum_ns.fetch_add(nanos, Ordering::Relaxed);
-    for (slot, edge) in BUCKET_EDGES_NS.iter().enumerate() {
-        if nanos <= *edge {
-            hist.buckets[slot].fetch_add(1, Ordering::Relaxed);
-        }
-    }
+    REQUEST_DURATION.observe(nanos);
 }
 
 /// Count one 429 GPU-slot-busy rejection (call at the rejection site).
 pub(crate) fn note_gpu_slot_busy() {
     GPU_SLOT_BUSY_REJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one model load-commit (call at the swap manager's load commit).
+pub(crate) fn note_model_load(kind: ModelKind, reason: LoadReason) {
+    MODEL_LOADS[kind_slot(kind)][load_reason_slot(reason)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one model unload (call at every swap-manager removal site).
+pub(crate) fn note_model_unload(kind: ModelKind, reason: UnloadReason) {
+    MODEL_UNLOADS[kind_slot(kind)][unload_reason_slot(reason)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one capacity-driven eviction (call at the LRU swap-out site).
+pub(crate) fn note_swap_eviction(kind: ModelKind) {
+    SWAP_EVICTIONS[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Observe one pipeline-construction duration (call around the swap
+/// manager's blocking load).
+pub(crate) fn note_model_load_duration(kind: ModelKind, elapsed: Duration) {
+    let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+    LOAD_DURATION[kind_slot(kind)].observe(nanos);
+}
+
+/// Render the swap/residency families: the kind-labeled grids (bounded by
+/// `KIND_SLOTS`, see the module docs) plus the per-kind load-duration
+/// histogram. Split out of [`exposition`] to keep both functions readable.
+fn push_swap_families(out: &mut String) {
+    push_family(
+        out,
+        "honkbox_model_loads_total",
+        "Swap-manager model load commits by kind and reason.",
+        "counter",
+    );
+    let kinds = KIND_LABELS.iter().copied();
+    let reasons = LOAD_REASONS.iter().copied();
+    for (kind, row) in kinds.zip(MODEL_LOADS.iter()) {
+        for (reason, cell) in reasons.clone().zip(row.iter()) {
+            let _ = writeln!(
+                out,
+                "honkbox_model_loads_total{{kind=\"{kind}\",reason=\"{reason}\"}} {}",
+                cell.load(Ordering::Relaxed)
+            );
+        }
+    }
+
+    push_family(
+        out,
+        "honkbox_model_unloads_total",
+        "Swap-manager model removals by kind and reason.",
+        "counter",
+    );
+    let kinds = KIND_LABELS.iter().copied();
+    let reasons = UNLOAD_REASONS.iter().copied();
+    for (kind, row) in kinds.zip(MODEL_UNLOADS.iter()) {
+        for (reason, cell) in reasons.clone().zip(row.iter()) {
+            let _ = writeln!(
+                out,
+                "honkbox_model_unloads_total{{kind=\"{kind}\",reason=\"{reason}\"}} {}",
+                cell.load(Ordering::Relaxed)
+            );
+        }
+    }
+
+    push_family(
+        out,
+        "honkbox_swap_evictions_total",
+        "Pipelines evicted for LRU capacity (swap-outs) by kind.",
+        "counter",
+    );
+    for (kind, cell) in KIND_LABELS.iter().zip(SWAP_EVICTIONS.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_swap_evictions_total{{kind=\"{kind}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
+
+    push_family(
+        out,
+        "honkbox_model_load_duration_seconds",
+        "Swap-manager pipeline construction duration in seconds, by kind.",
+        "histogram",
+    );
+    for (kind, hist) in KIND_LABELS.iter().zip(LOAD_DURATION.iter()) {
+        let count = hist.count.load(Ordering::Relaxed);
+        for (le, bucket) in BUCKET_LES.iter().zip(hist.buckets.iter()) {
+            let _ = writeln!(
+                out,
+                "honkbox_model_load_duration_seconds_bucket{{kind=\"{kind}\",le=\"{le}\"}} {}",
+                bucket.load(Ordering::Relaxed)
+            );
+        }
+        let _ = writeln!(
+            out,
+            "honkbox_model_load_duration_seconds_bucket{{kind=\"{kind}\",le=\"+Inf\"}} {count}"
+        );
+        let sum_ns = hist.sum_ns.load(Ordering::Relaxed);
+        // Integer math only (the repo avoids float casts): 9 fractional digits.
+        let _ = writeln!(
+            out,
+            "honkbox_model_load_duration_seconds_sum{{kind=\"{kind}\"}} {}.{:09}",
+            sum_ns / 1_000_000_000,
+            sum_ns % 1_000_000_000
+        );
+        let _ = writeln!(
+            out,
+            "honkbox_model_load_duration_seconds_count{{kind=\"{kind}\"}} {count}"
+        );
+    }
 }
 
 /// Render the Prometheus text exposition (version 0.0.4) for every series.
@@ -197,6 +421,8 @@ pub(crate) fn exposition() -> String {
         sum_ns % 1_000_000_000
     );
     let _ = writeln!(out, "honkbox_request_duration_seconds_count {count}");
+
+    push_swap_families(&mut out);
     out
 }
 
@@ -264,5 +490,73 @@ mod tests {
         assert!(body.contains("# TYPE honkbox_build_info gauge"));
         assert!(body.contains("honkbox_build_info{version=\""));
         assert!(body.ends_with('\n'));
+    }
+
+    #[test]
+    fn kind_slots_match_model_kind_order() {
+        assert_eq!(kind_slot(ModelKind::Llm), 0);
+        assert_eq!(kind_slot(ModelKind::Tts), KIND_SLOTS - 1);
+        assert_eq!(load_reason_slot(LoadReason::Manual), LOAD_REASONS.len() - 1);
+        assert_eq!(
+            unload_reason_slot(UnloadReason::Evict),
+            UNLOAD_REASONS.len() - 1
+        );
+    }
+
+    /// The kind-labeled families render a full bounded grid (7 kinds x
+    /// reasons), so unpopulated kinds still expose their `0` series.
+    #[test]
+    fn kind_labeled_families_render_bounded_grids() {
+        note_model_load(ModelKind::Llm, LoadReason::Request);
+        note_model_load(ModelKind::Tts, LoadReason::Preload);
+        note_model_unload(ModelKind::Llm, UnloadReason::Ttl);
+        note_model_unload(ModelKind::Sd, UnloadReason::Evict);
+        note_swap_eviction(ModelKind::Llm);
+        note_model_load_duration(ModelKind::Llm, Duration::from_millis(25));
+        let body = exposition();
+
+        assert!(body.contains("# TYPE honkbox_model_loads_total counter"));
+        assert!(
+            series_value(
+                &body,
+                "honkbox_model_loads_total{kind=\"llm\",reason=\"request\"}"
+            ) >= 1
+        );
+        assert!(
+            series_value(
+                &body,
+                "honkbox_model_loads_total{kind=\"tts\",reason=\"preload\"}"
+            ) >= 1
+        );
+        // Unpopulated slots still render (bounded pre-declared grid).
+        assert!(body.contains("honkbox_model_loads_total{kind=\"vae\",reason=\"manual\"} 0"));
+
+        assert!(body.contains("# TYPE honkbox_model_unloads_total counter"));
+        assert!(
+            series_value(
+                &body,
+                "honkbox_model_unloads_total{kind=\"llm\",reason=\"ttl\"}"
+            ) >= 1
+        );
+        assert!(
+            series_value(
+                &body,
+                "honkbox_model_unloads_total{kind=\"sd\",reason=\"evict\"}"
+            ) >= 1
+        );
+
+        assert!(body.contains("# TYPE honkbox_swap_evictions_total counter"));
+        assert!(series_value(&body, "honkbox_swap_evictions_total{kind=\"llm\"}") >= 1);
+        assert!(body.contains("honkbox_swap_evictions_total{kind=\"stt\"} 0"));
+
+        assert!(body.contains("# TYPE honkbox_model_load_duration_seconds histogram"));
+        // 25ms lands in le=0.025 (and above), llm row only.
+        let le25 = "honkbox_model_load_duration_seconds_bucket{kind=\"llm\",le=\"0.025\"}";
+        assert!(series_value(&body, le25) >= 1);
+        assert!(
+            body.contains("honkbox_model_load_duration_seconds_bucket{kind=\"sd\",le=\"+Inf\"} 0")
+        );
+        assert!(body.contains("honkbox_model_load_duration_seconds_count{kind=\"llm\"}"));
+        assert!(body.contains("honkbox_model_load_duration_seconds_sum{kind=\"llm\"} 0."));
     }
 }

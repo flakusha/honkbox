@@ -57,14 +57,16 @@ pub struct ChatRequest {
     /// Sampling temperature; backend default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    /// Per-request idle-TTL override for this model's swap entry, in seconds
-    /// (NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). Overrides
-    /// the configured `[swap] llm_ttl_secs` from this request until the entry
-    /// is touched again; `0` = free to evict at the next eviction sweep.
-    /// Ignored when the swap manager is off (stub backends, `[swap] enabled
-    /// = false`).
+    /// Per-request residency budget for this model's swap entry, in seconds
+    /// (NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). The entry's
+    /// effective window is `max(remaining, this)`, capped at
+    /// `[swap] max_ttl_secs`; `0` = use-then-unload, still shielded by the
+    /// remaining window so it cannot thrash. Values over the cap are clamped
+    /// at the route (`warn!`, never a 400); `[swap] pin` entries ignore it
+    /// entirely. Ignored when the swap manager is off (stub backends,
+    /// `[swap] enabled = false`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keep_alive: Option<u64>,
+    pub ttl_seconds: Option<u64>,
 }
 
 /// Chat completion response.
@@ -117,6 +119,12 @@ pub struct SynthesizeRequest {
     /// Output sample rate in Hz; backend default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
+    /// Per-request residency budget for this model's swap entry, in seconds
+    /// (NEW-8; same contract as [`ChatRequest::ttl_seconds`]). Over-cap
+    /// values are clamped at the route; audio pipelines are startup-loaded
+    /// today, so the advice takes effect once per-kind swap lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
 }
 
 /// Model modality as discovered on disk (`GET /v1/models` entries). Mirrors

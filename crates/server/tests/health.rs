@@ -46,6 +46,7 @@ async fn health_returns_ok() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     })
     .oneshot(

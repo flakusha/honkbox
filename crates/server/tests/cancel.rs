@@ -199,6 +199,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     });
 
@@ -280,6 +281,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
     });
 

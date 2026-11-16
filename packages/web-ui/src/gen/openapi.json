@@ -274,15 +274,6 @@
           "messages"
         ],
         "properties": {
-          "keep_alive": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Per-request idle-TTL override for this model's swap entry, in seconds\n(NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). Overrides\nthe configured `[swap] llm_ttl_secs` from this request until the entry\nis touched again; `0` = free to evict at the next eviction sweep.\nIgnored when the swap manager is off (stub backends, `[swap] enabled\n= false`).",
-            "minimum": 0
-          },
           "max_tokens": {
             "type": [
               "integer",
@@ -310,6 +301,15 @@
             ],
             "format": "float",
             "description": "Sampling temperature; backend default when absent."
+          },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Per-request residency budget for this model's swap entry, in seconds\n(NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). The entry's\neffective window is `max(remaining, this)`, capped at\n`[swap] max_ttl_secs`; `0` = use-then-unload, still shielded by the\nremaining window so it cannot thrash. Values over the cap are clamped\nat the route (`warn!`, never a 400); `[swap] pin` entries ignore it\nentirely. Ignored when the swap manager is off (stub backends,\n`[swap] enabled = false`).",
+            "minimum": 0
           }
         }
       },
@@ -581,6 +581,15 @@
           "text": {
             "type": "string",
             "description": "Text to synthesize."
+          },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Per-request residency budget for this model's swap entry, in seconds\n(NEW-8; same contract as [`ChatRequest::ttl_seconds`]). Over-cap\nvalues are clamped at the route; audio pipelines are startup-loaded\ntoday, so the advice takes effect once per-kind swap lands.",
+            "minimum": 0
           },
           "voice": {
             "type": [
