@@ -630,6 +630,7 @@ fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
         }],
         max_tokens,
         temperature,
+        seed: None,
     }));
     println!(
         "{}",

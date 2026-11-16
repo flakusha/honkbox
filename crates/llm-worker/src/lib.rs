@@ -40,6 +40,10 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     /// Sampling temperature (default 0.7).
     pub temperature: Option<f32>,
+    /// Deterministic sampling seed. `Some(seed)` makes the sampler chain
+    /// reproducible (same prompt + seed ⇒ same tokens); `None` keeps the
+    /// wall-clock-derived seed.
+    pub seed: Option<u64>,
 }
 
 /// Chat completion response.
@@ -51,6 +55,9 @@ pub struct ChatResponse {
     pub text: String,
     /// Number of generated tokens.
     pub tokens: u32,
+    /// Number of prompt tokens after tokenization (llama.cpp path reports
+    /// the real count; the stub reports 0).
+    pub prompt_tokens: u32,
     /// Wall-clock time in milliseconds.
     pub millis: u64,
 }
@@ -114,6 +121,10 @@ pub trait LlmPipeline: Send + Sync {
     /// Run one chat completion.
     fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, LlmError>;
     /// Run one chat completion, pushing each decoded piece to `sink` as it arrives.
+    ///
+    /// Token pieces stream through `sink`; the returned [`ChatResponse`] is
+    /// the final event and carries the final accounting, including
+    /// `prompt_tokens` (the OpenAI-style usage surface reads it from there).
     fn complete_stream(
         &self,
         req: &ChatRequest,
@@ -178,6 +189,7 @@ impl LlmPipeline for StubLlm {
         Ok(ChatResponse {
             backend_id: self.backend_id().to_string(),
             tokens: u32::try_from(text.split_whitespace().count()).unwrap_or(u32::MAX),
+            prompt_tokens: 0,
             millis: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             text,
         })
@@ -204,6 +216,7 @@ impl LlmPipeline for StubLlm {
         Ok(ChatResponse {
             backend_id: resp.backend_id,
             tokens,
+            prompt_tokens: resp.prompt_tokens,
             millis: resp.millis,
             text,
         })
@@ -238,6 +251,7 @@ mod tests {
             }],
             max_tokens: None,
             temperature: None,
+            seed: None,
         }
     }
 
@@ -295,5 +309,33 @@ mod tests {
         let err = LlamaCppLlm::load(Path::new("/nonexistent/model.gguf"), &LlmOptions::default())
             .unwrap_err();
         assert!(matches!(err, LlmError::Load(_)));
+    }
+
+    #[test]
+    fn stub_seed_is_deterministic() {
+        // The stub has no sampler, but the seed-honored contract holds at the
+        // worker API level: two same-seed runs are byte-identical in text and
+        // token counts, with or without a seed supplied.
+        let llm = StubLlm::default();
+        let mut seeded = req();
+        seeded.seed = Some(42);
+        let a = llm.complete(&seeded).unwrap();
+        let b = llm.complete(&seeded).unwrap();
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.tokens, b.tokens);
+        assert_eq!(a.prompt_tokens, b.prompt_tokens);
+        let unseeded = llm.complete(&req()).unwrap();
+        assert_eq!(unseeded.text, a.text);
+        assert_eq!(unseeded.tokens, a.tokens);
+    }
+
+    #[test]
+    fn stub_stream_reports_prompt_tokens_in_final_event() {
+        // Stream contract: pieces go through the sink, and the final
+        // `ChatResponse` carries `prompt_tokens` (0 for the stub).
+        let llm = StubLlm::default();
+        let resp = llm.complete_stream(&req(), &mut |_| {}).unwrap();
+        assert_eq!(resp.prompt_tokens, 0);
+        assert!(resp.tokens > 0);
     }
 }

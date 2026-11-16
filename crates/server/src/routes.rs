@@ -1092,6 +1092,7 @@ async fn post_chat(
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
+        seed: None,
     };
     let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
@@ -1204,6 +1205,7 @@ async fn post_chat_stream(
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
+        seed: None,
     };
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));

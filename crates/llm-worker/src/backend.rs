@@ -127,8 +127,8 @@ impl LlamaCppLlm {
         ctx.decode(&mut batch)
             .map_err(|e| LlmError::Decode(format!("{e:?}")))?;
 
-        let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
-            u32::try_from(d.as_secs()).unwrap_or(u32::MAX) ^ d.subsec_nanos()
+        let seed = req.seed.map_or_else(wallclock_seed, |seed| {
+            u32::try_from(seed).unwrap_or(u32::MAX)
         });
         let sampler =
             LlamaSampler::chain_simple([LlamaSampler::temp(temperature), LlamaSampler::dist(seed)]);
@@ -173,9 +173,18 @@ impl LlamaCppLlm {
             backend_id: self.backend_id().to_string(),
             text,
             tokens: generated,
+            prompt_tokens: u32::try_from(prompt_tokens.len()).unwrap_or(u32::MAX),
             millis: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
         })
     }
+}
+
+/// Fallback seed for unseeded requests: wall-clock seconds xor nanoseconds
+/// (same derivation as before request-controlled seeds existed).
+fn wallclock_seed() -> u32 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+        u32::try_from(d.as_secs()).unwrap_or(u32::MAX) ^ d.subsec_nanos()
+    })
 }
 
 impl LlmPipeline for LlamaCppLlm {

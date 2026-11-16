@@ -89,6 +89,7 @@ impl LlmPipeline for GatedLlm {
             backend_id: self.backend_id().to_owned(),
             text: "gated".to_owned(),
             tokens: 1,
+            prompt_tokens: 0,
             millis: 0,
         })
     }
@@ -108,6 +109,7 @@ impl LlmPipeline for GatedLlm {
             backend_id: self.backend_id().to_owned(),
             text: "onetwothree".to_owned(),
             tokens: 3,
+            prompt_tokens: 0,
             millis: 0,
         })
     }
@@ -135,6 +137,7 @@ impl LlmPipeline for AbortGateLlm {
             backend_id: self.backend_id().to_owned(),
             text: "gated".to_owned(),
             tokens: 1,
+            prompt_tokens: 0,
             millis: 0,
         })
     }
@@ -157,7 +160,8 @@ impl LlmPipeline for AbortGateLlm {
                 backend_id: self.backend_id().to_owned(),
                 text: "one".to_owned(),
                 tokens: 1,
-                    millis: 0,
+                prompt_tokens: 0,
+                millis: 0,
             });
         }
         sink("two");
@@ -166,6 +170,7 @@ impl LlmPipeline for AbortGateLlm {
             backend_id: self.backend_id().to_owned(),
             text: "onetwothree".to_owned(),
             tokens: 3,
+            prompt_tokens: 0,
             millis: 0,
         })
     }
