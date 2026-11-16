@@ -1,4 +1,4 @@
-//! `generate` bundle writer: `~/.honkbox/jobs/{ulid}/` + atomic writes.
+//! `generate` bundle writer: `<data_dir>/jobs/{ulid}/` + atomic writes.
 //!
 //! Layout per job dir: `request.json` (full params + slug), `final_00.{png,jpg,webp}` +
 //! sidecar `final_00.json`, `metrics.jsonl` (one line), `run.log`. Every file
@@ -52,32 +52,14 @@ pub fn parse_size(raw: &str) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// Job root: `~/.honkbox/jobs`. ONE-RELEASE compat: the old `~/.sd-rip/jobs`
-/// is used once (with a `warn!`) when the new dir is absent.
-fn jobs_dir() -> Result<PathBuf, String> {
-    let home = home::home_dir().ok_or_else(|| "cannot resolve home directory".to_string())?;
-    let new = home.join(".honkbox").join("jobs");
-    if !new.exists() {
-        let old = home.join(".sd-rip").join("jobs");
-        if old.exists() {
-            warn!(
-                "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
-                old.display(),
-                new.display()
-            );
-            return Ok(old);
-        }
-    }
-    Ok(new)
-}
-
-/// Write a full job bundle under `~/.honkbox/jobs/{ulid}/`; returns the job dir.
+/// Write a full job bundle under `<data_dir>/jobs/{ulid}/`; returns the job dir.
 pub fn write_bundle(
+    data_dir: &Path,
     inputs: &BundleInputs,
     image_bytes: &[u8],
     elapsed_ms: u64,
 ) -> Result<PathBuf, String> {
-    let dir = jobs_dir()?.join(ulid::Ulid::new().to_string());
+    let dir = data_dir.join("jobs").join(ulid::Ulid::new().to_string());
     fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create job dir {}: {e}", dir.display()))?;
     write_bundle_into(&dir, inputs, image_bytes, elapsed_ms)?;
@@ -158,7 +140,7 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Startup garbage collection over `~/.honkbox/jobs` and the temp dir.
+/// Startup garbage collection over `<data_dir>/jobs` and the temp dir.
 ///
 /// Removes: job dirs whose mtime is older than `max_age`; then, oldest
 /// first, job dirs until the total bundle size is under `max_bytes`; stray
@@ -166,15 +148,11 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
 /// `$TMPDIR/honkbox-*.png` files (the sd-cpp decode scratch template
 /// `honkbox-{pid}-{seed}-{nanos}.png`) older than `max_age`. Never fails:
 /// problems log at `warn!` and GC continues; removals log at `debug!`.
-pub fn gc_jobs(max_age: Duration, max_bytes: u64) {
-    let root = match jobs_dir() {
-        Ok(root) => root,
-        Err(e) => {
-            warn!("gc: cannot resolve jobs dir: {e}");
-            return;
-        }
-    };
-    gc_dir(&root, max_age, max_bytes);
+/// `jobs_root: None` (unresolvable data dir) still sweeps the temp dir.
+pub fn gc_jobs(jobs_root: Option<&Path>, max_age: Duration, max_bytes: u64) {
+    if let Some(root) = jobs_root {
+        gc_dir(root, max_age, max_bytes);
+    }
     sweep_stale_temp_pngs(max_age, SystemTime::now());
 }
 

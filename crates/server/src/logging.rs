@@ -14,8 +14,6 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tracing::warn;
-
 use tracing_subscriber::{
     EnvFilter, fmt, prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt,
 };
@@ -24,30 +22,15 @@ use tracing_subscriber::{
 /// startup (10 MiB).
 pub const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
 
-/// Default log file: `~/.honkbox/logs/honkbox.log` (user-kept logs under the
-/// data dir). ONE-RELEASE compat: the old `~/.sd-rip/logs/sd-rip.log` is used
-/// once (with a `warn!`) when the new file is absent but the old one exists.
-fn default_log_file() -> Option<PathBuf> {
-    let home = home::home_dir()?;
-    let new = home.join(".honkbox").join("logs").join("honkbox.log");
-    if !new.exists() {
-        let old = home.join(".sd-rip").join("logs").join("sd-rip.log");
-        if old.exists() {
-            warn!(
-                "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
-                old.display(),
-                new.display()
-            );
-            return Some(old);
-        }
-    }
-    Some(new)
+/// Default log file: `<data_dir>/logs/honkbox.log` (derived from the
+/// resolved data dir; `None` when no data dir could be resolved).
+fn default_log_file(data_dir: Option<&Path>) -> Option<PathBuf> {
+    data_dir.map(|base| base.join("logs").join("honkbox.log"))
 }
 
-/// Resolve the log path: explicit arg beats `HONKBOX_LOG_FILE` beats default.
-/// ONE-RELEASE compat: `SD_RIP_LOG_FILE` is honored once (with a `warn!`)
-/// when the new var is absent.
-fn resolve_log_file(arg: Option<PathBuf>) -> Option<PathBuf> {
+/// Resolve the log path: explicit arg beats `HONKBOX_LOG_FILE` beats the
+/// data-dir default.
+fn resolve_log_file(arg: Option<PathBuf>, data_dir: Option<&Path>) -> Option<PathBuf> {
     if arg.is_some() {
         return arg;
     }
@@ -56,23 +39,16 @@ fn resolve_log_file(arg: Option<PathBuf>) -> Option<PathBuf> {
     {
         return Some(PathBuf::from(env));
     }
-    if let Ok(env) = std::env::var("SD_RIP_LOG_FILE")
-        && !env.is_empty()
-    {
-        warn!(
-            "SD_RIP_LOG_FILE is deprecated; use HONKBOX_LOG_FILE (one-release compat: the old name will stop working)"
-        );
-        return Some(PathBuf::from(env));
-    }
-    default_log_file()
+    default_log_file(data_dir)
 }
 
 /// Install the global subscriber. Never fails: a bad log file warns to stderr
-/// and serving continues stderr-only.
-pub fn init(log_file: Option<PathBuf>) {
+/// and serving continues stderr-only. Called after `config::load` so the
+/// file-refined data dir applies to the log path too.
+pub fn init(log_file: Option<PathBuf>, data_dir: Option<&Path>) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr = fmt::layer().with_writer(std::io::stderr);
-    match resolve_log_file(log_file) {
+    match resolve_log_file(log_file, data_dir) {
         Some(path) => match open_log_file(&path) {
             Some(file) => {
                 let file_layer = fmt::layer()
@@ -192,5 +168,21 @@ mod tests {
         let _ = fs::remove_file(&path);
         rotate_if_large(&path, 0);
         assert!(!path.exists());
+    }
+
+    /// Log path derivation: arg > env-independent default under the data
+    /// dir; no data dir → `None` (stderr-only).
+    #[test]
+    fn log_file_resolves_under_data_dir() {
+        let base = std::env::temp_dir().join(format!("honkbox-log-base-{}", std::process::id()));
+        assert_eq!(
+            resolve_log_file(Some(PathBuf::from("/explicit/log")), Some(&base)),
+            Some(PathBuf::from("/explicit/log"))
+        );
+        assert_eq!(
+            resolve_log_file(None, Some(&base)),
+            Some(base.join("logs/honkbox.log"))
+        );
+        assert_eq!(resolve_log_file(None, None), None);
     }
 }

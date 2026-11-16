@@ -67,26 +67,53 @@ alias hbx=honkbox
 
 ## Config
 
+The whole on-disk state lives under ONE **data dir**, resolved as:
+
+1. `--data-dir` global CLI flag
+2. `HONKBOX_DATA_DIR` env
+3. `[core] data_dir` in the config file
+4. default: `$XDG_STATE_HOME/honkbox`, else `$HOME/.local/state/honkbox`
+   (empty or relative XDG/env values are treated as unset)
+
+Derived paths: `<data_dir>/honkbox.toml` (config), `<data_dir>/jobs/`,
+`<data_dir>/logs/honkbox.log`, `<data_dir>/registry.sqlite3` (registry cache),
+and starter model dirs `<data_dir>/models/{stt,tts}`. The startup log names
+the active data dir. Model/discovery roots stay explicit (external weight
+trees); temp PNGs stay in `$TMPDIR`.
+
 ```toml
+[core]
+data_dir = "/absolute/path"   # optional; must be absolute
+
 [models]
 llm_dirs = ["~/.cache/huggingface"]
 comfyui_dir = "~/git-ai/ai-models/Data/Models"
 ```
 
 - Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over file).
-- Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `HONKBOX_LOG_FILE` > `~/.honkbox/logs/honkbox.log` (stderr human-readable, file JSONL).
+- Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `HONKBOX_LOG_FILE` > `<data_dir>/logs/honkbox.log` (stderr human-readable, file JSONL).
+- Registry cache: `HONKBOX_REGISTRY_DB` (path; `off`/empty disables) > `<data_dir>/registry.sqlite3`.
 
-## Migrating from sd-rip (one release)
+## Migrating from sd-rip
 
-The binary is now `honkbox` (`sd-rip` is gone). Config and state moved from
-`~/.sd-rip` to `~/.honkbox` (`honkbox.toml`, `logs/honkbox.log`, `jobs/`), and
-env vars from `SD_RIP_*` to `HONKBOX_*` (`HONKBOX_LLM_DIRS`,
-`HONKBOX_COMFYUI_DIR`, `HONKBOX_LOG_FILE`, `HONKBOX_SD_LOG`). For one release
-the old paths/vars are still honored when the new ones are absent, with a
-deprecation warning telling you to move to `~/.honkbox` — move your files
-over; afterwards the old names stop working. Browser model picks migrate the
-same way: `sd-rip.*` localStorage keys are read once, then rewritten under
-`honkbox.*`.
+The binary is now `honkbox` (`sd-rip` is gone); the sd-rip compat release is
+over — old paths and `SD_RIP_*` vars are no longer read. Move your state by
+hand to the new default location:
+
+```bash
+D="${XDG_STATE_HOME:-$HOME/.local/state}/honkbox"
+mkdir -p "$D"
+mv ~/.honkbox/jobs "$D/jobs"
+mv ~/.honkbox/logs "$D/logs"
+mv ~/.honkbox/models "$D/models"              # if present
+mv ~/.honkbox/registry.sqlite3 "$D/"           # if present
+mv ~/.honkbox/honkbox.toml "$D/"
+# legacy sd-rip users first: same layout under ~/.sd-rip
+```
+
+Or set `--data-dir`/`HONKBOX_DATA_DIR` to an existing `~/.honkbox` instead of
+moving anything. Browser model picks keep migrating themselves: `sd-rip.*`
+localStorage keys are read once, then rewritten under `honkbox.*`.
 
 ## Docs
 

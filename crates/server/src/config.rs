@@ -1,20 +1,28 @@
 //! Model roots config: `[models]` + optional `[discovery]` in
-//! `~/.honkbox/honkbox.toml`, env wins over file. Also `[jobs]` GC settings
+//! `<data_dir>/honkbox.toml`, env wins over file. Also `[jobs]` GC settings
 //! (`gc_ttl` / `gc_max_bytes`, seconds / bytes, env `HONKBOX_GC_TTL` /
-//! `HONKBOX_GC_MAX_BYTES`) and `[swap]` LLM swap settings (`enabled`,
+//! `HONKBOX_GC_MAX_BYTES`), `[swap]` LLM swap settings (`enabled`,
 //! `llm_ttl_secs`, `llm_max_loaded`, env `HONKBOX_SWAP_LLM_TTL` /
-//! `HONKBOX_SWAP_LLM_MAX_LOADED`).
+//! `HONKBOX_SWAP_LLM_MAX_LOADED`), and `[core] data_dir`.
 //!
-//! Precedence: built-in defaults → config file → env (`HONKBOX_LLM_DIRS`,
-//! `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`, `HONKBOX_TTS_DIRS`,
-//! `HONKBOX_DISCOVERY_LLM_DIRS`, `HONKBOX_DISCOVERY_COMFYUI_DIRS`,
-//! `HONKBOX_DISCOVERY_STT_DIRS`, `HONKBOX_DISCOVERY_TTS_DIRS`).
+//! The ONE data-dir knob resolves `--data-dir` CLI flag > `HONKBOX_DATA_DIR`
+//! env > `[core] data_dir` file key > `$XDG_STATE_HOME/honkbox` (empty or
+//! relative env/XDG values are treated as unset; fallback
+//! `$HOME/.local/state/honkbox`). Everything derives from it:
+//! `<data_dir>/honkbox.toml` (config), `jobs/`, `logs/honkbox.log`,
+//! `registry.sqlite3`, `models/{stt,tts}`. The file-*locating* default is
+//! pure-env (no file read, no cwd), so the config file lives inside the data
+//! dir without circularity; a file `[core] data_dir` refines the derived
+//! roots but cannot move the file itself (one-pass).
 //!
-//! ONE-RELEASE compat: when the new path / env vars are absent, the old
-//! `~/.sd-rip/sd-rip.toml` / `SD_RIP_*` vars are honored once with a `warn!`
-//! pointing at the move to `~/.honkbox`.
+//! Precedence for model roots: built-in defaults → config file → env
+//! (`HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`,
+//! `HONKBOX_TTS_DIRS`, `HONKBOX_DISCOVERY_LLM_DIRS`,
+//! `HONKBOX_DISCOVERY_COMFYUI_DIRS`, `HONKBOX_DISCOVERY_STT_DIRS`,
+//! `HONKBOX_DISCOVERY_TTS_DIRS`).
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tracing::warn;
@@ -64,7 +72,7 @@ pub struct SwapConfig {
     pub llm_max_loaded: usize,
 }
 
-/// `[jobs]` section: startup GC of `~/.honkbox/jobs` + stale temp PNGs.
+/// `[jobs]` section: startup GC of `<data_dir>/jobs` + stale temp PNGs.
 #[derive(Debug, Clone)]
 pub struct JobsConfig {
     /// Age past which job bundles and stale temp files are removed.
@@ -145,19 +153,112 @@ fn gc_settings(file: &FileJobs, ttl_env: Option<&str>, max_env: Option<&str>) ->
     cfg
 }
 
-/// Load model roots: defaults, then `config_path` (or `~/.honkbox/honkbox.toml`),
-/// then env overrides. `[discovery]` extras are appended to the `[models]`
-/// base roots. A missing file falls back to defaults; invalid TOML is an
-/// `Err`.
-pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
-    let path = config_path.unwrap_or_else(default_path);
+/// Env var overriding the data dir (`--data-dir` flag wins over it).
+pub const DATA_DIR_ENV: &str = "HONKBOX_DATA_DIR";
+
+/// An absolute, non-empty path value; empty or relative values (a common
+/// malformed `$XDG_STATE_HOME`/env) count as unset per the XDG spec.
+fn clean(value: Option<OsString>) -> Option<PathBuf> {
+    value
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
+/// XDG-state default: `$XDG_STATE_HOME/honkbox`, else
+/// `$HOME/.local/state/honkbox`. Pure (args, not process env).
+fn default_data_dir(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    if let Some(dir) = clean(xdg) {
+        return Some(dir.join("honkbox"));
+    }
+    clean(home).map(|h| h.join(".local/state/honkbox"))
+}
+
+/// Resolve the data dir WITHOUT the config-file stage (pure, so tests stay
+/// thread-safe): `--data-dir` flag > `HONKBOX_DATA_DIR` env > XDG default.
+/// This is the file-*locating* chain: it reads no file and no cwd, so
+/// `<data_dir>/honkbox.toml` works without circularity.
+fn resolve_data_dir(
+    cli: Option<PathBuf>,
+    env: Option<OsString>,
+    xdg: Option<OsString>,
+    home: Option<OsString>,
+) -> Option<PathBuf> {
+    if let Some(dir) = cli {
+        return Some(dir);
+    }
+    if let Some(dir) = clean(env) {
+        return Some(dir);
+    }
+    default_data_dir(xdg, home)
+}
+
+/// Load result: model/job/swap config plus the final data dir (after the
+/// `[core] data_dir` refinement).
+pub struct LoadedConfig {
+    /// Model roots + `[jobs]` + `[swap]` settings.
+    pub models: ModelConfig,
+    /// Final data dir; `None` only when no absolute base can be derived.
+    pub data_dir: Option<PathBuf>,
+}
+
+/// Final data dir: flag > env > `[core] data_dir` file key > located default
+/// (pure-env chain). The file key is skipped whenever the flag or env already
+/// decided (they outrank it); an empty or relative file key is ignored with a
+/// `warn!` (absolute paths only). Pure (args, not process env).
+fn finalize_data_dir(
+    cli_dir: Option<PathBuf>,
+    env_dir: Option<OsString>,
+    file: &FileCore,
+    located: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let explicit = cli_dir.or_else(|| clean(env_dir));
+    explicit.or_else(|| {
+        file.data_dir
+            .as_deref()
+            .and_then(|raw| {
+                let expanded = expand_home(raw);
+                if expanded.is_absolute() {
+                    Some(expanded)
+                } else {
+                    warn!("ignoring relative [core] data_dir {raw:?}; use an absolute path");
+                    None
+                }
+            })
+            .or(located)
+    })
+}
+
+/// Load model roots: defaults, then `config_path` (or
+/// `<data_dir>/honkbox.toml`), then env overrides. `[discovery]` extras are
+/// appended to the `[models]` base roots. A missing file falls back to
+/// defaults; invalid TOML is an `Err`. `cli_dir` is the `--data-dir` flag;
+/// the `HONKBOX_DATA_DIR` env and the `[core] data_dir` file key slot in
+/// beneath it per the resolution chain in the module docs (one-pass: the
+/// file key cannot relocate the config file mid-read).
+pub fn load(
+    config_path: Option<PathBuf>,
+    cli_dir: Option<PathBuf>,
+) -> Result<LoadedConfig, String> {
+    let env_dir = std::env::var_os(DATA_DIR_ENV);
+    let located = resolve_data_dir(
+        cli_dir.clone(),
+        env_dir.clone(),
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    );
+    let path = config_path.or_else(|| located.as_ref().map(|d| d.join("honkbox.toml")));
     let mut staged = RootStages::defaults();
     let mut file_jobs = FileJobs::default();
     let mut file_swap = FileSwap::default();
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let file: FileConfig =
-                toml::from_str(&text).map_err(|e| format!("bad config {}: {e}", path.display()))?;
+    let mut file_core = FileCore::default();
+    let mut stt_from_file = false;
+    let mut tts_from_file = false;
+    match path.as_deref().map(std::fs::read_to_string).transpose() {
+        Ok(Some(text)) => {
+            let display = path.as_deref().unwrap_or(Path::new("<none>"));
+            let file: FileConfig = toml::from_str(&text)
+                .map_err(|e| format!("bad config {}: {e}", display.display()))?;
             if let Some(dirs) = file.models.llm_dirs {
                 staged.llm = dirs.iter().map(|d| expand_home(d)).collect();
             }
@@ -172,9 +273,11 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
             }
             if let Some(dirs) = file.models.stt_dirs {
                 staged.stt = dirs.iter().map(|d| expand_home(d)).collect();
+                stt_from_file = true;
             }
             if let Some(dirs) = file.models.tts_dirs {
                 staged.tts = dirs.iter().map(|d| expand_home(d)).collect();
+                tts_from_file = true;
             }
             if let Some(dirs) = file.discovery.stt_dirs {
                 staged.extra_stt = dirs.iter().map(|d| expand_home(d)).collect();
@@ -184,9 +287,26 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
             }
             file_jobs = file.jobs;
             file_swap = file.swap;
+            file_core = file.core;
         }
+        Ok(None) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("cannot read config {}: {e}", path.display())),
+        Err(e) => {
+            let display = path.as_deref().unwrap_or(Path::new("<none>"));
+            return Err(format!("cannot read config {}: {e}", display.display()));
+        }
+    }
+    let data_dir = finalize_data_dir(cli_dir, env_dir, &file_core, located);
+    // Starter model dirs derive from the final data dir (rebasing here keeps
+    // a file-refined `[core] data_dir` authoritative for them too); explicit
+    // `[models] stt_dirs`/`tts_dirs` file keys win over the derived starters.
+    if let Some(base) = &data_dir {
+        if !stt_from_file {
+            staged.stt = vec![base.join("models/stt")];
+        }
+        if !tts_from_file {
+            staged.tts = vec![base.join("models/tts")];
+        }
     }
     let jobs = gc_settings(
         &file_jobs,
@@ -198,20 +318,21 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ModelConfig, String> {
         std::env::var("HONKBOX_SWAP_LLM_TTL").ok().as_deref(),
         std::env::var("HONKBOX_SWAP_LLM_MAX_LOADED").ok().as_deref(),
     );
-    Ok(apply_env(
+    let models = apply_env(
         staged,
-        env_or_compat("HONKBOX_LLM_DIRS", "SD_RIP_LLM_DIRS").as_deref(),
-        env_or_compat("HONKBOX_COMFYUI_DIR", "SD_RIP_COMFYUI_DIR").as_deref(),
+        std::env::var("HONKBOX_LLM_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_COMFYUI_DIR").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_LLM_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_COMFYUI_DIRS")
             .ok()
             .as_deref(),
-        env_or_compat("HONKBOX_STT_DIRS", "SD_RIP_STT_DIRS").as_deref(),
-        env_or_compat("HONKBOX_TTS_DIRS", "SD_RIP_TTS_DIRS").as_deref(),
+        std::env::var("HONKBOX_STT_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_TTS_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_STT_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
     )
-    .merged(jobs, swap))
+    .merged(jobs, swap);
+    Ok(LoadedConfig { models, data_dir })
 }
 
 /// Staged roots before the final merge: the `[models]` base plus the
@@ -229,13 +350,14 @@ struct RootStages {
 }
 
 impl RootStages {
-    /// Built-in defaults used when no config file is present.
+    /// Built-in defaults used when no config file is present. The starter
+    /// `stt`/`tts` roots derive from the data dir instead (set in `load`).
     fn defaults() -> Self {
         Self {
             llm: vec![expand_home("~/.cache/huggingface")],
             comfyui: vec![expand_home("~/git-ai/ai-models/Data/Models")],
-            stt: vec![expand_home("~/.honkbox/models/stt")],
-            tts: vec![expand_home("~/.honkbox/models/tts")],
+            stt: Vec::new(),
+            tts: Vec::new(),
             extra_llm: Vec::new(),
             extra_comfyui: Vec::new(),
             extra_stt: Vec::new(),
@@ -263,19 +385,6 @@ impl RootStages {
             swap,
         }
     }
-}
-
-/// New `HONKBOX_*` env wins; the old `SD_RIP_*` name is honored once with a
-/// `warn!` when the new one is absent (one-release compat).
-fn env_or_compat(new_key: &str, old_key: &str) -> Option<String> {
-    if let Ok(v) = std::env::var(new_key) {
-        return Some(v);
-    }
-    let old = std::env::var(old_key).ok()?;
-    warn!(
-        "{old_key} is deprecated; use {new_key} (one-release compat: the old name will stop working)"
-    );
-    Some(old)
 }
 
 /// Env wins over file, per stage: `HONKBOX_LLM_DIRS` (path-separated via
@@ -355,36 +464,12 @@ fn expand_home(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-/// `~/.honkbox/honkbox.toml` (unexpanded when `$HOME` is unknown, which then
-/// just falls back to defaults as a missing file).
-fn default_path() -> PathBuf {
-    match home::home_dir() {
-        Some(h) => select_path(
-            h.join(".honkbox/honkbox.toml"),
-            h.join(".sd-rip/sd-rip.toml"),
-        ),
-        None => PathBuf::from("~/.honkbox/honkbox.toml"),
-    }
-}
-
-/// New path wins; the old `~/.sd-rip` path is honored once with a `warn!`
-/// when the new one is absent (one-release compat).
-fn select_path(new_path: PathBuf, old_path: PathBuf) -> PathBuf {
-    if new_path.exists() || !old_path.exists() {
-        return new_path;
-    }
-    warn!(
-        "{} is deprecated; move it to {} (one-release compat: the old path will stop working)",
-        old_path.display(),
-        new_path.display()
-    );
-    old_path
-}
-
-/// Whole-file shape: `[models]` (base roots) + optional `[discovery]` +
-/// optional `[jobs]`.
+/// Whole-file shape: `[core]` + `[models]` (base roots) + optional
+/// `[discovery]` + optional `[jobs]` + optional `[swap]`.
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileConfig {
+    #[serde(default)]
+    core: FileCore,
     #[serde(default)]
     models: FileModels,
     #[serde(default)]
@@ -393,6 +478,12 @@ struct FileConfig {
     jobs: FileJobs,
     #[serde(default)]
     swap: FileSwap,
+}
+
+/// `[core]` keys: `data_dir` (the one data-dir knob's file stage).
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileCore {
+    data_dir: Option<String>,
 }
 
 /// `[models]` keys; each missing key keeps its default.
@@ -473,8 +564,9 @@ mod tests {
             cfg.comfyui_dirs,
             vec![home.join("git-ai/ai-models/Data/Models")]
         );
-        assert_eq!(cfg.stt_dirs, vec![home.join(".honkbox/models/stt")]);
-        assert_eq!(cfg.tts_dirs, vec![home.join(".honkbox/models/tts")]);
+        // Starter audio roots derive from the data dir, not from `$HOME`.
+        assert_eq!(cfg.stt_dirs, Vec::<PathBuf>::new());
+        assert_eq!(cfg.tts_dirs, Vec::<PathBuf>::new());
 
         let staged = apply_env(
             RootStages::defaults(),
@@ -526,7 +618,58 @@ mod tests {
         assert_eq!(kept.tts_dirs, over.tts_dirs);
 
         // A missing file loads (defaults + ambient env), never errors.
-        assert!(load(Some(PathBuf::from("/nonexistent-honkbox-config.toml"))).is_ok());
+        load(
+            Some(PathBuf::from("/nonexistent-honkbox-config.toml")),
+            None,
+        )
+        .expect("missing config file loads");
+    }
+
+    /// Resolution chain: flag > env > XDG default (empty/relative treated as
+    /// unset) > `$HOME/.local/state/honkbox`; missing everything → `None`.
+    #[test]
+    fn resolve_data_dir_precedence() {
+        let flag = || Some(PathBuf::from("/flag-dir"));
+        let env = || Some("/env-dir".into());
+        let xdg = || Some("/xdg-state".into());
+        let home = || Some("/home/u".into());
+        // Flag wins over everything, even malformed lower stages.
+        assert_eq!(
+            resolve_data_dir(flag(), env(), xdg(), home()),
+            Some(PathBuf::from("/flag-dir"))
+        );
+        assert_eq!(
+            resolve_data_dir(None, env(), xdg(), home()),
+            Some(PathBuf::from("/env-dir"))
+        );
+        // XDG default with the env unset (relative XDG counts as unset).
+        assert_eq!(
+            resolve_data_dir(None, None, xdg(), home()),
+            Some(PathBuf::from("/xdg-state/honkbox"))
+        );
+        assert_eq!(
+            resolve_data_dir(None, None, Some("relative/xdg".into()), home()),
+            Some(PathBuf::from("/home/u/.local/state/honkbox"))
+        );
+        assert_eq!(
+            resolve_data_dir(None, None, Some(String::new().into()), home()),
+            Some(PathBuf::from("/home/u/.local/state/honkbox"))
+        );
+        assert_eq!(
+            resolve_data_dir(None, None, None, home()),
+            Some(PathBuf::from("/home/u/.local/state/honkbox"))
+        );
+        // A relative HONKBOX_DATA_DIR counts as unset (falls through to XDG).
+        assert_eq!(
+            resolve_data_dir(None, Some("rel/dir".into()), xdg(), home()),
+            Some(PathBuf::from("/xdg-state/honkbox"))
+        );
+        // Nothing resolvable → no data dir.
+        assert_eq!(resolve_data_dir(None, None, None, None), None);
+        assert_eq!(
+            resolve_data_dir(None, None, None, Some(String::new().into())),
+            None
+        );
     }
 
     #[test]
@@ -579,7 +722,7 @@ mod tests {
             "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\nstt_dirs = [\"/tmp/base-stt\"]\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\nstt_dirs = [\"/tmp/extra-stt\"]\ntts_dirs = [\"/tmp/extra-tts\"]\n",
         )
         .expect("write config");
-        let cfg = load(Some(path)).expect("load config");
+        let cfg = load(Some(path), None).expect("load config").models;
         std::fs::remove_dir_all(&base).ok();
         // `contains` keeps the test robust against ambient HONKBOX_* env.
         assert!(cfg.llm_dirs.contains(&PathBuf::from("/tmp/extra-llm")));
@@ -592,21 +735,51 @@ mod tests {
         assert!(cfg.tts_dirs.contains(&PathBuf::from("/tmp/extra-tts")));
     }
 
+    /// The `[core] data_dir` file key refines the default and relocates the
+    /// starter model dirs; a relative file key is ignored (treated unset).
     #[test]
-    fn compat_path_prefers_new() {
-        let base = std::env::temp_dir().join(format!("honkbox-compat-{}", std::process::id()));
+    fn file_core_data_dir_refines() {
+        let base = std::env::temp_dir().join(format!("honkbox-core-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).expect("test dir");
-        let new = base.join("honkbox.toml");
-        let old = base.join("sd-rip.toml");
-        // Neither exists → new (a missing file falls back to defaults).
-        assert_eq!(select_path(new.clone(), old.clone()), new);
-        // Only old exists → old (one-release compat).
-        std::fs::write(&old, "[models]\n").expect("old config");
-        assert_eq!(select_path(new.clone(), old.clone()), old);
-        // New exists → new even when old lingers.
-        std::fs::write(&new, "[models]\n").expect("new config");
-        assert_eq!(select_path(new.clone(), old.clone()), new);
+        let dir = base.join("my-state");
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let path = dir.join("honkbox.toml");
+        std::fs::write(
+            &path,
+            format!("[core]\ndata_dir = {:?}\n", dir.join("other").display()),
+        )
+        .expect("write config");
+        let loaded = load(Some(path), None).expect("load config");
+        assert_eq!(loaded.data_dir, Some(dir.join("other")));
+        assert_eq!(loaded.models.stt_dirs, vec![dir.join("other/models/stt")]);
+        assert_eq!(loaded.models.tts_dirs, vec![dir.join("other/models/tts")]);
+
+        // Flag beats the file key.
+        let path = dir.join("honkbox.toml");
+        let loaded = load(Some(path.clone()), Some(dir.join("flag"))).expect("load config");
+        assert_eq!(loaded.data_dir, Some(dir.join("flag")));
+        assert_eq!(loaded.models.stt_dirs, vec![dir.join("flag/models/stt")]);
+
+        // Relative file key is ignored → falls back to the located default
+        // (temp dir = absolute XDG-ish default for this test).
+        std::fs::write(&path, "[core]\ndata_dir = \"relative/dir\"\n").expect("write config");
+        let loaded = load(Some(path), None).expect("load config");
+        assert_ne!(loaded.data_dir, Some(PathBuf::from("relative/dir")));
+
+        // No explicit data dir: the located default (XDG/HOME) still holds
+        // even with an explicit config path; the file key cannot make it None.
+        let path = base.join("plain.toml");
+        std::fs::write(&path, "[models]\n").expect("write config");
+        let loaded = load(Some(path), None).expect("load config");
+        assert_eq!(
+            loaded.data_dir,
+            resolve_data_dir(
+                None,
+                std::env::var_os(DATA_DIR_ENV),
+                std::env::var_os("XDG_STATE_HOME"),
+                std::env::var_os("HOME")
+            )
+        );
         std::fs::remove_dir_all(&base).ok();
     }
 

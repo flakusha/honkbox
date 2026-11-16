@@ -31,48 +31,21 @@ struct Cli {
     /// What to run.
     #[command(subcommand)]
     command: Command,
-    /// Config file (`[models]`); defaults to `~/.honkbox/honkbox.toml`.
+    /// Config file (`[models]`); defaults to `<data-dir>/honkbox.toml`.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Data dir root for jobs, logs, registry cache, starter models, and the
+    /// config file. Beats `HONKBOX_DATA_DIR`; default
+    /// `$XDG_STATE_HOME/honkbox` (fallback `$HOME/.local/state/honkbox`).
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
 }
 
 /// Subcommands: the only entry points of the binary.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Serve the HTTP API + UI.
-    Serve {
-        /// Port to listen on.
-        #[arg(long, default_value_t = 8080)]
-        port: u16,
-        /// Serve the web-dist directory from disk (Vite dev flow).
-        #[arg(long)]
-        dev: bool,
-        /// Directory served in dev mode.
-        #[arg(long, default_value = "web-dist")]
-        web_dist_dir: PathBuf,
-        /// Log file (JSONL); falls back to `HONKBOX_LOG_FILE`, then `~/.honkbox/logs/honkbox.log`
-        /// (`SD_RIP_LOG_FILE` / `~/.honkbox` honored once as one-release compat).
-        #[arg(long, env = "HONKBOX_LOG_FILE")]
-        log_file: Option<PathBuf>,
-        /// Chat backend (`stub` needs no model/GPU).
-        #[arg(long, value_enum, default_value = "stub")]
-        llm_backend: LlmBackend,
-        /// Transcription backend (`stub` needs no model/GPU).
-        #[arg(long, value_enum, default_value = "stub")]
-        stt_backend: SttBackend,
-        /// Synthesis backend (`stub` needs no model/GPU).
-        #[arg(long, value_enum, default_value = "stub")]
-        tts_backend: TtsBackend,
-        /// Registry slug for the chat model (file backends only).
-        #[arg(long)]
-        llm_model: Option<String>,
-        /// Registry slug for the transcription model (file backends only).
-        #[arg(long)]
-        stt_model: Option<String>,
-        /// Registry slug for the synthesis model (file backends only).
-        #[arg(long)]
-        tts_model: Option<String>,
-    },
+    Serve(ServeArgs),
     /// Print the `OpenAPI` document to stdout.
     Openapi,
     /// Inspect discovered model files.
@@ -81,7 +54,7 @@ enum Command {
         #[command(subcommand)]
         action: ModelsAction,
     },
-    /// Render an image into `~/.honkbox/jobs/{ulid}/` (sync; picks `--backend`).
+    /// Render an image into `<data-dir>/jobs/{ulid}/` (sync; picks `--backend`).
     Generate(GenerateArgs),
     /// Chat once via the LLM pipeline; prints `ChatResponse` JSON.
     Chat(ChatArgs),
@@ -99,6 +72,42 @@ enum Command {
         #[arg(long, default_value_t = GC_MAX_BYTES)]
         max_bytes: u64,
     },
+}
+
+/// `serve` flags (one struct: the handler takes a single argument).
+#[derive(Debug, clap::Args)]
+struct ServeArgs {
+    /// Port to listen on.
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
+    /// Serve the web-dist directory from disk (Vite dev flow).
+    #[arg(long)]
+    dev: bool,
+    /// Directory served in dev mode.
+    #[arg(long, default_value = "web-dist")]
+    web_dist_dir: PathBuf,
+    /// Log file (JSONL); falls back to `HONKBOX_LOG_FILE`, then
+    /// `<data-dir>/logs/honkbox.log`.
+    #[arg(long, env = "HONKBOX_LOG_FILE")]
+    log_file: Option<PathBuf>,
+    /// Chat backend (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    llm_backend: LlmBackend,
+    /// Transcription backend (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    stt_backend: SttBackend,
+    /// Synthesis backend (`stub` needs no model/GPU).
+    #[arg(long, value_enum, default_value = "stub")]
+    tts_backend: TtsBackend,
+    /// Registry slug for the chat model (file backends only).
+    #[arg(long)]
+    llm_model: Option<String>,
+    /// Registry slug for the transcription model (file backends only).
+    #[arg(long)]
+    stt_model: Option<String>,
+    /// Registry slug for the synthesis model (file backends only).
+    #[arg(long)]
+    tts_model: Option<String>,
 }
 
 /// `generate` flags (one struct: the handler takes a single argument).
@@ -287,76 +296,13 @@ fn build_swap_manager(
 
 #[tokio::main]
 async fn main() {
-    let Cli { command, config } = Cli::parse();
+    let Cli {
+        command,
+        config,
+        data_dir,
+    } = Cli::parse();
     match command {
-        Command::Serve {
-            port,
-            dev,
-            web_dist_dir,
-            log_file,
-            llm_backend,
-            stt_backend,
-            tts_backend,
-            llm_model,
-            stt_model,
-            tts_model,
-        } => {
-            logging::init(log_file);
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            info!("honkbox serving on http://{addr} (dev: {dev})");
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("bind address");
-            // One registry scan feeds both slug resolution for file backends
-            // (stubs never call `resolve`) and the `/v1/models` catalog. The
-            // roots stay in `AppConfig` so `POST /v1/models/refresh` can
-            // re-scan them on demand.
-            let cfg = or_exit(config::load(config));
-            // Startup GC of job bundles + stale temp files, off the async
-            // runtime; removals log at `debug!`.
-            let gc_ttl = cfg.jobs.gc_ttl;
-            let gc_max_bytes = cfg.jobs.gc_max_bytes;
-            tokio::task::spawn_blocking(move || jobs::gc_jobs(gc_ttl, gc_max_bytes));
-            let swap_cfg = cfg.swap.clone();
-            let roots = honkbox_registry::ModelRoots {
-                llm_dirs: cfg.llm_dirs,
-                comfyui_dirs: cfg.comfyui_dirs,
-                stt_dirs: cfg.stt_dirs,
-                tts_dirs: cfg.tts_dirs,
-            };
-            let found = honkbox_registry::scan_roots(&roots);
-            info!("discovered {} models across configured roots", found.len());
-            sync_registry_db(&found, None);
-            let catalog = Arc::new(RwLock::new(Arc::new(build_catalog(&found))));
-            let resolve = |slug: &str| resolve_model(&found, slug);
-            // Pipelines are built from the configured slugs before the strings
-            // move into `AppConfig` (they are accepted as request `model`
-            // values alongside the catalog).
-            let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
-            let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
-            let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
-            let swap =
-                build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
-            axum::serve(
-                listener,
-                app(AppConfig {
-                    dev,
-                    web_dist_dir,
-                    catalog,
-                    roots,
-                    llm_model,
-                    stt_model,
-                    tts_model,
-                    llm,
-                    stt,
-                    tts,
-                    swap,
-                })
-                .into_make_service(),
-            )
-            .await
-            .expect("serve app");
-        }
+        Command::Serve(args) => serve(args, config, data_dir).await,
         Command::Openapi => {
             let doc = ApiDoc::openapi();
             println!(
@@ -364,28 +310,125 @@ async fn main() {
                 serde_json::to_string_pretty(&doc).expect("serialize openapi")
             );
         }
-        Command::Generate(args) => generate(args),
-        Command::Chat(args) => chat(args),
-        Command::Transcribe(args) => transcribe(args),
-        Command::Synthesize(args) => synthesize(args),
+        Command::Generate(args) => generate(args, data_dir),
+        Command::Chat(args) => chat(args, data_dir),
+        Command::Transcribe(args) => transcribe(args, data_dir),
+        Command::Synthesize(args) => synthesize(args, data_dir),
         Command::Gc {
             max_age_secs,
             max_bytes,
         } => {
-            logging::init(None);
+            let loaded = or_exit(config::load(config, data_dir));
+            let data_dir = loaded.data_dir;
+            logging::init(None, data_dir.as_deref());
+            if let Some(dir) = data_dir.as_deref() {
+                info!("honkbox data dir: {}", dir.display());
+            }
             info!("honkbox gc max_age={max_age_secs}s max_bytes={max_bytes}");
-            jobs::gc_jobs(Duration::from_secs(max_age_secs), max_bytes);
+            let jobs_root = data_dir.as_deref().map(|base| base.join("jobs"));
+            jobs::gc_jobs(
+                jobs_root.as_deref(),
+                Duration::from_secs(max_age_secs),
+                max_bytes,
+            );
             println!("gc done");
         }
         Command::Models { action } => match action {
-            ModelsAction::Show { json } => models_show(config, json),
+            ModelsAction::Show { json } => models_show(config, data_dir, json),
         },
     }
 }
 
+/// `serve`: load config (loud exit-1 on error), resolve the data dir, then
+/// install logging, scan, and serve the HTTP API + UI.
+#[allow(clippy::too_many_arguments)]
+async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
+    let ServeArgs {
+        port,
+        dev,
+        web_dist_dir,
+        log_file,
+        llm_backend,
+        stt_backend,
+        tts_backend,
+        llm_model,
+        stt_model,
+        tts_model,
+    } = args;
+    // Config loads BEFORE logging: the file-refined data dir relocates
+    // the log too, and config-parse errors go to stderr via `or_exit`.
+    let loaded = or_exit(config::load(config, data_dir_flag));
+    let data_dir = loaded.data_dir;
+    logging::init(log_file, data_dir.as_deref());
+    if let Some(dir) = data_dir.as_deref() {
+        info!("honkbox data dir: {}", dir.display());
+    } else {
+        info!("honkbox data dir: <unresolved>");
+    }
+    let cfg = loaded.models;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    info!("honkbox serving on http://{addr} (dev: {dev})");
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("bind address");
+    // Clone the swap tunables out before `cfg` is partially moved into the
+    // registry roots below.
+    let swap_cfg = cfg.swap.clone();
+    // Startup GC of job bundles + stale temp files, off the async runtime;
+    // removals log at `debug!`.
+    let gc_ttl = cfg.jobs.gc_ttl;
+    let gc_max_bytes = cfg.jobs.gc_max_bytes;
+    let jobs_root = data_dir.as_deref().map(|base| base.join("jobs"));
+    tokio::task::spawn_blocking(move || {
+        jobs::gc_jobs(jobs_root.as_deref(), gc_ttl, gc_max_bytes);
+    });
+    // One registry scan feeds both slug resolution for file backends (stubs
+    // never call `resolve`) and the `/v1/models` catalog. The roots stay in
+    // `AppConfig` so `POST /v1/models/refresh` can re-scan them on demand.
+    let roots = honkbox_registry::ModelRoots {
+        llm_dirs: cfg.llm_dirs,
+        comfyui_dirs: cfg.comfyui_dirs,
+        stt_dirs: cfg.stt_dirs,
+        tts_dirs: cfg.tts_dirs,
+    };
+    let found = honkbox_registry::scan_roots(&roots);
+    info!("discovered {} models across configured roots", found.len());
+    sync_registry_db(&found, data_dir.as_deref());
+    let catalog = Arc::new(RwLock::new(Arc::new(build_catalog(&found))));
+    let resolve = |slug: &str| resolve_model(&found, slug);
+    // Pipelines are built from the configured slugs before the strings move
+    // into `AppConfig` (they are accepted as request `model` values alongside
+    // the catalog).
+    let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
+    let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
+    let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
+    let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
+    axum::serve(
+        listener,
+        app(AppConfig {
+            dev,
+            web_dist_dir,
+            catalog,
+            roots,
+            llm_model,
+            stt_model,
+            tts_model,
+            llm,
+            stt,
+            tts,
+            swap,
+            data_dir,
+        })
+        .into_make_service(),
+    )
+    .await
+    .expect("serve app");
+}
+
 /// `models show`: load config (loud exit-1 on error), scan, print table/`--json`.
-fn models_show(config: Option<PathBuf>, json: bool) {
-    let cfg = or_exit(config::load(config));
+fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
+    let loaded = or_exit(config::load(config, data_dir));
+    let cfg = loaded.models;
     let mut found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dirs: cfg.comfyui_dirs,
@@ -456,7 +499,7 @@ fn or_exit<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
 /// `generate`: slug check, single-slot reserve, sample, bundle write.
 ///
 /// Every failure is a loud exit-1 naming the cause; success prints the job dir.
-fn generate(args: GenerateArgs) {
+fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
     let GenerateArgs {
         model,
         prompt,
@@ -468,7 +511,13 @@ fn generate(args: GenerateArgs) {
         clip,
         vae,
     } = args;
-    logging::init(None);
+    let loaded = or_exit(config::load(None, data_dir_flag));
+    let data_dir = loaded.data_dir;
+    let cfg = loaded.models;
+    logging::init(None, data_dir.as_deref());
+    if let Some(dir) = data_dir.as_deref() {
+        info!("honkbox data dir: {}", dir.display());
+    }
     let started = std::time::Instant::now();
     info!(
         "honkbox generate model={model} seed={seed} steps={steps} size={size} backend={backend:?}"
@@ -479,7 +528,6 @@ fn generate(args: GenerateArgs) {
             "hint: GGML_VK_VISIBLE_DEVICES unset — sd.cpp uses Vulkan device 0 (on multi-GPU boxes this may be the iGPU: slow, and 1024² aborts with context-lost; export the dGPU index, e.g. 1)"
         );
     }
-    let cfg = or_exit(config::load(None));
     let (width, height) = or_exit(jobs::parse_size(&size));
     let found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
@@ -512,7 +560,14 @@ fn generate(args: GenerateArgs) {
         Format::Webp => honkbox_sd_core::OutputFormat::Webp,
     };
     let bytes = or_exit(honkbox_sd_core::encode_image(img, format));
+    let base = data_dir.unwrap_or_else(|| {
+        eprintln!(
+            "error: cannot resolve data directory (set --data-dir, $HONKBOX_DATA_DIR, or $HOME/$XDG_STATE_HOME)"
+        );
+        std::process::exit(1);
+    });
     let dir = or_exit(jobs::write_bundle(
+        &base,
         &jobs::BundleInputs {
             model_slug: model,
             prompt,
@@ -530,8 +585,7 @@ fn generate(args: GenerateArgs) {
 }
 
 /// Registry scan for file backends (stubs never reach here: no model/GPU).
-fn scan_models() -> Vec<honkbox_registry::FoundModel> {
-    let cfg = or_exit(config::load(None));
+fn scan_models(cfg: config::ModelConfig) -> Vec<honkbox_registry::FoundModel> {
     honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
         comfyui_dirs: cfg.comfyui_dirs,
@@ -543,8 +597,10 @@ fn scan_models() -> Vec<honkbox_registry::FoundModel> {
 /// `chat`: one prompt through the chat pipeline; prints `ChatResponse` JSON.
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn chat(args: ChatArgs) {
-    logging::init(None);
+fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(None, data_dir_flag));
+    let cfg = loaded.models;
+    logging::init(None, loaded.data_dir.as_deref());
     let ChatArgs {
         model,
         prompt,
@@ -555,7 +611,7 @@ fn chat(args: ChatArgs) {
     info!("honkbox chat model={model} backend={llm_backend:?}");
     let found = match llm_backend {
         LlmBackend::Stub => Vec::new(),
-        LlmBackend::LlamaCpp => scan_models(),
+        LlmBackend::LlamaCpp => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_llm(llm_backend, Some(model.as_str()), &resolve);
@@ -585,8 +641,10 @@ fn chat(args: ChatArgs) {
 /// `Transcript` JSON (`--out` also writes it to a file).
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn transcribe(args: TranscribeArgs) {
-    logging::init(None);
+fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(None, data_dir_flag));
+    let cfg = loaded.models;
+    logging::init(None, loaded.data_dir.as_deref());
     let TranscribeArgs {
         model,
         input,
@@ -600,7 +658,7 @@ fn transcribe(args: TranscribeArgs) {
     let (sample_rate, pcm) = or_exit(honkbox_audio_worker::decode_wav(&bytes));
     let found = match stt_backend {
         SttBackend::Stub => Vec::new(),
-        SttBackend::Whisper => scan_models(),
+        SttBackend::Whisper => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_stt(stt_backend, Some(model.as_str()), &resolve);
@@ -636,8 +694,10 @@ fn transcribe(args: TranscribeArgs) {
 /// `synthesize`: run the TTS pipeline, write WAV to `--out`, print a JSON summary.
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn synthesize(args: SynthesizeArgs) {
-    logging::init(None);
+fn synthesize(args: SynthesizeArgs, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(None, data_dir_flag));
+    let cfg = loaded.models;
+    logging::init(None, loaded.data_dir.as_deref());
     let SynthesizeArgs {
         model,
         text,
@@ -649,7 +709,7 @@ fn synthesize(args: SynthesizeArgs) {
     info!("honkbox synthesize model={model} backend={tts_backend:?}");
     let found = match tts_backend {
         TtsBackend::Stub => Vec::new(),
-        TtsBackend::Kokoro => scan_models(),
+        TtsBackend::Kokoro => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_tts(tts_backend, Some(model.as_str()), &resolve);

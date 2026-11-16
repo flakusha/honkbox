@@ -8,11 +8,11 @@
 
 ```
 CLI (clap) / HTTP (axum)
-  → config::ModelConfig::load        crates/server/src/config.rs   (defaults → ~/.honkbox/honkbox.toml → HONKBOX_* env, one-release `~/.sd-rip` / `SD_RIP_*` compat)
+  → config::load                    crates/server/src/config.rs   (one data_dir knob: --data-dir > HONKBOX_DATA_DIR > [core] data_dir > $XDG_STATE_HOME/honkbox; config at <data_dir>/honkbox.toml → HONKBOX_* env)
   → registry::scan_roots             crates/registry/src/lib.rs    (model-dir scan; slugs llm:<rel> / comfy:<rel>)
   → residency::global().try_reserve  crates/residency/src/lib.rs   (process-wide single GPU slot, RAII Lease)
   → dyn SdPipeline                   crates/sd-core/src/lib.rs:84  (StubPipeline | SdCppPipeline via diffusion-rs)
-  → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (~/.honkbox/jobs/<ulid>/, .part + fsync + rename)
+  → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (<data_dir>/jobs/<ulid>/, .part + fsync + rename)
 ```
 
 - **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `experimental-ash-sd` gates the direct-Vulkan skeleton in `crates/ash-backend` (`honkbox-ash-backend`, empty until the server forwards the flag; `generate` still returns an unimplemented error).

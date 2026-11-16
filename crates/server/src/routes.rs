@@ -515,13 +515,13 @@ async fn post_chat(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
     };
-    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
@@ -619,6 +619,7 @@ async fn post_chat_stream(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     let worker_req = WorkerChatRequest {
         model: req.model,
         messages: req.messages.iter().map(worker_message).collect(),
@@ -632,7 +633,6 @@ async fn post_chat_stream(
     // returns the SSE body without awaiting the worker, so tokens stream as
     // they are produced.
     let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
-    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     // Separate handle for the SSE body: the worker closure consumes its own
     // clone, the drop path calls `abort` through this one.
     let abort_pipe = Arc::clone(&pipe);
