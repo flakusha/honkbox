@@ -3,6 +3,9 @@
 
 // No lib target on this binary crate, so include the modules directly.
 #[allow(dead_code)]
+#[path = "../src/catalog.rs"]
+mod catalog;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[path = "../src/metrics.rs"]
@@ -51,6 +54,7 @@ fn test_app() -> Router {
         swap: None,
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
+        vram_budget: None,
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),

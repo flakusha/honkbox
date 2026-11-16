@@ -63,6 +63,25 @@
         }
       }
     },
+    "/v1/catalog": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/catalog`: the curated manifest merged with the local scan\nsnapshot. Match by (kind, file name); fit pills (`ok`/`slow`/`fail`)\ncompute only from the matched file's bytes against\n`[models] vram_budget_bytes` — without a budget the advisory fields are\nomitted and entries show manifest metadata + local bytes only. Pills\nare advice, never enforcement.",
+        "operationId": "get_catalog",
+        "responses": {
+          "200": {
+            "description": "Curated catalog with local presence + fit pills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/chat": {
       "post": {
         "tags": [],
@@ -360,6 +379,126 @@
   },
   "components": {
     "schemas": {
+      "CatalogEntry": {
+        "type": "object",
+        "description": "One curated catalog offering (`GET /v1/catalog`). The manifest is a\nchecked-in JSON list — review-by-PR is the signature; entries carry a\n`verified_date` and rot without it (12 months ⇒ drop at release).",
+        "required": [
+          "id",
+          "repo",
+          "file",
+          "kind",
+          "quant",
+          "license",
+          "verified_date",
+          "notes"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "File path inside `repo` (last segment is the local file name)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable manifest id (e.g. `llama-3.2-1b-q4`); NOT a catalog slug."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ModelKind",
+            "description": "Modality (drives the download target dir and the pill factor)."
+          },
+          "license": {
+            "type": "string",
+            "description": "Model license tag (e.g. `apache-2.0`, `llama3.2`)."
+          },
+          "local": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CatalogLocal",
+                "description": "Local scan presence + fit pill; absent when not found under the\nscanned roots."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "description": "Short human note (why this entry is curated)."
+          },
+          "quant": {
+            "type": "string",
+            "description": "Quantization/format tag (e.g. `Q4_K_M`, `fp16`)."
+          },
+          "repo": {
+            "type": "string",
+            "description": "`HuggingFace` repo id the file downloads from (`owner/name`)."
+          },
+          "verified_date": {
+            "type": "string",
+            "description": "Manual verification month (`YYYY-MM`); entries unverified for 12\nmonths are dropped at release."
+          }
+        }
+      },
+      "CatalogList": {
+        "type": "object",
+        "description": "Curated catalog envelope (`GET /v1/catalog`), OpenAI-style list shape.",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogEntry"
+            },
+            "description": "Curated entries, sorted by id."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"` (OpenAI-compatible envelope)."
+          }
+        }
+      },
+      "CatalogLocal": {
+        "type": "object",
+        "description": "Local scan presence for one curated catalog entry (`GET /v1/catalog`);\nabsent when no scanned root holds a matching file.",
+        "required": [
+          "slug",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "On-disk weight size in bytes (the pill's byte input).",
+            "minimum": 0
+          },
+          "est_vram_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Estimated VRAM need (advisory heuristic, not a measurement); absent\nwithout a configured `[models] vram_budget_bytes`.",
+            "minimum": 0
+          },
+          "pill": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Pill",
+                "description": "Fit pill vs the configured budget; absent without one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "description": "Matched catalog slug (`llm:…` / `comfy:…` / `stt:…` / `tts:…`)."
+          }
+        }
+      },
       "ChatMessage": {
         "type": "object",
         "description": "One chat message.",
@@ -797,6 +936,15 @@
           }
         ],
         "description": "Optional on-disk header metadata, tagged by container format."
+      },
+      "Pill": {
+        "type": "string",
+        "description": "Fit-pill verdict for a curated catalog entry against the configured\n`[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind\noverhead factors over weight bytes), never a measurement.",
+        "enum": [
+          "ok",
+          "slow",
+          "fail"
+        ]
       },
       "SafetensorsMetadata": {
         "type": "object",

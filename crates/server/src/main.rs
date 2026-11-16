@@ -1,6 +1,7 @@
 //! `honkbox` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
 mod backends;
+mod catalog;
 mod config;
 mod downloads;
 mod jobs;
@@ -377,6 +378,8 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // Clone the swap tunables out before `cfg` is partially moved into the
     // registry roots below.
     let swap_cfg = cfg.swap.clone();
+    // VRAM budget for the curated catalog's fit pills (`Copy`).
+    let vram_budget = cfg.vram_budget_bytes;
     // Startup GC of job bundles + stale temp files, off the async runtime;
     // removals log at `debug!`.
     let gc_ttl = cfg.jobs.gc_ttl;
@@ -431,6 +434,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         swap,
         swap_max_ttl: swap_cfg.max_ttl,
         data_dir,
+        vram_budget,
         downloads,
     };
     let rescan_signal = app_config.downloads.rescan_signal();

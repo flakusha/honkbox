@@ -129,7 +129,7 @@ pub struct SynthesizeRequest {
 
 /// Model modality as discovered on disk (`GET /v1/models` entries). Mirrors
 /// the registry's on-disk kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelKind {
     /// Language-model weights (LLM root).
@@ -314,6 +314,75 @@ pub struct DownloadList {
     pub downloads: Vec<DownloadState>,
 }
 
+/// Fit-pill verdict for a curated catalog entry against the configured
+/// `[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind
+/// overhead factors over weight bytes), never a measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Pill {
+    /// Estimated VRAM fits the budget (`est <= budget`).
+    Ok,
+    /// Weights fit but the estimate does not (`bytes <= budget < est`):
+    /// loads, likely offloads — slow.
+    Slow,
+    /// Weights alone exceed the budget (`bytes > budget`).
+    Fail,
+}
+
+/// Local scan presence for one curated catalog entry (`GET /v1/catalog`);
+/// absent when no scanned root holds a matching file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct CatalogLocal {
+    /// Matched catalog slug (`llm:…` / `comfy:…` / `stt:…` / `tts:…`).
+    pub slug: String,
+    /// On-disk weight size in bytes (the pill's byte input).
+    pub bytes: u64,
+    /// Estimated VRAM need (advisory heuristic, not a measurement); absent
+    /// without a configured `[models] vram_budget_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_vram_bytes: Option<u64>,
+    /// Fit pill vs the configured budget; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pill: Option<Pill>,
+}
+
+/// One curated catalog offering (`GET /v1/catalog`). The manifest is a
+/// checked-in JSON list — review-by-PR is the signature; entries carry a
+/// `verified_date` and rot without it (12 months ⇒ drop at release).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct CatalogEntry {
+    /// Stable manifest id (e.g. `llama-3.2-1b-q4`); NOT a catalog slug.
+    pub id: String,
+    /// `HuggingFace` repo id the file downloads from (`owner/name`).
+    pub repo: String,
+    /// File path inside `repo` (last segment is the local file name).
+    pub file: String,
+    /// Modality (drives the download target dir and the pill factor).
+    pub kind: ModelKind,
+    /// Quantization/format tag (e.g. `Q4_K_M`, `fp16`).
+    pub quant: String,
+    /// Model license tag (e.g. `apache-2.0`, `llama3.2`).
+    pub license: String,
+    /// Manual verification month (`YYYY-MM`); entries unverified for 12
+    /// months are dropped at release.
+    pub verified_date: String,
+    /// Short human note (why this entry is curated).
+    pub notes: String,
+    /// Local scan presence + fit pill; absent when not found under the
+    /// scanned roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<CatalogLocal>,
+}
+
+/// Curated catalog envelope (`GET /v1/catalog`), OpenAI-style list shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct CatalogList {
+    /// Always `"list"` (OpenAI-compatible envelope).
+    pub object: String,
+    /// Curated entries, sorted by id.
+    pub data: Vec<CatalogEntry>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +418,10 @@ mod tests {
             DownloadAccepted::decl(&config),
             DownloadState::decl(&config),
             DownloadList::decl(&config),
+            Pill::decl(&config),
+            CatalogLocal::decl(&config),
+            CatalogEntry::decl(&config),
+            CatalogList::decl(&config),
         ] {
             out.push_str(&decl);
             out.push('\n');

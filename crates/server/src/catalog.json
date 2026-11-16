@@ -1,0 +1,172 @@
+[
+  {
+    "id": "llama-3.2-1b-q4",
+    "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+    "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "llama3.2",
+    "verified_date": "2026-11",
+    "notes": "1B edge chat model; snappy on CPU/iGPU, tiny VRAM slot."
+  },
+  {
+    "id": "llama-3.2-3b-q4",
+    "repo": "bartowski/Llama-3.2-3B-Instruct-GGUF",
+    "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "llama3.2",
+    "verified_date": "2026-11",
+    "notes": "3B general chat; good quality-per-GB for a single-GPU studio."
+  },
+  {
+    "id": "llama-3.1-8b-q4",
+    "repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+    "file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "llama3.1",
+    "verified_date": "2026-11",
+    "notes": "8B workhorse chat; needs a real GPU slot at Q4."
+  },
+  {
+    "id": "qwen2.5-0.5b-q4",
+    "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "Smallest useful chat model; near-instant load."
+  },
+  {
+    "id": "qwen2.5-1.5b-q4",
+    "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "Small multilingual chat; permissive license."
+  },
+  {
+    "id": "qwen2.5-7b-q4",
+    "repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+    "file": "qwen2.5-7b-instruct-q4_k_m.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "Strong 7B all-rounder; permissive license."
+  },
+  {
+    "id": "mistral-7b-v0.3-q4",
+    "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
+    "file": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "Classic 7B instruct baseline."
+  },
+  {
+    "id": "phi-3.5-mini-q4",
+    "repo": "bartowski/Phi-3.5-mini-instruct-GGUF",
+    "file": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "mit",
+    "verified_date": "2026-11",
+    "notes": "3.8B strong-reasoning small model; MIT."
+  },
+  {
+    "id": "gemma-2-2b-q4",
+    "repo": "bartowski/gemma-2-2b-it-GGUF",
+    "file": "gemma-2-2b-it-Q4_K_M.gguf",
+    "kind": "llm",
+    "quant": "Q4_K_M",
+    "license": "gemma",
+    "verified_date": "2026-11",
+    "notes": "2B quality chat; gemma license terms apply."
+  },
+  {
+    "id": "sd15-emaonly-fp16",
+    "repo": "Comfy-Ori/stable-diffusion-v1-5",
+    "file": "v1-5-pruned-emaonly-fp16.safetensors",
+    "kind": "sd",
+    "quant": "fp16",
+    "license": "creativeml-openrail-m",
+    "verified_date": "2026-11",
+    "notes": "SD 1.5 baseline checkpoint; fastest diffusion on modest GPUs."
+  },
+  {
+    "id": "sdxl-base-fp16",
+    "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+    "file": "sd_xl_base_1.0.safetensors",
+    "kind": "sd",
+    "quant": "fp16",
+    "license": "openrail++",
+    "verified_date": "2026-11",
+    "notes": "SDXL base; needs headroom for the 1024x1024 activations."
+  },
+  {
+    "id": "flux1-schnell-bf16",
+    "repo": "black-forest-labs/FLUX.1-schnell",
+    "file": "flux1-schnell.safetensors",
+    "kind": "sd",
+    "quant": "bf16",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "4-step distilled flux; big single-file transformer."
+  },
+  {
+    "id": "whisper-base",
+    "repo": "ggerganov/whisper.cpp",
+    "file": "ggml-base.bin",
+    "kind": "stt",
+    "quant": "ggml-f16",
+    "license": "mit",
+    "verified_date": "2026-11",
+    "notes": "whisper.cpp base; cheap realtime transcription."
+  },
+  {
+    "id": "whisper-small-q5",
+    "repo": "ggerganov/whisper.cpp",
+    "file": "ggml-small-q5_1.bin",
+    "kind": "stt",
+    "quant": "q5_1",
+    "license": "mit",
+    "verified_date": "2026-11",
+    "notes": "whisper.cpp small, quantized; accuracy/speed middle ground."
+  },
+  {
+    "id": "whisper-large-v3-turbo",
+    "repo": "ggerganov/whisper.cpp",
+    "file": "ggml-large-v3-turbo.bin",
+    "kind": "stt",
+    "quant": "ggml-f16",
+    "license": "mit",
+    "verified_date": "2026-11",
+    "notes": "Large-v3 turbo; best accuracy, still a small VRAM slice."
+  },
+  {
+    "id": "kokoro-82m-onnx",
+    "repo": "hexgrad/kokoro",
+    "file": "onnx/kokoro-v1.0.onnx",
+    "kind": "tts",
+    "quant": "onnx-fp32",
+    "license": "apache-2.0",
+    "verified_date": "2026-11",
+    "notes": "Kokoro 82M TTS; the honkbox tts backend's native format."
+  },
+  {
+    "id": "piper-en-us-amy",
+    "repo": "rhasspy/piper-voices",
+    "file": "en/en_US/amy/medium/en_US-amy-medium.onnx",
+    "kind": "tts",
+    "quant": "onnx-fp32",
+    "license": "mit",
+    "verified_date": "2026-11",
+    "notes": "Piper medium US-English voice; tiny and fast."
+  }
+]

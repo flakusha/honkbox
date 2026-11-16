@@ -264,3 +264,70 @@ type DownloadList = {
  * Known downloads, sorted by id.
  */
 downloads: Array<DownloadState>, };
+type Pill = "ok" | "slow" | "fail";
+type CatalogLocal = { 
+/**
+ * Matched catalog slug (`llm:…` / `comfy:…` / `stt:…` / `tts:…`).
+ */
+slug: string, 
+/**
+ * On-disk weight size in bytes (the pill's byte input).
+ */
+bytes: bigint, 
+/**
+ * Estimated VRAM need (advisory heuristic, not a measurement); absent
+ * without a configured `[models] vram_budget_bytes`.
+ */
+est_vram_bytes: bigint | null, 
+/**
+ * Fit pill vs the configured budget; absent without one.
+ */
+pill: Pill | null, };
+type CatalogEntry = { 
+/**
+ * Stable manifest id (e.g. `llama-3.2-1b-q4`); NOT a catalog slug.
+ */
+id: string, 
+/**
+ * `HuggingFace` repo id the file downloads from (`owner/name`).
+ */
+repo: string, 
+/**
+ * File path inside `repo` (last segment is the local file name).
+ */
+file: string, 
+/**
+ * Modality (drives the download target dir and the pill factor).
+ */
+kind: ModelKind, 
+/**
+ * Quantization/format tag (e.g. `Q4_K_M`, `fp16`).
+ */
+quant: string, 
+/**
+ * Model license tag (e.g. `apache-2.0`, `llama3.2`).
+ */
+license: string, 
+/**
+ * Manual verification month (`YYYY-MM`); entries unverified for 12
+ * months are dropped at release.
+ */
+verified_date: string, 
+/**
+ * Short human note (why this entry is curated).
+ */
+notes: string, 
+/**
+ * Local scan presence + fit pill; absent when not found under the
+ * scanned roots.
+ */
+local: CatalogLocal | null, };
+type CatalogList = { 
+/**
+ * Always `"list"` (OpenAI-compatible envelope).
+ */
+object: string, 
+/**
+ * Curated entries, sorted by id.
+ */
+data: Array<CatalogEntry>, };

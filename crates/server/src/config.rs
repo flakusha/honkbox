@@ -22,7 +22,8 @@
 //! (`HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`,
 //! `HONKBOX_TTS_DIRS`, `HONKBOX_DISCOVERY_LLM_DIRS`,
 //! `HONKBOX_DISCOVERY_COMFYUI_DIRS`, `HONKBOX_DISCOVERY_STT_DIRS`,
-//! `HONKBOX_DISCOVERY_TTS_DIRS`).
+//! `HONKBOX_DISCOVERY_TTS_DIRS`); the curated catalog's VRAM budget rides
+//! `[models] vram_budget_bytes` with `HONKBOX_VRAM_BUDGET` as its env stage.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,10 @@ pub struct ModelConfig {
     pub jobs: JobsConfig,
     /// `[swap]` LLM load-on-demand + idle-eviction settings.
     pub swap: SwapConfig,
+    /// `[models] vram_budget_bytes` (env `HONKBOX_VRAM_BUDGET`): the
+    /// user-declared VRAM ceiling driving the curated catalog's advisory
+    /// fit pills. `None` → pills omitted (advice only, never enforced).
+    pub vram_budget_bytes: Option<u64>,
 }
 
 /// Default `[swap]` idle TTL: 10 minutes (llama-swap defaults to never
@@ -208,6 +213,20 @@ fn gc_settings(file: &FileJobs, ttl_env: Option<&str>, max_env: Option<&str>) ->
     cfg
 }
 
+/// Resolve the VRAM budget (NEW-5): file key → env override. Pure (env as
+/// args); empty or invalid env values keep the file value, matching the
+/// GC/swap knobs. `None` → pills omitted (advice only, never enforced).
+fn vram_budget_settings(file: Option<u64>, env: Option<&str>) -> Option<u64> {
+    let mut budget = file;
+    if let Some(raw) = env
+        && !raw.is_empty()
+        && let Ok(bytes) = raw.parse::<u64>()
+    {
+        budget = Some(bytes);
+    }
+    budget
+}
+
 /// Env var overriding the data dir (`--data-dir` flag wins over it).
 pub const DATA_DIR_ENV: &str = "HONKBOX_DATA_DIR";
 
@@ -291,6 +310,76 @@ fn finalize_data_dir(
 /// the `HONKBOX_DATA_DIR` env and the `[core] data_dir` file key slot in
 /// beneath it per the resolution chain in the module docs (one-pass: the
 /// file key cannot relocate the config file mid-read).
+/// The config file's side knobs, staged out of `load` (missing file ⇒
+/// defaults; the file stage never re-reads the data-dir chain).
+#[derive(Debug, Default)]
+struct FileStages {
+    /// `[jobs]` keys.
+    jobs: FileJobs,
+    /// `[swap]` keys.
+    swap: FileSwap,
+    /// `[core]` keys.
+    core: FileCore,
+    /// `[models] vram_budget_bytes` (NEW-5).
+    vram_budget: Option<u64>,
+}
+
+/// Read + apply the config-file stage: parse `path`'s TOML into the staged
+/// roots (mutated in place) and return the file's side knobs. A missing
+/// file keeps the defaults; other IO errors and bad TOML are fatal with a
+/// message naming the path.
+fn stage_config_file(
+    path: Option<&Path>,
+    staged: &mut RootStages,
+    stt_from_file: &mut bool,
+    tts_from_file: &mut bool,
+) -> Result<FileStages, String> {
+    let mut out = FileStages::default();
+    let text = match path.map(std::fs::read_to_string).transpose() {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(out),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => {
+            let display = path.unwrap_or(Path::new("<none>"));
+            return Err(format!("cannot read config {}: {e}", display.display()));
+        }
+    };
+    let display = path.unwrap_or(Path::new("<none>"));
+    let file: FileConfig =
+        toml::from_str(&text).map_err(|e| format!("bad config {}: {e}", display.display()))?;
+    if let Some(dirs) = file.models.llm_dirs {
+        staged.llm = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    if let Some(dir) = file.models.comfyui_dir {
+        staged.comfyui = vec![expand_home(&dir)];
+    }
+    if let Some(dirs) = file.discovery.llm_dirs {
+        staged.extra_llm = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    if let Some(dirs) = file.discovery.comfyui_dirs {
+        staged.extra_comfyui = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    if let Some(dirs) = file.models.stt_dirs {
+        staged.stt = dirs.iter().map(|d| expand_home(d)).collect();
+        *stt_from_file = true;
+    }
+    if let Some(dirs) = file.models.tts_dirs {
+        staged.tts = dirs.iter().map(|d| expand_home(d)).collect();
+        *tts_from_file = true;
+    }
+    if let Some(dirs) = file.discovery.stt_dirs {
+        staged.extra_stt = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    if let Some(dirs) = file.discovery.tts_dirs {
+        staged.extra_tts = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    out.jobs = file.jobs;
+    out.swap = file.swap;
+    out.core = file.core;
+    out.vram_budget = file.models.vram_budget_bytes;
+    Ok(out)
+}
+
 pub fn load(
     config_path: Option<PathBuf>,
     cli_dir: Option<PathBuf>,
@@ -304,53 +393,19 @@ pub fn load(
     );
     let path = config_path.or_else(|| located.as_ref().map(|d| d.join("honkbox.toml")));
     let mut staged = RootStages::defaults();
-    let mut file_jobs = FileJobs::default();
-    let mut file_swap = FileSwap::default();
-    let mut file_core = FileCore::default();
     let mut stt_from_file = false;
     let mut tts_from_file = false;
-    match path.as_deref().map(std::fs::read_to_string).transpose() {
-        Ok(Some(text)) => {
-            let display = path.as_deref().unwrap_or(Path::new("<none>"));
-            let file: FileConfig = toml::from_str(&text)
-                .map_err(|e| format!("bad config {}: {e}", display.display()))?;
-            if let Some(dirs) = file.models.llm_dirs {
-                staged.llm = dirs.iter().map(|d| expand_home(d)).collect();
-            }
-            if let Some(dir) = file.models.comfyui_dir {
-                staged.comfyui = vec![expand_home(&dir)];
-            }
-            if let Some(dirs) = file.discovery.llm_dirs {
-                staged.extra_llm = dirs.iter().map(|d| expand_home(d)).collect();
-            }
-            if let Some(dirs) = file.discovery.comfyui_dirs {
-                staged.extra_comfyui = dirs.iter().map(|d| expand_home(d)).collect();
-            }
-            if let Some(dirs) = file.models.stt_dirs {
-                staged.stt = dirs.iter().map(|d| expand_home(d)).collect();
-                stt_from_file = true;
-            }
-            if let Some(dirs) = file.models.tts_dirs {
-                staged.tts = dirs.iter().map(|d| expand_home(d)).collect();
-                tts_from_file = true;
-            }
-            if let Some(dirs) = file.discovery.stt_dirs {
-                staged.extra_stt = dirs.iter().map(|d| expand_home(d)).collect();
-            }
-            if let Some(dirs) = file.discovery.tts_dirs {
-                staged.extra_tts = dirs.iter().map(|d| expand_home(d)).collect();
-            }
-            file_jobs = file.jobs;
-            file_swap = file.swap;
-            file_core = file.core;
-        }
-        Ok(None) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            let display = path.as_deref().unwrap_or(Path::new("<none>"));
-            return Err(format!("cannot read config {}: {e}", display.display()));
-        }
-    }
+    let FileStages {
+        jobs: file_jobs,
+        swap: file_swap,
+        core: file_core,
+        vram_budget,
+    } = stage_config_file(
+        path.as_deref(),
+        &mut staged,
+        &mut stt_from_file,
+        &mut tts_from_file,
+    )?;
     let data_dir = finalize_data_dir(cli_dir, env_dir, &file_core, located);
     // Starter model dirs derive from the final data dir (rebasing here keeps
     // a file-refined `[core] data_dir` authoritative for them too); explicit
@@ -375,6 +430,11 @@ pub fn load(
         std::env::var("HONKBOX_SWAP_MAX_TTL").ok().as_deref(),
         std::env::var("HONKBOX_SWAP_PIN").ok().as_deref(),
     );
+    // `[models] vram_budget_bytes` (NEW-5): env wins over the file key.
+    let vram_budget = vram_budget_settings(
+        vram_budget,
+        std::env::var("HONKBOX_VRAM_BUDGET").ok().as_deref(),
+    );
     let mut models = apply_env(
         staged,
         std::env::var("HONKBOX_LLM_DIRS").ok().as_deref(),
@@ -389,6 +449,7 @@ pub fn load(
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
     )
     .merged(jobs, swap);
+    models.vram_budget_bytes = vram_budget;
     // Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
     // stay part of the scan no matter what file/env configured, so a
     // completed download shows up in `GET /v1/models` after the rescan
@@ -467,6 +528,8 @@ impl RootStages {
             tts_dirs,
             jobs,
             swap,
+            // Resolved separately in `load` (file key + env stage).
+            vram_budget_bytes: None,
         }
     }
 }
@@ -581,6 +644,9 @@ struct FileModels {
     stt_dirs: Option<Vec<String>>,
     #[serde(default)]
     tts_dirs: Option<Vec<String>>,
+    /// Optional VRAM budget (bytes) for the curated catalog's fit pills.
+    #[serde(default)]
+    vram_budget_bytes: Option<u64>,
 }
 
 /// Optional `[discovery]` extras APPENDED to the `[models]` roots (P0 of the
@@ -874,6 +940,103 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
+    /// VRAM budget: defaults (unset) → `[models] vram_budget_bytes` →
+    /// `HONKBOX_VRAM_BUDGET` (bytes); empty/invalid env keeps the file
+    /// value (pure helper — same contract as the GC/swap knobs).
+    #[test]
+    fn vram_budget_precedence() {
+        // Defaults: unset.
+        assert_eq!(vram_budget_settings(None, None), None);
+        // File key alone.
+        assert_eq!(
+            vram_budget_settings(Some(8_000_000_000), None),
+            Some(8_000_000_000)
+        );
+        // Env wins over the file.
+        assert_eq!(
+            vram_budget_settings(Some(8_000_000_000), Some("4294967296")),
+            Some(4_294_967_296)
+        );
+        // Env alone (no file key).
+        assert_eq!(vram_budget_settings(None, Some("1024")), Some(1024));
+        // Empty env keeps the file value; invalid env keeps it too.
+        assert_eq!(
+            vram_budget_settings(Some(8_000_000_000), Some("")),
+            Some(8_000_000_000)
+        );
+        assert_eq!(
+            vram_budget_settings(Some(8_000_000_000), Some("not-a-number")),
+            Some(8_000_000_000)
+        );
+        // Empty/invalid env with no file key stays unset.
+        assert_eq!(vram_budget_settings(None, Some("")), None);
+        assert_eq!(vram_budget_settings(None, Some("nope")), None);
+        // `load` actually wires the file key through (no env in this
+        // process's test env unless a sibling test leaked it).
+        let base = std::env::temp_dir().join(format!("honkbox-vram-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(&path, "[models]\nvram_budget_bytes = 8_000_000_000\n").expect("write");
+        let loaded = load(Some(path), Some(base.clone())).expect("load config");
+        if std::env::var("HONKBOX_VRAM_BUDGET").is_err() {
+            assert_eq!(loaded.models.vram_budget_bytes, Some(8_000_000_000));
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
+    /// are appended to whatever file/env configured (exact-path dedupe keeps
+    /// the starter audio dirs from doubling up); no data dir → no managed
+    /// roots.
+    #[test]
+    fn managed_download_roots_appended() {
+        let base = std::env::temp_dir().join(format!("honkbox-managed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(
+            &path,
+            "[models]\nllm_dirs = [\"/custom/llm\"]\n\n[discovery]\ncomfyui_dirs = [\"/extra/comfy\"]\n",
+        )
+        .expect("write config");
+        let cfg = load(Some(path), Some(base.clone()))
+            .expect("load config")
+            .models;
+        // Custom roots survive; the managed roots ride along after them.
+        assert!(cfg.llm_dirs.contains(&PathBuf::from("/custom/llm")));
+        assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
+        assert!(cfg.comfyui_dirs.contains(&PathBuf::from("/extra/comfy")));
+        assert!(cfg.comfyui_dirs.contains(&base.join("models/sd")));
+        // The starter audio roots ARE the managed roots (deduped).
+        assert_eq!(cfg.stt_dirs, vec![base.join("models/stt")]);
+        assert_eq!(cfg.tts_dirs, vec![base.join("models/tts")]);
+
+        // No explicit data dir: the located XDG default is still the data
+        // dir, so exactly its managed root is the one appended.
+        let plain = base.join("plain.toml");
+        std::fs::write(&plain, "[models]\n").expect("write config");
+        let cfg = load(Some(plain), None).expect("load config").models;
+        let resolved = resolve_data_dir(
+            None,
+            std::env::var_os(DATA_DIR_ENV),
+            std::env::var_os("XDG_STATE_HOME"),
+            std::env::var_os("HOME"),
+        );
+        let managed = cfg
+            .llm_dirs
+            .iter()
+            .filter(|d| d.ends_with("models/llm"))
+            .count();
+        if let Some(base) = resolved {
+            assert_eq!(managed, 1);
+            assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
+        } else {
+            assert_eq!(managed, 0);
+        }
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     /// GC settings: defaults, then `[jobs]` keys, then env overrides win.
     #[test]
     fn gc_settings_precedence() {
@@ -963,58 +1126,6 @@ mod tests {
         assert_eq!(bad.llm_ttl, Duration::from_secs(30));
         assert_eq!(bad.llm_max_loaded, 1);
         assert_eq!(bad.max_ttl, Duration::from_secs(600));
-    }
-
-    /// Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
-    /// are appended to whatever file/env configured (exact-path dedupe keeps
-    /// the starter audio dirs from doubling up); no data dir → no managed
-    /// roots.
-    #[test]
-    fn managed_download_roots_appended() {
-        let base = std::env::temp_dir().join(format!("honkbox-managed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).expect("test dir");
-        let path = base.join("honkbox.toml");
-        std::fs::write(
-            &path,
-            "[models]\nllm_dirs = [\"/custom/llm\"]\n\n[discovery]\ncomfyui_dirs = [\"/extra/comfy\"]\n",
-        )
-        .expect("write config");
-        let cfg = load(Some(path), Some(base.clone()))
-            .expect("load config")
-            .models;
-        // Custom roots survive; the managed roots ride along after them.
-        assert!(cfg.llm_dirs.contains(&PathBuf::from("/custom/llm")));
-        assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
-        assert!(cfg.comfyui_dirs.contains(&PathBuf::from("/extra/comfy")));
-        assert!(cfg.comfyui_dirs.contains(&base.join("models/sd")));
-        // The starter audio roots ARE the managed roots (deduped).
-        assert_eq!(cfg.stt_dirs, vec![base.join("models/stt")]);
-        assert_eq!(cfg.tts_dirs, vec![base.join("models/tts")]);
-
-        // No explicit data dir: the located XDG default is still the data
-        // dir, so exactly its managed root is the one appended.
-        let plain = base.join("plain.toml");
-        std::fs::write(&plain, "[models]\n").expect("write config");
-        let cfg = load(Some(plain), None).expect("load config").models;
-        let resolved = resolve_data_dir(
-            None,
-            std::env::var_os(DATA_DIR_ENV),
-            std::env::var_os("XDG_STATE_HOME"),
-            std::env::var_os("HOME"),
-        );
-        let managed = cfg
-            .llm_dirs
-            .iter()
-            .filter(|d| d.ends_with("models/llm"))
-            .count();
-        if let Some(base) = resolved {
-            assert_eq!(managed, 1);
-            assert!(cfg.llm_dirs.contains(&base.join("models/llm")));
-        } else {
-            assert_eq!(managed, 0);
-        }
-        std::fs::remove_dir_all(&base).ok();
     }
 
     fn f_file() -> FileSwap {
