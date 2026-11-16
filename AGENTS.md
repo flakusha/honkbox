@@ -80,5 +80,5 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 - TS: `bun test --isolate --pass-with-no-tests` (no `*.test.ts` files yet).
 - Per-crate: `bun run test:core|test:server|test:registry|…` (each `cargo test --locked -p honkbox-<crate>`).
 - CI matrix: `test-rs` 3-OS (Linux Vulkan default features; Windows/macOS `--no-default-features` CPU-only) + `lavapipe` CPU-Vulkan smoke + lcov coverage (collected, **no threshold gate**).
-- Known gap: `bun run test:parity` targets `-p honkbox-sd-core --test parity` but `crates/sd-core/tests/parity.rs` does not exist yet — planned parity harness.
+- Parity harness: `crates/sd-core/tests/parity.rs` — structural backend agreement (PNG magic + decode, exact dimensions, `MAX_EDGE` cap, stub seed determinism; byte-level cross-backend equality is impossible without GPU determinism and is NOT asserted). Default runs skip the real backend; `bun run test:parity` (`-- --include-ignored`) exercises `SdCppPipeline` and needs `HONKBOX_PARITY_MODEL=path` to a local single-file checkpoint (no model download in CI; ci.yml untouched — the gap stays opt-in locally).
 - License gates: `deny.toml` (GPL/LGPL/AGPL incoming denied), `reuse lint`, `cargo about generate about.hbs -o NOTICE`; `doc` job runs `RUSTDOCFLAGS=-D warnings`.
