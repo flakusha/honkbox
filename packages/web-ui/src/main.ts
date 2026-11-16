@@ -1,5 +1,6 @@
 import { mountChat } from "./chat";
 import { mountPlayground } from "./playground";
+import { mountReview } from "./review";
 import { mountVoice } from "./voice";
 
 // Contract: GET /api/version → 200 {"name":"honkbox","version":"0.1.0"}.
@@ -58,11 +59,14 @@ function render(version: Version | null): void {
   voiceBtn.textContent = "Voice";
   const playgroundBtn = document.createElement("button");
   playgroundBtn.textContent = "Playground";
-  tabs.append(chatBtn, voiceBtn, playgroundBtn);
+  const reviewBtn = document.createElement("button");
+  reviewBtn.textContent = "Review";
+  tabs.append(chatBtn, voiceBtn, playgroundBtn, reviewBtn);
   const panel = document.createElement("div");
   chatBtn.addEventListener("click", () => mountChat(panel));
   voiceBtn.addEventListener("click", () => mountVoice(panel));
   playgroundBtn.addEventListener("click", () => mountPlayground(panel));
+  reviewBtn.addEventListener("click", () => mountReview(panel));
   app.append(heading, para, nav, tabs, panel);
   mountChat(panel);
 }

@@ -1,3 +1,5 @@
+import type { OpenAiChatCompletion, OpenAiChunk } from "./gen/api-types";
+
 export type Role = "user" | "assistant" | "system";
 export type ChatMessage = { role: Role; content: string; };
 // Optional generation knobs mapped onto ChatRequest; omitted keys use the
@@ -105,11 +107,95 @@ async function streamChat(
   return out;
 }
 
+// Surface the OpenAI error envelope's human message when one comes back.
+function openaiErrorMessage(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const error = (body as { error?: unknown; }).error;
+  if (typeof error !== "object" || error === null) return null;
+  const message = (error as { message?: unknown; }).message;
+  return typeof message === "string" ? message : null;
+}
+
+async function postChatOpenAI(
+  model: string,
+  messages: ChatMessage[],
+  params: ChatParams = {},
+): Promise<string> {
+  const res = await fetch("/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, messages, ...params }),
+  });
+  if (!res.ok) {
+    const message = openaiErrorMessage(await res.json().catch(() => null))
+      ?? `completions ${res.status}`;
+    throw new Error(message);
+  }
+  const body = (await res.json()) as OpenAiChatCompletion;
+  const text = body.choices[0]?.message.content ?? "";
+  if (!text) throw new Error("empty completion");
+  return text;
+}
+
+// Streams OpenAI `chat.completion.chunk` SSE frames plus the final
+// `data: [DONE]`; throws if unusable so the caller falls back to the
+// non-streaming JSON path above.
+async function streamChatOpenAI(
+  model: string,
+  messages: ChatMessage[],
+  onToken: (token: string) => void,
+  params: ChatParams = {},
+): Promise<string> {
+  const res = await fetch("/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, messages, stream: true, ...params }),
+  });
+  if (!res.ok || !res.body) {
+    const message = openaiErrorMessage(await res.json().catch(() => null))
+      ?? `stream ${res.status}`;
+    throw new Error(message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") break;
+      try {
+        const chunk = JSON.parse(data) as OpenAiChunk;
+        const piece = chunk.choices[0]?.delta.content;
+        if (piece) {
+          out += piece;
+          onToken(piece);
+        }
+      } catch {
+        // Skip keep-alive / partial frames.
+      }
+    }
+  }
+  if (!out) throw new Error("empty stream");
+  return out;
+}
+
 export type ChatControls = {
   // Model id for ChatRequest.model; "" = server default.
   getModel: () => string;
   // Generation knobs for ChatRequest; omit to use server defaults.
   getParams?: () => ChatParams;
+  // Route through POST /v1/chat/completions (OpenAI shape, stream:true)
+  // instead of the native /v1/chat endpoints; default stays native. The
+  // OpenAI route requires a non-empty model (server 400s otherwise).
+  useOpenAI?: () => boolean;
 };
 
 // Shared chat surface: message list + send form with SSE token streaming and
@@ -143,8 +229,11 @@ export function mountChatCore(host: HTMLElement, controls: ChatControls): void {
       history.push({ role: "assistant", content: final });
       reply.textContent = `assistant: ${final}`;
     };
-    streamChat(model, history, append, params).then(finish).catch(() => {
-      postChat(model, history, params).then(finish).catch((err: unknown) => {
+    const openai = controls.useOpenAI?.() === true;
+    const stream = openai ? streamChatOpenAI : streamChat;
+    const post = openai ? postChatOpenAI : postChat;
+    stream(model, history, append, params).then(finish).catch(() => {
+      post(model, history, params).then(finish).catch((err: unknown) => {
         reply.textContent = `error: ${err instanceof Error ? err.message : err}`;
       });
     });

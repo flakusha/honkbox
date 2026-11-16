@@ -1,13 +1,8 @@
 import { el, mountChatCore } from "./chat";
 import type { ChatParams } from "./chat";
+import type { CatalogList } from "./gen/api-types";
 
-// Tolerant runtime shape for GET /v1/models (ModelCatalog + ModelCatalogEntry
-// in crates/api-types). src/gen/api-types.ts has not been regenerated with the
-// catalog yet; this stand-in is replaced — not widened — once codegen lands.
-type CatalogEntry = { id: string; };
-type Catalog = { data: CatalogEntry[]; };
-
-function isCatalog(value: unknown): value is Catalog {
+function isCatalog(value: unknown): value is CatalogList {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -24,7 +19,7 @@ function isCatalog(value: unknown): value is Catalog {
   );
 }
 
-async function loadCatalog(): Promise<Catalog | null> {
+async function loadCatalog(): Promise<CatalogList | null> {
   try {
     const res = await fetch("/v1/models");
     if (!res.ok) {
@@ -95,10 +90,18 @@ export function mountPlayground(host: HTMLElement): void {
   image.title = "not available";
   knobs.append(maxTokens, temperature, image);
 
+  // Route toggle: native /v1/chat* by default; checked sends the same chat
+  // surface through POST /v1/chat/completions (OpenAI shape, stream:true).
+  const openai = el("input");
+  openai.type = "checkbox";
+  const openaiLabel = el("label");
+  openaiLabel.append(openai, " via /v1/chat/completions (OpenAI)");
+
   const core = el("div");
-  host.append(status, modelSelect, modelInput, knobs, core);
+  host.append(status, modelSelect, modelInput, knobs, openaiLabel, core);
   mountChatCore(core, {
     getModel: () => (catalogOk ? modelSelect.value : modelInput.value),
+    useOpenAI: () => openai.checked,
     getParams: (): ChatParams => {
       const params: ChatParams = {};
       const max = parseKnob(maxTokens.value);
