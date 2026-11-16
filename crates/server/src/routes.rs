@@ -125,6 +125,10 @@ pub struct AppConfig {
     /// `[swap] enabled = false`). 429 semantics are unchanged either way —
     /// the residency slot stays the only inference gate.
     pub swap: Option<Arc<crate::swap::SwapManager>>,
+    /// Resolved data dir; supplies the registry-cache DB default
+    /// (`<data_dir>/registry.sqlite3`) on refresh. `None` disables the
+    /// cache default (explicit `HONKBOX_REGISTRY_DB` still wins).
+    pub data_dir: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -244,7 +248,7 @@ async fn refresh_models(State(config): State<AppConfig>) -> Response {
                     .into_response();
             }
         };
-    let catalog = build_catalog(&found);
+    let catalog = refresh_catalog(&found, config.data_dir.as_deref());
     *config
         .catalog
         .write()
@@ -259,6 +263,65 @@ async fn refresh_models(State(config): State<AppConfig>) -> Response {
     }
 }
 
+/// Registry scan hits → `/v1/models` body, with SQLite cache sync.
+///
+/// The file walk stays the **source of truth**; `HONKBOX_REGISTRY_DB` (off
+/// by default via `"off"`/empty, otherwise a cache path) only adds an
+/// incremental cache: a successful non-empty scan upserts its entries and
+/// prunes rows whose files vanished; when a scan comes back **empty** (roots
+/// unavailable) the last-known cached catalog is served as an offline
+/// fallback instead of an empty list. Every cache failure is logged and
+/// non-fatal — the response is always the plain scan result when caching is
+/// disabled or the cache is unusable.
+fn refresh_catalog(
+    found: &[honkbox_registry::FoundModel],
+    data_dir: Option<&Path>,
+) -> ModelCatalog {
+    let db_default = data_dir.map(|base| base.join("registry.sqlite3"));
+    if found.is_empty() {
+        // Offline fallback: roots unavailable → serve the cached catalog.
+        match honkbox_registry::Db::open_from_env(db_default.as_deref()) {
+            Ok(Some(db)) => match db.load_entries() {
+                Ok(cached) if !cached.is_empty() => {
+                    tracing::warn!(
+                        count = cached.len(),
+                        "scan found no models; serving cached registry catalog"
+                    );
+                    return catalog_from_entries(&cached);
+                }
+                Ok(_) => {}
+                Err(err) => tracing::warn!(%err, "registry cache read failed"),
+            },
+            Ok(None) => {}
+            Err(err) => tracing::warn!(%err, "registry cache open failed"),
+        }
+        return build_catalog(found);
+    }
+    // Cache sync: upsert the fresh scan, prune entries whose files vanished.
+    // Best-effort; a slow/broken cache never fails the request. Entries are
+    // built once and reused for the response (header probes are file IO).
+    let entries: Vec<honkbox_registry::CatalogEntry> = found
+        .iter()
+        .map(honkbox_registry::CatalogEntry::from)
+        .collect();
+    match honkbox_registry::Db::open_from_env(db_default.as_deref()) {
+        Ok(Some(db)) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if let Err(err) = db.upsert_entries(&entries, now) {
+                tracing::warn!(%err, "registry cache upsert failed");
+            }
+            if let Err(err) = db.prune_missing_roots() {
+                tracing::warn!(%err, "registry cache prune failed");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "registry cache open failed"),
+    }
+    catalog_from_entries(&entries)
+}
+
 /// Registry scan hits → `/v1/models` body. Also feeds `models show --json`
 /// so the CLI output and the endpoint agree (P0 exit of the parity plan).
 #[must_use]
@@ -266,6 +329,14 @@ pub fn build_catalog(found: &[honkbox_registry::FoundModel]) -> ModelCatalog {
     ModelCatalog {
         object: "list".to_owned(),
         data: found.iter().map(|m| catalog_entry(m.into())).collect(),
+    }
+}
+
+/// Registry catalog entries (e.g. the SQLite cache) → `/v1/models` body.
+fn catalog_from_entries(entries: &[honkbox_registry::CatalogEntry]) -> ModelCatalog {
+    ModelCatalog {
+        object: "list".to_owned(),
+        data: entries.iter().map(|e| catalog_entry(e.clone())).collect(),
     }
 }
 

@@ -222,6 +222,35 @@ enum ModelsAction {
     },
 }
 
+/// Sync the SQLite registry cache (best-effort mirror of the file
+/// walk, which stays the source of truth; disabled via
+/// `HONKBOX_REGISTRY_DB`=`off`). Failures never block startup.
+fn sync_registry_db(found: &[honkbox_registry::FoundModel], data_dir: Option<&std::path::Path>) {
+    if found.is_empty() {
+        return;
+    }
+    let entries: Vec<honkbox_registry::CatalogEntry> = found
+        .iter()
+        .map(honkbox_registry::CatalogEntry::from)
+        .collect();
+    let db_default = data_dir.map(|base| base.join("registry.sqlite3"));
+    match honkbox_registry::Db::open_from_env(db_default.as_deref()) {
+        Ok(Some(db)) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if let Err(err) = db.upsert_entries(&entries, now) {
+                tracing::warn!(%err, "registry cache upsert failed");
+            }
+            if let Err(err) = db.prune_missing_roots() {
+                tracing::warn!(%err, "registry cache prune failed");
+            }
+        }
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%err, "registry cache open failed"),
+    }
+}
+
 /// P1 swap manager for the chat modality: load-on-demand + TTL/LRU
 /// eviction, active only with the real llama backend (a stub server keeps
 /// its single zero-cost stub pipeline; SD/audio stay startup-loaded — their
@@ -297,6 +326,7 @@ async fn main() {
             };
             let found = honkbox_registry::scan_roots(&roots);
             info!("discovered {} models across configured roots", found.len());
+            sync_registry_db(&found, None);
             let catalog = Arc::new(RwLock::new(Arc::new(build_catalog(&found))));
             let resolve = |slug: &str| resolve_model(&found, slug);
             // Pipelines are built from the configured slugs before the strings

@@ -60,6 +60,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     })
 }
 
@@ -81,6 +82,7 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     })
 }
 
@@ -192,6 +194,8 @@ async fn transcribe_validates_model_first() {
 
 #[tokio::test]
 async fn refresh_rescans_roots_and_updates_snapshot() {
+    // Keep the test's temp-file models out of the real/default cache DB.
+    honkbox_registry::db::set_db_override(None);
     let base = std::env::temp_dir().join(format!("honkbox-refresh-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let llm = base.join("llm");
@@ -264,6 +268,8 @@ async fn refresh_rescans_roots_and_updates_snapshot() {
 /// kinds after `POST /v1/models/refresh`.
 #[tokio::test]
 async fn refresh_picks_up_audio_roots() {
+    // Keep the test's temp-file models out of the real/default cache DB.
+    honkbox_registry::db::set_db_override(None);
     let base = std::env::temp_dir().join(format!("honkbox-audio-refresh-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let stt = base.join("stt");
@@ -329,6 +335,9 @@ async fn refresh_picks_up_audio_roots() {
 
 #[tokio::test]
 async fn refresh_is_idempotent_on_missing_roots() {
+    // Missing roots must refresh to an EMPTY catalog: no cache fallback and
+    // no writes to the real/default cache DB.
+    honkbox_registry::db::set_db_override(None);
     // A root that does not exist refreshes to an empty catalog, never an error.
     let app = test_app_with_roots(
         catalog_with(&["llm:stale.gguf"]),

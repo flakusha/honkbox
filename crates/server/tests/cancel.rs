@@ -199,6 +199,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     });
 
     let response = app
@@ -279,6 +280,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     });
 
     let response = app

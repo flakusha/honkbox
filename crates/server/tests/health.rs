@@ -46,6 +46,7 @@ async fn health_returns_ok() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     })
     .oneshot(
         Request::builder()

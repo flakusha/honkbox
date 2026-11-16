@@ -21,6 +21,11 @@ clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 home = "0.5"
+# Registry cache DB (crates/registry): bundled SQLite — no system lib
+# dependency; libsqlite3-sys MIT shim + public-domain C, accepted by deny.toml.
+# Pinned to 0.41+: bundled SQLite >= 3.54 fixes RUSTSEC-2026-0459
+# (CVE-2026-119375, WAL page-size memory exposure in older bundles).
+rusqlite = { version = "0.41", features = ["bundled"] }
 toml = "1"
 llama-cpp-4 = "0.11"
 honkbox-registry = { path = "crates/registry" }

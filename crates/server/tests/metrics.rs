@@ -46,6 +46,7 @@ fn test_app() -> Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        data_dir: None,
     })
 }
 
