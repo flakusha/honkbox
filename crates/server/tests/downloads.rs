@@ -7,8 +7,14 @@
 #[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
+#[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -867,7 +873,17 @@ async fn catalog_route_merges_snapshot_and_budget() {
         object: "list".to_owned(),
         data: vec![honkbox_api_types::ModelCatalogEntry {
             id: "llm:models/llm/Llama-3.2-1B-Instruct-Q4_K_M.gguf".to_owned(),
+            slug: "llm:models/llm/Llama-3.2-1B-Instruct-Q4_K_M.gguf".to_owned(),
             kind: honkbox_api_types::ModelKind::Llm,
+            owned_by: "local".to_owned(),
+            context_length: None,
+            max_output: None,
+            thinking: false,
+            tool_calling: false,
+            modalities: vec!["text".to_owned()],
+            capabilities: honkbox_api_types::ModelCapabilities::for_kind(
+                honkbox_api_types::ModelKind::Llm,
+            ),
             category: "root".to_owned(),
             path: root
                 .join("models/llm/Llama-3.2-1B-Instruct-Q4_K_M.gguf")
@@ -953,6 +969,7 @@ fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: Some(root.to_path_buf()),
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: mgr,
     }
 }

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use backends::{LlmBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
-use routes::{ApiDoc, AppConfig, app, build_catalog};
+use routes::{ApiDoc, AppConfig, app};
 use tracing::info;
 use utoipa::OpenApi as _;
 
@@ -233,35 +233,6 @@ enum ModelsAction {
     },
 }
 
-/// Sync the SQLite registry cache (best-effort mirror of the file
-/// walk, which stays the source of truth; disabled via
-/// `HONKBOX_REGISTRY_DB`=`off`). Failures never block startup.
-fn sync_registry_db(found: &[honkbox_registry::FoundModel], data_dir: Option<&std::path::Path>) {
-    if found.is_empty() {
-        return;
-    }
-    let entries: Vec<honkbox_registry::CatalogEntry> = found
-        .iter()
-        .map(honkbox_registry::CatalogEntry::from)
-        .collect();
-    let db_default = data_dir.map(|base| base.join("registry.sqlite3"));
-    match honkbox_registry::Db::open_from_env(db_default.as_deref()) {
-        Ok(Some(db)) => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
-            if let Err(err) = db.upsert_entries(&entries, now) {
-                tracing::warn!(%err, "registry cache upsert failed");
-            }
-            if let Err(err) = db.prune_missing_roots() {
-                tracing::warn!(%err, "registry cache prune failed");
-            }
-        }
-        Ok(None) => {}
-        Err(err) => tracing::warn!(%err, "registry cache open failed"),
-    }
-}
-
 /// P1 swap manager for the chat modality: load-on-demand + TTL/LRU
 /// eviction, active only with the real llama backend (a stub server keeps
 /// its single zero-cost stub pipeline; SD/audio stay startup-loaded — their
@@ -399,8 +370,16 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     };
     let found = honkbox_registry::scan_roots(&roots);
     info!("discovered {} models across configured roots", found.len());
-    sync_registry_db(&found, data_dir.as_deref());
-    let catalog = Arc::new(RwLock::new(Arc::new(build_catalog(&found))));
+    // Scan → cache → catalog (REQ-2): operator bindings are validated hard
+    // (an alias conflict is a startup error), the SQLite cache stays
+    // best-effort, and an empty scan serves the cached fallback catalog.
+    // Same pipeline as `POST /v1/models/refresh`.
+    let model_entries = cfg.entries.clone();
+    let catalog = Arc::new(RwLock::new(Arc::new(or_exit(routes::refresh_catalog(
+        &found,
+        data_dir.as_deref(),
+        &model_entries,
+    )))));
     let resolve = |slug: &str| resolve_model(&found, slug);
     // Pipelines are built from the configured slugs before the strings move
     // into `AppConfig` (they are accepted as request `model` values alongside
@@ -435,6 +414,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         swap_max_ttl: swap_cfg.max_ttl,
         data_dir,
         vram_budget,
+        model_entries,
         downloads,
     };
     let rescan_signal = app_config.downloads.rescan_signal();
@@ -459,10 +439,14 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
     });
     found.sort_by(|a, b| a.slug.cmp(&b.slug));
     if json {
-        // Same shape as `GET /v1/models` (P0 exit of the parity plan).
+        // Same shape as `GET /v1/models` (P0 exit of the parity plan) with
+        // the operator bindings applied (REQ-2); a binding conflict is the
+        // same hard error the server exits on.
+        let bindings = or_exit(routes::bind_entries(&cfg.entries, &found));
         println!(
             "{}",
-            serde_json::to_string_pretty(&build_catalog(&found)).expect("serialize models")
+            serde_json::to_string_pretty(&routes::build_catalog(&found, &bindings))
+                .expect("serialize models")
         );
     } else {
         println!("{:<64} {:<6} {:>10}  PATH", "SLUG", "KIND", "SIZE");

@@ -15,7 +15,7 @@ pub mod db;
 mod metadata;
 
 pub use db::env_db_path as registry_db_path;
-pub use db::{DB_ENV, Db, DbError, DbResult, SCHEMA_VERSION};
+pub use db::{AliasRow, DB_ENV, Db, DbError, DbResult, EntryOverride, SCHEMA_VERSION};
 use metadata::probe;
 pub use metadata::{GgufMetadata, ModelFileMetadata, SafetensorsMetadata};
 

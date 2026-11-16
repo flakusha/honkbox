@@ -24,6 +24,22 @@
 //! `HONKBOX_DISCOVERY_COMFYUI_DIRS`, `HONKBOX_DISCOVERY_STT_DIRS`,
 //! `HONKBOX_DISCOVERY_TTS_DIRS`); the curated catalog's VRAM budget rides
 //! `[models] vram_budget_bytes` with `HONKBOX_VRAM_BUDGET` as its env stage.
+//!
+//! Operator model bindings (REQ-2) ride `[[models.entry]]` — an array of
+//! tables *under* the existing `[models]` table (a top-level `[[models]]`
+//! array would collide with the roots table). Each entry targets a scan hit
+//! by exact `slug` **or** by `match` on the weight file's name (the stable
+//! choice for HF snapshots whose slug embeds a content sha); declaring both
+//! or neither is a config error. It may declare `aliases` (operator-declared
+//! only — never filename-derived) and `capabilities` overrides (`chat`,
+//! `embeddings`, `tool_calling`, `vision`; each `Option<bool>`, absent keys
+//! keep the kind-inferred default; a `chat = false` + `embeddings = true`
+//! pair also reclassifies the emitted `kind` so embedding GGUFs under an
+//! LLM root stay discoverable). Alias conflicts (two entries claiming one
+//! alias, or one `match` hitting several files) are a **hard startup
+//! error**, validated against the live scan in `routes::bind_entries`.
+//! Structured tables have no env stage in this config's house pattern (all
+//! `HONKBOX_*` env vars are scalars/path lists), so entries are file-only.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -53,6 +69,74 @@ pub struct ModelConfig {
     /// user-declared VRAM ceiling driving the curated catalog's advisory
     /// fit pills. `None` → pills omitted (advice only, never enforced).
     pub vram_budget_bytes: Option<u64>,
+    /// Operator model bindings (`[[models.entry]]`, REQ-2): aliases +
+    /// capability overrides bound to scan hits by `routes::bind_entries`.
+    pub entries: Vec<ModelEntryConfig>,
+}
+
+/// One operator model binding (`[[models.entry]]`): targets a scan hit by
+/// exact `slug` or by `match` on the weight file's name, optionally naming
+/// `aliases` and overriding `capabilities`. See the module docs for the
+/// full contract (operator-declared only; conflicts are startup errors).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEntryConfig {
+    /// Exact registry slug this entry binds to (`slug = "llm:…"`). Mutually
+    /// exclusive with `match`; exactly one must be present.
+    pub slug: Option<String>,
+    /// Weight file **name** to bind (`match = "Model-Q8_0.gguf"`): stable
+    /// across HF snapshot re-downloads whose slug embeds a content sha.
+    /// Matching is by exact name (the path's final component).
+    pub file_match: Option<String>,
+    /// Operator-declared request aliases; the first is the `id` served by
+    /// `GET /v1/models`. All resolve on chat/transcribe/synthesize.
+    pub aliases: Vec<String>,
+    /// Capability overrides (`Option<bool>` per flag; absent keys keep the
+    /// kind-inferred default).
+    pub capabilities: ModelCapabilitiesOverride,
+}
+
+/// Per-flag capability overrides (`[[models.entry]] capabilities`).
+/// `None` keeps the kind-inferred default for that flag; declaring
+/// `chat = false` together with `embeddings = true` additionally
+/// reclassifies the emitted `kind` as `embedding` (discoverability for
+/// embedding GGUFs under LLM roots).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelCapabilitiesOverride {
+    /// Chat-template conversation turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<bool>,
+    /// Embedding vectors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embeddings: Option<bool>,
+    /// OpenAI-style tool calling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calling: Option<bool>,
+    /// Vision content parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
+}
+
+impl ModelCapabilitiesOverride {
+    /// Whether the declaration reclassifies the entry as an embedding model
+    /// (explicit `chat = false` + `embeddings = true`).
+    #[must_use]
+    pub fn reclassifies_embedding(self) -> bool {
+        self.chat == Some(false) && self.embeddings == Some(true)
+    }
+
+    /// JSON encoding for the registry-cache override column (declared keys
+    /// only); `{}` when nothing is declared.
+    #[must_use]
+    pub fn cache_json(self) -> String {
+        serde_json::to_string(&self).unwrap_or_else(|_| "{}".to_owned())
+    }
+
+    /// Decode [`Self::cache_json`] output; invalid JSON decodes empty
+    /// (the cache is advisory and the next scan rewrites it).
+    #[must_use]
+    pub fn from_cache_json(json: &str) -> Self {
+        serde_json::from_str(json).unwrap_or_default()
+    }
 }
 
 /// Default `[swap]` idle TTL: 10 minutes (llama-swap defaults to never
@@ -269,6 +353,7 @@ fn resolve_data_dir(
 
 /// Load result: model/job/swap config plus the final data dir (after the
 /// `[core] data_dir` refinement).
+#[derive(Debug)]
 pub struct LoadedConfig {
     /// Model roots + `[jobs]` + `[swap]` settings.
     pub models: ModelConfig,
@@ -322,6 +407,8 @@ struct FileStages {
     core: FileCore,
     /// `[models] vram_budget_bytes` (NEW-5).
     vram_budget: Option<u64>,
+    /// `[[models.entry]]` bindings (REQ-2), parse-validated.
+    entries: Vec<ModelEntryConfig>,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -377,7 +464,82 @@ fn stage_config_file(
     out.swap = file.swap;
     out.core = file.core;
     out.vram_budget = file.models.vram_budget_bytes;
+    out.entries = file
+        .models
+        .entry
+        .iter()
+        .map(FileModelEntry::parse)
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(out)
+}
+
+/// One `[[models.entry]]` table as written (`match` is a Rust keyword, so
+/// the field is renamed); validated + cleaned by [`FileModelEntry::parse`].
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileModelEntry {
+    /// Exact registry slug (`llm:…` / `comfy:…`).
+    #[serde(default)]
+    slug: Option<String>,
+    /// Weight file name to match.
+    #[serde(rename = "match", default)]
+    file_match: Option<String>,
+    /// Request aliases (operator-declared; never filename-derived).
+    #[serde(default)]
+    aliases: Option<Vec<String>>,
+    /// Capability overrides (the `[models.entry.capabilities]` sub-table
+    /// or an inline `capabilities = { … }` value).
+    #[serde(default)]
+    capabilities: ModelCapabilitiesOverride,
+}
+
+impl FileModelEntry {
+    /// Clean + validate: exactly one of `slug` / `match` must be present,
+    /// aliases are trimmed/de-duplicated (empty and repeated aliases are
+    /// config errors — a silently dropped alias would resolve differently
+    /// than the operator wrote), and the capabilities flatten verbatim.
+    fn parse(&self) -> Result<ModelEntryConfig, String> {
+        let target = match (&self.slug, &self.file_match) {
+            (Some(slug), None) => Some(clean_slug_key(slug, "slug")?),
+            (None, Some(_)) => None,
+            (Some(_), Some(_)) => {
+                return Err(
+                    "[[models.entry]] declares both slug and match; declare exactly one".to_owned(),
+                );
+            }
+            (None, None) => {
+                return Err(
+                    "[[models.entry]] declares neither slug nor match; declare exactly one"
+                        .to_owned(),
+                );
+            }
+        };
+        let file_match = match &self.file_match {
+            Some(m) => Some(clean_slug_key(m, "match")?),
+            None => None,
+        };
+        let mut aliases = Vec::new();
+        for alias in clean_slugs(self.aliases.iter().flatten()) {
+            if aliases.contains(&alias) {
+                return Err(format!("[[models.entry]] declares alias {alias:?} twice"));
+            }
+            aliases.push(alias);
+        }
+        Ok(ModelEntryConfig {
+            slug: target,
+            file_match,
+            aliases,
+            capabilities: self.capabilities,
+        })
+    }
+}
+
+/// Trim one `slug`/`match` key; empty after trimming is a config error.
+fn clean_slug_key(value: &str, key: &str) -> Result<String, String> {
+    let trimmed = value.trim().to_owned();
+    if trimmed.is_empty() {
+        return Err(format!("[[models.entry]] {key} is empty"));
+    }
+    Ok(trimmed)
 }
 
 pub fn load(
@@ -400,6 +562,7 @@ pub fn load(
         swap: file_swap,
         core: file_core,
         vram_budget,
+        entries,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -450,6 +613,7 @@ pub fn load(
     )
     .merged(jobs, swap);
     models.vram_budget_bytes = vram_budget;
+    models.entries = entries;
     // Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
     // stay part of the scan no matter what file/env configured, so a
     // completed download shows up in `GET /v1/models` after the rescan
@@ -530,6 +694,9 @@ impl RootStages {
             swap,
             // Resolved separately in `load` (file key + env stage).
             vram_budget_bytes: None,
+            // Operator bindings staged out of the file pass (`load` fills
+            // them; no env stage — structured tables have none).
+            entries: Vec::new(),
         }
     }
 }
@@ -647,6 +814,9 @@ struct FileModels {
     /// Optional VRAM budget (bytes) for the curated catalog's fit pills.
     #[serde(default)]
     vram_budget_bytes: Option<u64>,
+    /// Operator model bindings (`[[models.entry]]`, REQ-2).
+    #[serde(default)]
+    entry: Vec<FileModelEntry>,
 }
 
 /// Optional `[discovery]` extras APPENDED to the `[models]` roots (P0 of the
@@ -1143,5 +1313,90 @@ mod tests {
             gc_ttl: Some(3600),
             gc_max_bytes: None,
         }
+    }
+
+    /// Write a config TOML and load it (isolated temp file per call).
+    fn load_toml(tag: &str, text: &str) -> Result<LoadedConfig, String> {
+        let base = std::env::temp_dir().join(format!("honkbox-entry-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(&path, text).expect("write config");
+        let loaded = load(Some(path), None);
+        std::fs::remove_dir_all(&base).ok();
+        loaded
+    }
+
+    /// `[[models.entry]]`: slug- and match-targeted entries parse with
+    /// cleaned aliases and verbatim capability overrides.
+    #[test]
+    fn models_entry_parses_both_targets() {
+        let loaded = load_toml(
+            "ok",
+            "[models]\n\
+             llm_dirs = [\"/tmp/llm\"]\n\
+             [[models.entry]]\n\
+             slug = \"llm:models--org--Repo/snapshots/sha/Model-Q8_0.gguf\"\n\
+             aliases = [\"qwen3\", \" embed-model \"]\n\
+             [models.entry.capabilities]\n\
+             chat = false\n\
+             embeddings = true\n\
+             [[models.entry]]\n\
+             match = \"Whisper-Bin.bin\"\n\
+             aliases = [\"whisper\"]\n\
+             [models.entry.capabilities]\n\
+             tool_calling = true\n",
+        )
+        .expect("load config");
+        let entries = &loaded.models.entries;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].slug.as_deref(),
+            Some("llm:models--org--Repo/snapshots/sha/Model-Q8_0.gguf")
+        );
+        assert_eq!(entries[0].file_match, None);
+        assert_eq!(entries[0].aliases, vec!["qwen3", "embed-model"]);
+        assert_eq!(entries[0].capabilities.chat, Some(false));
+        assert_eq!(entries[0].capabilities.embeddings, Some(true));
+        assert_eq!(entries[0].capabilities.tool_calling, None);
+        assert!(entries[0].capabilities.reclassifies_embedding());
+        assert_eq!(entries[1].slug, None);
+        assert_eq!(entries[1].file_match.as_deref(), Some("Whisper-Bin.bin"));
+        assert_eq!(entries[1].aliases, vec!["whisper"]);
+        assert_eq!(entries[1].capabilities.tool_calling, Some(true));
+        // Cache JSON round-trips through the registry-cache column shape.
+        let json = entries[0].capabilities.cache_json();
+        assert_eq!(
+            ModelCapabilitiesOverride::from_cache_json(&json),
+            entries[0].capabilities
+        );
+    }
+
+    /// Malformed `[[models.entry]]` declarations are config errors (the
+    /// whole load fails loudly — a half-applied binding is worse than a
+    /// failed boot).
+    #[test]
+    fn models_entry_declarations_are_validated() {
+        let both = load_toml(
+            "both",
+            "[[models.entry]]\nslug = \"llm:a.gguf\"\nmatch = \"a.gguf\"\n",
+        )
+        .expect_err("both targets");
+        assert!(both.contains("both slug and match"), "{both}");
+
+        let neither =
+            load_toml("neither", "[[models.entry]]\naliases = [\"x\"]\n").expect_err("no target");
+        assert!(neither.contains("neither slug nor match"), "{neither}");
+
+        let empty =
+            load_toml("empty", "[[models.entry]]\nslug = \"   \"\n").expect_err("empty slug");
+        assert!(empty.contains("slug is empty"), "{empty}");
+
+        let dup = load_toml(
+            "dup",
+            "[[models.entry]]\nmatch = \"a.gguf\"\naliases = [\"x\", \" x \"]\n",
+        )
+        .expect_err("duplicate alias");
+        assert!(dup.contains("twice"), "{dup}");
     }
 }

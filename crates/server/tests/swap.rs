@@ -10,8 +10,14 @@
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -71,6 +77,7 @@ fn canned_response() -> ChatResponse {
         backend_id: "counting-llm".to_owned(),
         text: "hello swap".to_owned(),
         tokens: 2,
+        prompt_tokens: 0,
         millis: 0,
     }
 }
@@ -144,7 +151,15 @@ fn catalog_with(entries: &[(&str, ModelKind)]) -> ModelCatalog {
             .iter()
             .map(|(id, kind)| ModelCatalogEntry {
                 id: (*id).to_owned(),
+                slug: (*id).to_owned(),
                 kind: *kind,
+                owned_by: "local".to_owned(),
+                context_length: None,
+                max_output: None,
+                thinking: false,
+                tool_calling: false,
+                modalities: vec!["text".to_owned()],
+                capabilities: honkbox_api_types::ModelCapabilities::for_kind(*kind),
                 category: "root".to_owned(),
                 path: "/dev/null-fake-weights".to_owned(),
                 bytes: 1,
@@ -186,6 +201,7 @@ fn swap_app(
         swap_max_ttl: max_ttl,
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),
@@ -688,6 +704,7 @@ async fn stub_path_unaffected_without_swap_manager() {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),

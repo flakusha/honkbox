@@ -32,7 +32,7 @@
     "/health": {
       "get": {
         "tags": [],
-        "summary": "Liveness probe.",
+        "summary": "Liveness probe. Content-negotiated: the JSON `Health` body by default\n(and for `Accept: application/json`), a literal `OK` text/plain body for\nprobes that prefer `text/plain` (uptime monitors, `docker --health-cmd`\nequivalents).",
         "operationId": "health",
         "responses": {
           "200": {
@@ -806,6 +806,39 @@
           }
         }
       },
+      "ModelCapabilities": {
+        "type": "object",
+        "description": "Feature flags for one model (`GET /v1/models` entry `capabilities`).\n\nDefaults derive from the entry's `kind` (see [`ModelCapabilities::for_kind`]);\nan operator `[[models.entry]]` capabilities declaration overrides\nindividual flags. Emitted as a nested object for OpenAI/llama-swap-style\nconsumers — loop-lore reads the same values off the entry root as flat\nfields, which are emitted alongside (`tool_calling`, `modalities`, …).",
+        "required": [
+          "chat",
+          "completion",
+          "tool_calling",
+          "vision",
+          "embeddings"
+        ],
+        "properties": {
+          "chat": {
+            "type": "boolean",
+            "description": "Chat-template conversation turns (an LLM pipeline can serve it)."
+          },
+          "completion": {
+            "type": "boolean",
+            "description": "Raw completion; mirrors `chat` (honkbox loads whole turns either way)."
+          },
+          "embeddings": {
+            "type": "boolean",
+            "description": "Embedding vectors (e.g. an operator-declared embedding GGUF)."
+          },
+          "tool_calling": {
+            "type": "boolean",
+            "description": "OpenAI-style tool/function calling."
+          },
+          "vision": {
+            "type": "boolean",
+            "description": "Vision (`image` content parts)."
+          }
+        }
+      },
       "ModelCatalog": {
         "type": "object",
         "description": "Model catalog: OpenAI-style list envelope (`GET /v1/models`).",
@@ -829,10 +862,16 @@
       },
       "ModelCatalogEntry": {
         "type": "object",
-        "description": "One discovered model in the catalog (`GET /v1/models`).",
+        "description": "One discovered model in the catalog (`GET /v1/models`).\n\n`id` is the operator alias when one is configured for the file, else the\nregistry slug; requests accept either (the raw slug always works, via\n`slug`). The loop-lore flat fields (`owned_by`, `context_length`,\n`max_output`, `thinking`, `tool_calling`, `modalities`) mirror the nested\n`capabilities` object so both consumer shapes work.",
         "required": [
           "id",
+          "slug",
           "kind",
+          "owned_by",
+          "thinking",
+          "tool_calling",
+          "modalities",
+          "capabilities",
           "category",
           "path",
           "bytes"
@@ -844,17 +883,39 @@
             "description": "File size in bytes.",
             "minimum": 0
           },
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilities",
+            "description": "Feature flags (also mirrored into the flat fields above)."
+          },
           "category": {
             "type": "string",
             "description": "Directory category (`checkpoints`, `loras`, LLM parent dir, or `root`)."
           },
+          "context_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Training context length from GGUF metadata; `null` when unprobed.",
+            "minimum": 0
+          },
           "id": {
             "type": "string",
-            "description": "Registry slug, the stable request-facing id (`llm:…` / `comfy:…`)."
+            "description": "Operator alias when configured, else the registry slug."
           },
           "kind": {
             "$ref": "#/components/schemas/ModelKind",
-            "description": "Modality derived from the scanned root."
+            "description": "Modality (capability overrides may reclassify a root, e.g. an\noperator-declared embedding GGUF under an LLM root)."
+          },
+          "max_output": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Generation cap; `null` (honkbox has no per-model output ceiling).",
+            "minimum": 0
           },
           "metadata": {
             "oneOf": [
@@ -867,9 +928,32 @@
               }
             ]
           },
+          "modalities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Content modalities (`[\"text\"]`, plus `\"vision\"` when declared)."
+          },
+          "owned_by": {
+            "type": "string",
+            "description": "Ownership label; local files are always `\"local\"`."
+          },
           "path": {
             "type": "string",
             "description": "Absolute path to the weight file."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Registry slug (`llm:…` / `comfy:…`), always present regardless of `id`."
+          },
+          "thinking": {
+            "type": "boolean",
+            "description": "Reasoning/thinking support (no honkbox model declares it today)."
+          },
+          "tool_calling": {
+            "type": "boolean",
+            "description": "OpenAI-style tool calling; `capabilities.tool_calling` mirrored flat."
           }
         }
       },

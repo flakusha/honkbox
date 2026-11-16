@@ -6,8 +6,14 @@
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -39,17 +45,28 @@ static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::syn
 fn catalog_with(slugs: &[&str]) -> ModelCatalog {
     ModelCatalog {
         object: "list".to_owned(),
-        data: slugs
-            .iter()
-            .map(|slug| ModelCatalogEntry {
-                id: (*slug).to_owned(),
-                kind: ModelKind::Llm,
-                category: "root".to_owned(),
-                path: format!("/models/{slug}"),
-                bytes: 1,
-                metadata: None,
-            })
-            .collect(),
+        data: slugs.iter().map(|slug| entry_with(slug, slug)).collect(),
+    }
+}
+
+/// One fake LLM entry: served `id` (alias or slug) plus its registry slug.
+#[allow(clippy::too_many_arguments)]
+fn entry_with(id: &str, slug: &str) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        id: id.to_owned(),
+        slug: slug.to_owned(),
+        kind: ModelKind::Llm,
+        owned_by: "local".to_owned(),
+        context_length: None,
+        max_output: None,
+        thinking: false,
+        tool_calling: false,
+        modalities: vec!["text".to_owned()],
+        capabilities: honkbox_api_types::ModelCapabilities::for_kind(ModelKind::Llm),
+        category: "root".to_owned(),
+        path: format!("/models/{slug}"),
+        bytes: 1,
+        metadata: None,
     }
 }
 
@@ -69,6 +86,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),
@@ -96,6 +114,7 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),
@@ -146,8 +165,30 @@ async fn models_list_shape() {
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     assert_eq!(
         body.as_ref(),
-        br#"{"object":"list","data":[{"id":"llm:a.gguf","kind":"llm","category":"root","path":"/models/llm:a.gguf","bytes":1}]}"#
+        br#"{"object":"list","data":[{"id":"llm:a.gguf","slug":"llm:a.gguf","kind":"llm","owned_by":"local","context_length":null,"max_output":null,"thinking":false,"tool_calling":false,"modalities":["text"],"capabilities":{"chat":true,"completion":true,"tool_calling":false,"vision":false,"embeddings":false},"category":"root","path":"/models/llm:a.gguf","bytes":1}]}"#
     );
+}
+
+/// REQ-2: an alias (`id` differing from the slug) and the raw registry slug
+/// both dispatch; an unknown value is still the native 400.
+#[tokio::test]
+async fn alias_and_slug_both_resolve() {
+    let catalog = ModelCatalog {
+        object: "list".to_owned(),
+        data: vec![entry_with(
+            "qwen3-8b",
+            "llm:models--org--M/snapshots/sha/Q8_0.gguf",
+        )],
+    };
+    let (status, _) = chat(test_app(catalog.clone(), None), "qwen3-8b").await;
+    assert_eq!(status, StatusCode::OK);
+    // The raw slug keeps working alongside the alias.
+    let (status, _) = chat(
+        test_app(catalog, None),
+        "llm:models--org--M/snapshots/sha/Q8_0.gguf",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]

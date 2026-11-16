@@ -9,8 +9,14 @@
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -151,7 +157,7 @@ impl LlmPipeline for AbortGateLlm {
                 backend_id: self.backend_id().to_owned(),
                 text: "one".to_owned(),
                 tokens: 1,
-                millis: 0,
+                    millis: 0,
             });
         }
         sink("two");
@@ -208,6 +214,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),
@@ -294,6 +301,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),

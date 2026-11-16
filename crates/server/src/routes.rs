@@ -4,6 +4,7 @@
 //! The `OpenAPI` document is served as plain JSON via `Json` — no
 //! `utoipa-axum` router glue.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -27,8 +28,9 @@ use axum::{
 use honkbox_api_types::{
     CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
     DownloadAccepted, DownloadKind, DownloadList, DownloadRequest, DownloadState, DownloadStatus,
-    GgufMetadata, Health, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, Pill,
-    SafetensorsMetadata, SynthesizeRequest, Transcript, TranscriptSegment, Version,
+    GgufMetadata, Health, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind,
+    ModelMetadata, Pill, SafetensorsMetadata, SynthesizeRequest, Transcript, TranscriptSegment,
+    Version,
 };
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest,
@@ -80,6 +82,7 @@ struct EmbeddedUi;
         TranscriptSegment,
         SynthesizeRequest,
         ModelKind,
+        ModelCapabilities,
         GgufMetadata,
         SafetensorsMetadata,
         ModelMetadata,
@@ -153,6 +156,9 @@ pub struct AppConfig {
     /// Configured VRAM budget (`[models] vram_budget_bytes` / env): drives
     /// the curated catalog's advisory fit pills; `None` omits them.
     pub vram_budget: Option<u64>,
+    /// Operator model bindings (`[[models.entry]]`): rebound against every
+    /// fresh scan (startup, `POST /v1/models/refresh`, post-download rescan).
+    pub model_entries: Vec<crate::config::ModelEntryConfig>,
     /// Managed download supervisor (`/v1/downloads`): fetches model files
     /// into `<data_dir>/models/{llm,sd,stt,tts}` and fires the rescan
     /// signal on every commit.
@@ -203,12 +209,54 @@ async fn track_metrics(req: Request, next: Next) -> Response {
     response
 }
 
-/// Liveness probe.
+/// Liveness probe. Content-negotiated: the JSON `Health` body by default
+/// (and for `Accept: application/json`), a literal `OK` text/plain body for
+/// probes that prefer `text/plain` (uptime monitors, `docker --health-cmd`
+/// equivalents).
 #[utoipa::path(get, path = "/health", responses((status = 200, description = "Server is alive", body = Health)))]
-async fn health() -> Json<Health> {
+async fn health(headers: HeaderMap) -> Response {
+    if prefers_text_plain(&headers) {
+        return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "OK").into_response();
+    }
     Json(Health {
         status: "ok".to_owned(),
     })
+    .into_response()
+}
+
+/// True when the request's `Accept` header ranks `text/plain` strictly above
+/// `application/json` (per-entry q-values, highest wins). No header,
+/// wildcards (`*/*`, `text/*`), other media types, or a tie all keep the
+/// JSON default — only an explicit text/plain preference flips the body.
+fn prefers_text_plain(headers: &HeaderMap) -> bool {
+    let Some(value) = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let mut plain_q = None::<f32>;
+    let mut json_q = None::<f32>;
+    for media in value.split(',') {
+        let Some((media_type, params)) = media.split_once(';') else {
+            note_media_type(media.trim(), &mut plain_q, &mut json_q, 1.0);
+            continue;
+        };
+        let q = params
+            .split(';')
+            .find_map(|param| param.trim().strip_prefix("q="))
+            .and_then(|q| q.trim().parse::<f32>().ok())
+            .unwrap_or(1.0);
+        note_media_type(media_type.trim(), &mut plain_q, &mut json_q, q);
+    }
+    plain_q.is_some() && plain_q > json_q
+}
+
+/// Track the best q-value seen for the two media types `/health` picks
+/// between; everything else is ignored (wildcards keep the JSON default).
+fn note_media_type(media_type: &str, plain_q: &mut Option<f32>, json_q: &mut Option<f32>, q: f32) {
+    match media_type.to_ascii_lowercase().as_str() {
+        "text/plain" => *plain_q = Some(plain_q.map_or(q, |best| best.max(q))),
+        "application/json" => *json_q = Some(json_q.map_or(q, |best| best.max(q))),
+        _ => {}
+    }
 }
 
 /// Binary name + version.
@@ -313,13 +361,15 @@ async fn get_catalog(State(config): State<AppConfig>) -> Response {
 
 /// Registry re-scan + shared catalog snapshot swap: the body of
 /// `POST /v1/models/refresh`, also driven by the download manager's
-/// completion signal (`rescan_on_downloads`).
+/// completion signal (`rescan_on_downloads`). An operator-binding conflict
+/// in the fresh scan leaves the previous snapshot in place and fails the
+/// request — never a silently wrong alias.
 async fn rescan_catalog(config: &AppConfig) -> Result<ModelCatalog, String> {
     let roots = config.roots.clone();
     let found = tokio::task::spawn_blocking(move || honkbox_registry::scan_roots(&roots))
         .await
         .map_err(|err| format!("refresh scan failed: {err}"))?;
-    let catalog = refresh_catalog(&found, config.data_dir.as_deref());
+    let catalog = refresh_catalog(&found, config.data_dir.as_deref(), &config.model_entries)?;
     *config
         .catalog
         .write()
@@ -346,27 +396,38 @@ pub(crate) async fn rescan_on_downloads(config: AppConfig, signal: Arc<Notify>) 
 ///
 /// The file walk stays the **source of truth**; `HONKBOX_REGISTRY_DB` (off
 /// by default via `"off"`/empty, otherwise a cache path) only adds an
-/// incremental cache: a successful non-empty scan upserts its entries and
-/// prunes rows whose files vanished; when a scan comes back **empty** (roots
-/// unavailable) the last-known cached catalog is served as an offline
-/// fallback instead of an empty list. Every cache failure is logged and
-/// non-fatal — the response is always the plain scan result when caching is
-/// disabled or the cache is unusable.
-fn refresh_catalog(
+/// incremental cache: a successful non-empty scan upserts its entries plus
+/// the operator bindings and prunes rows whose files vanished; when a scan
+/// comes back **empty** (roots unavailable) the last-known cached catalog
+/// is served as an offline fallback — with the cached aliases, so a restart
+/// against empty roots still resolves operator aliases. Every cache failure
+/// is logged and non-fatal — the response is always the plain scan result
+/// when caching is disabled or the cache is unusable. Operator-binding
+/// conflicts (duplicate alias across files, `match` hitting several files)
+/// are `Err` — a hard failure at startup, a 500 on refresh.
+pub fn refresh_catalog(
     found: &[honkbox_registry::FoundModel],
     data_dir: Option<&Path>,
-) -> ModelCatalog {
+    model_entries: &[crate::config::ModelEntryConfig],
+) -> Result<ModelCatalog, String> {
     let db_default = data_dir.map(|base| base.join("registry.sqlite3"));
     if found.is_empty() {
         // Offline fallback: roots unavailable → serve the cached catalog.
         match honkbox_registry::Db::open_from_env(db_default.as_deref()) {
             Ok(Some(db)) => match db.load_entries() {
                 Ok(cached) if !cached.is_empty() => {
+                    let bindings = match db.load_bindings() {
+                        Ok((aliases, overrides)) => bindings_from_cache(&aliases, &overrides),
+                        Err(err) => {
+                            tracing::warn!(%err, "registry cache bindings read failed");
+                            ModelBindings::default()
+                        }
+                    };
                     tracing::warn!(
                         count = cached.len(),
                         "scan found no models; serving cached registry catalog"
                     );
-                    return catalog_from_entries(&cached);
+                    return Ok(catalog_from_entries(&cached, &bindings));
                 }
                 Ok(_) => {}
                 Err(err) => tracing::warn!(%err, "registry cache read failed"),
@@ -374,11 +435,15 @@ fn refresh_catalog(
             Ok(None) => {}
             Err(err) => tracing::warn!(%err, "registry cache open failed"),
         }
-        return build_catalog(found);
+        return Ok(build_catalog(found, &ModelBindings::default()));
     }
-    // Cache sync: upsert the fresh scan, prune entries whose files vanished.
-    // Best-effort; a slow/broken cache never fails the request. Entries are
-    // built once and reused for the response (header probes are file IO).
+    // Bind the operator entries against the fresh hits; a conflict fails
+    // loudly (startup: exit; refresh: 500) instead of binding a wrong file.
+    let bindings = bind_entries(model_entries, found)?;
+    // Cache sync: upsert the fresh scan + bindings, prune entries whose
+    // files vanished. Best-effort; a slow/broken cache never fails the
+    // request. Entries are built once and reused for the response (header
+    // probes are file IO).
     let entries: Vec<honkbox_registry::CatalogEntry> = found
         .iter()
         .map(honkbox_registry::CatalogEntry::from)
@@ -391,6 +456,9 @@ fn refresh_catalog(
             if let Err(err) = db.upsert_entries(&entries, now) {
                 tracing::warn!(%err, "registry cache upsert failed");
             }
+            if let Err(err) = db.sync_bindings(&bindings.alias_rows(), &bindings.override_rows()) {
+                tracing::warn!(%err, "registry cache binding sync failed");
+            }
             if let Err(err) = db.prune_missing_roots() {
                 tracing::warn!(%err, "registry cache prune failed");
             }
@@ -398,32 +466,270 @@ fn refresh_catalog(
         Ok(None) => {}
         Err(err) => tracing::warn!(%err, "registry cache open failed"),
     }
-    catalog_from_entries(&entries)
+    Ok(catalog_from_entries(&entries, &bindings))
+}
+
+/// Operator bindings bound to scan hits: per-slug declared aliases (in
+/// declaration order; the first is the served `id`) and capability
+/// overrides. Built by [`bind_entries`]; cached rows rebuild it for the
+/// offline fallback.
+#[derive(Debug, Default)]
+pub struct ModelBindings {
+    /// slug → declared aliases (declaration order preserved).
+    aliases: HashMap<String, Vec<String>>,
+    /// slug → operator capability overrides.
+    capabilities: HashMap<String, crate::config::ModelCapabilitiesOverride>,
+}
+
+impl ModelBindings {
+    /// The alias served as `id` for `slug` (first declared), if any.
+    fn display_alias(&self, slug: &str) -> Option<&str> {
+        self.aliases.get(slug)?.first().map(String::as_str)
+    }
+
+    /// Cache rows: alias→slug pairs, grouped per slug in declaration order
+    /// so the loaded catalog's `id` (first alias) is stable across restarts.
+    fn alias_rows(&self) -> Vec<honkbox_registry::AliasRow> {
+        let mut slugs: Vec<&String> = self.aliases.keys().collect();
+        slugs.sort_unstable();
+        slugs
+            .into_iter()
+            .flat_map(|slug| {
+                self.aliases[slug]
+                    .iter()
+                    .map(|alias| honkbox_registry::AliasRow {
+                        alias: alias.clone(),
+                        slug: slug.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// Cache rows: per-slug capability overrides (slug-sorted; the JSON
+    /// column carries the declaration verbatim).
+    fn override_rows(&self) -> Vec<honkbox_registry::EntryOverride> {
+        let mut rows: Vec<(String, String)> = self
+            .capabilities
+            .iter()
+            .map(|(slug, caps)| (slug.clone(), caps.cache_json()))
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        rows.into_iter()
+            .map(|(slug, json)| honkbox_registry::EntryOverride {
+                slug,
+                capabilities_json: json,
+            })
+            .collect()
+    }
+}
+
+/// Rebuild [`ModelBindings`] from the registry cache (offline fallback).
+/// Rows arrive slug-grouped in declaration order (`sync_bindings`), so the
+/// first alias per slug is again the served `id`. Orphan rows were dropped
+/// by `load_bindings`.
+fn bindings_from_cache(
+    aliases: &[honkbox_registry::AliasRow],
+    overrides: &[honkbox_registry::EntryOverride],
+) -> ModelBindings {
+    let mut bindings = ModelBindings::default();
+    for row in aliases {
+        bindings
+            .aliases
+            .entry(row.slug.clone())
+            .or_default()
+            .push(row.alias.clone());
+    }
+    for row in overrides {
+        bindings.capabilities.insert(
+            row.slug.clone(),
+            crate::config::ModelCapabilitiesOverride::from_cache_json(&row.capabilities_json),
+        );
+    }
+    bindings
+}
+
+/// Bind operator `[[models.entry]]` declarations to scan hits.
+///
+/// Targeting: `slug` binds exactly that registry slug; `match` binds every
+/// hit whose weight file **name** (final path component) equals the value.
+/// Rules, all **hard errors** naming the offending files:
+///
+/// - two entries binding the same file (a config-level duplicate, or a
+///   `match` that catches another entry's `slug` target);
+/// - an alias-bearing `match` hitting several files (the alias would be
+///   ambiguous — capabilities-only entries apply to every hit instead);
+/// - the same alias declared for two different files, or an alias colliding
+///   with a *different* model's registry slug.
+///
+/// Declarations whose target is absent from this scan bind nothing (the
+/// file may appear later); they resurface on the next refresh.
+///
+/// # Errors
+/// Any of the conflict rules above; the message names both paths.
+pub fn bind_entries(
+    entries: &[crate::config::ModelEntryConfig],
+    found: &[honkbox_registry::FoundModel],
+) -> Result<ModelBindings, String> {
+    let mut bindings = ModelBindings::default();
+    // slug → descriptor of the entry that bound it (for duplicate reports).
+    let mut bound_by: HashMap<&str, String> = HashMap::new();
+    for entry in entries {
+        let descriptor = entry_descriptor(entry);
+        let targets = targets_of(entry, found);
+        if !entry.aliases.is_empty() && targets.len() > 1 {
+            return Err(format!(
+                "[[models.entry]] {descriptor}: match binds {} files; aliases must name one: {}",
+                targets.len(),
+                paths_of(&targets)
+            ));
+        }
+        for target in targets {
+            if let Some(previous) = bound_by.get(target.slug.as_str()) {
+                return Err(format!(
+                    "two [[models.entry]] entries bind {}: {} and {descriptor}",
+                    target.path.display(),
+                    previous
+                ));
+            }
+            bound_by.insert(target.slug.as_str(), descriptor.clone());
+            bind_target(&mut bindings, entry, target, found)?;
+        }
+    }
+    Ok(bindings)
+}
+
+/// Scan hits one entry targets: the exact `slug`, plus every hit whose
+/// weight file name equals `match`.
+fn targets_of<'a>(
+    entry: &crate::config::ModelEntryConfig,
+    found: &'a [honkbox_registry::FoundModel],
+) -> Vec<&'a honkbox_registry::FoundModel> {
+    found
+        .iter()
+        .filter(|m| {
+            entry.slug.as_deref().is_some_and(|slug| slug == m.slug)
+                || entry
+                    .file_match
+                    .as_deref()
+                    .is_some_and(|file_match| file_name(&m.path) == Some(file_match))
+        })
+        .collect()
+}
+
+/// Bind one scan hit: capability overrides (unless nothing is declared) and
+/// the entry's aliases, each checked against aliases of other slugs and
+/// against other models' registry slugs.
+fn bind_target(
+    bindings: &mut ModelBindings,
+    entry: &crate::config::ModelEntryConfig,
+    target: &honkbox_registry::FoundModel,
+    found: &[honkbox_registry::FoundModel],
+) -> Result<(), String> {
+    if entry.capabilities != crate::config::ModelCapabilitiesOverride::default() {
+        bindings
+            .capabilities
+            .insert(target.slug.clone(), entry.capabilities);
+    }
+    for alias in &entry.aliases {
+        let conflicting = bindings
+            .aliases
+            .iter()
+            .find(|(slug, list)| slug.as_str() != target.slug && list.contains(alias))
+            .map(|(slug, _)| slug.clone());
+        if let Some(other_slug) = conflicting {
+            return Err(format!(
+                "alias {alias:?} is declared twice: for {other_slug:?} and {} ({})",
+                target.slug,
+                target.path.display()
+            ));
+        }
+        if let Some(other) = found
+            .iter()
+            .find(|m| m.slug == *alias && m.slug != target.slug)
+        {
+            return Err(format!(
+                "alias {alias:?} collides with the registry slug of another model ({})",
+                other.path.display()
+            ));
+        }
+        bindings
+            .aliases
+            .entry(target.slug.clone())
+            .or_default()
+            .push(alias.clone());
+    }
+    Ok(())
+}
+
+/// Stable descriptor for error messages: what the entry targets.
+fn entry_descriptor(entry: &crate::config::ModelEntryConfig) -> String {
+    if let Some(slug) = &entry.slug {
+        format!("slug = {slug:?}")
+    } else {
+        format!("match = {:?}", entry.file_match.as_deref().unwrap_or(""))
+    }
+}
+
+/// Final path component (the weight file name `match` compares).
+fn file_name(path: &Path) -> Option<&str> {
+    path.file_name().and_then(|name| name.to_str())
+}
+
+/// Comma-joined display paths for conflict messages.
+fn paths_of(targets: &[&honkbox_registry::FoundModel]) -> String {
+    targets
+        .iter()
+        .map(|m| m.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Registry scan hits → `/v1/models` body. Also feeds `models show --json`
 /// so the CLI output and the endpoint agree (P0 exit of the parity plan).
 #[must_use]
-pub fn build_catalog(found: &[honkbox_registry::FoundModel]) -> ModelCatalog {
+pub fn build_catalog(
+    found: &[honkbox_registry::FoundModel],
+    bindings: &ModelBindings,
+) -> ModelCatalog {
     ModelCatalog {
         object: "list".to_owned(),
-        data: found.iter().map(|m| catalog_entry(m.into())).collect(),
+        data: found
+            .iter()
+            .map(|m| catalog_entry(m.into(), bindings))
+            .collect(),
     }
 }
 
 /// Registry catalog entries (e.g. the SQLite cache) → `/v1/models` body.
-fn catalog_from_entries(entries: &[honkbox_registry::CatalogEntry]) -> ModelCatalog {
+fn catalog_from_entries(
+    entries: &[honkbox_registry::CatalogEntry],
+    bindings: &ModelBindings,
+) -> ModelCatalog {
     ModelCatalog {
         object: "list".to_owned(),
-        data: entries.iter().map(|e| catalog_entry(e.clone())).collect(),
+        data: entries
+            .iter()
+            .map(|e| catalog_entry(e.clone(), bindings))
+            .collect(),
     }
 }
 
 /// Registry catalog entry → response DTO (the only registry→wire mapping).
-fn catalog_entry(entry: honkbox_registry::CatalogEntry) -> ModelCatalogEntry {
-    ModelCatalogEntry {
-        id: entry.slug,
-        kind: match entry.kind {
+/// The operator alias (when bound) becomes `id`; the slug always rides its
+/// own field. Capability defaults derive from the (possibly reclassified)
+/// kind, then operator declarations win; loop-lore's flat fields mirror the
+/// nested `capabilities` object.
+fn catalog_entry(
+    entry: honkbox_registry::CatalogEntry,
+    bindings: &ModelBindings,
+) -> ModelCatalogEntry {
+    let overrides = bindings.capabilities.get(&entry.slug).copied();
+    let kind = if overrides
+        .is_some_and(crate::config::ModelCapabilitiesOverride::reclassifies_embedding)
+    {
+        ModelKind::Embedding
+    } else {
+        match entry.kind {
             honkbox_registry::ModelKind::Llm => ModelKind::Llm,
             honkbox_registry::ModelKind::Sd => ModelKind::Sd,
             honkbox_registry::ModelKind::Lora => ModelKind::Lora,
@@ -431,7 +737,48 @@ fn catalog_entry(entry: honkbox_registry::CatalogEntry) -> ModelCatalogEntry {
             honkbox_registry::ModelKind::Vae => ModelKind::Vae,
             honkbox_registry::ModelKind::Stt => ModelKind::Stt,
             honkbox_registry::ModelKind::Tts => ModelKind::Tts,
+        }
+    };
+    let mut capabilities = ModelCapabilities::for_kind(kind);
+    if let Some(overrides) = overrides {
+        if let Some(chat) = overrides.chat {
+            capabilities.chat = chat;
+        }
+        if let Some(embeddings) = overrides.embeddings {
+            capabilities.embeddings = embeddings;
+        }
+        if let Some(tool_calling) = overrides.tool_calling {
+            capabilities.tool_calling = tool_calling;
+        }
+        if let Some(vision) = overrides.vision {
+            capabilities.vision = vision;
+        }
+        capabilities.completion = capabilities.chat;
+    }
+    let context_length = match entry.metadata.as_ref() {
+        Some(honkbox_registry::ModelFileMetadata::Gguf(meta)) => meta.context_length,
+        _ => None,
+    };
+    ModelCatalogEntry {
+        id: bindings
+            .display_alias(&entry.slug)
+            .map_or_else(|| entry.slug.clone(), str::to_owned),
+        slug: entry.slug,
+        kind,
+        owned_by: "local".to_owned(),
+        context_length,
+        // honkbox has no per-model output ceiling; the field exists for the
+        // loop-lore flat contract and stays `null`.
+        max_output: None,
+        // No honkbox model declares reasoning/thinking support today.
+        thinking: false,
+        tool_calling: capabilities.tool_calling,
+        modalities: if capabilities.vision {
+            vec!["text".to_owned(), "vision".to_owned()]
+        } else {
+            vec!["text".to_owned()]
         },
+        capabilities,
         category: entry.category,
         path: entry.path.display().to_string(),
         bytes: entry.bytes,
@@ -559,15 +906,18 @@ async fn delete_download(
     }
 }
 
-/// Per-request model targeting (P0 of the llama-swap parity plan).
+/// Per-request model targeting (P0 of the llama-swap parity plan, extended
+/// for REQ-2 aliases).
 ///
-/// The request `model` field is **validated only**: a non-empty value must
-/// be either the startup-configured slug for the modality or any catalog
-/// slug. Nothing is loaded, swapped, or re-routed here — the pipeline loaded
-/// at startup keeps serving (that is P1, the swap manager). Empty/missing
-/// keeps the startup-configured model, exactly as before this check
-/// existed. With no catalog entries and no configured slug (stub backends,
-/// empty scan) any value passes, so zero-config stub servers keep working.
+/// The request `model` field is validated and **resolved to its owning
+/// registry slug**: a non-empty value may be an operator alias (a served
+/// `id`), any catalog slug, or the startup-configured slug for the
+/// modality. Nothing is loaded or re-routed here — [`resolve_model_slug`]'s
+/// slug then drives the swap manager (or the static startup pipeline).
+/// Empty/missing keeps the startup-configured model, exactly as before this
+/// check existed. With no catalog entries and no configured slug (stub
+/// backends, empty scan) any value passes, so zero-config stub servers keep
+/// working. Unknown values are the route's 400/404, unchanged.
 fn validate_model(
     model: Option<&str>,
     configured: Option<&str>,
@@ -576,12 +926,19 @@ fn validate_model(
     let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) else {
         return Ok(());
     };
-    if configured.is_some_and(|c| c == model) || catalog.data.iter().any(|e| e.id == model) {
+    if configured.is_some_and(|c| c == model) || resolve_model_slug(model, catalog).is_some() {
         return Ok(());
     }
     Err(format!(
-        "unknown model {model:?}: not a catalog slug (see GET /v1/models) and not the configured model"
+        "unknown model {model:?}: not a catalog slug or alias (see GET /v1/models) and not the configured model"
     ))
+}
+
+/// Owning registry slug for a request `model` value: the entry whose alias
+/// (served `id`) or registry `slug` matches. Aliases are bound by operator
+/// config ([`bind_entries`]); the raw slug always keeps working.
+fn resolve_model_slug<'a>(model: &str, catalog: &'a ModelCatalog) -> Option<&'a str> {
+    resolve_model_entry(model, catalog).map(|e| e.slug.as_str())
 }
 
 /// Embedded `web-dist/` asset when present, dev-disk file in `--dev`,
@@ -719,14 +1076,19 @@ async fn post_chat(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    // Aliases resolve to their owning registry slug; the swap manager and
+    // the worker both key on the slug (an unresolved value is the
+    // startup-configured model, same as before aliases existed).
+    let slug =
+        resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
     let pipe = chat_pipeline(
         &config,
-        &req.model,
+        &slug,
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
     let worker_req = WorkerChatRequest {
-        model: req.model,
+        model: slug,
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
@@ -828,14 +1190,17 @@ async fn post_chat_stream(
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+    // Alias → owning slug (same contract as `post_chat`).
+    let slug =
+        resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
     let pipe = chat_pipeline(
         &config,
-        &req.model,
+        &slug,
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
     let worker_req = WorkerChatRequest {
-        model: req.model,
+        model: slug,
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
@@ -891,6 +1256,18 @@ async fn post_chat_stream(
         pipe: abort_pipe,
         _worker: worker,
     }))
+}
+
+/// Owning catalog entry for a request `model` value (the alias `id` or the
+/// registry `slug`); [`resolve_model_slug`] reads the slug off it.
+fn resolve_model_entry<'a>(
+    model: &str,
+    catalog: &'a ModelCatalog,
+) -> Option<&'a ModelCatalogEntry> {
+    catalog
+        .data
+        .iter()
+        .find(|e| e.id == model || e.slug == model)
 }
 
 /// `POST /v1/transcribe`: content-type dispatch (`audio/wav` → `decode_wav`,
@@ -1044,4 +1421,191 @@ async fn post_synthesize(
     })??;
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
     Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ModelCapabilitiesOverride, ModelEntryConfig};
+    use honkbox_registry::RootKind;
+
+    /// One scan hit for a synthetic file path.
+    fn scan_hit(slug: &str, path: &str) -> honkbox_registry::FoundModel {
+        honkbox_registry::FoundModel {
+            root: RootKind::Llm,
+            category: "root".to_owned(),
+            path: PathBuf::from(path),
+            slug: slug.to_owned(),
+            bytes: 1,
+        }
+    }
+
+    /// One `[[models.entry]]` declaration.
+    fn model_entry(
+        slug: Option<&str>,
+        file_match: Option<&str>,
+        aliases: &[&str],
+        capabilities: ModelCapabilitiesOverride,
+    ) -> ModelEntryConfig {
+        ModelEntryConfig {
+            slug: slug.map(str::to_owned),
+            file_match: file_match.map(str::to_owned),
+            aliases: aliases.iter().map(|alias| (*alias).to_owned()).collect(),
+            capabilities,
+        }
+    }
+
+    #[test]
+    fn bind_binds_slug_and_match_targets() {
+        let found = vec![
+            scan_hit("llm:a/snap/sha1/m.gguf", "/r/a/snap/sha1/m.gguf"),
+            scan_hit("llm:b/w.bin", "/r/b/w.bin"),
+        ];
+        let entries = vec![
+            model_entry(
+                Some("llm:a/snap/sha1/m.gguf"),
+                None,
+                &["alpha"],
+                ModelCapabilitiesOverride::default(),
+            ),
+            model_entry(
+                None,
+                Some("w.bin"),
+                &["whisper"],
+                ModelCapabilitiesOverride::default(),
+            ),
+        ];
+        let bindings = bind_entries(&entries, &found).expect("bind");
+        let catalog = build_catalog(&found, &bindings);
+        assert_eq!(catalog.data.len(), 2);
+        assert_eq!(catalog.data[0].id, "alpha");
+        assert_eq!(catalog.data[0].slug, "llm:a/snap/sha1/m.gguf");
+        assert_eq!(catalog.data[1].id, "whisper");
+        // The flat loop-lore fields mirror the capabilities object.
+        assert_eq!(catalog.data[0].modalities, vec!["text"]);
+        assert!(catalog.data[0].capabilities.chat);
+        assert!(!catalog.data[0].tool_calling);
+        assert_eq!(catalog.data[0].owned_by, "local");
+        assert_eq!(catalog.data[0].context_length, None);
+        assert_eq!(catalog.data[0].max_output, None);
+        assert!(!catalog.data[0].thinking);
+    }
+
+    /// Alias conflicts are hard errors naming both paths (binding owner
+    /// decision: never a silent first-wins).
+    #[test]
+    fn bind_conflicts_are_errors() {
+        let found = vec![
+            scan_hit("llm:a/m1.gguf", "/r/a/m1.gguf"),
+            scan_hit("llm:b/m2.gguf", "/r/b/m2.gguf"),
+        ];
+
+        // The same alias for two files.
+        let entries = vec![
+            model_entry(
+                Some("llm:a/m1.gguf"),
+                None,
+                &["same"],
+                ModelCapabilitiesOverride::default(),
+            ),
+            model_entry(
+                Some("llm:b/m2.gguf"),
+                None,
+                &["same"],
+                ModelCapabilitiesOverride::default(),
+            ),
+        ];
+        let err = bind_entries(&entries, &found).expect_err("duplicate alias");
+        assert!(err.contains("m1.gguf") && err.contains("m2.gguf"), "{err}");
+
+        // An alias that collides with another model's registry slug.
+        let entries = vec![model_entry(
+            Some("llm:a/m1.gguf"),
+            None,
+            &["llm:b/m2.gguf"],
+            ModelCapabilitiesOverride::default(),
+        )];
+        let err = bind_entries(&entries, &found).expect_err("slug collision");
+        assert!(err.contains("collides"), "{err}");
+
+        // Two entries binding the same file.
+        let entries = vec![
+            model_entry(
+                Some("llm:a/m1.gguf"),
+                None,
+                &[],
+                ModelCapabilitiesOverride::default(),
+            ),
+            model_entry(
+                None,
+                Some("m1.gguf"),
+                &[],
+                ModelCapabilitiesOverride::default(),
+            ),
+        ];
+        let err = bind_entries(&entries, &found).expect_err("double bind");
+        assert!(err.contains("two [[models.entry]] entries bind"), "{err}");
+
+        // An alias-bearing match hitting several files.
+        let multi = vec![
+            scan_hit("llm:a/m1.gguf", "/r/a/m1.gguf"),
+            scan_hit("llm:b/m1.gguf", "/r/b/m1.gguf"),
+        ];
+        let entries = vec![model_entry(
+            None,
+            Some("m1.gguf"),
+            &["x"],
+            ModelCapabilitiesOverride::default(),
+        )];
+        let err = bind_entries(&entries, &multi).expect_err("ambiguous match");
+        assert!(err.contains("binds 2 files"), "{err}");
+    }
+
+    /// Operator capability declarations override the kind-inferred
+    /// defaults; `chat = false` + `embeddings = true` reclassifies the
+    /// emitted `kind` (embedding GGUF discoverability).
+    #[test]
+    fn capabilities_override_kind_defaults() {
+        let found = vec![scan_hit("llm:e/embed.gguf", "/r/e/embed.gguf")];
+        let entries = vec![model_entry(
+            Some("llm:e/embed.gguf"),
+            None,
+            &["embed-0.6b"],
+            ModelCapabilitiesOverride {
+                chat: Some(false),
+                embeddings: Some(true),
+                ..Default::default()
+            },
+        )];
+        let bindings = bind_entries(&entries, &found).expect("bind");
+        let catalog = build_catalog(&found, &bindings);
+        let entry = &catalog.data[0];
+        assert_eq!(entry.id, "embed-0.6b");
+        assert_eq!(entry.kind, ModelKind::Embedding);
+        assert!(!entry.capabilities.chat);
+        assert!(!entry.capabilities.completion);
+        assert!(entry.capabilities.embeddings);
+        assert!(!entry.tool_calling);
+
+        // A partial declaration keeps the inferred defaults for the rest.
+        let entries = vec![model_entry(
+            Some("llm:e/embed.gguf"),
+            None,
+            &[],
+            ModelCapabilitiesOverride {
+                tool_calling: Some(true),
+                vision: Some(true),
+                ..Default::default()
+            },
+        )];
+        let bindings = bind_entries(&entries, &found).expect("bind");
+        let catalog = build_catalog(&found, &bindings);
+        let entry = &catalog.data[0];
+        assert_eq!(entry.kind, ModelKind::Llm);
+        assert!(entry.capabilities.chat);
+        assert!(entry.capabilities.tool_calling);
+        assert!(entry.capabilities.vision);
+        assert_eq!(entry.modalities, vec!["text", "vision"]);
+        assert!(entry.tool_calling);
+    }
 }

@@ -123,6 +123,27 @@ sample_rate?: number | null,
  */
 ttl_seconds?: bigint | null, };
 type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae" | "stt" | "tts";
+type ModelCapabilities = { 
+/**
+ * Chat-template conversation turns (an LLM pipeline can serve it).
+ */
+chat: boolean, 
+/**
+ * Raw completion; mirrors `chat` (honkbox loads whole turns either way).
+ */
+completion: boolean, 
+/**
+ * OpenAI-style tool/function calling.
+ */
+tool_calling: boolean, 
+/**
+ * Vision (`image` content parts).
+ */
+vision: boolean, 
+/**
+ * Embedding vectors (e.g. an operator-declared embedding GGUF).
+ */
+embeddings: boolean, };
 type GgufMetadata = { 
 /**
  * GGUF spec version.
@@ -152,13 +173,46 @@ dtypes: Array<string>, };
 type ModelMetadata = { "format": "gguf" } & GgufMetadata | { "format": "safetensors" } & SafetensorsMetadata;
 type ModelCatalogEntry = { 
 /**
- * Registry slug, the stable request-facing id (`llm:…` / `comfy:…`).
+ * Operator alias when configured, else the registry slug.
  */
 id: string, 
 /**
- * Modality derived from the scanned root.
+ * Registry slug (`llm:…` / `comfy:…`), always present regardless of `id`.
+ */
+slug: string, 
+/**
+ * Modality (capability overrides may reclassify a root, e.g. an
+ * operator-declared embedding GGUF under an LLM root).
  */
 kind: ModelKind, 
+/**
+ * Ownership label; local files are always `"local"`.
+ */
+owned_by: string, 
+/**
+ * Training context length from GGUF metadata; `null` when unprobed.
+ */
+context_length: bigint | null, 
+/**
+ * Generation cap; `null` (honkbox has no per-model output ceiling).
+ */
+max_output: bigint | null, 
+/**
+ * Reasoning/thinking support (no honkbox model declares it today).
+ */
+thinking: boolean, 
+/**
+ * OpenAI-style tool calling; `capabilities.tool_calling` mirrored flat.
+ */
+tool_calling: boolean, 
+/**
+ * Content modalities (`["text"]`, plus `"vision"` when declared).
+ */
+modalities: Array<string>, 
+/**
+ * Feature flags (also mirrored into the flat fields above).
+ */
+capabilities: ModelCapabilities, 
 /**
  * Directory category (`checkpoints`, `loras`, LLM parent dir, or `root`).
  */

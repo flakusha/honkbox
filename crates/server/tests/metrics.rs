@@ -6,8 +6,14 @@
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 #[path = "../src/metrics.rs"]
 mod metrics;
 #[path = "../src/routes.rs"]
@@ -55,6 +61,7 @@ fn test_app() -> Router {
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
+        model_entries: Vec::new(),
         downloads: std::sync::Arc::new(
             downloads::DownloadManager::new(None).expect("download manager"),
         ),

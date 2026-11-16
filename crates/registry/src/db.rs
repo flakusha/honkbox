@@ -6,6 +6,16 @@
 //! longer exist. When roots are unavailable the server may fall back to
 //! `load_entries` so `GET /v1/models` still reports the last-known catalog.
 //!
+//! Operator model bindings (REQ-2) round-trip the same way so a restart with
+//! empty roots still serves cached aliases + capability overrides:
+//! `sync_bindings` replace-all-writes the `aliases` (alias→slug) and
+//! `entry_overrides` (per-slug kind + capabilities JSON) tables from the
+//! server's operator config after a successful scan; `load_bindings` reads
+//! them back for the offline fallback. The tables are caches of the operator
+//! config — never derived from filenames. Orphan alias rows (slug pruned by
+//! `prune_missing_roots`) are skipped by the caller when the slug has no
+//! cached entry.
+//!
 //! DB path resolution: `HONKBOX_REGISTRY_DB` (absolute or relative path);
 //! the values `"off"` and `""` disable persistence entirely (callers then
 //! keep the exact pre-cache behavior). Unset falls back to a caller-supplied
@@ -26,8 +36,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-/// Current schema version of the `entries` table layout.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Current schema version of the `entries`/`aliases`/`entry_overrides` layout.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Env var selecting the cache DB path; `"off"` or `""` disables persistence.
 pub const DB_ENV: &str = "HONKBOX_REGISTRY_DB";
@@ -137,7 +147,37 @@ const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS meta (
      path TEXT NOT NULL,
      bytes INTEGER NOT NULL,
      size_ts INTEGER NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS aliases (
+     alias TEXT PRIMARY KEY,
+     slug TEXT NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS entry_overrides (
+     slug TEXT PRIMARY KEY,
+     capabilities TEXT NOT NULL
  );";
+
+/// One cached alias binding: `alias` resolves to the entry with `slug`
+/// (operator-declared; never filename-derived). Rows are stored per slug in
+/// declaration order so the first row of a slug is the served `id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AliasRow {
+    /// The operator-declared request alias.
+    pub alias: String,
+    /// Registry slug owning the alias.
+    pub slug: String,
+}
+
+/// One cached per-entry override: the operator capability declaration as a
+/// JSON object (`{"chat":false,…}`; only the declared keys are present).
+/// Parsed by the caller — the cache stays schema-agnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryOverride {
+    /// Registry slug the override applies to.
+    pub slug: String,
+    /// Serialized [`crate`] caller capability declaration.
+    pub capabilities_json: String,
+}
 
 impl Db {
     /// Open (creating if missing) the cache DB at `path`.
@@ -198,7 +238,8 @@ impl Db {
             // From-empty bootstraps here (no version row); older/foreign
             // schemas are dropped wholesale — the cache is rebuildable.
             conn.execute_batch(&format!(
-                "DROP TABLE IF EXISTS entries; DROP TABLE IF EXISTS meta; {SCHEMA_SQL}\
+                "DROP TABLE IF EXISTS entries; DROP TABLE IF EXISTS aliases; \
+                 DROP TABLE IF EXISTS entry_overrides; DROP TABLE IF EXISTS meta; {SCHEMA_SQL}\
                  INSERT OR REPLACE INTO meta VALUES ('schema_version', '{SCHEMA_VERSION}');"
             ))?;
         }
@@ -265,6 +306,68 @@ impl Db {
         Ok(out)
     }
 
+    /// Replace-all write of the operator bindings: the `aliases` and
+    /// `entry_overrides` tables mirror the caller's operator config after a
+    /// successful scan, so the last-known bindings survive a restart with
+    /// empty roots. One transaction: the pair is always consistent.
+    pub fn sync_bindings(&self, aliases: &[AliasRow], overrides: &[EntryOverride]) -> DbResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch("DELETE FROM aliases; DELETE FROM entry_overrides;")?;
+        {
+            let mut stmt = tx.prepare("INSERT INTO aliases (alias, slug) VALUES (?1, ?2)")?;
+            for row in aliases {
+                stmt.execute((row.alias.as_str(), row.slug.as_str()))?;
+            }
+        }
+        {
+            let mut stmt =
+                tx.prepare("INSERT INTO entry_overrides (slug, capabilities) VALUES (?1, ?2)")?;
+            for o in overrides {
+                stmt.execute((o.slug.as_str(), o.capabilities_json.as_str()))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load the cached operator bindings (row-id sorted for determinism).
+    /// Orphan alias rows (their slug was pruned) are dropped here so callers
+    /// never see bindings without a cached entry.
+    pub fn load_bindings(&self) -> DbResult<(Vec<AliasRow>, Vec<EntryOverride>)> {
+        let live: std::collections::HashSet<String> = {
+            let mut stmt = self.conn.prepare("SELECT slug FROM entries")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut aliases: Vec<AliasRow> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT alias, slug FROM aliases ORDER BY rowid")?;
+            let rows = stmt.query_map([], |r| {
+                Ok(AliasRow {
+                    alias: r.get(0)?,
+                    slug: r.get(1)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        aliases.retain(|row| live.contains(&row.slug));
+        let mut overrides: Vec<EntryOverride> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT slug, capabilities FROM entry_overrides ORDER BY rowid")?;
+            let rows = stmt.query_map([], |r| {
+                Ok(EntryOverride {
+                    slug: r.get(0)?,
+                    capabilities_json: r.get(1)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        overrides.retain(|o| live.contains(&o.slug));
+        Ok((aliases, overrides))
+    }
+
     /// Remove rows whose file no longer exists on disk; returns the number
     /// pruned.
     pub fn prune_missing_roots(&self) -> DbResult<usize> {
@@ -323,7 +426,9 @@ fn parse_kind(s: &str) -> crate::ModelKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Db, SCHEMA_VERSION, db_path_from, env_db_path, set_db_override};
+    use super::{
+        AliasRow, Db, EntryOverride, SCHEMA_VERSION, db_path_from, env_db_path, set_db_override,
+    };
     use crate::{CatalogEntry, ModelKind};
     use std::path::PathBuf;
 
@@ -448,6 +553,60 @@ mod tests {
         set_db_override(None);
         assert_eq!(env_db_path(None), None);
         set_db_override(None::<PathBuf>); // restore env-driven resolution
+    }
+
+    #[test]
+    fn bindings_roundtrip_and_orphan_prune() {
+        let tag = "bindings";
+        let db = Db::open(&temp_db(tag)).expect("open");
+        let live = real_file(tag, "m.gguf");
+        db.upsert_entries(&[entry("llm:m.gguf", ModelKind::Llm, &live, 10)], 1)
+            .expect("upsert");
+        db.sync_bindings(
+            &[AliasRow {
+                alias: "qwen3-embed".into(),
+                slug: "llm:m.gguf".into(),
+            }],
+            &[EntryOverride {
+                slug: "llm:m.gguf".into(),
+                capabilities_json: r#"{"chat":false,"embeddings":true}"#.into(),
+            }],
+        )
+        .expect("sync");
+        let (aliases, overrides) = db.load_bindings().expect("load");
+        assert_eq!(
+            aliases,
+            vec![AliasRow {
+                alias: "qwen3-embed".into(),
+                slug: "llm:m.gguf".into(),
+            }]
+        );
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].slug, "llm:m.gguf");
+        assert_eq!(
+            overrides[0].capabilities_json,
+            r#"{"chat":false,"embeddings":true}"#
+        );
+
+        // Replace-all: an emptied config clears the tables.
+        db.sync_bindings(&[], &[]).expect("clear");
+        let (aliases, overrides) = db.load_bindings().expect("load empty");
+        assert!(aliases.is_empty() && overrides.is_empty());
+
+        // Bindings whose slug has no cached entry are not served.
+        db.sync_bindings(
+            &[AliasRow {
+                alias: "orphan".into(),
+                slug: "llm:gone.gguf".into(),
+            }],
+            &[EntryOverride {
+                slug: "llm:gone.gguf".into(),
+                capabilities_json: "{}".into(),
+            }],
+        )
+        .expect("sync orphan");
+        let (aliases, overrides) = db.load_bindings().expect("load orphans");
+        assert!(aliases.is_empty() && overrides.is_empty());
     }
 
     #[test]

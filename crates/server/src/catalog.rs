@@ -114,7 +114,9 @@ pub fn build(snapshot: &ModelCatalog, budget: Option<u64>) -> CatalogList {
                     let pill =
                         est.map(|est| pill_for(entry.bytes, est, budget.unwrap_or_default()));
                     CatalogLocal {
-                        slug: entry.id.clone(),
+                        // The matched snapshot entry's registry slug (its
+                        // `id` may be an operator alias; REQ-2).
+                        slug: entry.slug.clone(),
                         bytes: entry.bytes,
                         est_vram_bytes: est,
                         pill,
@@ -151,7 +153,15 @@ mod tests {
     fn snapshot_entry(kind: ModelKind, path: &str, bytes: u64) -> ModelCatalogEntry {
         ModelCatalogEntry {
             id: path.trim_start_matches('/').to_owned(),
+            slug: path.trim_start_matches('/').to_owned(),
             kind,
+            owned_by: "local".to_owned(),
+            context_length: None,
+            max_output: None,
+            thinking: false,
+            tool_calling: false,
+            modalities: vec!["text".to_owned()],
+            capabilities: honkbox_api_types::ModelCapabilities::for_kind(kind),
             category: "root".to_owned(),
             path: path.to_owned(),
             bytes,

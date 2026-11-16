@@ -180,13 +180,81 @@ pub enum ModelMetadata {
     Safetensors(SafetensorsMetadata),
 }
 
+/// Feature flags for one model (`GET /v1/models` entry `capabilities`).
+///
+/// Defaults derive from the entry's `kind` (see [`ModelCapabilities::for_kind`]);
+/// an operator `[[models.entry]]` capabilities declaration overrides
+/// individual flags. Emitted as a nested object for OpenAI/llama-swap-style
+/// consumers — loop-lore reads the same values off the entry root as flat
+/// fields, which are emitted alongside (`tool_calling`, `modalities`, …).
+// The five-bool shape is the wire contract (llama-swap's nested capabilities
+// map); a state machine would change what clients parse, not improve it.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ModelCapabilities {
+    /// Chat-template conversation turns (an LLM pipeline can serve it).
+    pub chat: bool,
+    /// Raw completion; mirrors `chat` (honkbox loads whole turns either way).
+    pub completion: bool,
+    /// OpenAI-style tool/function calling.
+    pub tool_calling: bool,
+    /// Vision (`image` content parts).
+    pub vision: bool,
+    /// Embedding vectors (e.g. an operator-declared embedding GGUF).
+    pub embeddings: bool,
+}
+
+impl ModelCapabilities {
+    /// Inferred defaults for `kind`: LLM entries chat/completion-capable;
+    /// on-disk `embedding` weights embedding-capable; everything else
+    /// featureless until declared.
+    #[must_use]
+    pub fn for_kind(kind: ModelKind) -> Self {
+        let (chat, embeddings) = match kind {
+            ModelKind::Llm => (true, false),
+            ModelKind::Embedding => (false, true),
+            _ => (false, false),
+        };
+        Self {
+            chat,
+            completion: chat,
+            tool_calling: false,
+            vision: false,
+            embeddings,
+        }
+    }
+}
+
 /// One discovered model in the catalog (`GET /v1/models`).
+///
+/// `id` is the operator alias when one is configured for the file, else the
+/// registry slug; requests accept either (the raw slug always works, via
+/// `slug`). The loop-lore flat fields (`owned_by`, `context_length`,
+/// `max_output`, `thinking`, `tool_calling`, `modalities`) mirror the nested
+/// `capabilities` object so both consumer shapes work.
 #[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ModelCatalogEntry {
-    /// Registry slug, the stable request-facing id (`llm:…` / `comfy:…`).
+    /// Operator alias when configured, else the registry slug.
     pub id: String,
-    /// Modality derived from the scanned root.
+    /// Registry slug (`llm:…` / `comfy:…`), always present regardless of `id`.
+    pub slug: String,
+    /// Modality (capability overrides may reclassify a root, e.g. an
+    /// operator-declared embedding GGUF under an LLM root).
     pub kind: ModelKind,
+    /// Ownership label; local files are always `"local"`.
+    pub owned_by: String,
+    /// Training context length from GGUF metadata; `null` when unprobed.
+    pub context_length: Option<u64>,
+    /// Generation cap; `null` (honkbox has no per-model output ceiling).
+    pub max_output: Option<u64>,
+    /// Reasoning/thinking support (no honkbox model declares it today).
+    pub thinking: bool,
+    /// OpenAI-style tool calling; `capabilities.tool_calling` mirrored flat.
+    pub tool_calling: bool,
+    /// Content modalities (`["text"]`, plus `"vision"` when declared).
+    pub modalities: Vec<String>,
+    /// Feature flags (also mirrored into the flat fields above).
+    pub capabilities: ModelCapabilities,
     /// Directory category (`checkpoints`, `loras`, LLM parent dir, or `root`).
     pub category: String,
     /// Absolute path to the weight file.
@@ -407,6 +475,7 @@ mod tests {
             Transcript::decl(&config),
             SynthesizeRequest::decl(&config),
             ModelKind::decl(&config),
+            ModelCapabilities::decl(&config),
             GgufMetadata::decl(&config),
             SafetensorsMetadata::decl(&config),
             ModelMetadata::decl(&config),
@@ -427,5 +496,29 @@ mod tests {
             out.push('\n');
         }
         std::fs::write(dir.join("api-types.ts"), out).expect("write api-types.ts");
+    }
+
+    /// Inferred defaults: LLM chats, on-disk embeddings embed, the rest are
+    /// featureless until an operator declaration overrides them.
+    #[test]
+    fn capabilities_default_from_kind() {
+        let llm = ModelCapabilities::for_kind(ModelKind::Llm);
+        assert!(llm.chat && llm.completion);
+        assert!(!llm.tool_calling && !llm.vision && !llm.embeddings);
+
+        let embedding = ModelCapabilities::for_kind(ModelKind::Embedding);
+        assert!(embedding.embeddings);
+        assert!(!embedding.chat && !embedding.completion);
+
+        for kind in [
+            ModelKind::Sd,
+            ModelKind::Lora,
+            ModelKind::Vae,
+            ModelKind::Stt,
+            ModelKind::Tts,
+        ] {
+            let caps = ModelCapabilities::for_kind(kind);
+            assert!(!caps.chat && !caps.completion && !caps.embeddings);
+        }
     }
 }

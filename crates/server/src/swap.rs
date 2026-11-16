@@ -348,7 +348,13 @@ pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader 
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let entry = snapshot.data.iter().find(|entry| entry.id == slug);
+        // Match the served `id` (operator alias) or the registry slug: the
+        // chat routes resolve aliases to the owning slug before calling the
+        // loader, and the raw slug keeps working either way.
+        let entry = snapshot
+            .data
+            .iter()
+            .find(|entry| entry.id == slug || entry.slug == slug);
         let Some(entry) = entry else {
             return Err(SwapError::UnknownSlug(format!(
                 "unknown model {slug:?}: not a catalog slug (see GET /v1/models)"
