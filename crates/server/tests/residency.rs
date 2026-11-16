@@ -45,7 +45,7 @@ use honkbox_llm_worker::{
 use serde_json::Value;
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 use swap::{EvictOutcome, LlmLoader, SwapManager, SwapSettings};
 
 /// Serializes the residency-slot tests: they share the process-global GPU
@@ -166,6 +166,7 @@ fn residency_app(catalog: ModelCatalog, swap_settings: SwapSettings) -> Router {
 
 fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),

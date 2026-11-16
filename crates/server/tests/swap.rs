@@ -42,7 +42,7 @@ use honkbox_llm_worker::{
 };
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 use swap::{LlmLoader, SwapError, SwapManager, SwapSettings};
 
 /// Serializes the residency-slot tests: they share the process-global GPU
@@ -177,6 +177,7 @@ fn swap_app(
     max_ttl: Duration,
 ) -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),
@@ -685,6 +686,7 @@ async fn chat_stream_resolves_through_swap_manager() {
 async fn stub_path_unaffected_without_swap_manager() {
     let _slot_guard = SLOT_LOCK.lock().await;
     let app = app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog_with(&[])))),

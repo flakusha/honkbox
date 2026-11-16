@@ -34,6 +34,11 @@ use honkbox_api_types::{
     OpenAiUsage, Pill, ResidentModel, RunningList, RunningModel, SafetensorsMetadata,
     SynthesizeRequest, Transcript, TranscriptSegment, UnloadAllResult, UnloadResult, Version,
 };
+
+/// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
+/// `main`) build `AppConfig.auth` from these.
+#[allow(unused_imports)] // which name is used varies per #[path]-included test binary
+pub use crate::config::{AuthConfig, AuthMode};
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest,
     TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript, TtsPipeline,
@@ -188,6 +193,10 @@ pub struct AppConfig {
     /// into `<data_dir>/models/{llm,sd,stt,tts}` and fires the rescan
     /// signal on every commit.
     pub downloads: Arc<crate::downloads::DownloadManager>,
+    /// Auth settings (REQ-7): `[server] auth` mode + `[auth] api_key_env`
+    /// NAME. The middleware reads the key VALUE per request via `std::env`
+    /// (rotation without restart); the value is never stored or logged.
+    pub auth: crate::config::AuthConfig,
 }
 
 impl AppConfig {
@@ -225,9 +234,128 @@ pub fn app(config: AppConfig) -> Router {
             get(get_download).delete(delete_download),
         )
         .route("/metrics", get(metrics_endpoint))
+        .route_layer(middleware::from_fn_with_state(
+            config.clone(),
+            require_bearer,
+        ))
         .fallback(fallback)
         .layer(middleware::from_fn(track_metrics))
         .with_state(config)
+}
+
+/// Bearer auth middleware (REQ-7). `route_layer` runs ONLY for matched
+/// routes, so the UI/static fallback (and its assets) is structurally
+/// exempt — the web UI keeps working without a key. `GET /health` and
+/// `GET /metrics` are exempt too (probes/scrapers). When
+/// `[server] auth = "bearer"`, every other route requires
+/// `Authorization: Bearer <key>`; the key VALUE is read from the
+/// `[auth] api_key_env` env var AT REQUEST TIME (`std::env` is
+/// process-global, safe in async; rotation works without a restart) and is
+/// never logged, never in metrics, never echoed in responses. Missing/
+/// unset env is fail-closed: every bearer request gets 401.
+async fn require_bearer(State(cfg): State<AppConfig>, req: Request, next: Next) -> Response {
+    if cfg.auth.mode != crate::config::AuthMode::Bearer
+        || is_probe_exempt(req.method(), req.uri().path())
+    {
+        return next.run(req).await;
+    }
+    let expected = env_var(&cfg.auth.api_key_env).filter(|key| !key.is_empty());
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    let ok = matches!((expected, provided), (Some(e), Some(p)) if constant_time_eq(e.as_bytes(), p.as_bytes()));
+    if ok {
+        return next.run(req).await;
+    }
+    unauthorized_response()
+}
+
+/// Keyless routes: the liveness/metrics probes, GET only (so a scraper
+/// cannot write anything and probes stay cheap).
+fn is_probe_exempt(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::GET && (path == "/health" || path == "/metrics")
+}
+
+/// Env read for the bearer key VALUE (REQ-7). Production: `std::env`, per
+/// request, so rotation needs no restart. Test builds (this module is
+/// `#[path]`-included into integration tests that run with
+/// `forbid(unsafe_code)`): [`set_env_var`] injects overrides instead of
+/// mutating the process-global env; the real env is still consulted first
+/// when the name is not overridden.
+#[cfg(not(test))]
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+#[cfg(test)]
+static ENV_OVERRIDES: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
+    std::sync::Mutex::new(None);
+
+/// Test-only env override (`Some` sets, `None` clears); see [`env_var`].
+/// Only the `#[path]`-included integration tests call it, so the unit-test
+/// build of this module sees it as dead code.
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn set_env_var(name: &str, value: Option<&str>) {
+    let mut slot = ENV_OVERRIDES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = slot.get_or_insert_with(Default::default);
+    match value {
+        Some(v) => {
+            map.insert(name.to_owned(), v.to_owned());
+        }
+        None => {
+            map.remove(name);
+        }
+    }
+}
+
+#[cfg(test)]
+fn env_var(name: &str) -> Option<String> {
+    let slot = ENV_OVERRIDES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    slot.as_ref()
+        .and_then(|map| map.get(name).cloned())
+        .or_else(|| std::env::var(name).ok())
+}
+
+/// Hand-rolled constant-time byte comparison (REQ-7: no new dependency).
+/// Double-pass over the longer slice with zero-fill for the shorter one, so
+/// the work done does not depend on where (or whether) the inputs differ;
+/// the length XOR folds any length mismatch into the same accumulator.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut acc = (a.len() ^ b.len()) as u64;
+    for i in 0..a.len().max(b.len()) {
+        let x = u64::from(a.get(i).copied().unwrap_or(0));
+        let y = u64::from(b.get(i).copied().unwrap_or(0));
+        acc |= x ^ y;
+    }
+    acc == 0
+}
+
+/// 401 with the OpenAI-shaped error envelope. Built inline via `json!` —
+/// `OpenAiError::new` maps non-400/404/429/5xx classes to `server_error`,
+/// and auth needs `authentication_error` + `invalid_api_key`; api-types is
+/// shared DTO territory we do not extend here.
+fn unauthorized_response() -> Response {
+    let body = serde_json::json!({
+        "error": {
+            "message": "Invalid API key provided.",
+            "type": "authentication_error",
+            "param": null,
+            "code": "invalid_api_key"
+        }
+    });
+    (StatusCode::UNAUTHORIZED, Json(body)).into_response()
 }
 
 /// Per-request metrics: one route/code counter + one duration observation

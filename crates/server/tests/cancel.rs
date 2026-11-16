@@ -44,7 +44,7 @@ use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::{ChatRequest as WorkerChatRequest, ChatResponse, LlmError, LlmPipeline};
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 
 /// Park/notify pair the "generation" waits on until the test says go.
 struct Gate {
@@ -193,6 +193,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
     let (resumed_tx, resumed_rx): (_, Receiver<()>) = channel();
     let gate = Arc::new(Gate::new());
     let app = app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {
@@ -284,6 +285,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         aborted: std::sync::atomic::AtomicBool::new(false),
     });
     let app = app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {

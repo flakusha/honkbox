@@ -10,7 +10,7 @@ mod metrics;
 mod routes;
 mod swap;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -82,6 +82,16 @@ struct ServeArgs {
     /// Port to listen on.
     #[arg(long, default_value_t = 8080)]
     port: u16,
+    /// Bind address: an IP (`127.0.0.1`, `::1`, `0.0.0.0`, ...) or
+    /// `localhost` (binds the IPv4 loopback). Non-loopback binds with
+    /// `[server] auth = "none"` refuse to start unless
+    /// `--allow-unauthenticated-bind` is passed (REQ-7, fail-closed).
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    /// Explicit acknowledgement that a non-loopback bind without auth is
+    /// intended (REQ-7 escape hatch; the warning-worthy choice).
+    #[arg(long)]
+    allow_unauthenticated_bind: bool,
     /// Serve the web-dist directory from disk (Vite dev flow).
     #[arg(long)]
     dev: bool,
@@ -316,10 +326,33 @@ async fn main() {
 
 /// `serve`: load config (loud exit-1 on error), resolve the data dir, then
 /// install logging, scan, and serve the HTTP API + UI.
+/// Resolve the serve bind address + auth (REQ-7): parse `--host` into an
+/// `IpAddr`, then fail-closed — `auth = "none"` on a non-loopback host is a
+/// refused start unless the operator passed the explicit acknowledgement
+/// flag. Bearer mode logs its env-var NAME (never any value).
+fn resolve_bind(
+    host: &str,
+    port: u16,
+    auth: config::AuthConfig,
+    allow_unauthenticated_bind: bool,
+) -> Result<(SocketAddr, config::AuthConfig), String> {
+    let bind_ip: IpAddr = config::parse_bind_host(host)?;
+    config::check_bind_auth(auth.mode, host, allow_unauthenticated_bind)?;
+    if auth.mode == config::AuthMode::Bearer {
+        info!(
+            "bearer auth enabled (key read per request from {})",
+            auth.api_key_env
+        );
+    }
+    Ok((SocketAddr::new(bind_ip, port), auth))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
     let ServeArgs {
         port,
+        host,
+        allow_unauthenticated_bind,
         dev,
         web_dist_dir,
         log_file,
@@ -341,7 +374,12 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         info!("honkbox data dir: <unresolved>");
     }
     let cfg = loaded.models;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let (addr, auth) = or_exit(resolve_bind(
+        &host,
+        port,
+        loaded.auth,
+        allow_unauthenticated_bind,
+    ));
     info!("honkbox serving on http://{addr} (dev: {dev})");
     let listener = tokio::net::TcpListener::bind(addr)
         .await

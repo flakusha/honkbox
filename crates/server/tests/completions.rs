@@ -43,7 +43,7 @@ use honkbox_llm_worker::StubLlm;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 
 /// Serializes the process-global GPU slot across this binary's tests (the
 /// busy-429 test holds it; the chat tests need it free).
@@ -79,6 +79,7 @@ fn catalog_with(ids: &[&str]) -> ModelCatalog {
 
 fn test_app(catalog: ModelCatalog) -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),

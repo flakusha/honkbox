@@ -36,7 +36,7 @@ use serde_json::json;
 use std::sync::{Arc, LazyLock, RwLock};
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 
 /// Serializes GPU-slot-reserving tests within this binary (see `chat`).
 static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
@@ -72,6 +72,7 @@ fn entry_with(id: &str, slug: &str) -> ModelCatalogEntry {
 
 fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoots) -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),
@@ -95,6 +96,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
 
 fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(catalog))),

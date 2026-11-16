@@ -35,10 +35,11 @@ use honkbox_llm_worker::StubLlm;
 use std::sync::{Arc, RwLock};
 use tower::ServiceExt as _;
 
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 
 fn test_app() -> Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {

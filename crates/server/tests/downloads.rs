@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use honkbox_api_types::{DownloadKind, DownloadRequest, DownloadStatus};
-use routes::AppConfig;
+use routes::{AppConfig, AuthConfig};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt as _;
 
@@ -945,6 +945,7 @@ async fn post_without_models_root_is_500() {
 /// given download supervisor.
 fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
     AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(std::sync::RwLock::new(Arc::new(

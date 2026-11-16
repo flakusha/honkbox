@@ -33,11 +33,12 @@ use tower::ServiceExt as _;
 use honkbox_api_types::ModelCatalog;
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
-use routes::{AppConfig, app};
+use routes::{AppConfig, AuthConfig, app};
 use std::sync::{Arc, RwLock};
 
 fn test_app() -> axum::Router {
     app(AppConfig {
+        auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {

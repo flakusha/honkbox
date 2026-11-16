@@ -88,9 +88,23 @@ data_dir = "/absolute/path"   # optional; must be absolute
 [models]
 llm_dirs = ["~/.cache/huggingface"]
 comfyui_dir = "~/git-ai/ai-models/Data/Models"
+
+[server]
+auth = "none"                 # "none" (default) or "bearer"
+
+[auth]
+api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
 ```
 
 - Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over file).
+- Auth (`[server] auth`, REQ-7): with `auth = "bearer"`, every route except
+  `GET /health`, `GET /metrics`, and the static web UI requires
+  `Authorization: Bearer <key>`; failures return a 401 with an OpenAI-shaped
+  error body. The key VALUE is read at request time from the env var named
+  by `[auth] api_key_env` (rotation needs no restart) and is never logged.
+  Fail-closed startup: `auth = "none"` with a non-loopback `--host`
+  (`127.0.0.0/8`, `::1`, `localhost` are loopback) refuses to start unless
+  `honkbox serve --allow-unauthenticated-bind` is passed.
 - Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `HONKBOX_LOG_FILE` > `<data_dir>/logs/honkbox.log` (stderr human-readable, file JSONL).
 - Registry cache: `HONKBOX_REGISTRY_DB` (path; `off`/empty disables) > `<data_dir>/registry.sqlite3`.
 
