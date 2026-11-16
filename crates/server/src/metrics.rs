@@ -27,19 +27,25 @@ use std::time::Duration;
 
 use honkbox_api_types::ModelKind;
 
-/// Known route labels (bounded cardinality); everything else counts under
-/// `"other"` so arbitrary fallback paths cannot explode the series set.
-const ROUTES: [&str; 11] = [
+/// Known route labels (bounded cardinality); parameterized control routes
+/// collapse to their template, everything else counts under `"other"` so
+/// arbitrary fallback paths cannot explode the series set.
+const ROUTES: [&str; 16] = [
     "/health",
     "/api/version",
     "/v1/openapi.json",
     "/v1/models",
     "/v1/models/refresh",
+    "/v1/models/{slug}/unload",
+    "/v1/memory",
     "/v1/chat",
     "/v1/chat/stream",
     "/v1/chat/completions",
     "/v1/transcribe",
     "/v1/synthesize",
+    "/running",
+    "/api/models/unload",
+    "/api/models/unload/{model}",
     "/metrics",
 ];
 
@@ -105,8 +111,7 @@ pub(crate) enum LoadReason {
 pub(crate) enum UnloadReason {
     /// Idle TTL expired (reaper sweep or pre-load trim).
     Ttl,
-    /// Reserved: an explicit operator/API-triggered unload.
-    #[allow(dead_code)] // reserved slot in the bounded exposition set
+    /// An explicit operator/API-triggered unload (`POST /v1/models/{slug}/unload`).
     Explicit,
     /// LRU capacity trim made room for an incoming load.
     Evict,
@@ -186,8 +191,32 @@ static REQUEST_DURATION: LazyLock<Histogram> = LazyLock::new(|| Histogram {
     buckets: [const { AtomicU64::new(0) }; BUCKETS],
 });
 
-/// 429 GPU-slot rejections (residency `Busy`), process-wide.
-static GPU_SLOT_BUSY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// Why a 429 GPU-slot rejection happened (`reason` label of
+/// `honkbox_gpu_slot_busy_rejections_total`). The queue reasons are
+/// reserved for the bounded FIFO admission queue (deferred): today every
+/// rejection is immediate (`no_wait`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BusyReason {
+    /// Rejected immediately - no queue configured (the only reachable
+    /// reason; REQ-6 Option B).
+    NoWait,
+    /// Reserved: the admission queue was full.
+    #[allow(dead_code)] // reserved label in the bounded exposition set
+    QueueFull,
+    /// Reserved: the admission wait exceeded its bound.
+    #[allow(dead_code)] // reserved label in the bounded exposition set
+    QueueTimeout,
+}
+
+/// Busy rejection reason labels (bounded exposition set; queue reasons
+/// render zero series until the queue lands).
+const BUSY_REASONS: [&str; 3] = ["no_wait", "queue_full", "queue_timeout"];
+
+const BUSY_REASON_SLOTS: usize = BUSY_REASONS.len();
+
+/// 429 GPU-slot rejections (residency `Busy`), per reason.
+static GPU_SLOT_BUSY_REJECTIONS: LazyLock<[AtomicU64; BUSY_REASON_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; BUSY_REASON_SLOTS]);
 
 /// `loads_total` cells: `[kind][load reason]`, zero-initialized at first use.
 static MODEL_LOADS: LazyLock<[[AtomicU64; LOAD_REASON_SLOTS]; KIND_SLOTS]> =
@@ -206,13 +235,24 @@ static SWAP_EVICTIONS: LazyLock<[AtomicU64; KIND_SLOTS]> =
 static LOAD_DURATION: LazyLock<[Histogram; KIND_SLOTS]> =
     LazyLock::new(|| [const { Histogram::new() }; KIND_SLOTS]);
 
-/// Request route label for a raw URI path: the path itself for known routes,
-/// `"other"` for anything else (fallback hits, escapes, probes).
+/// Request route label for a raw URI path: the path itself for known
+/// routes, the templated shape for the two parameterized control routes,
+/// and `"other"` for anything else (fallback hits, escapes, probes).
 pub(crate) fn route_label(path: &str) -> &'static str {
     ROUTES
         .iter()
         .find(|route| **route == path)
         .copied()
+        .or_else(|| {
+            // Parameterized: one bounded series per template, never per slug.
+            if path.starts_with("/v1/models/") && path.ends_with("/unload") {
+                Some("/v1/models/{slug}/unload")
+            } else if path.starts_with("/api/models/unload/") {
+                Some("/api/models/unload/{model}")
+            } else {
+                None
+            }
+        })
         .unwrap_or("other")
 }
 
@@ -239,8 +279,16 @@ pub(crate) fn record_request(route: &'static str, code: u16, elapsed: Duration) 
 }
 
 /// Count one 429 GPU-slot-busy rejection (call at the rejection site).
-pub(crate) fn note_gpu_slot_busy() {
-    GPU_SLOT_BUSY_REJECTIONS.fetch_add(1, Ordering::Relaxed);
+pub(crate) fn note_gpu_slot_busy(reason: BusyReason) {
+    GPU_SLOT_BUSY_REJECTIONS[busy_reason_slot(reason)].fetch_add(1, Ordering::Relaxed);
+}
+
+fn busy_reason_slot(reason: BusyReason) -> usize {
+    match reason {
+        BusyReason::NoWait => 0,
+        BusyReason::QueueFull => 1,
+        BusyReason::QueueTimeout => 2,
+    }
 }
 
 /// Count one model load-commit (call at the swap manager's load commit).
@@ -385,14 +433,20 @@ pub(crate) fn exposition() -> String {
     push_family(
         &mut out,
         "honkbox_gpu_slot_busy_rejections_total",
-        "Requests rejected with 429 because the GPU slot was busy.",
+        "Requests rejected with 429 because the GPU slot was busy, by reason (queue reasons reserved).",
         "counter",
     );
-    let _ = writeln!(
-        out,
-        "honkbox_gpu_slot_busy_rejections_total {}",
-        GPU_SLOT_BUSY_REJECTIONS.load(Ordering::Relaxed)
-    );
+    for (reason, cell) in BUSY_REASONS
+        .iter()
+        .copied()
+        .zip(GPU_SLOT_BUSY_REJECTIONS.iter())
+    {
+        let _ = writeln!(
+            out,
+            "honkbox_gpu_slot_busy_rejections_total{{reason=\"{reason}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
 
     push_family(
         &mut out,
@@ -480,8 +534,13 @@ mod tests {
         assert!(series_value(&body, "honkbox_request_duration_seconds_count") >= 2);
 
         assert!(body.contains("# TYPE honkbox_gpu_slot_busy_rejections_total counter"));
-        note_gpu_slot_busy();
-        assert!(series_value(&exposition(), "honkbox_gpu_slot_busy_rejections_total") >= 1);
+        note_gpu_slot_busy(BusyReason::NoWait);
+        assert!(
+            series_value(
+                &exposition(),
+                "honkbox_gpu_slot_busy_rejections_total{reason=\"no_wait\"}"
+            ) >= 1
+        );
     }
 
     #[test]

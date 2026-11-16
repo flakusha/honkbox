@@ -454,6 +454,109 @@ pub struct ModelCatalog {
     pub data: Vec<ModelCatalogEntry>,
 }
 
+/// Explicit unload result (`POST /v1/models/{{slug}}/unload`,
+/// `POST /api/models/unload/{{model}}`). `reason` is `"explicit"` when a
+/// resident entry was evicted, `"not_loaded"` for an idempotent no-op (a
+/// 200, never a 404 - the caller treats any 200 as an unconditional
+/// continue-case).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct UnloadResult {
+    /// `true` when a resident entry was evicted.
+    pub unloaded: bool,
+    /// The owning registry slug the request resolved to.
+    pub slug: String,
+    /// `"explicit"` or `"not_loaded"`.
+    pub reason: String,
+}
+
+/// Bulk unload result (`POST /api/models/unload`): every non-pinned
+/// resident was evicted; pinned residents are skipped, never refused here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct UnloadAllResult {
+    /// Number of resident entries evicted.
+    pub unloaded: u32,
+    /// Always `"explicit"`.
+    pub reason: String,
+}
+
+/// One resident entry of the swap manager (`GET /v1/memory`, `GET
+/// /running`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ResidentModel {
+    /// Owning registry slug.
+    pub slug: String,
+    /// Served alias when the operator bound one, else absent (the raw slug
+    /// is always a valid request id).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    /// Catalog kind string (currently always `"llm"` - the swap manager's
+    /// only modality).
+    pub kind: String,
+    /// Load time, Unix seconds.
+    pub loaded_at: u64,
+    /// Idle-window end, Unix seconds; `null` for pinned entries (they have
+    /// no TTL budget).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// `[swap].pin` member (never auto-evicts; explicit unload refuses).
+    pub pinned: bool,
+    /// Best-effort: another holder than the manager owns the pipeline `Arc`
+    /// right now (an in-flight request).
+    pub in_use: bool,
+}
+
+/// Configured warm-pipeline capacity (`GET /v1/memory`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct MemoryCapacity {
+    /// LRU warm-set capacity (`[swap] llm_max_loaded`).
+    pub llm_max_loaded: u32,
+    /// Default idle window seconds (`[swap] llm_ttl_secs`).
+    pub llm_ttl_secs: u64,
+}
+
+/// GPU slot readout (`GET /v1/memory`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct MemoryGpu {
+    /// Another job currently holds the single inference slot.
+    pub slot_busy: bool,
+}
+
+/// Residency readout (`GET /v1/memory`): exactly the models the swap
+/// manager considers resident, plus configured capacity and GPU state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct MemoryInfo {
+    /// Resident entries, sorted by slug.
+    pub resident: Vec<ResidentModel>,
+    /// Configured warm-set capacity.
+    pub capacity: MemoryCapacity,
+    /// GPU slot state.
+    pub gpu: MemoryGpu,
+}
+
+/// One llama-swap-compat running entry (`GET /running`). The envelope key
+/// `running` and this entry's `model` key are load-bearing: loop-lore's
+/// `readRunningModels` reads only `running[].model` and classifies any
+/// other envelope as malformed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct RunningModel {
+    /// Owning registry slug (llama-swap reports its model id here).
+    pub model: String,
+    /// Always `"running"` (llama-swap's healthy state string).
+    pub state: String,
+    /// Remaining idle-window seconds; `null` for pinned entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+    /// `[swap].pin` member.
+    pub pinned: bool,
+}
+
+/// llama-swap-compatible warm-set envelope (`GET /running`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct RunningList {
+    /// Resident entries.
+    pub running: Vec<RunningModel>,
+}
+
 /// Download modality target (`POST /v1/downloads`): picks the managed
 /// `<data_dir>/models` subdir the completed file lands in (and labels the
 /// download metrics). The on-disk `ModelKind` set is wider (`lora`,
@@ -640,6 +743,12 @@ mod tests {
             .join("../../packages/web-ui/src/gen");
         std::fs::create_dir_all(&dir).expect("create gen dir");
         let config = ts_rs::Config::new();
+        // ts-rs v12 `decl()` never emits the `export` keyword (no config knob
+        // for it), which would leave the bindings unimportable. Re-add it: the
+        // keyword opens every decl string, and ts-rs never renders a line that
+        // starts with `type ` inside doc comments or object bodies (fields end
+        // in `:`), so a first-occurrence prefix rewrite is exact.
+        let exported = |decl: String| decl.replacen("type ", "export type ", 1);
         let mut out =
             String::from("// AUTO-GENERATED by `cargo test -p honkbox-api-types` — do not edit.\n");
         for decl in [
@@ -669,6 +778,14 @@ mod tests {
             ModelMetadata::decl(&config),
             ModelCatalogEntry::decl(&config),
             ModelCatalog::decl(&config),
+            UnloadResult::decl(&config),
+            UnloadAllResult::decl(&config),
+            ResidentModel::decl(&config),
+            MemoryCapacity::decl(&config),
+            MemoryGpu::decl(&config),
+            MemoryInfo::decl(&config),
+            RunningModel::decl(&config),
+            RunningList::decl(&config),
             DownloadKind::decl(&config),
             DownloadStatus::decl(&config),
             DownloadRequest::decl(&config),
@@ -680,7 +797,7 @@ mod tests {
             CatalogEntry::decl(&config),
             CatalogList::decl(&config),
         ] {
-            out.push_str(&decl);
+            out.push_str(&exported(decl));
             out.push('\n');
         }
         std::fs::write(dir.join("api-types.ts"), out).expect("write api-types.ts");

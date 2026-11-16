@@ -67,6 +67,15 @@ impl Ledger {
             *busy = false;
         }
     }
+
+    /// `true` while some job holds the slot (read-only probe for the
+    /// `/v1/memory` readout; never reserves).
+    pub fn is_busy(&self) -> bool {
+        *self
+            .busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 impl Drop for Lease<'_> {

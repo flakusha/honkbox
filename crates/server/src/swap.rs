@@ -29,6 +29,12 @@
 //!   ([`SwapManager::spawn_reaper`], started by `serve`) for pure idle
 //!   expiry; sweep granularity bounds how soon an expired entry actually
 //!   frees.
+//! - **Explicit unload** (REQ-5): [`SwapManager::evict_by_slug`] removes one
+//!   resident on API request (`POST /v1/models/{slug}/unload` and the
+//!   llama-swap-compat `/api/models/unload` forms); pinned residents are
+//!   refused ([`EvictOutcome::Pinned`] → 409 at the route); non-resident ids
+//!   are an idempotent no-op. [`SwapManager::residency`] is the readout
+//!   behind `GET /v1/memory` / `GET /running`.
 //!
 //! Metrics: load commits, removals, capacity evictions, and load durations
 //! are emitted through [`crate::metrics`] with kind `llm` (the manager's
@@ -125,6 +131,9 @@ struct Entry {
     /// and capped at `max_ttl`. Unused for pinned entries (they never
     /// TTL-evict).
     ttl: Duration,
+    /// Load time in Unix seconds (the `/v1/memory` `loaded_at` readout;
+    /// `Instant` has no epoch anchor).
+    loaded_at: u64,
 }
 
 /// LLM pipeline cache: load-on-demand, per-entry idle TTL, LRU capacity.
@@ -138,6 +147,48 @@ pub struct SwapManager {
     /// for uncached slugs serialize instead of racing (`tokio` mutex — the
     /// guard is held across `spawn_blocking().await`).
     load_gate: AsyncMutex<()>,
+}
+
+/// One resident entry of the [`SwapManager`] readout (`GET /v1/memory` /
+/// `GET /running` data source).
+#[derive(Debug, Clone)]
+pub struct ResidentEntry {
+    /// Owning registry slug.
+    pub slug: String,
+    /// Load time (Unix seconds) - captured at insert, not derived from
+    /// `Instant` (which has no epoch anchor).
+    pub loaded_at: u64,
+    /// Idle-window end (Unix seconds); `None` for pinned entries, which
+    /// carry no TTL budget.
+    pub expires_at: Option<u64>,
+    /// `[swap].pin` member.
+    pub pinned: bool,
+    /// Best-effort in-flight flag: `Arc::strong_count(&pipe) > 1` - some
+    /// holder besides the manager owns the pipeline right now (an
+    /// in-flight request's clone). Racy by nature (the count can change
+    /// between read and response), but honest for a diagnostic readout:
+    /// `false` never claims activity, `true` always reflects a real extra
+    /// holder at snapshot time.
+    pub in_use: bool,
+}
+
+/// Outcome of [`SwapManager::evict_by_slug`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvictOutcome {
+    /// A resident entry was removed (the in-flight `Arc` clones keep the
+    /// pipeline alive until the last holder drops - no request is aborted).
+    Evicted,
+    /// The slug had no resident entry (idempotent no-op).
+    NotLoaded,
+    /// The slug is resident but `[swap].pin`-pinned: refusal is explicit,
+    /// the route maps this to a 409.
+    Pinned,
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl SwapManager {
@@ -164,6 +215,7 @@ impl SwapManager {
                 pipe,
                 last_use: Instant::now(),
                 ttl: self.settings.llm_ttl.min(self.settings.max_ttl),
+                loaded_at: epoch_secs(),
             }
         });
     }
@@ -211,6 +263,7 @@ impl SwapManager {
                 pipe: Arc::clone(&pipe),
                 last_use: Instant::now(),
                 ttl: requested.min(self.settings.max_ttl),
+                loaded_at: epoch_secs(),
             },
         );
         drop(gate);
@@ -254,6 +307,84 @@ impl SwapManager {
             false
         });
         before - entries.len()
+    }
+
+    /// Evict one slug on explicit request (`POST /v1/models/{slug}/unload`):
+    /// resident non-pinned entries are removed and counted as
+    /// `UnloadReason::Explicit`; pinned residents are refused
+    /// ([`EvictOutcome::Pinned`] - the route answers 409); an absent slug is
+    /// an idempotent [`EvictOutcome::NotLoaded`]. In-flight requests keep
+    /// their `Arc` clones - eviction only drops the cache's own handle, so
+    /// running inference is never aborted (llama-swap `trackedServe` drain
+    /// semantics, for free).
+    pub fn evict_by_slug(&self, slug: &str, reason: UnloadReason) -> EvictOutcome {
+        let mut entries = self.lock_entries();
+        if !entries.contains_key(slug) {
+            return EvictOutcome::NotLoaded;
+        }
+        if self.settings.pinned.contains(slug) {
+            return EvictOutcome::Pinned;
+        }
+        entries.remove(slug);
+        note_model_unload(SWAP_KIND, reason);
+        EvictOutcome::Evicted
+    }
+
+    /// Evict every resident non-pinned entry (the llama-swap-compat
+    /// `POST /api/models/unload` bulk form). Pinned residents are skipped,
+    /// never refused. Returns the number of entries evicted.
+    pub fn evict_all_unpinned(&self, reason: UnloadReason) -> usize {
+        let mut entries = self.lock_entries();
+        let before = entries.len();
+        entries.retain(|slug, _| self.settings.pinned.contains(slug));
+        let evicted = before - entries.len();
+        for _ in 0..evicted {
+            note_model_unload(SWAP_KIND, reason);
+        }
+        evicted
+    }
+
+    /// Residency snapshot (`GET /v1/memory` / `GET /running`): exactly the
+    /// entries the manager considers resident, under one short read lock.
+    /// Sorted by slug for deterministic output.
+    #[must_use]
+    pub fn residency(&self) -> Vec<ResidentEntry> {
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let now = Instant::now();
+        let entries = self.lock_entries();
+        let mut out: Vec<ResidentEntry> = entries
+            .iter()
+            .map(|(slug, entry)| {
+                let pinned = self.settings.pinned.contains(slug);
+                let expires_at = if pinned {
+                    None
+                } else {
+                    let remaining = entry.ttl.saturating_sub(now.duration_since(entry.last_use));
+                    Some(now_epoch + remaining.as_secs())
+                };
+                ResidentEntry {
+                    slug: slug.clone(),
+                    loaded_at: entry.loaded_at,
+                    expires_at,
+                    pinned,
+                    in_use: Arc::strong_count(&entry.pipe) > 1,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.slug.cmp(&b.slug));
+        out
+    }
+
+    /// Configured warm-set capacity (`GET /v1/memory`'s `capacity` block):
+    /// `(llm_max_loaded, llm_ttl_secs)`.
+    #[must_use]
+    pub fn capacity(&self) -> (usize, u64) {
+        (
+            self.settings.llm_max_loaded,
+            self.settings.llm_ttl.as_secs(),
+        )
     }
 
     /// Pre-load capacity trim: TTL-expired entries go first, then LRU down

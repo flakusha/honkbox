@@ -10,6 +10,61 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/models/unload": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /api/models/unload`: llama-swap-compatible bulk unload (REQ-5) -\nevict every resident non-pinned entry. Pinned residents are skipped,\nnever refused (the bulk form is the caller's \"make room\" move).",
+        "operationId": "post_unload_all",
+        "responses": {
+          "200": {
+            "description": "Non-pinned residents evicted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnloadAllResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/models/unload/{model}": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /api/models/unload/{model}`: llama-swap-compatible single unload\n(REQ-5). Accepts an operator alias or registry slug. Divergence from\nllama-swap, deliberate: an unknown id is a 404 whose body contains the\nliteral `model not found` (loop-lore's classifier substring-matches it),\nbut a known id with nothing resident is a 200 `{\"unloaded\":false}` -\nany 200 is an unconditional continue-case on the client, so the common\nalready-gone race needs no string matching at all. Pinned → 409.",
+        "operationId": "post_unload_one",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "path",
+            "description": "Operator alias or registry slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unloaded or not resident",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnloadResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown model (body contains `model not found`)"
+          },
+          "409": {
+            "description": "Model is pinned; explicit refusal"
+          }
+        }
+      }
+    },
     "/api/version": {
       "get": {
         "tags": [],
@@ -58,6 +113,25 @@
             "description": "Prometheus text exposition",
             "content": {
               "text/plain": {}
+            }
+          }
+        }
+      }
+    },
+    "/running": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /running`: llama-swap-compatible warm-set envelope (REQ-5). The\nenvelope key `running` and the entry key `model` are load-bearing -\nloop-lore's `readRunningModels` reads only `running[].model` and\nclassifies any other envelope as malformed (a probe failure that leaves\nthe LLM resident through a `ComfyUI` render). Extra fields are additive.",
+        "operationId": "get_running",
+        "responses": {
+          "200": {
+            "description": "Running (resident) models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunningList"
+                }
+              }
             }
           }
         }
@@ -334,6 +408,25 @@
         }
       }
     },
+    "/v1/memory": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/memory`: residency readout (REQ-5) - exactly the models the\nswap manager considers resident, with `loaded_at`, `expires_at`,\n`pinned`, and the best-effort `in_use` flag, plus the configured\ncapacity and the GPU slot state. Without a swap manager (stub backends)\nthe resident list is empty and capacity reads zeros - nothing is\nmanaged.",
+        "operationId": "get_memory",
+        "responses": {
+          "200": {
+            "description": "Residency readout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "tags": [],
@@ -368,6 +461,39 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/models/{slug}/unload": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/models/{slug}/unload`: explicitly evict one resident model\n(REQ-5). Accepts an operator alias or the registry slug. A resident\nnon-pinned entry is evicted (`{\"unloaded\":true,\"reason\":\"explicit\"}`);\na non-resident or unknown id is an idempotent 200\n(`{\"unloaded\":false,\"reason\":\"not_loaded\"}`); a pinned resident is\nrefused with 409 and a loud log. In-flight requests are never aborted:\neviction only drops the cache's own `Arc` handle.",
+        "operationId": "post_model_unload",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Operator alias or registry slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unloaded or not resident",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnloadResult"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Model is pinned; explicit refusal"
           }
         }
       }
@@ -881,6 +1007,67 @@
           "status": {
             "type": "string",
             "description": "Always `\"ok\"` while the server is alive."
+          }
+        }
+      },
+      "MemoryCapacity": {
+        "type": "object",
+        "description": "Configured warm-pipeline capacity (`GET /v1/memory`).",
+        "required": [
+          "llm_max_loaded",
+          "llm_ttl_secs"
+        ],
+        "properties": {
+          "llm_max_loaded": {
+            "type": "integer",
+            "format": "int32",
+            "description": "LRU warm-set capacity (`[swap] llm_max_loaded`).",
+            "minimum": 0
+          },
+          "llm_ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Default idle window seconds (`[swap] llm_ttl_secs`).",
+            "minimum": 0
+          }
+        }
+      },
+      "MemoryGpu": {
+        "type": "object",
+        "description": "GPU slot readout (`GET /v1/memory`).",
+        "required": [
+          "slot_busy"
+        ],
+        "properties": {
+          "slot_busy": {
+            "type": "boolean",
+            "description": "Another job currently holds the single inference slot."
+          }
+        }
+      },
+      "MemoryInfo": {
+        "type": "object",
+        "description": "Residency readout (`GET /v1/memory`): exactly the models the swap\nmanager considers resident, plus configured capacity and GPU state.",
+        "required": [
+          "resident",
+          "capacity",
+          "gpu"
+        ],
+        "properties": {
+          "capacity": {
+            "$ref": "#/components/schemas/MemoryCapacity",
+            "description": "Configured warm-set capacity."
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/MemoryGpu",
+            "description": "GPU slot state."
+          },
+          "resident": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResidentModel"
+            },
+            "description": "Resident entries, sorted by slug."
           }
         }
       },
@@ -1419,6 +1606,105 @@
           "fail"
         ]
       },
+      "ResidentModel": {
+        "type": "object",
+        "description": "One resident entry of the swap manager (`GET /v1/memory`, `GET\n/running`).",
+        "required": [
+          "slug",
+          "kind",
+          "loaded_at",
+          "pinned",
+          "in_use"
+        ],
+        "properties": {
+          "alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Served alias when the operator bound one, else absent (the raw slug\nis always a valid request id)."
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Idle-window end, Unix seconds; `null` for pinned entries (they have\nno TTL budget).",
+            "minimum": 0
+          },
+          "in_use": {
+            "type": "boolean",
+            "description": "Best-effort: another holder than the manager owns the pipeline `Arc`\nright now (an in-flight request)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Catalog kind string (currently always `\"llm\"` - the swap manager's\nonly modality)."
+          },
+          "loaded_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Load time, Unix seconds.",
+            "minimum": 0
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "`[swap].pin` member (never auto-evicts; explicit unload refuses)."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Owning registry slug."
+          }
+        }
+      },
+      "RunningList": {
+        "type": "object",
+        "description": "llama-swap-compatible warm-set envelope (`GET /running`).",
+        "required": [
+          "running"
+        ],
+        "properties": {
+          "running": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunningModel"
+            },
+            "description": "Resident entries."
+          }
+        }
+      },
+      "RunningModel": {
+        "type": "object",
+        "description": "One llama-swap-compat running entry (`GET /running`). The envelope key\n`running` and this entry's `model` key are load-bearing: loop-lore's\n`readRunningModels` reads only `running[].model` and classifies any\nother envelope as malformed.",
+        "required": [
+          "model",
+          "state",
+          "pinned"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Owning registry slug (llama-swap reports its model id here)."
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "`[swap].pin` member."
+          },
+          "state": {
+            "type": "string",
+            "description": "Always `\"running\"` (llama-swap's healthy state string)."
+          },
+          "ttl_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Remaining idle-window seconds; `null` for pinned entries.",
+            "minimum": 0
+          }
+        }
+      },
       "SafetensorsMetadata": {
         "type": "object",
         "description": "Safetensors header summary (`GET /v1/models` entry `metadata`).",
@@ -1542,6 +1828,49 @@
           "text": {
             "type": "string",
             "description": "Segment text."
+          }
+        }
+      },
+      "UnloadAllResult": {
+        "type": "object",
+        "description": "Bulk unload result (`POST /api/models/unload`): every non-pinned\nresident was evicted; pinned residents are skipped, never refused here.",
+        "required": [
+          "unloaded",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Always `\"explicit\"`."
+          },
+          "unloaded": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of resident entries evicted.",
+            "minimum": 0
+          }
+        }
+      },
+      "UnloadResult": {
+        "type": "object",
+        "description": "Explicit unload result (`POST /v1/models/{{slug}}/unload`,\n`POST /api/models/unload/{{model}}`). `reason` is `\"explicit\"` when a\nresident entry was evicted, `\"not_loaded\"` for an idempotent no-op (a\n200, never a 404 - the caller treats any 200 as an unconditional\ncontinue-case).",
+        "required": [
+          "unloaded",
+          "slug",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`\"explicit\"` or `\"not_loaded\"`."
+          },
+          "slug": {
+            "type": "string",
+            "description": "The owning registry slug the request resolved to."
+          },
+          "unloaded": {
+            "type": "boolean",
+            "description": "`true` when a resident entry was evicted."
           }
         }
       },

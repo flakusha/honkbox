@@ -117,7 +117,12 @@ async fn metrics_lines_present_after_request() {
     assert!(body.contains("honkbox_request_duration_seconds_count"));
     assert!(body.contains("honkbox_request_duration_seconds_sum "));
     assert!(body.contains("# TYPE honkbox_gpu_slot_busy_rejections_total counter"));
-    assert!(body.contains("honkbox_gpu_slot_busy_rejections_total "));
+    assert!(
+        body.contains("honkbox_gpu_slot_busy_rejections_total{reason=\"no_wait\"}"),
+        "labeled busy series missing: {body}"
+    );
+    assert!(body.contains("honkbox_gpu_slot_busy_rejections_total{reason=\"queue_full\"}"));
+    assert!(body.contains("honkbox_gpu_slot_busy_rejections_total{reason=\"queue_timeout\"}"));
     // Kind-labeled swap families render their full bounded grid. Counts in
     // this process depend on which in-module unit tests ran first (the
     // statics are process-wide, see `metrics.rs` tests), so only presence +

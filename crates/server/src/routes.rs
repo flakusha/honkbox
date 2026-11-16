@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Query, Request, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{
@@ -28,10 +28,11 @@ use axum::{
 use honkbox_api_types::{
     CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
     DownloadAccepted, DownloadKind, DownloadList, DownloadRequest, DownloadState, DownloadStatus,
-    FinishReason, GgufMetadata, Health, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
-    ModelKind, ModelMetadata, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk,
-    OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, SafetensorsMetadata,
-    SynthesizeRequest, Transcript, TranscriptSegment, Version,
+    FinishReason, GgufMetadata, Health, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
+    ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, OpenAiChatCompletion,
+    OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
+    OpenAiUsage, Pill, ResidentModel, RunningList, RunningModel, SafetensorsMetadata,
+    SynthesizeRequest, Transcript, TranscriptSegment, UnloadAllResult, UnloadResult, Version,
 };
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest,
@@ -60,6 +61,8 @@ struct EmbeddedUi;
         get_version,
         get_models,
         refresh_models,
+        post_model_unload,
+        get_memory,
         openapi_json,
         metrics_endpoint,
         post_chat,
@@ -71,7 +74,10 @@ struct EmbeddedUi;
         list_downloads,
         get_download,
         delete_download,
-        get_catalog
+        get_catalog,
+        get_running,
+        post_unload_all,
+        post_unload_one
     ),
     components(schemas(
         Health,
@@ -90,6 +96,14 @@ struct EmbeddedUi;
         ModelMetadata,
         ModelCatalogEntry,
         ModelCatalog,
+        UnloadResult,
+        UnloadAllResult,
+        ResidentModel,
+        MemoryCapacity,
+        MemoryGpu,
+        MemoryInfo,
+        RunningModel,
+        RunningList,
         OpenAiChatRequest,
         FinishReason,
         OpenAiUsage,
@@ -193,13 +207,18 @@ pub fn app(config: AppConfig) -> Router {
         .route("/api/version", get(get_version))
         .route("/v1/models", get(get_models))
         .route("/v1/models/refresh", post(refresh_models))
+        .route("/v1/models/{slug}/unload", post(post_model_unload))
         .route("/v1/catalog", get(get_catalog))
+        .route("/v1/memory", get(get_memory))
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/chat/completions", post(post_chat_completions))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
+        .route("/running", get(get_running))
+        .route("/api/models/unload", post(post_unload_all))
+        .route("/api/models/unload/{model}", post(post_unload_one))
         .route("/v1/downloads", post(post_download).get(list_downloads))
         .route(
             "/v1/downloads/{id}",
@@ -351,6 +370,222 @@ async fn refresh_models(State(config): State<AppConfig>) -> Response {
         },
         Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
     }
+}
+
+/// Alias-or-slug resolution for the control routes: the owning registry
+/// slug for a request id, `None` when the catalog has no such entry.
+fn control_slug<'a>(model: &str, catalog: &'a ModelCatalog) -> Option<&'a str> {
+    resolve_model_slug(model, catalog)
+}
+
+/// Map an unload outcome to its HTTP response. `Pinned` is an explicit 409
+/// refusal (a loud log accompanies it) - pinned residents are never evicted
+/// silently; `NotLoaded` is a 200 idempotent no-op, deliberately NOT the
+/// llama-swap 404 `no local server found` (loop-lore's client treats any
+/// 200 as an unconditional continue-case, so 200 needs no body matching).
+fn unload_response(outcome: crate::swap::EvictOutcome, slug: String) -> Response {
+    match outcome {
+        crate::swap::EvictOutcome::Evicted => {
+            tracing::info!(slug, "explicit unload evicted resident model");
+            Json(UnloadResult {
+                unloaded: true,
+                slug,
+                reason: "explicit".to_owned(),
+            })
+            .into_response()
+        }
+        crate::swap::EvictOutcome::NotLoaded => Json(UnloadResult {
+            unloaded: false,
+            slug,
+            reason: "not_loaded".to_owned(),
+        })
+        .into_response(),
+        crate::swap::EvictOutcome::Pinned => {
+            tracing::warn!(slug, "explicit unload refused: model is pinned");
+            (
+                StatusCode::CONFLICT,
+                format!("model {slug:?} is pinned via [swap].pin; remove the pin to unload it"),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `POST /v1/models/{slug}/unload`: explicitly evict one resident model
+/// (REQ-5). Accepts an operator alias or the registry slug. A resident
+/// non-pinned entry is evicted (`{"unloaded":true,"reason":"explicit"}`);
+/// a non-resident or unknown id is an idempotent 200
+/// (`{"unloaded":false,"reason":"not_loaded"}`); a pinned resident is
+/// refused with 409 and a loud log. In-flight requests are never aborted:
+/// eviction only drops the cache's own `Arc` handle.
+#[utoipa::path(
+    post,
+    path = "/v1/models/{slug}/unload",
+    params(("slug" = String, Path, description = "Operator alias or registry slug")),
+    responses(
+        (status = 200, description = "Unloaded or not resident", body = UnloadResult),
+        (status = 409, description = "Model is pinned; explicit refusal")
+    )
+)]
+async fn post_model_unload(
+    State(config): State<AppConfig>,
+    AxumPath(model): AxumPath<String>,
+) -> Response {
+    let catalog = config.catalog_snapshot();
+    // Unknown ids resolve to themselves: the answer is the same idempotent
+    // not-loaded no-op either way.
+    let slug = control_slug(&model, &catalog).map_or_else(|| model.clone(), str::to_owned);
+    let outcome = match &config.swap {
+        Some(swap) => swap.evict_by_slug(&slug, crate::metrics::UnloadReason::Explicit),
+        None => crate::swap::EvictOutcome::NotLoaded,
+    };
+    unload_response(outcome, slug)
+}
+
+/// `GET /v1/memory`: residency readout (REQ-5) - exactly the models the
+/// swap manager considers resident, with `loaded_at`, `expires_at`,
+/// `pinned`, and the best-effort `in_use` flag, plus the configured
+/// capacity and the GPU slot state. Without a swap manager (stub backends)
+/// the resident list is empty and capacity reads zeros - nothing is
+/// managed.
+#[utoipa::path(
+    get,
+    path = "/v1/memory",
+    responses((status = 200, description = "Residency readout", body = MemoryInfo))
+)]
+async fn get_memory(State(config): State<AppConfig>) -> Response {
+    let catalog = config.catalog_snapshot();
+    let (resident, capacity) = match &config.swap {
+        Some(swap) => {
+            let resident: Vec<ResidentModel> = swap
+                .residency()
+                .into_iter()
+                .map(|entry| ResidentModel {
+                    alias: catalog
+                        .data
+                        .iter()
+                        .find(|e| e.slug == entry.slug && e.id != e.slug)
+                        .map(|e| e.id.clone()),
+                    kind: "llm".to_owned(),
+                    slug: entry.slug,
+                    loaded_at: entry.loaded_at,
+                    expires_at: entry.expires_at,
+                    pinned: entry.pinned,
+                    in_use: entry.in_use,
+                })
+                .collect();
+            let (llm_max_loaded, llm_ttl_secs) = swap.capacity();
+            let capacity = MemoryCapacity {
+                llm_max_loaded: u32::try_from(llm_max_loaded).unwrap_or(u32::MAX),
+                llm_ttl_secs,
+            };
+            (resident, capacity)
+        }
+        None => (
+            Vec::new(),
+            MemoryCapacity {
+                llm_max_loaded: 0,
+                llm_ttl_secs: 0,
+            },
+        ),
+    };
+    Json(MemoryInfo {
+        resident,
+        capacity,
+        gpu: MemoryGpu {
+            slot_busy: honkbox_residency::global().is_busy(),
+        },
+    })
+    .into_response()
+}
+
+/// `GET /running`: llama-swap-compatible warm-set envelope (REQ-5). The
+/// envelope key `running` and the entry key `model` are load-bearing -
+/// loop-lore's `readRunningModels` reads only `running[].model` and
+/// classifies any other envelope as malformed (a probe failure that leaves
+/// the LLM resident through a `ComfyUI` render). Extra fields are additive.
+#[utoipa::path(
+    get,
+    path = "/running",
+    responses((status = 200, description = "Running (resident) models", body = RunningList))
+)]
+async fn get_running(State(config): State<AppConfig>) -> Response {
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let running: Vec<RunningModel> = match &config.swap {
+        Some(swap) => swap
+            .residency()
+            .into_iter()
+            .map(|entry| RunningModel {
+                model: entry.slug,
+                state: "running".to_owned(),
+                ttl_secs: entry
+                    .expires_at
+                    .map(|expires| expires.saturating_sub(now_epoch)),
+                pinned: entry.pinned,
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    Json(RunningList { running }).into_response()
+}
+
+/// `POST /api/models/unload`: llama-swap-compatible bulk unload (REQ-5) -
+/// evict every resident non-pinned entry. Pinned residents are skipped,
+/// never refused (the bulk form is the caller's "make room" move).
+#[utoipa::path(
+    post,
+    path = "/api/models/unload",
+    responses((status = 200, description = "Non-pinned residents evicted", body = UnloadAllResult))
+)]
+async fn post_unload_all(State(config): State<AppConfig>) -> Response {
+    let evicted = match &config.swap {
+        Some(swap) => swap.evict_all_unpinned(crate::metrics::UnloadReason::Explicit),
+        None => 0,
+    };
+    if evicted > 0 {
+        tracing::info!(count = evicted, "bulk explicit unload");
+    }
+    Json(UnloadAllResult {
+        unloaded: u32::try_from(evicted).unwrap_or(u32::MAX),
+        reason: "explicit".to_owned(),
+    })
+    .into_response()
+}
+
+/// `POST /api/models/unload/{model}`: llama-swap-compatible single unload
+/// (REQ-5). Accepts an operator alias or registry slug. Divergence from
+/// llama-swap, deliberate: an unknown id is a 404 whose body contains the
+/// literal `model not found` (loop-lore's classifier substring-matches it),
+/// but a known id with nothing resident is a 200 `{"unloaded":false}` -
+/// any 200 is an unconditional continue-case on the client, so the common
+/// already-gone race needs no string matching at all. Pinned → 409.
+#[utoipa::path(
+    post,
+    path = "/api/models/unload/{model}",
+    params(("model" = String, Path, description = "Operator alias or registry slug")),
+    responses(
+        (status = 200, description = "Unloaded or not resident", body = UnloadResult),
+        (status = 404, description = "Unknown model (body contains `model not found`)"),
+        (status = 409, description = "Model is pinned; explicit refusal")
+    )
+)]
+async fn post_unload_one(
+    State(config): State<AppConfig>,
+    AxumPath(model): AxumPath<String>,
+) -> Response {
+    let catalog = config.catalog_snapshot();
+    let Some(slug) = control_slug(&model, &catalog) else {
+        // Literal substring is load-bearing for loop-lore's classifier.
+        return (StatusCode::NOT_FOUND, format!("model not found: {model}")).into_response();
+    };
+    let slug = slug.to_owned();
+    let outcome = match &config.swap {
+        Some(swap) => swap.evict_by_slug(&slug, crate::metrics::UnloadReason::Explicit),
+        None => crate::swap::EvictOutcome::NotLoaded,
+    };
+    unload_response(outcome, slug)
 }
 
 /// `GET /v1/catalog`: the curated manifest merged with the local scan
@@ -1028,7 +1263,7 @@ fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
 /// `honkbox_gpu_slot_busy_rejections_total` metric and maps to a 429.
 fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, String)> {
     honkbox_residency::global().try_reserve().map_err(|err| {
-        crate::metrics::note_gpu_slot_busy();
+        crate::metrics::note_gpu_slot_busy(crate::metrics::BusyReason::NoWait);
         (StatusCode::TOO_MANY_REQUESTS, err.to_string())
     })
 }
@@ -1229,6 +1464,10 @@ async fn post_chat_stream(
     };
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    // REQ-6 (Option B): the busy condition must be an HTTP 429, never a 200
+    // with an error frame - so the slot is reserved HERE, before the handler
+    // returns the SSE body. A busy slot short-circuits above as a real 429.
+    let lease = reserve_gpu_slot()?;
     // The lease sits in a slot the token sink can drain: once the client is
     // gone, the next token boundary frees the slot right away. The handler
     // returns the SSE body without awaiting the worker, so tokens stream as
@@ -1238,39 +1477,33 @@ async fn post_chat_stream(
     // clone, the drop path calls `abort` through this one.
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
-    let worker = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            *lease_slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
-            let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-                if worker_cancelled.load(Ordering::Relaxed) {
-                    // Also abort the FFI loop itself, not just delivery.
-                    pipe.abort();
-                    free_gpu_lease(&lease_slot);
-                    return;
-                }
-                let data = serde_json::json!({ "token": token }).to_string();
-                if tx.send(Ok(Event::default().data(data))).is_err() {
-                    // Receiver gone without the drop guard (drop raced the send).
-                    worker_cancelled.store(true, Ordering::Relaxed);
-                    pipe.abort();
-                    free_gpu_lease(&lease_slot);
-                }
-            });
-            // A disconnect between the last token and completion frees here.
-            free_gpu_lease(&lease_slot);
-            if let Err(err) = result {
-                let _ = tx.send(Ok(Event::default()
-                    .event("error")
-                    .data(format!("chat failed: {err}"))));
+    let worker = tokio::task::spawn_blocking(move || {
+        *lease_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
+        let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
+            if worker_cancelled.load(Ordering::Relaxed) {
+                // Also abort the FFI loop itself, not just delivery.
+                pipe.abort();
+                free_gpu_lease(&lease_slot);
+                return;
             }
-            let _ = tx.send(Ok(Event::default().data("[DONE]")));
+            let data = serde_json::json!({ "token": token }).to_string();
+            if tx.send(Ok(Event::default().data(data))).is_err() {
+                // Receiver gone without the drop guard (drop raced the send).
+                worker_cancelled.store(true, Ordering::Relaxed);
+                pipe.abort();
+                free_gpu_lease(&lease_slot);
+            }
+        });
+        // A disconnect between the last token and completion frees here.
+        free_gpu_lease(&lease_slot);
+        if let Err(err) = result {
+            let _ = tx.send(Ok(Event::default()
+                .event("error")
+                .data(format!("chat failed: {err}"))));
         }
-        Err((_, message)) => {
-            let _ = tx.send(Ok(Event::default().event("error").data(message)));
-            let _ = tx.send(Ok(Event::default().data("[DONE]")));
-        }
+        let _ = tx.send(Ok(Event::default().data("[DONE]")));
     });
     Ok(Sse::new(CancelOnDrop {
         inner: UnboundedReceiverStream::new(rx),
@@ -1413,7 +1646,25 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
         None => config.llm.clone(),
     };
     if req.stream.is_some_and(|stream| stream) {
-        completions_stream(pipe, worker_req, &served_id, id_frame(), req.max_tokens)
+        // REQ-6 (Option B): reserve the slot BEFORE returning the SSE body,
+        // so a busy slot is a real 429 with the OpenAI envelope + the
+        // shared `Retry-After` middleware hint - never a 200 whose only
+        // content is an error frame (loop-lore's `data:`-only parser would
+        // read that as a clean empty completion).
+        let lease = match reserve_gpu_slot() {
+            Ok(lease) => lease,
+            Err((status, message)) => {
+                return openai_error_response(status, message, Some("gpu_slot_busy"));
+            }
+        };
+        completions_stream(
+            lease,
+            pipe,
+            worker_req,
+            &served_id,
+            id_frame(),
+            req.max_tokens,
+        )
     } else {
         completions_json(pipe, worker_req, &served_id, req.max_tokens).await
     }
@@ -1487,10 +1738,14 @@ fn chunk_frame(frame: &OpenAiChunk) -> Event {
 /// `OpenAI` SSE translation of `complete_stream` (REQ-1): role+first-token
 /// frame, one content frame per token, a final frame with `finish_reason`
 /// and `usage`, then a literal `data: [DONE]`. No `event:` frames on the
-/// success path — they are reserved for errors, which arrive as an
-/// `event: error` data frame before `[DONE]` (the SSE body is already 200
-/// by then, so a busy slot cannot become an HTTP 429).
+/// success path — they are reserved for inference failures, which arrive
+/// as an `event: error` data frame before `[DONE]` (the SSE body is
+/// already 200 by then). The GPU-slot busy condition is NOT one of them:
+/// REQ-6 (Option B) reserves the slot in the handler, so a busy slot
+/// becomes a real HTTP 429 before this function runs — the `lease` here is
+/// already held and handed to the worker.
 fn completions_stream(
+    lease: honkbox_residency::Lease<'static>,
     pipe: Arc<dyn LlmPipeline>,
     worker_req: WorkerChatRequest,
     served_id: &str,
@@ -1503,86 +1758,79 @@ fn completions_stream(
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
     let frame_model = served_id.to_owned();
-    let worker = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            *lease_slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
-            let mut first = true;
-            let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-                if worker_cancelled.load(Ordering::Relaxed) {
-                    pipe.abort();
-                    free_gpu_lease(&lease_slot);
-                    return;
+    let worker = tokio::task::spawn_blocking(move || {
+        // The slot was reserved in the handler (REQ-6); park the lease where
+        // the token sink can drain it at the first cancel/disconnect.
+        *lease_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
+        let mut first = true;
+        let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
+            if worker_cancelled.load(Ordering::Relaxed) {
+                pipe.abort();
+                free_gpu_lease(&lease_slot);
+                return;
+            }
+            let delta = if first {
+                first = false;
+                OpenAiDelta {
+                    role: Some(ChatRole::Assistant),
+                    content: Some(token.to_owned()),
                 }
-                let delta = if first {
-                    first = false;
-                    OpenAiDelta {
-                        role: Some(ChatRole::Assistant),
-                        content: Some(token.to_owned()),
-                    }
-                } else {
-                    OpenAiDelta {
-                        role: None,
-                        content: Some(token.to_owned()),
-                    }
-                };
-                let frame = OpenAiChunk {
-                    id: id.clone(),
+            } else {
+                OpenAiDelta {
+                    role: None,
+                    content: Some(token.to_owned()),
+                }
+            };
+            let frame = OpenAiChunk {
+                id: id.clone(),
+                object: "chat.completion.chunk".to_owned(),
+                created,
+                model: frame_model.clone(),
+                choices: vec![OpenAiChunkChoice {
+                    index: 0,
+                    delta,
+                    finish_reason: None,
+                }],
+                usage: None,
+            };
+            if tx.send(Ok(chunk_frame(&frame))).is_err() {
+                // Receiver gone without the drop guard (drop raced the send).
+                worker_cancelled.store(true, Ordering::Relaxed);
+                pipe.abort();
+                free_gpu_lease(&lease_slot);
+            }
+        });
+        // A disconnect between the last token and completion frees here.
+        free_gpu_lease(&lease_slot);
+        match result {
+            Ok(reply) => {
+                let final_frame = OpenAiChunk {
+                    id,
                     object: "chat.completion.chunk".to_owned(),
                     created,
-                    model: frame_model.clone(),
+                    model: frame_model,
                     choices: vec![OpenAiChunkChoice {
                         index: 0,
-                        delta,
-                        finish_reason: None,
+                        delta: OpenAiDelta {
+                            role: None,
+                            content: None,
+                        },
+                        finish_reason: Some(finish_reason(reply.tokens, max_tokens)),
                     }],
-                    usage: None,
+                    usage: Some(usage_of(&reply)),
                 };
-                if tx.send(Ok(chunk_frame(&frame))).is_err() {
-                    // Receiver gone without the drop guard (drop raced the send).
-                    worker_cancelled.store(true, Ordering::Relaxed);
-                    pipe.abort();
-                    free_gpu_lease(&lease_slot);
-                }
-            });
-            // A disconnect between the last token and completion frees here.
-            free_gpu_lease(&lease_slot);
-            match result {
-                Ok(reply) => {
-                    let final_frame = OpenAiChunk {
-                        id,
-                        object: "chat.completion.chunk".to_owned(),
-                        created,
-                        model: frame_model,
-                        choices: vec![OpenAiChunkChoice {
-                            index: 0,
-                            delta: OpenAiDelta {
-                                role: None,
-                                content: None,
-                            },
-                            finish_reason: Some(finish_reason(reply.tokens, max_tokens)),
-                        }],
-                        usage: Some(usage_of(&reply)),
-                    };
-                    let _ = tx.send(Ok(chunk_frame(&final_frame)));
-                }
-                Err(err) => {
-                    let body = OpenAiError::new(500, format!("chat failed: {err}"), None);
-                    let _ = tx.send(Ok(Event::default()
-                        .event("error")
-                        .data(serde_json::to_string(&body).unwrap_or_default())));
-                }
+                let _ = tx.send(Ok(chunk_frame(&final_frame)));
             }
-            let _ = tx.send(Ok(Event::default().data("[DONE]")));
+            Err(err) => {
+                let body = OpenAiError::new(500, format!("chat failed: {err}"), None);
+                let _ = tx.send(Ok(Event::default()
+                    .event("error")
+                    .data(serde_json::to_string(&body).unwrap_or_default())));
+            }
         }
-        Err((_, message)) => {
-            let body = OpenAiError::new(429, message, Some("gpu_slot_busy".to_owned()));
-            let _ = tx.send(Ok(Event::default()
-                .event("error")
-                .data(serde_json::to_string(&body).unwrap_or_default())));
-            let _ = tx.send(Ok(Event::default().data("[DONE]")));
-        }
+        let _ = tx.send(Ok(Event::default().data("[DONE]")));
     });
     Sse::new(CancelOnDrop {
         inner: UnboundedReceiverStream::new(rx),
