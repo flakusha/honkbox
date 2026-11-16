@@ -6,6 +6,7 @@ mod jobs;
 mod logging;
 mod metrics;
 mod routes;
+mod swap;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -221,6 +222,40 @@ enum ModelsAction {
     },
 }
 
+/// P1 swap manager for the chat modality: load-on-demand + TTL/LRU
+/// eviction, active only with the real llama backend (a stub server keeps
+/// its single zero-cost stub pipeline; SD/audio stay startup-loaded — their
+/// constructors and eviction costs differ). The eager startup load is
+/// retained as a pre-warmed cache entry (the llama-swap `preload` analog):
+/// the configured slug answers instantly, and idle TTL eviction frees it
+/// like any other entry.
+fn build_swap_manager(
+    swap_cfg: &config::SwapConfig,
+    llm_backend: backends::LlmBackend,
+    catalog: &Arc<RwLock<Arc<honkbox_api_types::ModelCatalog>>>,
+    llm: &Arc<dyn honkbox_llm_worker::LlmPipeline>,
+    llm_model: Option<&str>,
+) -> Option<Arc<swap::SwapManager>> {
+    if !(swap_cfg.enabled && matches!(llm_backend, backends::LlmBackend::LlamaCpp)) {
+        return None;
+    }
+    let manager = Arc::new(swap::SwapManager::new(
+        swap::SwapSettings {
+            llm_ttl: swap_cfg.llm_ttl,
+            llm_max_loaded: swap_cfg.llm_max_loaded,
+        },
+        swap::catalog_llm_loader(Arc::clone(catalog)),
+    ));
+    if let Some(slug) = llm_model {
+        manager.seed(slug, Arc::clone(llm));
+    }
+    // The reaper runs detached for the server's lifetime; the handle is
+    // dropped on purpose (a missed idle sweep only delays a free, and the
+    // process's exit tears the task down anyway).
+    drop(swap::spawn_reaper(Arc::clone(&manager)));
+    Some(manager)
+}
+
 #[tokio::main]
 async fn main() {
     let Cli { command, config } = Cli::parse();
@@ -253,6 +288,7 @@ async fn main() {
             let gc_ttl = cfg.jobs.gc_ttl;
             let gc_max_bytes = cfg.jobs.gc_max_bytes;
             tokio::task::spawn_blocking(move || jobs::gc_jobs(gc_ttl, gc_max_bytes));
+            let swap_cfg = cfg.swap.clone();
             let roots = honkbox_registry::ModelRoots {
                 llm_dirs: cfg.llm_dirs,
                 comfyui_dirs: cfg.comfyui_dirs,
@@ -269,6 +305,8 @@ async fn main() {
             let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
             let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
             let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
+            let swap =
+                build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
             axum::serve(
                 listener,
                 app(AppConfig {
@@ -282,6 +320,7 @@ async fn main() {
                     llm,
                     stt,
                     tts,
+                    swap,
                 })
                 .into_make_service(),
             )

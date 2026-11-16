@@ -6,6 +6,11 @@
 mod metrics;
 #[path = "../src/routes.rs"]
 mod routes;
+// Included only so `routes.rs`'s `crate::swap` paths resolve in this test
+// binary; the swap module itself is not exercised here.
+#[allow(dead_code)]
+#[path = "../src/swap.rs"]
+mod swap;
 
 use axum::{
     Router,
@@ -54,6 +59,7 @@ fn test_app_with_roots(catalog: ModelCatalog, roots: honkbox_registry::ModelRoot
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        swap: None,
     })
 }
 
@@ -74,6 +80,7 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        swap: None,
     })
 }
 

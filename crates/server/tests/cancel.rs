@@ -9,6 +9,11 @@
 mod metrics;
 #[path = "../src/routes.rs"]
 mod routes;
+// Included only so `routes.rs`'s `crate::swap` paths resolve in this test
+// binary; the swap module itself is not exercised here.
+#[allow(dead_code)]
+#[path = "../src/swap.rs"]
+mod swap;
 
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -193,6 +198,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
         }),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        swap: None,
     });
 
     let response = app
@@ -272,6 +278,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         llm: Arc::clone(&llm) as Arc<dyn LlmPipeline>,
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        swap: None,
     });
 
     let response = app

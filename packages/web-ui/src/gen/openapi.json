@@ -274,6 +274,15 @@
           "messages"
         ],
         "properties": {
+          "keep_alive": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Per-request idle-TTL override for this model's swap entry, in seconds\n(NEW-8; the Ollama `keep_alive` / LM Studio `ttl` analog). Overrides\nthe configured `[swap] llm_ttl_secs` from this request until the entry\nis touched again; `0` = free to evict at the next eviction sweep.\nIgnored when the swap manager is off (stub backends, `[swap] enabled\n= false`).",
+            "minimum": 0
+          },
           "max_tokens": {
             "type": [
               "integer",

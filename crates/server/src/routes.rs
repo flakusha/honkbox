@@ -86,7 +86,9 @@ pub struct ApiDoc;
 /// Runtime switch for the UI fallback plus the shared inference pipelines.
 ///
 /// Pipelines are `Clone`-safe (`Arc`): stub unit structs cost nothing, file
-/// backends load once at startup and are shared across requests.
+/// backends load once at startup and are shared across requests. With the
+/// LLM swap manager active (`swap`), chat routes resolve the request slug
+/// through it instead of the static `llm` pipeline.
 #[derive(Clone)]
 pub struct AppConfig {
     /// Serve `web_dist_dir` from disk instead of the embedded bundle.
@@ -116,6 +118,13 @@ pub struct AppConfig {
     pub stt: Arc<dyn SttPipeline>,
     /// Shared synthesis pipeline (`stub-tts` or `kokoro-*`).
     pub tts: Arc<dyn TtsPipeline>,
+    /// LLM swap manager (P1 of the llama-swap parity plan). When `Some`,
+    /// `/v1/chat`(+`/stream`) resolve the request `model` slug through it:
+    /// load-on-demand construction, per-entry idle TTL, LRU capacity. `None`
+    /// keeps the startup-loaded `llm` pipeline (stub backends, or
+    /// `[swap] enabled = false`). 429 semantics are unchanged either way —
+    /// the residency slot stays the only inference gate.
+    pub swap: Option<Arc<crate::swap::SwapManager>>,
 }
 
 impl AppConfig {
@@ -391,6 +400,30 @@ fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, 
     })
 }
 
+/// Map a swap error onto the HTTP contract: an unknown / non-LLM slug is a
+/// 400 (same semantics as `validate_model`), a failed construction is a 500
+/// naming the cause (the cache stays consistent — nothing was inserted).
+fn swap_rejection(err: crate::swap::SwapError) -> (StatusCode, String) {
+    match err {
+        crate::swap::SwapError::UnknownSlug(message) => (StatusCode::BAD_REQUEST, message),
+        crate::swap::SwapError::Load(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+
+/// Resolve the chat pipeline for a request: through the swap manager when
+/// active (per-request `keep_alive` rides along as the entry's TTL budget),
+/// otherwise the startup-configured static pipeline.
+async fn chat_pipeline(
+    config: &AppConfig,
+    model: &str,
+    keep_alive: Option<u64>,
+) -> Result<Arc<dyn LlmPipeline>, (StatusCode, String)> {
+    match &config.swap {
+        Some(swap) => swap.get(model, keep_alive).await.map_err(swap_rejection),
+        None => Ok(config.llm.clone()),
+    }
+}
+
 /// `POST /v1/chat`: sync worker call inside `spawn_blocking`; the residency
 /// lease is held across the call. Only the server edge is async.
 #[utoipa::path(
@@ -417,7 +450,7 @@ async fn post_chat(
         max_tokens: req.max_tokens,
         temperature: req.temperature,
     };
-    let pipe = config.llm.clone();
+    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
@@ -528,7 +561,7 @@ async fn post_chat_stream(
     // returns the SSE body without awaiting the worker, so tokens stream as
     // they are produced.
     let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
-    let pipe = config.llm.clone();
+    let pipe = chat_pipeline(&config, &req.model, req.keep_alive).await?;
     // Separate handle for the SSE body: the worker closure consumes its own
     // clone, the drop path calls `abort` through this one.
     let abort_pipe = Arc::clone(&pipe);
