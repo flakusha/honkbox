@@ -4,6 +4,9 @@
 //! `already_present`, the 2-slot cap, and the `/v1/downloads` route flow.
 
 // No lib target on this binary crate, so include the modules directly.
+#[allow(dead_code)]
+#[path = "../src/catalog.rs"]
+mod catalog;
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[path = "../src/metrics.rs"]
@@ -949,6 +952,7 @@ fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
         swap: None,
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: Some(root.to_path_buf()),
+        vram_budget: None,
         downloads: mgr,
     }
 }
