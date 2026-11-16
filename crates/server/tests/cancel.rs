@@ -90,6 +90,7 @@ impl LlmPipeline for GatedLlm {
             text: "gated".to_owned(),
             tokens: 1,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }
@@ -110,6 +111,7 @@ impl LlmPipeline for GatedLlm {
             text: "onetwothree".to_owned(),
             tokens: 3,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }
@@ -138,6 +140,7 @@ impl LlmPipeline for AbortGateLlm {
             text: "gated".to_owned(),
             tokens: 1,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }
@@ -171,6 +174,7 @@ impl LlmPipeline for AbortGateLlm {
             text: "onetwothree".to_owned(),
             tokens: 3,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }

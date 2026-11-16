@@ -15,16 +15,129 @@ export type Version = {
    */
   version: string;
 };
-export type ChatRole = "user" | "assistant" | "system";
+export type JsonValue =
+  | number
+  | string
+  | boolean
+  | Array<JsonValue>
+  | { [key in string]: JsonValue; }
+  | null;
+export type ChatRole = "user" | "assistant" | "system" | "tool";
 export type ChatMessage = {
   /**
    * Who said it.
    */
   role: ChatRole;
   /**
-   * Message text.
+   * Message text. Nullable on the assistant-with-`tool_calls` shape
+   * (`OpenAI` sends `content: null` there); missing content deserializes
+   * as `null` and is treated as empty.
    */
-  content: string;
+  content: string | null;
+  /**
+   * Assistant turn: tool calls the model already made (`REQ-3`).
+   */
+  tool_calls?: Array<ToolCall> | null;
+  /**
+   * `role: "tool"` turn: id of the assistant tool call this message
+   * answers.
+   */
+  tool_call_id?: string | null;
+};
+export type ToolCall = {
+  /**
+   * Call id (unique per response on replies; echoed by `role: "tool"`
+   * messages as `tool_call_id`).
+   */
+  id: string;
+  /**
+   * Always `"function"`.
+   */
+  type: ToolCallType;
+  /**
+   * The invoked function.
+   */
+  function: FunctionCall;
+};
+export type ToolCallType = "function";
+export type FunctionCall = {
+  /**
+   * Tool name.
+   */
+  name: string;
+  /**
+   * The arguments, as a JSON-encoded string ("{\"city\":\"Reykjavik\"}").
+   */
+  arguments: string;
+};
+export type ChatTool = {
+  /**
+   * Always `"function"`.
+   */
+  type: ToolType;
+  /**
+   * The callable function.
+   */
+  function: FunctionDefinition;
+};
+export type ToolType = "function";
+export type FunctionDefinition = {
+  /**
+   * Tool name.
+   */
+  name: string;
+  /**
+   * What the function does (model-facing hint).
+   */
+  description?: string | null;
+  /**
+   * JSON Schema of the arguments object. Arbitrary JSON: it is forwarded
+   * to the schema→grammar converter verbatim.
+   */
+  parameters: JsonValue;
+};
+export type ToolChoiceSpec = string | {
+  /**
+   * The named function.
+   */
+  function: NamedFunction;
+};
+export type NamedFunction = {
+  /**
+   * Tool name to steer the model towards.
+   */
+  name: string;
+};
+export type ResponseFormat = {
+  /**
+   * Format discriminator.
+   */
+  type: ResponseFormatType;
+  /**
+   * Required when `format_type` is `json_schema`.
+   */
+  json_schema?: JsonSchemaSpec | null;
+};
+export type ResponseFormatType = "text" | "json_object" | "json_schema";
+export type JsonSchemaSpec = {
+  /**
+   * Schema name (`OpenAI` requires one; only echoed, never enforced).
+   */
+  name: string;
+  /**
+   * Optional schema description.
+   */
+  description?: string | null;
+  /**
+   * The JSON Schema itself; converted to a GBNF grammar on the llama.cpp
+   * path.
+   */
+  schema: JsonValue;
+  /**
+   * `OpenAI` strict-mode flag; accepted (grammar enforcement is always
+   * strict here).
+   */
+  strict: boolean;
 };
 export type ChatRequest = {
   /**
@@ -109,8 +222,84 @@ export type OpenAiChatRequest = {
    * [`ChatRequest::ttl_seconds`].
    */
   ttl_seconds?: bigint | null;
+  /**
+   * `OpenAI` tool definitions (`REQ-3`). Non-empty arrays switch the
+   * worker onto the tool-capable chat template: the model's tool-call
+   * grammar constrains generation and tool calls are parsed from the
+   * output (`finish_reason: "tool_calls"`).
+   */
+  tools?: Array<ChatTool> | null;
+  /**
+   * `"auto"` / `"none"` / `"required"` / named. Only `"none"` changes
+   * behavior; everything else is clamped to `auto`.
+   */
+  tool_choice?: ToolChoiceSpec | null;
+  /**
+   * Accepted and ignored: honkbox produces at most one tool call per
+   * turn. Present so parallel-`true` clients are not rejected.
+   */
+  parallel_tool_calls?: boolean | null;
+  /**
+   * Structured output (`REQ-3`): `json_object` → any-JSON grammar,
+   * `json_schema` → schema converted to GBNF. Both enforced on the
+   * llama.cpp path, never a silently unconstrained string.
+   */
+  response_format?: ResponseFormat | null;
+  /**
+   * Raw GBNF grammar (llama.cpp `grammar` field), honored verbatim as
+   * the sampler chain's head. An unparseable grammar is a 400.
+   */
+  grammar?: string | null;
+  /**
+   * Distinct tokens considered per step (llama.cpp `top_k`; `<= 0`
+   * disables). Wired when present.
+   */
+  top_k?: number | null;
+  /**
+   * Minimum probability for a token to be kept (llama.cpp `min_p`).
+   * Wired when present.
+   */
+  min_p?: number | null;
+  /**
+   * Locally-typical sampling mass (llama.cpp `typical_p`). Wired when
+   * present.
+   */
+  typical_p?: number | null;
+  /**
+   * Repetition penalty (llama.cpp `repeat_penalty`; 1.0 = off). Wired
+   * when present.
+   */
+  repeat_penalty?: number | null;
+  /**
+   * Probability of excising the top token when a close runner-up exists
+   * (llama.cpp `xtc_probability`; 0 = off). Wired when present.
+   */
+  xtc_probability?: number | null;
+  /**
+   * DRY repetition penalty strength (0 = off). Wired when present.
+   */
+  dry_multiplier?: number | null;
+  /**
+   * DRY penalty exponent base (llama.cpp default 1.75). Wired when
+   * `dry_multiplier` is present.
+   */
+  dry_base?: number | null;
+  /**
+   * DRY sequence length below which no penalty applies (llama.cpp
+   * default 2). Wired when `dry_multiplier` is present.
+   */
+  dry_allowed_length?: number | null;
+  /**
+   * Dynamic temperature range (0 = off). Wired when present.
+   */
+  dynatemp_range?: number | null;
+  /**
+   * Dynamic temperature exponent (llama.cpp default 1.0). Wired when
+   * `dynatemp_range` is present.
+   */
+  dynatemp_exponent?: number | null;
 };
-export type FinishReason = "stop" | "length";
+export type FinishReason = "stop" | "length" | "tool_calls";
 export type OpenAiUsage = {
   /**
    * Prompt tokens after tokenization (real count on the llama.cpp path;
@@ -176,6 +365,42 @@ export type OpenAiDelta = {
    * Next text piece, token frames only.
    */
   content: string | null;
+  /**
+   * Tool-call fragments (`REQ-3`): the first frame of a call carries
+   * `id`/`type`/`name` + empty `arguments`, later frames append to
+   * `arguments` at the same `index`. Concatenating the `arguments`
+   * fragments per index yields the complete JSON string.
+   */
+  tool_calls: Array<DeltaToolCall> | null;
+};
+export type DeltaToolCall = {
+  /**
+   * Fragment position within the turn's tool calls.
+   */
+  index: number;
+  /**
+   * Call id, first fragment only.
+   */
+  id?: string | null;
+  /**
+   * Always `"function"`, first fragment only.
+   */
+  type?: ToolCallType | null;
+  /**
+   * The invoked function: `name` (+ empty `arguments`) on the first
+   * fragment, next `arguments` piece on every continuation.
+   */
+  function?: DeltaFunction | null;
+};
+export type DeltaFunction = {
+  /**
+   * Function name, first fragment only.
+   */
+  name?: string | null;
+  /**
+   * Next piece of the JSON-encoded arguments string.
+   */
+  arguments?: string | null;
 };
 export type OpenAiChunkChoice = {
   /**
@@ -241,6 +466,62 @@ export type OpenAiError = {
    * The error detail.
    */
   error: OpenAiErrorDetail;
+};
+export type EmbeddingsRequest = {
+  /**
+   * Model id: an operator alias or registry slug whose
+   * `capabilities.embeddings` is true (`REQ-2` override honored).
+   */
+  model: string;
+  /**
+   * One input or a batch of inputs; batch order maps onto
+   * `data[].index` one-to-one.
+   */
+  input: EmbeddingsInput;
+};
+export type EmbeddingsInput = string | Array<string>;
+export type EmbeddingsData = {
+  /**
+   * Always `"embedding"`.
+   */
+  object: string;
+  /**
+   * Position of the source input in the request batch.
+   */
+  index: number;
+  /**
+   * The embedding vector: the model's dimension, L2-normalized.
+   */
+  embedding: Array<number>;
+};
+export type EmbeddingsUsage = {
+  /**
+   * Input token count (real tokenizer on the llama.cpp path;
+   * deterministic word count on the stub).
+   */
+  prompt_tokens: number;
+  /**
+   * `prompt_tokens` (embeddings generate nothing).
+   */
+  total_tokens: bigint;
+};
+export type EmbeddingsResponse = {
+  /**
+   * Always `"list"`.
+   */
+  object: string;
+  /**
+   * One entry per input, in request order.
+   */
+  data: Array<EmbeddingsData>;
+  /**
+   * The resolved model's served id (alias when bound, else the slug).
+   */
+  model: string;
+  /**
+   * Token accounting.
+   */
+  usage: EmbeddingsUsage;
 };
 export type TranscriptSegment = {
   /**

@@ -33,6 +33,43 @@ pub enum ChatRole {
     Assistant,
     /// System instructions.
     System,
+    /// Tool result turn (`REQ-3`); pairs with `tool_call_id`.
+    Tool,
+}
+
+/// One tool call as it appears on an assistant message (`REQ-3`).
+/// `arguments` is a JSON-encoded **string**, exactly as `OpenAI` clients
+/// exchange it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ToolCall {
+    /// Call id (unique per response on replies; echoed by `role: "tool"`
+    /// messages as `tool_call_id`).
+    #[serde(default)]
+    pub id: String,
+    /// Always `"function"`.
+    #[serde(rename = "type")]
+    pub call_type: ToolCallType,
+    /// The invoked function.
+    pub function: FunctionCall,
+}
+
+/// Flavor of a tool call. Only `OpenAI` function calls are supported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolCallType {
+    /// A named function call.
+    #[default]
+    Function,
+}
+
+/// Function invocation payload of a [`ToolCall`].
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct FunctionCall {
+    /// Tool name.
+    pub name: String,
+    /// The arguments, as a JSON-encoded string ("{\"city\":\"Reykjavik\"}").
+    #[serde(default)]
+    pub arguments: String,
 }
 
 /// One chat message.
@@ -40,8 +77,130 @@ pub enum ChatRole {
 pub struct ChatMessage {
     /// Who said it.
     pub role: ChatRole,
-    /// Message text.
-    pub content: String,
+    /// Message text. Nullable on the assistant-with-`tool_calls` shape
+    /// (`OpenAI` sends `content: null` there); missing content deserializes
+    /// as `null` and is treated as empty.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Assistant turn: tool calls the model already made (`REQ-3`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// `role: "tool"` turn: id of the assistant tool call this message
+    /// answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// One `OpenAI` tool definition (`REQ-3`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ChatTool {
+    /// Always `"function"`.
+    #[serde(rename = "type")]
+    pub tool_type: ToolType,
+    /// The callable function.
+    pub function: FunctionDefinition,
+}
+
+/// Flavor of a tool definition. Only `OpenAI` function tools are supported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolType {
+    /// A named function tool.
+    #[default]
+    Function,
+}
+
+/// Callable function description (`tools[].function`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct FunctionDefinition {
+    /// Tool name.
+    pub name: String,
+    /// What the function does (model-facing hint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// JSON Schema of the arguments object. Arbitrary JSON: it is forwarded
+    /// to the schema→grammar converter verbatim.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub parameters: serde_json::Value,
+}
+
+/// `OpenAI` `tool_choice` (`REQ-3`): a mode string or a named function.
+/// Everything except `"none"` is clamped to `auto` behaviour (tools are
+/// offered; the model decides) — no rejection.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+#[serde(untagged)]
+pub enum ToolChoiceSpec {
+    /// `"auto"`, `"none"`, `"required"`, or `"any"`.
+    Mode(String),
+    /// `{"type":"function","function":{"name":…}}`.
+    Named {
+        /// The named function.
+        function: NamedFunction,
+    },
+}
+
+/// Named function payload of [`ToolChoiceSpec::Named`].
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct NamedFunction {
+    /// Tool name to steer the model towards.
+    pub name: String,
+}
+
+impl ToolChoiceSpec {
+    /// True when tool calls must not be offered (`"none"`). Any other
+    /// value — `auto`, `required`, `any`, named — samples with tools
+    /// available (clamped to `auto`).
+    #[must_use]
+    pub fn suppresses_tools(&self) -> bool {
+        matches!(self, Self::Mode(mode) if mode == "none")
+    }
+}
+
+/// `OpenAI` `response_format` (`REQ-3`). `json_object` and `json_schema` are
+/// **enforced**: the schema (or a generic any-JSON grammar for
+/// `json_object`) is converted to GBNF and wired into the sampler chain, so
+/// the model cannot emit a non-conforming string.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ResponseFormat {
+    /// Format discriminator.
+    #[serde(rename = "type")]
+    pub format_type: ResponseFormatType,
+    /// Required when `format_type` is `json_schema`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<JsonSchemaSpec>,
+}
+
+/// Supported `response_format` types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormatType {
+    /// Plain text (unconstrained).
+    Text,
+    /// Any valid JSON object, enforced by grammar.
+    JsonObject,
+    /// One specific JSON schema, enforced by grammar.
+    JsonSchema,
+}
+
+/// Schema payload of `response_format: {"type":"json_schema"}`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct JsonSchemaSpec {
+    /// Schema name (`OpenAI` requires one; only echoed, never enforced).
+    #[serde(default)]
+    pub name: String,
+    /// Optional schema description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The JSON Schema itself; converted to a GBNF grammar on the llama.cpp
+    /// path.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub schema: serde_json::Value,
+    /// `OpenAI` strict-mode flag; accepted (grammar enforcement is always
+    /// strict here).
+    #[serde(default)]
+    pub strict: bool,
 }
 
 /// Chat completion request.
@@ -87,10 +246,26 @@ pub struct ChatResponse {
 /// request is served by the same pipeline, GPU lease, and swap decision as
 /// `POST /v1/chat`.
 ///
-/// Undeclared keys (`top_p`, `stop`, tool fields, anything else) are
-/// accepted and silently ignored (serde's default unknown-key behavior);
-/// only the fields below have honkbox-side meaning. `content` parts and
-/// tool messages are REQ-8/REQ-3, out of scope.
+/// Undeclared keys (`top_p`, `stop`, `reasoning_budget`, `cache_prompt`, …)
+/// are accepted and silently ignored (serde's default unknown-key behavior);
+/// only the fields below have honkbox-side meaning.
+///
+/// REQ-3 additions and their fidelity:
+/// - **Enforced** (never silently ignored): `tools` + `tool_calls`,
+///   `response_format` (`json_object`/`json_schema` → GBNF grammar), raw
+///   `grammar` (llama.cpp GBNF, honored verbatim), `tool_choice: "none"`.
+///   `tools` combined with `grammar`/`response_format` is a 400 (mutually
+///   exclusive constraint), matching llama.cpp's own hard error.
+/// - **Clamped**: `tool_choice` `"required"`/`"any"`/named function all
+///   behave as `"auto"` (tools offered, model decides).
+/// - **Accepted and ignored**: `parallel_tool_calls` — one tool call is
+///   produced per turn regardless; the field exists so clients that always
+///   send it are not rejected.
+/// - **Extended sampler params, wired into the sampler chain**: `top_k`,
+///   `min_p`, `typical_p`, `repeat_penalty`, `xtc_probability`,
+///   `dry_multiplier`/`dry_base`/`dry_allowed_length`,
+///   `dynatemp_range`/`dynatemp_exponent`. All are supported by the
+///   llama-cpp-4 binding; each is applied only when present.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct OpenAiChatRequest {
     /// Model id: an operator alias or registry slug (`GET /v1/models`).
@@ -120,17 +295,80 @@ pub struct OpenAiChatRequest {
     /// [`ChatRequest::ttl_seconds`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<u64>,
+    /// `OpenAI` tool definitions (`REQ-3`). Non-empty arrays switch the
+    /// worker onto the tool-capable chat template: the model's tool-call
+    /// grammar constrains generation and tool calls are parsed from the
+    /// output (`finish_reason: "tool_calls"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ChatTool>>,
+    /// `"auto"` / `"none"` / `"required"` / named. Only `"none"` changes
+    /// behavior; everything else is clamped to `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoiceSpec>,
+    /// Accepted and ignored: honkbox produces at most one tool call per
+    /// turn. Present so parallel-`true` clients are not rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    /// Structured output (`REQ-3`): `json_object` → any-JSON grammar,
+    /// `json_schema` → schema converted to GBNF. Both enforced on the
+    /// llama.cpp path, never a silently unconstrained string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
+    /// Raw GBNF grammar (llama.cpp `grammar` field), honored verbatim as
+    /// the sampler chain's head. An unparseable grammar is a 400.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammar: Option<String>,
+    /// Distinct tokens considered per step (llama.cpp `top_k`; `<= 0`
+    /// disables). Wired when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    /// Minimum probability for a token to be kept (llama.cpp `min_p`).
+    /// Wired when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f32>,
+    /// Locally-typical sampling mass (llama.cpp `typical_p`). Wired when
+    /// present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typical_p: Option<f32>,
+    /// Repetition penalty (llama.cpp `repeat_penalty`; 1.0 = off). Wired
+    /// when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    /// Probability of excising the top token when a close runner-up exists
+    /// (llama.cpp `xtc_probability`; 0 = off). Wired when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xtc_probability: Option<f32>,
+    /// DRY repetition penalty strength (0 = off). Wired when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_multiplier: Option<f32>,
+    /// DRY penalty exponent base (llama.cpp default 1.75). Wired when
+    /// `dry_multiplier` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_base: Option<f32>,
+    /// DRY sequence length below which no penalty applies (llama.cpp
+    /// default 2). Wired when `dry_multiplier` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_allowed_length: Option<u32>,
+    /// Dynamic temperature range (0 = off). Wired when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_range: Option<f32>,
+    /// Dynamic temperature exponent (llama.cpp default 1.0). Wired when
+    /// `dynatemp_range` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynatemp_exponent: Option<f32>,
 }
 
 /// Why generation stopped (`choices[].finish_reason`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// Natural end of generation.
     Stop,
     /// `max_tokens` reached (heuristic: reported tokens >= requested cap —
     /// the worker does not surface a native stop cause).
     Length,
+    /// The reply carries `message.tool_calls` (`REQ-3`).
+    ToolCalls,
 }
 
 /// Token accounting (`usage`).
@@ -174,9 +412,9 @@ pub struct OpenAiChatCompletion {
     pub usage: OpenAiUsage,
 }
 
-/// One streamed delta (`choices[].delta` of a chunk). Both fields optional:
-/// the first frame carries `role`, token frames carry `content`, the final
-/// frame carries neither.
+/// One streamed delta (`choices[].delta` of a chunk). All fields optional:
+/// the first frame carries `role`, token frames carry `content`, tool-call
+/// frames carry `tool_calls` (`REQ-3`), the final frame carries none.
 #[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiDelta {
     /// Assistant role marker, first frame only.
@@ -185,6 +423,43 @@ pub struct OpenAiDelta {
     /// Next text piece, token frames only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Tool-call fragments (`REQ-3`): the first frame of a call carries
+    /// `id`/`type`/`name` + empty `arguments`, later frames append to
+    /// `arguments` at the same `index`. Concatenating the `arguments`
+    /// fragments per index yields the complete JSON string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<DeltaToolCall>>,
+}
+
+/// One streamed tool-call fragment (`delta.tool_calls[]`). Mirrors the
+/// `OpenAI` fragment shape: the first fragment of a call carries
+/// `id`/`type` and a `function` object with `name` + empty `arguments`;
+/// continuation fragments carry only `index` and `function.arguments`.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct DeltaToolCall {
+    /// Fragment position within the turn's tool calls.
+    pub index: u32,
+    /// Call id, first fragment only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Always `"function"`, first fragment only.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub call_type: Option<ToolCallType>,
+    /// The invoked function: `name` (+ empty `arguments`) on the first
+    /// fragment, next `arguments` piece on every continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<DeltaFunction>,
+}
+
+/// Function payload of [`DeltaToolCall`] (streamed incrementally).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct DeltaFunction {
+    /// Function name, first fragment only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Next piece of the JSON-encoded arguments string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
 }
 
 /// One streamed chunk choice (`choices[]` of a chunk).
@@ -259,6 +534,8 @@ impl OpenAiError {
         }
     }
 }
+
+// Embeddings DTOs land with REQ-4.
 
 /// One transcript segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
@@ -754,8 +1031,23 @@ mod tests {
         for decl in [
             Health::decl(&config),
             Version::decl(&config),
+            // `serde_json::Value` renders as `JsonValue` (ts-rs serde-json
+            // impl); fields like `FunctionDefinition::parameters` reference
+            // it, so its definition must ship alongside them.
+            serde_json::Value::decl(&config),
             ChatRole::decl(&config),
             ChatMessage::decl(&config),
+            ToolCall::decl(&config),
+            ToolCallType::decl(&config),
+            FunctionCall::decl(&config),
+            ChatTool::decl(&config),
+            ToolType::decl(&config),
+            FunctionDefinition::decl(&config),
+            ToolChoiceSpec::decl(&config),
+            NamedFunction::decl(&config),
+            ResponseFormat::decl(&config),
+            ResponseFormatType::decl(&config),
+            JsonSchemaSpec::decl(&config),
             ChatRequest::decl(&config),
             ChatResponse::decl(&config),
             OpenAiChatRequest::decl(&config),
@@ -764,6 +1056,8 @@ mod tests {
             OpenAiChoice::decl(&config),
             OpenAiChatCompletion::decl(&config),
             OpenAiDelta::decl(&config),
+            DeltaToolCall::decl(&config),
+            DeltaFunction::decl(&config),
             OpenAiChunkChoice::decl(&config),
             OpenAiChunk::decl(&config),
             OpenAiErrorDetail::decl(&config),

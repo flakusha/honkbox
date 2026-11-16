@@ -1,6 +1,6 @@
 # honkbox
 
-Local-first generative studio in Rust: Stable Diffusion image/video generation plus local LLM chat plus audio (STT/TTS) behind one Axum REST/WS server, Vulkan-first GPU with CPU fallback, and a tabbed web UI served over the same API.
+Local-first generative studio in Rust: Stable Diffusion image/video generation plus local LLM chat plus audio (STT/TTS) behind one Axum REST/SSE server, Vulkan-first GPU with CPU fallback, and a tabbed web UI served over the same API.
 
 ## Prereqs
 
@@ -60,7 +60,7 @@ alias hbx=honkbox
 - `crates/audio-worker` — whisper STT, Kokoro TTS, Silero VAD.
 - `crates/residency` — VRAM ledger + tier presets, `/v1/memory` backing types.
 - `crates/registry` — SQLite schema, model-dir scan, hf-hub downloads.
-- `crates/server` — Axum REST+WS binary, clap CLI, queue, embedded UI, TOML config.
+- `crates/server` — Axum REST+SSE binary, clap CLI, queue, embedded UI, TOML config.
 - `packages/web-ui` — tabbed frontend (Vite + TS).
 - `scripts/` — bun dev/build/codegen helpers run via package scripts.
 - `packages/web-ui/src/gen/` — generated TS from `api-types`; do not hand-edit (`codegen:check` enforces).

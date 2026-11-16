@@ -665,10 +665,12 @@ fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
         messages: vec![honkbox_llm_worker::ChatMessage {
             role: honkbox_llm_worker::Role::User,
             content: prompt,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
         }],
         max_tokens,
         temperature,
-        seed: None,
+        ..Default::default()
     }));
     println!(
         "{}",

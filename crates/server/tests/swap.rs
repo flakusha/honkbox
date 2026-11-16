@@ -78,6 +78,7 @@ fn canned_response() -> ChatResponse {
         text: "hello swap".to_owned(),
         tokens: 2,
         prompt_tokens: 0,
+        tool_calls: Vec::new(),
         millis: 0,
     }
 }

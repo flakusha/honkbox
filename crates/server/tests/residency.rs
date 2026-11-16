@@ -40,7 +40,7 @@ use axum::{
 use honkbox_api_types::{ModelCatalog, ModelCatalogEntry, ModelKind};
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::{
-    ChatRequest as WorkerChatRequest, ChatResponse, LlmError, LlmPipeline, StubLlm,
+    ChatRequest as WorkerChatRequest, ChatResponse, LlmError, LlmPipeline, SamplerParams, StubLlm,
 };
 use serde_json::Value;
 use tower::ServiceExt as _;
@@ -82,6 +82,7 @@ impl LlmPipeline for CountingLlm {
             text: "hello residency".to_owned(),
             tokens: 2,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }
@@ -98,6 +99,7 @@ impl LlmPipeline for CountingLlm {
             text: "hello residency".to_owned(),
             tokens: 2,
             prompt_tokens: 0,
+            tool_calls: Vec::new(),
             millis: 0,
         })
     }
@@ -373,6 +375,12 @@ async fn in_flight_pipeline_survives_eviction() {
         max_tokens: None,
         temperature: None,
         seed: None,
+        grammar: None,
+        json_schema: None,
+        json_object: false,
+        tools_json: None,
+        tool_choice_none: false,
+        sampler: SamplerParams::default(),
     };
     let reply = pipe.complete(&req).expect("in-flight completion");
     assert_eq!(reply.backend_id, "counting-llm");

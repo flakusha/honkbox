@@ -699,17 +699,36 @@
         "type": "object",
         "description": "One chat message.",
         "required": [
-          "role",
-          "content"
+          "role"
         ],
         "properties": {
           "content": {
-            "type": "string",
-            "description": "Message text."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Message text. Nullable on the assistant-with-`tool_calls` shape\n(`OpenAI` sends `content: null` there); missing content deserializes\nas `null` and is treated as empty."
           },
           "role": {
             "$ref": "#/components/schemas/ChatRole",
             "description": "Who said it."
+          },
+          "tool_call_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`role: \"tool\"` turn: id of the assistant tool call this message\nanswers."
+          },
+          "tool_calls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ToolCall"
+            },
+            "description": "Assistant turn: tool calls the model already made (`REQ-3`)."
           }
         }
       },
@@ -798,8 +817,91 @@
         "enum": [
           "user",
           "assistant",
-          "system"
+          "system",
+          "tool"
         ]
+      },
+      "ChatTool": {
+        "type": "object",
+        "description": "One `OpenAI` tool definition (`REQ-3`).",
+        "required": [
+          "type",
+          "function"
+        ],
+        "properties": {
+          "function": {
+            "$ref": "#/components/schemas/FunctionDefinition",
+            "description": "The callable function."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ToolType",
+            "description": "Always `\"function\"`."
+          }
+        }
+      },
+      "DeltaFunction": {
+        "type": "object",
+        "description": "Function payload of [`DeltaToolCall`] (streamed incrementally).",
+        "properties": {
+          "arguments": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Next piece of the JSON-encoded arguments string."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Function name, first fragment only."
+          }
+        }
+      },
+      "DeltaToolCall": {
+        "type": "object",
+        "description": "One streamed tool-call fragment (`delta.tool_calls[]`). Mirrors the\n`OpenAI` fragment shape: the first fragment of a call carries\n`id`/`type` and a `function` object with `name` + empty `arguments`;\ncontinuation fragments carry only `index` and `function.arguments`.",
+        "required": [
+          "index"
+        ],
+        "properties": {
+          "function": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeltaFunction",
+                "description": "The invoked function: `name` (+ empty `arguments`) on the first\nfragment, next `arguments` piece on every continuation."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Call id, first fragment only."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Fragment position within the turn's tool calls.",
+            "minimum": 0
+          },
+          "type": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolCallType",
+                "description": "Always `\"function\"`, first fragment only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "DownloadAccepted": {
         "type": "object",
@@ -953,13 +1055,171 @@
           "cancelled"
         ]
       },
+      "EmbeddingsData": {
+        "type": "object",
+        "description": "One embedding vector (`data[]`).",
+        "required": [
+          "object",
+          "index",
+          "embedding"
+        ],
+        "properties": {
+          "embedding": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "The embedding vector: the model's dimension, L2-normalized."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position of the source input in the request batch.",
+            "minimum": 0
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"embedding\"`."
+          }
+        }
+      },
+      "EmbeddingsInput": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A single input (one `data` entry, `index` 0)."
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A batch (one `data` entry per input, in order)."
+          }
+        ],
+        "description": "The `input` field: a bare string or an array of strings."
+      },
+      "EmbeddingsRequest": {
+        "type": "object",
+        "description": "`POST /v1/embeddings` request (REQ-4). `model` is required (`OpenAI`\ncontract): an omitted model is a deserialization 400.",
+        "required": [
+          "model",
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/EmbeddingsInput",
+            "description": "One input or a batch of inputs; batch order maps onto\n`data[].index` one-to-one."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model id: an operator alias or registry slug whose\n`capabilities.embeddings` is true (`REQ-2` override honored)."
+          }
+        }
+      },
+      "EmbeddingsResponse": {
+        "type": "object",
+        "description": "Embeddings response (`object: \"list\"`), one `data` entry per input.",
+        "required": [
+          "object",
+          "data",
+          "model",
+          "usage"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingsData"
+            },
+            "description": "One entry per input, in request order."
+          },
+          "model": {
+            "type": "string",
+            "description": "The resolved model's served id (alias when bound, else the slug)."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"`."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/EmbeddingsUsage",
+            "description": "Token accounting."
+          }
+        }
+      },
+      "EmbeddingsUsage": {
+        "type": "object",
+        "description": "Token accounting for an embeddings call (no completion side).",
+        "required": [
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Input token count (real tokenizer on the llama.cpp path;\ndeterministic word count on the stub).",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`prompt_tokens` (embeddings generate nothing).",
+            "minimum": 0
+          }
+        }
+      },
       "FinishReason": {
         "type": "string",
         "description": "Why generation stopped (`choices[].finish_reason`).",
         "enum": [
           "stop",
-          "length"
+          "length",
+          "tool_calls"
         ]
+      },
+      "FunctionCall": {
+        "type": "object",
+        "description": "Function invocation payload of a [`ToolCall`].",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "arguments": {
+            "type": "string",
+            "description": "The arguments, as a JSON-encoded string (\"{\\\"city\\\":\\\"Reykjavik\\\"}\")."
+          },
+          "name": {
+            "type": "string",
+            "description": "Tool name."
+          }
+        }
+      },
+      "FunctionDefinition": {
+        "type": "object",
+        "description": "Callable function description (`tools[].function`).",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the function does (model-facing hint)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Tool name."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "JSON Schema of the arguments object. Arbitrary JSON: it is forwarded\nto the schema→grammar converter verbatim."
+          }
+        }
       },
       "GgufMetadata": {
         "type": "object",
@@ -1007,6 +1267,31 @@
           "status": {
             "type": "string",
             "description": "Always `\"ok\"` while the server is alive."
+          }
+        }
+      },
+      "JsonSchemaSpec": {
+        "type": "object",
+        "description": "Schema payload of `response_format: {\"type\":\"json_schema\"}`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional schema description."
+          },
+          "name": {
+            "type": "string",
+            "description": "Schema name (`OpenAI` requires one; only echoed, never enforced)."
+          },
+          "schema": {
+            "type": "object",
+            "description": "The JSON Schema itself; converted to a GBNF grammar on the llama.cpp\npath."
+          },
+          "strict": {
+            "type": "boolean",
+            "description": "`OpenAI` strict-mode flag; accepted (grammar enforcement is always\nstrict here)."
           }
         }
       },
@@ -1286,6 +1571,19 @@
         ],
         "description": "Optional on-disk header metadata, tagged by container format."
       },
+      "NamedFunction": {
+        "type": "object",
+        "description": "Named function payload of [`ToolChoiceSpec::Named`].",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Tool name to steer the model towards."
+          }
+        }
+      },
       "OpenAiChatCompletion": {
         "type": "object",
         "description": "Non-streaming response (`object: \"chat.completion\"`).",
@@ -1331,11 +1629,59 @@
       },
       "OpenAiChatRequest": {
         "type": "object",
-        "description": "OpenAI-compatible chat completion request (`POST /v1/chat/completions`;\nREQ-1). A translation surface over honkbox's native chat pipeline — the\nrequest is served by the same pipeline, GPU lease, and swap decision as\n`POST /v1/chat`.\n\nUndeclared keys (`top_p`, `stop`, tool fields, anything else) are\naccepted and silently ignored (serde's default unknown-key behavior);\nonly the fields below have honkbox-side meaning. `content` parts and\ntool messages are REQ-8/REQ-3, out of scope.",
+        "description": "OpenAI-compatible chat completion request (`POST /v1/chat/completions`;\nREQ-1). A translation surface over honkbox's native chat pipeline — the\nrequest is served by the same pipeline, GPU lease, and swap decision as\n`POST /v1/chat`.\n\nUndeclared keys (`top_p`, `stop`, `reasoning_budget`, `cache_prompt`, …)\nare accepted and silently ignored (serde's default unknown-key behavior);\nonly the fields below have honkbox-side meaning.\n\nREQ-3 additions and their fidelity:\n- **Enforced** (never silently ignored): `tools` + `tool_calls`,\n  `response_format` (`json_object`/`json_schema` → GBNF grammar), raw\n  `grammar` (llama.cpp GBNF, honored verbatim), `tool_choice: \"none\"`.\n  `tools` combined with `grammar`/`response_format` is a 400 (mutually\n  exclusive constraint), matching llama.cpp's own hard error.\n- **Clamped**: `tool_choice` `\"required\"`/`\"any\"`/named function all\n  behave as `\"auto\"` (tools offered, model decides).\n- **Accepted and ignored**: `parallel_tool_calls` — one tool call is\n  produced per turn regardless; the field exists so clients that always\n  send it are not rejected.\n- **Extended sampler params, wired into the sampler chain**: `top_k`,\n  `min_p`, `typical_p`, `repeat_penalty`, `xtc_probability`,\n  `dry_multiplier`/`dry_base`/`dry_allowed_length`,\n  `dynatemp_range`/`dynatemp_exponent`. All are supported by the\n  llama-cpp-4 binding; each is applied only when present.",
         "required": [
           "messages"
         ],
         "properties": {
+          "dry_allowed_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "DRY sequence length below which no penalty applies (llama.cpp\ndefault 2). Wired when `dry_multiplier` is present.",
+            "minimum": 0
+          },
+          "dry_base": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "DRY penalty exponent base (llama.cpp default 1.75). Wired when\n`dry_multiplier` is present."
+          },
+          "dry_multiplier": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "DRY repetition penalty strength (0 = off). Wired when present."
+          },
+          "dynatemp_exponent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Dynamic temperature exponent (llama.cpp default 1.0). Wired when\n`dynatemp_range` is present."
+          },
+          "dynatemp_range": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Dynamic temperature range (0 = off). Wired when present."
+          },
+          "grammar": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw GBNF grammar (llama.cpp `grammar` field), honored verbatim as\nthe sampler chain's head. An unparseable grammar is a 400."
+          },
           "max_tokens": {
             "type": [
               "integer",
@@ -1352,12 +1698,46 @@
             },
             "description": "Conversation turns (string content; roles user/assistant/system)."
           },
+          "min_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Minimum probability for a token to be kept (llama.cpp `min_p`).\nWired when present."
+          },
           "model": {
             "type": [
               "string",
               "null"
             ],
             "description": "Model id: an operator alias or registry slug (`GET /v1/models`).\nRequired on this route — an omitted/empty model is a 400 naming the\nrequirement (the native route's empty-means-server-default fallback\nstays native-only)."
+          },
+          "parallel_tool_calls": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Accepted and ignored: honkbox produces at most one tool call per\nturn. Present so parallel-`true` clients are not rejected."
+          },
+          "repeat_penalty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Repetition penalty (llama.cpp `repeat_penalty`; 1.0 = off). Wired\nwhen present."
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ResponseFormat",
+                "description": "Structured output (`REQ-3`): `json_object` → any-JSON grammar,\n`json_schema` → schema converted to GBNF. Both enforced on the\nllama.cpp path, never a silently unconstrained string."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "seed": {
             "type": [
@@ -1383,6 +1763,35 @@
             "format": "float",
             "description": "Sampling temperature; backend default when absent."
           },
+          "tool_choice": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolChoiceSpec",
+                "description": "`\"auto\"` / `\"none\"` / `\"required\"` / named. Only `\"none\"` changes\nbehavior; everything else is clamped to `auto`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ChatTool"
+            },
+            "description": "`OpenAI` tool definitions (`REQ-3`). Non-empty arrays switch the\nworker onto the tool-capable chat template: the model's tool-call\ngrammar constrains generation and tool calls are parsed from the\noutput (`finish_reason: \"tool_calls\"`)."
+          },
+          "top_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Distinct tokens considered per step (llama.cpp `top_k`; `<= 0`\ndisables). Wired when present."
+          },
           "ttl_seconds": {
             "type": [
               "integer",
@@ -1391,6 +1800,22 @@
             "format": "int64",
             "description": "Per-request residency advice; identical contract to\n[`ChatRequest::ttl_seconds`].",
             "minimum": 0
+          },
+          "typical_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Locally-typical sampling mass (llama.cpp `typical_p`). Wired when\npresent."
+          },
+          "xtc_probability": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Probability of excising the top token when a close runner-up exists\n(llama.cpp `xtc_probability`; 0 = off). Wired when present."
           }
         }
       },
@@ -1501,7 +1926,7 @@
       },
       "OpenAiDelta": {
         "type": "object",
-        "description": "One streamed delta (`choices[].delta` of a chunk). Both fields optional:\nthe first frame carries `role`, token frames carry `content`, the final\nframe carries neither.",
+        "description": "One streamed delta (`choices[].delta` of a chunk). All fields optional:\nthe first frame carries `role`, token frames carry `content`, tool-call\nframes carry `tool_calls` (`REQ-3`), the final frame carries none.",
         "properties": {
           "content": {
             "type": [
@@ -1520,6 +1945,16 @@
                 "type": "null"
               }
             ]
+          },
+          "tool_calls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeltaToolCall"
+            },
+            "description": "Tool-call fragments (`REQ-3`): the first frame of a call carries\n`id`/`type`/`name` + empty `arguments`, later frames append to\n`arguments` at the same `index`. Concatenating the `arguments`\nfragments per index yields the complete JSON string."
           }
         }
       },
@@ -1538,7 +1973,7 @@
       },
       "OpenAiErrorDetail": {
         "type": "object",
-        "description": "`OpenAI` error envelope detail (`error`).",
+        "description": "/// `OpenAI` error envelope detail (`error`).",
         "required": [
           "message",
           "type"
@@ -1657,6 +2092,39 @@
           }
         }
       },
+      "ResponseFormat": {
+        "type": "object",
+        "description": "`OpenAI` `response_format` (`REQ-3`). `json_object` and `json_schema` are\n**enforced**: the schema (or a generic any-JSON grammar for\n`json_object`) is converted to GBNF and wired into the sampler chain, so\nthe model cannot emit a non-conforming string.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "json_schema": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JsonSchemaSpec",
+                "description": "Required when `format_type` is `json_schema`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResponseFormatType",
+            "description": "Format discriminator."
+          }
+        }
+      },
+      "ResponseFormatType": {
+        "type": "string",
+        "description": "Supported `response_format` types.",
+        "enum": [
+          "text",
+          "json_object",
+          "json_schema"
+        ]
+      },
       "RunningList": {
         "type": "object",
         "description": "llama-swap-compatible warm-set envelope (`GET /running`).",
@@ -1770,6 +2238,64 @@
             "description": "Voice name; backend default when absent."
           }
         }
+      },
+      "ToolCall": {
+        "type": "object",
+        "description": "One tool call as it appears on an assistant message (`REQ-3`).\n`arguments` is a JSON-encoded **string**, exactly as `OpenAI` clients\nexchange it.",
+        "required": [
+          "type",
+          "function"
+        ],
+        "properties": {
+          "function": {
+            "$ref": "#/components/schemas/FunctionCall",
+            "description": "The invoked function."
+          },
+          "id": {
+            "type": "string",
+            "description": "Call id (unique per response on replies; echoed by `role: \"tool\"`\nmessages as `tool_call_id`)."
+          },
+          "type": {
+            "$ref": "#/components/schemas/ToolCallType",
+            "description": "Always `\"function\"`."
+          }
+        }
+      },
+      "ToolCallType": {
+        "type": "string",
+        "description": "Flavor of a tool call. Only `OpenAI` function calls are supported.",
+        "enum": [
+          "function"
+        ]
+      },
+      "ToolChoiceSpec": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "`\"auto\"`, `\"none\"`, `\"required\"`, or `\"any\"`."
+          },
+          {
+            "type": "object",
+            "description": "`{\"type\":\"function\",\"function\":{\"name\":…}}`.",
+            "required": [
+              "function"
+            ],
+            "properties": {
+              "function": {
+                "$ref": "#/components/schemas/NamedFunction",
+                "description": "The named function."
+              }
+            }
+          }
+        ],
+        "description": "`OpenAI` `tool_choice` (`REQ-3`): a mode string or a named function.\nEverything except `\"none\"` is clamped to `auto` behaviour (tools are\noffered; the model decides) — no rejection."
+      },
+      "ToolType": {
+        "type": "string",
+        "description": "Flavor of a tool definition. Only `OpenAI` function tools are supported.",
+        "enum": [
+          "function"
+        ]
       },
       "Transcript": {
         "type": "object",

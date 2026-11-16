@@ -27,12 +27,14 @@ use axum::{
 };
 use honkbox_api_types::{
     CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
-    DownloadAccepted, DownloadKind, DownloadList, DownloadRequest, DownloadState, DownloadStatus,
-    FinishReason, GgufMetadata, Health, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
-    ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, OpenAiChatCompletion,
+    ChatTool, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
+    DownloadRequest, DownloadState, DownloadStatus, FinishReason, FunctionCall, FunctionDefinition,
+    GgufMetadata, Health, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
+    ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
     OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
-    OpenAiUsage, Pill, ResidentModel, RunningList, RunningModel, SafetensorsMetadata,
-    SynthesizeRequest, Transcript, TranscriptSegment, UnloadAllResult, UnloadResult, Version,
+    OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType, RunningList,
+    RunningModel, SafetensorsMetadata, SynthesizeRequest, ToolCall, ToolCallType, ToolChoiceSpec,
+    ToolType, Transcript, TranscriptSegment, UnloadAllResult, UnloadResult, Version,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -45,7 +47,8 @@ use honkbox_audio_worker::{
     decode_wav, encode_wav,
 };
 use honkbox_llm_worker::{
-    ChatMessage as WorkerChatMessage, ChatRequest as WorkerChatRequest, LlmPipeline, Role,
+    ChatMessage as WorkerChatMessage, ChatRequest as WorkerChatRequest, LlmError, LlmPipeline,
+    Role, SamplerParams, ToolCallOut, ToolCallSpec,
 };
 use rust_embed::Embed;
 use serde::Deserialize;
@@ -110,11 +113,24 @@ struct EmbeddedUi;
         RunningModel,
         RunningList,
         OpenAiChatRequest,
+        ToolCall,
+        ToolCallType,
+        FunctionCall,
+        ChatTool,
+        ToolType,
+        FunctionDefinition,
+        ToolChoiceSpec,
+        NamedFunction,
+        ResponseFormat,
+        ResponseFormatType,
+        JsonSchemaSpec,
         FinishReason,
         OpenAiUsage,
         OpenAiChoice,
         OpenAiChatCompletion,
         OpenAiDelta,
+        DeltaToolCall,
+        DeltaFunction,
         OpenAiChunkChoice,
         OpenAiChunk,
         OpenAiError,
@@ -1374,16 +1390,53 @@ struct TranscribeQuery {
     ttl_seconds: Option<u64>,
 }
 
-/// `api-types` message → worker message (only the role enum differs).
+/// `api-types` message → worker message (`REQ-3`): the tool role,
+/// `tool_call_id` and assistant `tool_calls` round-trip; missing/null
+/// content becomes the empty string (assistant-with-tool_calls shape).
 fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
     let role = match message.role {
         ChatRole::User => Role::User,
         ChatRole::Assistant => Role::Assistant,
         ChatRole::System => Role::System,
+        ChatRole::Tool => Role::Tool,
     };
     WorkerChatMessage {
         role,
-        content: message.content.clone(),
+        content: message.content.clone().unwrap_or_default(),
+        tool_call_id: message.tool_call_id.clone(),
+        tool_calls: message
+            .tool_calls
+            .iter()
+            .flatten()
+            .map(|tc| ToolCallSpec {
+                id: tc.id.clone(),
+                name: tc.function.name.clone(),
+                arguments: tc.function.arguments.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Worker request skeleton shared by both routes: constraint fields absent
+/// (`REQ-3` fields ride only on `/v1/chat/completions`), default sampler.
+fn worker_request_base(
+    slug: String,
+    messages: Vec<WorkerChatMessage>,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+) -> WorkerChatRequest {
+    WorkerChatRequest {
+        model: slug,
+        messages,
+        max_tokens,
+        temperature,
+        seed: None,
+        grammar: None,
+        json_schema: None,
+        json_object: false,
+        tools_json: None,
+        tool_choice_none: false,
+        sampler: SamplerParams::default(),
     }
 }
 
@@ -1470,13 +1523,12 @@ async fn post_chat(
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
-    let worker_req = WorkerChatRequest {
-        model: slug,
-        messages: req.messages.iter().map(worker_message).collect(),
-        max_tokens: req.max_tokens,
-        temperature: req.temperature,
-        seed: None,
-    };
+    let worker_req = worker_request_base(
+        slug,
+        req.messages.iter().map(worker_message).collect(),
+        req.max_tokens,
+        req.temperature,
+    );
     let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
@@ -1583,13 +1635,12 @@ async fn post_chat_stream(
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
-    let worker_req = WorkerChatRequest {
-        model: slug,
-        messages: req.messages.iter().map(worker_message).collect(),
-        max_tokens: req.max_tokens,
-        temperature: req.temperature,
-        seed: None,
-    };
+    let worker_req = worker_request_base(
+        slug,
+        req.messages.iter().map(worker_message).collect(),
+        req.max_tokens,
+        req.temperature,
+    );
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
     // REQ-6 (Option B): the busy condition must be an HTTP 429, never a 200
@@ -1646,6 +1697,116 @@ async fn post_chat_stream(
 fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
     let body = OpenAiError::new(status.as_u16(), message, code.map(str::to_owned));
     (status, Json(body)).into_response()
+}
+
+/// Resolved `REQ-3` constraint fields for one completions request.
+struct ChatConstraints {
+    /// Raw GBNF grammar, honored verbatim.
+    grammar: Option<String>,
+    /// JSON Schema text (`response_format: json_schema`); the worker
+    /// converts it to GBNF (unconvertible schema = worker `InvalidRequest`
+    /// = honest 400).
+    json_schema: Option<String>,
+    /// `response_format: json_object` → generic any-JSON grammar.
+    json_object: bool,
+    /// `OpenAI` tools array JSON; `None` = no tools offered.
+    tools_json: Option<String>,
+    /// `tool_choice` clamped: only `"none"` survives (everything else
+    /// behaves as `auto`).
+    tool_choice_none: bool,
+    /// Extended sampler knobs, wired when present.
+    sampler: SamplerParams,
+}
+
+/// Resolve the `REQ-3` request fields into worker-protocol constraints.
+/// Every field is enforced, clamped, or rejected with an `OpenAI`
+/// envelope — never silently ignored: output constraints (`grammar`,
+/// `response_format`) and `tools` are mutually exclusive (llama.cpp
+/// itself rejects the combination; dropping one side would be fake
+/// support), and so are `grammar` and `response_format` with each other.
+/// An empty conversation is rejected here too: the llama backend refuses
+/// it (`InvalidRequest`), so the route answers 400 up front rather than
+/// surfacing a backend-specific 500 later.
+fn resolve_constraints(req: &OpenAiChatRequest) -> Result<ChatConstraints, (&'static str, String)> {
+    if req.messages.is_empty() {
+        return Err((
+            "messages_required",
+            "messages is required: pass at least one conversation turn".to_owned(),
+        ));
+    }
+    let tools_json = match req.tools.as_deref() {
+        None | Some([]) => None,
+        Some(tools) => Some(
+            serde_json::to_string(tools)
+                .map_err(|err| ("unsupported_constraint", format!("tools: {err}")))?,
+        ),
+    };
+    let mut json_schema = None;
+    let mut json_object = false;
+    match &req.response_format {
+        Some(ResponseFormat {
+            format_type: ResponseFormatType::JsonSchema,
+            json_schema: Some(spec),
+        }) => {
+            if spec.schema.is_null() {
+                return Err((
+                    "unsupported_constraint",
+                    "response_format.json_schema.schema is required".to_owned(),
+                ));
+            }
+            json_schema = Some(spec.schema.to_string());
+        }
+        Some(ResponseFormat {
+            format_type: ResponseFormatType::JsonSchema,
+            json_schema: None,
+        }) => {
+            return Err((
+                "unsupported_constraint",
+                "response_format.json_schema is required for type json_schema".to_owned(),
+            ));
+        }
+        Some(ResponseFormat {
+            format_type: ResponseFormatType::JsonObject,
+            ..
+        }) => json_object = true,
+        _ => {}
+    }
+    if tools_json.is_some() && (req.grammar.is_some() || json_schema.is_some() || json_object) {
+        return Err((
+            "unsupported_constraint",
+            "tools combined with grammar or response_format is not supported: the tool-call constraint and the output constraint are mutually exclusive"
+                .to_owned(),
+        ));
+    }
+    if req.grammar.is_some() && (json_schema.is_some() || json_object) {
+        return Err((
+            "unsupported_constraint",
+            "grammar and response_format are mutually exclusive: pass one output constraint"
+                .to_owned(),
+        ));
+    }
+    Ok(ChatConstraints {
+        grammar: req.grammar.clone(),
+        json_schema,
+        json_object,
+        tools_json,
+        tool_choice_none: req
+            .tool_choice
+            .as_ref()
+            .is_some_and(ToolChoiceSpec::suppresses_tools),
+        sampler: SamplerParams {
+            top_k: req.top_k,
+            min_p: req.min_p,
+            typical_p: req.typical_p,
+            repeat_penalty: req.repeat_penalty,
+            xtc_probability: req.xtc_probability,
+            dry_multiplier: req.dry_multiplier,
+            dry_base: req.dry_base,
+            dry_allowed_length: req.dry_allowed_length,
+            dynatemp_range: req.dynatemp_range,
+            dynatemp_exponent: req.dynatemp_exponent,
+        },
+    })
 }
 
 /// Owning catalog entry for a request `model` value (the alias `id` or the
@@ -1743,12 +1904,27 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
     };
     let served_id = entry.id.clone();
     let slug = entry.slug.clone();
+    // `REQ-3` request surface: resolve tools + output constraints + sampler
+    // knobs into the worker protocol (clamps and 400s are inside; nothing
+    // is silently dropped).
+    let constraints = match resolve_constraints(&req) {
+        Ok(constraints) => constraints,
+        Err((code, message)) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        }
+    };
     let worker_req = WorkerChatRequest {
         model: slug.clone(),
         messages: req.messages.iter().map(worker_message).collect(),
         max_tokens: req.max_tokens,
         temperature: req.temperature,
         seed: req.seed,
+        grammar: constraints.grammar,
+        json_schema: constraints.json_schema,
+        json_object: constraints.json_object,
+        tools_json: constraints.tools_json,
+        tool_choice_none: constraints.tool_choice_none,
+        sampler: constraints.sampler,
     };
     // Same swap path as `/v1/chat`: load-on-demand through the swap manager
     // when active, else the startup pipeline. Unknown/non-LLM slugs are the
@@ -1810,10 +1986,13 @@ async fn completions_json(
         Ok(lease) => {
             let _lease = lease;
             pipe.complete(&worker_req).map_err(|err| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("chat failed: {err}"),
-                )
+                // `REQ-3`: unusable constraints (unparseable grammar, non-
+                // convertible schema) are client errors, not server ones.
+                let status = match &err {
+                    LlmError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                (status, format!("chat failed: {err}"))
             })
         }
         Err((_, message)) => Err((StatusCode::TOO_MANY_REQUESTS, message)),
@@ -1829,11 +2008,43 @@ async fn completions_json(
                 Some("gpu_slot_busy"),
             );
         }
+        Ok(Err((StatusCode::BAD_REQUEST, message))) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                Some("invalid_request"),
+            );
+        }
         Ok(Err((_, message))) | Err(message) => {
             return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
         }
     };
     let usage = usage_of(&reply);
+    let tool_calls = reply
+        .tool_calls
+        .iter()
+        .map(|call| ToolCall {
+            // Unique per response (REQ-3 acceptance); echoed back via
+            // `tool_call_id` on the follow-up `role: "tool"` message.
+            id: format!("call_{}", ulid::Ulid::new()),
+            call_type: ToolCallType::Function,
+            function: FunctionCall {
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let finish = if tool_calls.is_empty() {
+        finish_reason(reply.tokens, max_tokens)
+    } else {
+        FinishReason::ToolCalls
+    };
+    let content = if tool_calls.is_empty() || !reply.text.is_empty() {
+        Some(reply.text)
+    } else {
+        // Tool-call-only reply: `OpenAI` sends `content: null` there.
+        None
+    };
     Json(OpenAiChatCompletion {
         id: format!("chatcmpl-{}", ulid::Ulid::new()),
         object: "chat.completion".to_owned(),
@@ -1843,9 +2054,11 @@ async fn completions_json(
             index: 0,
             message: ChatMessage {
                 role: ChatRole::Assistant,
-                content: reply.text,
+                content,
+                tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+                tool_call_id: None,
             },
-            finish_reason: finish_reason(reply.tokens, max_tokens),
+            finish_reason: finish,
         }],
         usage,
     })
@@ -1872,6 +2085,9 @@ fn chunk_frame(frame: &OpenAiChunk) -> Event {
 /// REQ-6 (Option B) reserves the slot in the handler, so a busy slot
 /// becomes a real HTTP 429 before this function runs — the `lease` here is
 /// already held and handed to the worker.
+// 105 lines: the SSE translation (chunks, tool-call deltas, finish reasons,
+// [DONE]) is one linear pipeline; splitting it hurts readability.
+#[allow(clippy::too_many_lines)]
 fn completions_stream(
     lease: honkbox_residency::Lease<'static>,
     pipe: Arc<dyn LlmPipeline>,
@@ -1886,6 +2102,12 @@ fn completions_stream(
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
     let frame_model = served_id.to_owned();
+    // `REQ-3`: with tools on the table, pieces are buffered until the
+    // parsed tool calls are known, then framed as `delta.tool_calls`
+    // fragments (arguments split across frames; per-index concatenation
+    // yields the JSON string). Without tools, content streams
+    // token-by-token as before — including `json_object` replies.
+    let tool_streaming = worker_req.tools_json.is_some();
     let worker = tokio::task::spawn_blocking(move || {
         // The slot was reserved in the handler (REQ-6); park the lease where
         // the token sink can drain it at the first cancel/disconnect.
@@ -1893,37 +2115,19 @@ fn completions_stream(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         let mut first = true;
+        let mut buffered: Vec<String> = Vec::new();
         let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
             if worker_cancelled.load(Ordering::Relaxed) {
                 pipe.abort();
                 free_gpu_lease(&lease_slot);
                 return;
             }
-            let delta = if first {
-                first = false;
-                OpenAiDelta {
-                    role: Some(ChatRole::Assistant),
-                    content: Some(token.to_owned()),
-                }
-            } else {
-                OpenAiDelta {
-                    role: None,
-                    content: Some(token.to_owned()),
-                }
-            };
-            let frame = OpenAiChunk {
-                id: id.clone(),
-                object: "chat.completion.chunk".to_owned(),
-                created,
-                model: frame_model.clone(),
-                choices: vec![OpenAiChunkChoice {
-                    index: 0,
-                    delta,
-                    finish_reason: None,
-                }],
-                usage: None,
-            };
-            if tx.send(Ok(chunk_frame(&frame))).is_err() {
+            if tool_streaming {
+                buffered.push(token.to_owned());
+                return;
+            }
+            let delivered = send_token_delta(&tx, &id, created, &frame_model, &mut first, token);
+            if !delivered {
                 // Receiver gone without the drop guard (drop raced the send).
                 worker_cancelled.store(true, Ordering::Relaxed);
                 pipe.abort();
@@ -1934,6 +2138,25 @@ fn completions_stream(
         free_gpu_lease(&lease_slot);
         match result {
             Ok(reply) => {
+                let usage = usage_of(&reply);
+                let finish = if reply.tool_calls.is_empty() {
+                    finish_reason(reply.tokens, max_tokens)
+                } else {
+                    FinishReason::ToolCalls
+                };
+                if tool_streaming {
+                    if reply.tool_calls.is_empty() {
+                        // No call was made (e.g. `tool_choice: "none"`, or
+                        // the model answered in prose): the buffered pieces
+                        // stream as content now.
+                        emit_content_stream(&tx, &id, created, &frame_model, &buffered);
+                    } else {
+                        // Tool-call reply: a role marker frame, then the
+                        // parsed calls as fragments. The buffered raw
+                        // pieces are superseded by the parser output.
+                        emit_tool_stream(&tx, &id, created, &frame_model, &reply.tool_calls);
+                    }
+                }
                 let final_frame = OpenAiChunk {
                     id,
                     object: "chat.completion.chunk".to_owned(),
@@ -1944,10 +2167,11 @@ fn completions_stream(
                         delta: OpenAiDelta {
                             role: None,
                             content: None,
+                            tool_calls: None,
                         },
-                        finish_reason: Some(finish_reason(reply.tokens, max_tokens)),
+                        finish_reason: Some(finish),
                     }],
-                    usage: Some(usage_of(&reply)),
+                    usage: Some(usage),
                 };
                 let _ = tx.send(Ok(chunk_frame(&final_frame)));
             }
@@ -1967,6 +2191,183 @@ fn completions_stream(
         _worker: worker,
     })
     .into_response()
+}
+
+/// Emit a buffered tools stream: a role marker frame, then the parsed
+/// calls as `delta.tool_calls` fragments with fresh per-response ids.
+fn emit_tool_stream(
+    tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
+    id: &str,
+    created: u64,
+    model: &str,
+    tool_calls: &[ToolCallOut],
+) {
+    send_delta(
+        tx,
+        id,
+        created,
+        model,
+        OpenAiDelta {
+            role: Some(ChatRole::Assistant),
+            content: None,
+            tool_calls: None,
+        },
+    );
+    let ids: Vec<String> = tool_calls
+        .iter()
+        .map(|_| format!("call_{}", ulid::Ulid::new()))
+        .collect();
+    for delta in tool_delta_frames(tool_calls, &ids) {
+        send_delta(tx, id, created, model, delta);
+    }
+}
+
+/// Emit buffered pieces as a plain content stream (the first piece carries
+/// the role marker).
+fn emit_content_stream(
+    tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
+    id: &str,
+    created: u64,
+    model: &str,
+    pieces: &[String],
+) {
+    for (piece_index, piece) in pieces.iter().enumerate() {
+        let delta = if piece_index == 0 {
+            OpenAiDelta {
+                role: Some(ChatRole::Assistant),
+                content: Some(piece.clone()),
+                tool_calls: None,
+            }
+        } else {
+            OpenAiDelta {
+                role: None,
+                content: Some(piece.clone()),
+                tool_calls: None,
+            }
+        };
+        send_delta(tx, id, created, model, delta);
+    }
+}
+
+/// Send one streamed content token (the role marker rides the first
+/// piece). Returns `false` when the receiver is gone — the caller then
+/// cancels the generation.
+#[allow(clippy::needless_pass_by_ref_mut)] // `first` is mutated across calls
+fn send_token_delta(
+    tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
+    id: &str,
+    created: u64,
+    model: &str,
+    first: &mut bool,
+    token: &str,
+) -> bool {
+    let delta = if *first {
+        *first = false;
+        OpenAiDelta {
+            role: Some(ChatRole::Assistant),
+            content: Some(token.to_owned()),
+            tool_calls: None,
+        }
+    } else {
+        OpenAiDelta {
+            role: None,
+            content: Some(token.to_owned()),
+            tool_calls: None,
+        }
+    };
+    let frame = OpenAiChunk {
+        id: id.to_owned(),
+        object: "chat.completion.chunk".to_owned(),
+        created,
+        model: model.to_owned(),
+        choices: vec![OpenAiChunkChoice {
+            index: 0,
+            delta,
+            finish_reason: None,
+        }],
+        usage: None,
+    };
+    tx.send(Ok(chunk_frame(&frame))).is_ok()
+}
+
+/// Send one content/tool delta chunk (serialization never fails on these
+/// DTOs; a gone receiver just drops the frame post-completion).
+fn send_delta(
+    tx: &mpsc::UnboundedSender<Result<Event, Infallible>>,
+    id: &str,
+    created: u64,
+    model: &str,
+    delta: OpenAiDelta,
+) {
+    let frame = OpenAiChunk {
+        id: id.to_owned(),
+        object: "chat.completion.chunk".to_owned(),
+        created,
+        model: model.to_owned(),
+        choices: vec![OpenAiChunkChoice {
+            index: 0,
+            delta,
+            finish_reason: None,
+        }],
+        usage: None,
+    };
+    let _ = tx.send(Ok(chunk_frame(&frame)));
+}
+
+/// Split an arguments JSON string into frame-sized pieces (char-boundary
+/// safe). Short payloads still split in half, so the streamed form always
+/// exercises the fragment protocol (per-index concatenation reproduces the
+/// original string).
+fn argument_frames(arguments: &str) -> Vec<String> {
+    let chars: Vec<char> = arguments.chars().collect();
+    if chars.len() < 2 {
+        return vec![arguments.to_owned()];
+    }
+    let per_frame = chars.len().div_ceil(4).max(2);
+    chars
+        .chunks(per_frame)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
+}
+
+/// `delta.tool_calls` frames for parsed calls (`REQ-3`): per call a first
+/// fragment carrying `id`/`type`/`function.name` + empty `arguments`, then
+/// continuation fragments with `function.arguments` pieces at the same
+/// `index`. `ids` runs parallel to `tool_calls`.
+fn tool_delta_frames(tool_calls: &[ToolCallOut], ids: &[String]) -> Vec<OpenAiDelta> {
+    let mut deltas = Vec::new();
+    for (index, (call, call_id)) in tool_calls.iter().zip(ids).enumerate() {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        deltas.push(OpenAiDelta {
+            role: None,
+            content: None,
+            tool_calls: Some(vec![DeltaToolCall {
+                index,
+                id: Some(call_id.clone()),
+                call_type: Some(ToolCallType::Function),
+                function: Some(DeltaFunction {
+                    name: Some(call.name.clone()),
+                    arguments: Some(String::new()),
+                }),
+            }]),
+        });
+        for piece in argument_frames(&call.arguments) {
+            deltas.push(OpenAiDelta {
+                role: None,
+                content: None,
+                tool_calls: Some(vec![DeltaToolCall {
+                    index,
+                    id: None,
+                    call_type: None,
+                    function: Some(DeltaFunction {
+                        name: None,
+                        arguments: Some(piece),
+                    }),
+                }]),
+            });
+        }
+    }
+    deltas
 }
 
 /// `POST /v1/transcribe`: content-type dispatch (`audio/wav` → `decode_wav`,

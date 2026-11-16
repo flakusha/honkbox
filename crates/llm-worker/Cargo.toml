@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 llama-cpp-4 = { workspace = true }
+serde_json = { workspace = true }
 
 [features]
 default = ["llm-vulkan"]

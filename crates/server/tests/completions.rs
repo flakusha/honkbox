@@ -429,3 +429,449 @@ async fn native_route_shape_unchanged() {
     assert!(parsed.get("choices").is_none(), "no OpenAI shape: {parsed}");
     assert!(parsed.get("usage").is_none(), "no OpenAI shape: {parsed}");
 }
+
+/// REQ-3: one function tool the stub deterministically calls.
+fn tools_json() -> Value {
+    json!([{
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "description": "Look up the current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }
+        }
+    }])
+}
+
+/// REQ-3 acceptance: a request with `tools` returns `tool_calls` in
+/// `choices[0].message` with `finish_reason: "tool_calls"`, `content:
+/// null`, a unique per-response call id, and `arguments` that parses as
+/// JSON shaped by the tool schema (stub: schema-driven, deterministic).
+#[tokio::test]
+async fn tools_request_returns_tool_calls() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body("llm:fake.gguf", &json!({"tools": tools_json()})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let choice = &parsed["choices"][0];
+    assert_eq!(choice["finish_reason"], "tool_calls");
+    assert!(choice["message"]["content"].is_null(), "{choice}");
+    let calls = choice["message"]["tool_calls"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tool_calls array: {choice}"));
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["type"], "function");
+    assert_eq!(calls[0]["function"]["name"], "lookup_weather");
+    let args = calls[0]["function"]["arguments"]
+        .as_str()
+        .unwrap_or_else(|| panic!("arguments is a string: {calls:?}"));
+    let parsed_args: Value = serde_json::from_str(args).expect("arguments parse as JSON");
+    assert_eq!(parsed_args["city"], "stub");
+    assert!(
+        calls[0]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("call_")),
+        "{calls:?}"
+    );
+}
+
+/// REQ-3 acceptance: the streamed form emits `delta.tool_calls` fragments
+/// carrying `index`, the `function.arguments` pieces split across frames
+/// and concatenate into valid JSON, the final frame carries
+/// `finish_reason: "tool_calls"` + usage, and the body ends with
+/// `data: [DONE]`.
+#[tokio::test]
+async fn streamed_tool_calls_fragments_concatenate() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, content_type, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"tools": tools_json(), "stream": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        content_type.starts_with("text/event-stream"),
+        "{content_type}"
+    );
+    assert!(body.ends_with("data: [DONE]\n\n"), "tail: {body:?}");
+    let chunks: Vec<Value> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|payload| serde_json::from_str(payload).ok())
+        .collect();
+    let mut fragments: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+    let mut ids: Vec<String> = Vec::new();
+    let mut fragment_frames = 0;
+    for chunk in &chunks {
+        for call in chunk["choices"][0]["delta"]["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let index = call["index"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("fragment index: {call}"));
+            if let Some(id) = call["id"].as_str() {
+                ids.push(id.to_owned());
+            }
+            if let Some(piece) = call.pointer("/function/arguments").and_then(Value::as_str)
+                && !piece.is_empty()
+            {
+                fragment_frames += 1;
+                fragments.entry(index).or_default().push_str(piece);
+            }
+        }
+    }
+    assert!(
+        fragment_frames >= 2,
+        "arguments split across >= 2 frames: {body}"
+    );
+    let joined = fragments
+        .get(&0)
+        .unwrap_or_else(|| panic!("fragment for index 0: {fragments:?}"));
+    let parsed: Value = serde_json::from_str(joined)
+        .unwrap_or_else(|err| panic!("concatenated fragments are valid JSON: {joined:?}: {err}"));
+    assert_eq!(parsed["city"], "stub");
+    let last = chunks.last().expect("chunks");
+    assert_eq!(last["choices"][0]["finish_reason"], "tool_calls");
+    assert!(
+        !last["usage"].is_null(),
+        "final frame carries usage: {last}"
+    );
+    assert_eq!(ids.len(), 1, "exactly one id frame: {ids:?}");
+    assert!(ids[0].starts_with("call_"));
+}
+
+/// REQ-3 acceptance: `response_format: {"type":"json_object"}` yields a
+/// response whose `content` parses as JSON — enforced by grammar on the
+/// worker path, deterministically on the stub — and the streamed form
+/// concatenates to the same parseable JSON.
+#[tokio::test]
+async fn json_object_response_format_parses() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(catalog_with(&["llm:fake.gguf"]));
+    let extra = json!({"response_format": {"type": "json_object"}});
+    let (status, _, body) =
+        completions(app.clone(), completion_body("llm:fake.gguf", &extra)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("content");
+    let obj: Value = serde_json::from_str(content)
+        .unwrap_or_else(|err| panic!("json_object content parses: {content:?}: {err}"));
+    assert!(obj["reply"].is_string(), "{obj}");
+
+    let (status, _, stream) = completions(
+        app,
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"response_format": {"type": "json_object"}, "stream": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let streamed: String = stream
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|payload| serde_json::from_str::<Value>(payload).ok())
+        .filter_map(|chunk| {
+            chunk["choices"][0]["delta"]["content"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    let streamed_obj: Value = serde_json::from_str(&streamed)
+        .unwrap_or_else(|err| panic!("streamed json_object parses: {streamed:?}: {err}"));
+    assert_eq!(streamed_obj, obj, "stream and non-stream agree");
+}
+
+/// REQ-3: `response_format: {"type":"json_schema"}` is accepted and the
+/// reply content parses as JSON.
+#[tokio::test]
+async fn json_schema_response_format_accepted() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"response_format": {"type": "json_schema", "json_schema": {
+                "name": "reply",
+                "strict": true,
+                "schema": {"type": "object", "properties": {"reply": {"type": "string"}}}
+            }}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("content");
+    serde_json::from_str::<Value>(content)
+        .unwrap_or_else(|err| panic!("json_schema content parses: {content:?}: {err}"));
+}
+
+/// REQ-3 acceptance: a raw llama.cpp GBNF `grammar` is honored end-to-end
+/// (accepted and passed to the worker's grammar chain, never ignored).
+#[tokio::test]
+async fn raw_grammar_is_accepted() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body("llm:fake.gguf", &json!({"grammar": "root ::= \"ok\""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// REQ-3 acceptance: a follow-up request carrying a `role: "tool"`
+/// message with the matching `tool_call_id` (plus the assistant turn with
+/// `content: null` + `tool_calls`) is accepted and produces a normal
+/// completion.
+#[tokio::test]
+async fn tool_role_round_trip() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        json!({
+            "model": "llm:fake.gguf",
+            "messages": [
+                {"role": "user", "content": "What is the weather in Reykjavik?"},
+                {"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {
+                        "name": "lookup_weather", "arguments": "{\"city\":\"Reykjavik\"}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "4°C, raining"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let choice = &parsed["choices"][0];
+    assert_eq!(choice["finish_reason"], "stop");
+    let content = choice["message"]["content"]
+        .as_str()
+        .expect("content on the follow-up reply");
+    assert!(content.contains("4°C, raining"), "{content}");
+}
+
+/// REQ-3 acceptance: `min_p`, `top_k`, `dry_*`, `dynatemp_*`,
+/// `xtc_probability`, `repeat_penalty`, `typical_p` are accepted without a
+/// 400 (all wired into the llama.cpp sampler chain when a real model
+/// serves the request).
+#[tokio::test]
+async fn extended_sampler_params_accepted() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({
+                "top_k": 40, "min_p": 0.05, "typical_p": 0.9,
+                "repeat_penalty": 1.1, "xtc_probability": 0.5,
+                "dry_multiplier": 0.8, "dry_base": 1.75, "dry_allowed_length": 2,
+                "dynatemp_range": 1.0, "dynatemp_exponent": 1.0
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// REQ-3: `tool_choice: "none"` suppresses calls entirely; named-function
+/// and `"required"` choices are clamped to `auto` (accepted, never a 400,
+/// still able to call).
+#[tokio::test]
+async fn tool_choice_none_and_clamps() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(catalog_with(&["llm:fake.gguf"]));
+    let (status, _, body) = completions(
+        app.clone(),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"tools": tools_json(), "tool_choice": "none"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(parsed["choices"][0]["finish_reason"], "stop");
+    assert!(
+        parsed["choices"][0]["message"]["tool_calls"].is_null(),
+        "no tool_calls under none: {parsed}"
+    );
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("plain content under none");
+    assert!(content.contains("stub reply"), "{content}");
+
+    for choice in [
+        json!({"type": "function", "function": {"name": "lookup_weather"}}),
+        json!("required"),
+    ] {
+        let (status, _, body) = completions(
+            app.clone(),
+            completion_body(
+                "llm:fake.gguf",
+                &json!({"tools": tools_json(), "tool_choice": choice}),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "clamped choice: {body}");
+        let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+        assert!(
+            parsed["choices"][0]["finish_reason"] == "tool_calls",
+            "clamped to auto ⇒ the stub still calls: {parsed}"
+        );
+    }
+}
+
+/// REQ-3: `parallel_tool_calls` is accepted and ignored (one call per
+/// turn), documented in `OpenAiChatRequest`.
+#[tokio::test]
+async fn parallel_tool_calls_ignored() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"tools": tools_json(), "parallel_tool_calls": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// REQ-3: `tools` combined with `grammar`/`response_format` is an honest
+/// 400 `OpenAI` envelope — the two constraints are mutually exclusive, and
+/// silently dropping one side is the fake support this route must not
+/// have.
+#[tokio::test]
+async fn tools_with_output_constraint_is_400_envelope() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(catalog_with(&["llm:fake.gguf"]));
+    for extra in [
+        json!({"grammar": "root ::= \"ok\""}),
+        json!({"response_format": {"type": "json_object"}}),
+        json!({"response_format": {"type": "json_schema", "json_schema": {
+            "name": "x", "schema": {"type": "object"}}}}),
+    ] {
+        let mut body = completion_body("llm:fake.gguf", &extra);
+        body["tools"] = tools_json();
+        let (status, _, response) = completions(app.clone(), body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+        let parsed: Value = serde_json::from_str(&response).expect("envelope");
+        assert_eq!(parsed["error"]["type"], "invalid_request_error");
+        assert_eq!(parsed["error"]["code"], "unsupported_constraint");
+    }
+}
+
+/// REQ-3: `grammar` + `response_format` together is likewise a 400 (one
+/// output constraint at a time).
+#[tokio::test]
+async fn grammar_with_response_format_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"grammar": "root ::= \"ok\"", "response_format": {"type": "json_object"}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("envelope");
+    assert_eq!(parsed["error"]["code"], "unsupported_constraint");
+}
+
+/// REQ-3: `response_format: json_schema` without a schema payload is a
+/// 400, never a silently unconstrained reply.
+#[tokio::test]
+async fn json_schema_missing_payload_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"response_format": {"type": "json_schema", "json_schema": {"name": "x"}}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("envelope");
+    assert_eq!(parsed["error"]["code"], "unsupported_constraint");
+}
+
+/// REQ-3/error-path: an empty `messages` array is an unusable request —
+/// the llama backend rejects it (`LlmError::InvalidRequest`, the mapping
+/// unparseable grammars and bad tool messages ride) — so the route rejects
+/// it up front with an honest 400 `OpenAI` envelope (never a stub-only
+/// 200 or a backend-specific 500).
+#[tokio::test]
+async fn worker_invalid_request_is_400_envelope() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body("llm:fake.gguf", &json!({"messages": []})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("envelope");
+    assert_eq!(parsed["error"]["type"], "invalid_request_error");
+    assert_eq!(parsed["error"]["code"], "messages_required");
+}
+
+/// REQ-3: with tools offered but no call made (`tool_choice: "none"`),
+/// the STREAMED form falls back to plain content frames (first frame
+/// carries the role marker) and ends `stop` — the buffered pieces are not
+/// dropped.
+#[tokio::test]
+async fn streamed_tool_choice_none_falls_back_to_content() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"tools": tools_json(), "tool_choice": "none", "stream": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.ends_with("data: [DONE]\n\n"), "tail: {body:?}");
+    let chunks: Vec<Value> = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|payload| serde_json::from_str(payload).ok())
+        .collect();
+    assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+    let content: String = chunks
+        .iter()
+        .filter_map(|chunk| {
+            chunk["choices"][0]["delta"]["content"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(content.contains("stub reply"), "{content}");
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| chunk["choices"][0]["delta"]["tool_calls"].is_null()),
+        "no tool_calls fragments under none: {body}"
+    );
+    let last = chunks.last().expect("chunks");
+    assert_eq!(last["choices"][0]["finish_reason"], "stop");
+    assert!(!last["usage"].is_null());
+}

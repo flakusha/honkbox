@@ -10,5 +10,6 @@ workspace = true
 
 [dependencies]
 serde = { workspace = true }
-ts-rs = { workspace = true }
+serde_json = { workspace = true }
+ts-rs = { workspace = true, features = ["serde-json-impl"] }
 utoipa = { workspace = true }
