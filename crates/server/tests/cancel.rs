@@ -164,6 +164,7 @@ impl LlmPipeline for AbortGateLlm {
                 text: "one".to_owned(),
                 tokens: 1,
                 prompt_tokens: 0,
+                tool_calls: Vec::new(),
                 millis: 0,
             });
         }
@@ -221,6 +222,7 @@ async fn dropped_stream_body_frees_gpu_slot() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,
@@ -309,6 +311,7 @@ async fn dropped_stream_body_aborts_pipeline_mid_generation() {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,

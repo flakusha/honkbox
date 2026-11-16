@@ -967,6 +967,7 @@ fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
         stt: Arc::new(honkbox_audio_worker::StubStt),
         tts: Arc::new(honkbox_audio_worker::StubTts),
         swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: Some(root.to_path_buf()),
         vram_budget: None,

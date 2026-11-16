@@ -426,6 +426,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
     let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
+    // POST /v1/embeddings (REQ-4): load-once cache keyed by slug; the idle
+    // reuse window reuses `[swap] max_ttl` (see `EmbedCache::catalog`).
+    let embed = Arc::new(crate::swap::EmbedCache::catalog(swap_cfg.max_ttl));
     // Managed download supervisor: fetches into <data_dir>/models and fires
     // a rescan on every commit (stale *.part files are kept for resume; the
     // count is logged so leftovers stay visible).
@@ -449,11 +452,13 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         stt,
         tts,
         swap,
+        embed,
         swap_max_ttl: swap_cfg.max_ttl,
         data_dir,
         vram_budget,
         model_entries,
         downloads,
+        auth,
     };
     let rescan_signal = app_config.downloads.rescan_signal();
     tokio::spawn(routes::rescan_on_downloads(

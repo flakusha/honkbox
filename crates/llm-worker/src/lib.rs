@@ -1,8 +1,10 @@
 //! LLM sessions (llama-cpp flavors, token streaming); sync only, no HTTP/DB.
 
 mod backend;
+mod embed;
 
 pub use backend::LlamaCppLlm;
+pub use embed::LlamaCppEmbed;
 
 use std::fmt;
 use std::sync::Arc;
@@ -378,10 +380,82 @@ fn stub_property_value(schema: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Sync embedding pipeline: batched inputs → L2-normalized vectors
+/// (REQ-4). Deliberately separate from [`LlmPipeline`]: chat and embedding
+/// models are different artifacts (different GGUFs, different context
+/// flags), never interchangeable.
+pub trait EmbedPipeline: Send + Sync {
+    /// Embed each input. `result[i]` corresponds to `inputs[i]` (batch
+    /// order preserved) and is L2-normalized (unit length; the all-zero
+    /// degenerate case maps onto the first basis vector).
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::Load`] for a broken model, [`LlmError::Tokenizer`] for
+    /// a non-UTF8-safe input, [`LlmError::Context`] when an input does not
+    /// fit the embedding context.
+    fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, LlmError>;
+    /// Sum of the inputs' token counts (the `usage.prompt_tokens`
+    /// surface): the real tokenizer on the llama.cpp path, a deterministic
+    /// word count on the stub.
+    fn prompt_tokens(&self, inputs: &[String]) -> u32;
+    /// Backend id (`stub-embed` | `llama-cpp-embed-vulkan` | `llama-cpp-embed-cuda`).
+    fn backend_id(&self) -> &'static str;
+}
+
+/// Embedding dimension of [`StubEmbed`]: small so tests stay fast, big
+/// enough that per-input vectors are distinguishable.
+const STUB_EMBED_DIM: usize = 16;
+
+/// Deterministic stub embedding backend: a content-hashed, L2-normalized
+/// 16-dim vector per input. No model, no GPU; identical inputs always
+/// produce identical vectors, distinct inputs (almost always) distinct
+/// ones.
+#[derive(Debug, Default, Clone)]
+pub struct StubEmbed;
+
+/// Deterministic unit vector for `input`: byte contributions accumulated
+/// per dimension, then L2-normalized (the all-zero input maps onto the
+/// first basis vector).
+fn stub_vector(input: &str) -> Vec<f32> {
+    let mut vector = [0.0_f32; STUB_EMBED_DIM];
+    for (position, byte) in input.bytes().enumerate() {
+        vector[position % STUB_EMBED_DIM] += f32::from(byte).mul_add(0.01, -1.28);
+    }
+    let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        vector.iter().map(|x| x / norm).collect()
+    } else {
+        let mut unit = vec![0.0_f32; STUB_EMBED_DIM];
+        unit[0] = 1.0;
+        unit
+    }
+}
+
+impl EmbedPipeline for StubEmbed {
+    fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>, LlmError> {
+        Ok(inputs.iter().map(|input| stub_vector(input)).collect())
+    }
+
+    fn prompt_tokens(&self, inputs: &[String]) -> u32 {
+        inputs
+            .iter()
+            .map(|input| u32::try_from(input.split_whitespace().count()).unwrap_or(u32::MAX))
+            .sum()
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "stub-embed"
+    }
+}
+
 const _: fn() = || {
     fn assert_pipeline<T: LlmPipeline>() {}
+    fn assert_embed<T: EmbedPipeline>() {}
     assert_pipeline::<StubLlm>();
     assert_pipeline::<LlamaCppLlm>();
+    assert_embed::<StubEmbed>();
+    assert_embed::<LlamaCppEmbed>();
 };
 
 #[cfg(test)]

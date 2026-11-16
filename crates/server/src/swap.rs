@@ -60,11 +60,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use honkbox_api_types::{ModelCatalog, ModelKind};
-use honkbox_llm_worker::{LlamaCppLlm, LlmOptions, LlmPipeline};
+use honkbox_api_types::{ModelCatalog, ModelCatalogEntry, ModelKind};
+use honkbox_llm_worker::{EmbedPipeline, LlamaCppEmbed, LlamaCppLlm, LlmOptions, LlmPipeline};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::metrics::{
@@ -505,6 +506,123 @@ pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader 
             ))),
         }
     })
+}
+
+/// POST /v1/embeddings loader seam (REQ-4): a resolved catalog entry →
+/// embedding pipeline. Production: [`catalog_embed_loader`] (llama.cpp from
+/// the entry's on-disk path, capability-gated); tests: [`stub_embed_loader`]
+/// (deterministic stub, entry ignored). Called on the blocking pool.
+pub type EmbedLoader =
+    Arc<dyn Fn(&ModelCatalogEntry) -> Result<Arc<dyn EmbedPipeline>, String> + Send + Sync>;
+
+/// Production embeddings loader: llama.cpp embedding model from the entry's
+/// path. Re-gates `capabilities.embeddings` (defense-in-depth: the route's
+/// resolution already checked — a chat model handed here is refused, never
+/// loaded for garbage token output). Integration-test binaries that include
+/// this module without exercising it need the allow (same pattern as the
+/// stub loaders).
+#[allow(dead_code)]
+pub fn catalog_embed_loader() -> EmbedLoader {
+    Arc::new(|entry: &ModelCatalogEntry| {
+        if !entry.capabilities.embeddings {
+            return Err(format!(
+                "model {:?} is not embeddings-capable (capabilities.embeddings = false)",
+                entry.id
+            ));
+        }
+        LlamaCppEmbed::load(Path::new(&entry.path), &LlmOptions::default())
+            .map(|pipe| Arc::new(pipe) as Arc<dyn EmbedPipeline>)
+            .map_err(|err| err.to_string())
+    })
+}
+
+/// Test loader: the deterministic [`StubEmbed`], entry ignored. Unused in
+/// the server binary itself (integration tests only), hence the allow —
+/// same pattern as the reserved `UnloadReason` slots.
+#[allow(dead_code)]
+pub fn stub_embed_loader() -> EmbedLoader {
+    Arc::new(|_| Ok(Arc::new(honkbox_llm_worker::StubEmbed)))
+}
+
+/// Test helper: an `AppConfig.embed` cache with the stub loader and a long
+/// idle window (tests never exercise eviction; unit tests do it with short
+/// TTLs directly).
+#[allow(dead_code)]
+pub fn stub_embed_cache() -> EmbedCache {
+    EmbedCache::new(stub_embed_loader(), Duration::from_hours(24))
+}
+
+/// Cached-pipeline map entry: the pipeline plus its load/last-use instant
+/// (the idle-TTL window start).
+type EmbedEntry = (Arc<dyn EmbedPipeline>, Instant);
+/// Slug → pipeline map behind the capacity-1 cache.
+type EmbedEntries = HashMap<String, EmbedEntry>;
+
+/// POST /v1/embeddings pipeline cache (REQ-4): load-once per slug, idle
+/// TTL reuse on hits, capacity 1 with evict-on-conflict.
+///
+/// Deliberately **not** the [`SwapManager`]: that type is
+/// `LlmPipeline`-bound and chat-shaped (seeded swap decisions, pin lists,
+/// `/v1/memory` residency). An embedding model never shares a warm set or
+/// a lease with a chat model, so a small dedicated cache — keyed by slug,
+/// at most one resident embedding pipeline, evicted after the idle window
+/// — is the honest minimal shape. `ttl` reuses `[swap] max_ttl` (the
+/// operator's one residency knob) rather than inventing a new setting.
+pub struct EmbedCache {
+    loader: EmbedLoader,
+    entries: Mutex<EmbedEntries>,
+    ttl: Duration,
+}
+
+impl EmbedCache {
+    /// Cache with `loader` and the idle-TTL reuse window.
+    pub fn new(loader: EmbedLoader, ttl: Duration) -> Self {
+        Self {
+            loader,
+            entries: Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// Production cache: the catalog-backed llama.cpp loader, the `[swap]`
+    /// `max_ttl` idle window (the operator's one residency knob).
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn catalog(max_ttl: Duration) -> Self {
+        Self::new(catalog_embed_loader(), max_ttl)
+    }
+
+    /// The cached pipeline for `entry`'s slug, loading it on a miss (or an
+    /// idle-expired hit) via the configured loader. Loading runs on the
+    /// caller's thread — the route invokes this from `spawn_blocking`.
+    ///
+    /// # Errors
+    ///
+    /// The loader's error string (capability refusal, load failure); the
+    /// cache stays consistent — nothing is inserted on failure.
+    pub fn get(&self, entry: &ModelCatalogEntry) -> Result<Arc<dyn EmbedPipeline>, String> {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((pipe, loaded_at)) = entries.get(entry.slug.as_str()) {
+            if loaded_at.elapsed() < self.ttl {
+                return Ok(Arc::clone(pipe));
+            }
+            // Idle-expired: evict (drop the pipeline = free the model) and
+            // fall through to a fresh load.
+            entries.remove(entry.slug.as_str());
+        }
+        // Capacity 1: any other resident embedding pipeline is the LRU
+        // victim by construction.
+        entries.clear();
+        let load_start = Instant::now();
+        let pipe = (self.loader)(entry)?;
+        crate::metrics::note_model_load(ModelKind::Embedding, crate::metrics::LoadReason::Request);
+        crate::metrics::note_model_load_duration(ModelKind::Embedding, load_start.elapsed());
+        entries.insert(entry.slug.clone(), (Arc::clone(&pipe), Instant::now()));
+        Ok(pipe)
+    }
 }
 
 #[cfg(test)]

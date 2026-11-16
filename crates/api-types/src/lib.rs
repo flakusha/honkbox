@@ -535,7 +535,72 @@ impl OpenAiError {
     }
 }
 
-// Embeddings DTOs land with REQ-4.
+/// `POST /v1/embeddings` request (REQ-4). `model` is required (`OpenAI`
+/// contract): an omitted model is a deserialization 400.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct EmbeddingsRequest {
+    /// Model id: an operator alias or registry slug whose
+    /// `capabilities.embeddings` is true (`REQ-2` override honored).
+    pub model: String,
+    /// One input or a batch of inputs; batch order maps onto
+    /// `data[].index` one-to-one.
+    pub input: EmbeddingsInput,
+}
+
+/// The `input` field: a bare string or an array of strings.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+#[serde(untagged)]
+pub enum EmbeddingsInput {
+    /// A single input (one `data` entry, `index` 0).
+    Text(String),
+    /// A batch (one `data` entry per input, in order).
+    Batch(Vec<String>),
+}
+
+impl EmbeddingsInput {
+    /// The inputs as an ordered vector (batch order = index order).
+    #[must_use]
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::Text(text) => vec![text],
+            Self::Batch(batch) => batch,
+        }
+    }
+}
+
+/// One embedding vector (`data[]`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct EmbeddingsData {
+    /// Always `"embedding"`.
+    pub object: String,
+    /// Position of the source input in the request batch.
+    pub index: u32,
+    /// The embedding vector: the model's dimension, L2-normalized.
+    pub embedding: Vec<f32>,
+}
+
+/// Token accounting for an embeddings call (no completion side).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct EmbeddingsUsage {
+    /// Input token count (real tokenizer on the llama.cpp path;
+    /// deterministic word count on the stub).
+    pub prompt_tokens: u32,
+    /// `prompt_tokens` (embeddings generate nothing).
+    pub total_tokens: u64,
+}
+
+/// Embeddings response (`object: "list"`), one `data` entry per input.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct EmbeddingsResponse {
+    /// Always `"list"`.
+    pub object: String,
+    /// One entry per input, in request order.
+    pub data: Vec<EmbeddingsData>,
+    /// The resolved model's served id (alias when bound, else the slug).
+    pub model: String,
+    /// Token accounting.
+    pub usage: EmbeddingsUsage,
+}
 
 /// One transcript segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
@@ -1062,6 +1127,11 @@ mod tests {
             OpenAiChunk::decl(&config),
             OpenAiErrorDetail::decl(&config),
             OpenAiError::decl(&config),
+            EmbeddingsRequest::decl(&config),
+            EmbeddingsInput::decl(&config),
+            EmbeddingsData::decl(&config),
+            EmbeddingsUsage::decl(&config),
+            EmbeddingsResponse::decl(&config),
             TranscriptSegment::decl(&config),
             Transcript::decl(&config),
             SynthesizeRequest::decl(&config),

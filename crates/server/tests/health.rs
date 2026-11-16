@@ -58,6 +58,7 @@ fn test_app() -> axum::Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,

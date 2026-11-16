@@ -185,6 +185,7 @@ fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
         swap: Some(Arc::new(manager)),
+        embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
         data_dir: None,
         vram_budget: None,

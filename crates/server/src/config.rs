@@ -40,6 +40,13 @@
 //! error**, validated against the live scan in `routes::bind_entries`.
 //! Structured tables have no env stage in this config's house pattern (all
 //! `HONKBOX_*` env vars are scalars/path lists), so entries are file-only.
+//!
+//! Auth (REQ-7): `[server] auth` is `"none"` (default) or `"bearer"`;
+//! `[auth] api_key_env` names the env var holding the bearer key (default
+//! `HONKBOX_API_KEY`). Only the NAME is configured; the key VALUE is read
+//! at request time via `std::env` in the route middleware (so rotation
+//! works without a restart) and is never logged, never in metrics, and
+//! never in any config dump — these types store the env-var name only.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -175,6 +182,102 @@ pub struct SwapConfig {
     /// entirely (`pin`; llama-swap `persistent`) — pin outranks client
     /// advice.
     pub pin: Vec<String>,
+}
+
+/// `[server] auth` mode (REQ-7): `none` (default, loopback-only
+/// operation) or `bearer` (every route except the probes requires
+/// `Authorization: Bearer <key>`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AuthMode {
+    /// No auth; the bind-address fail-closed check in `main::serve` is the
+    /// safety net for non-loopback binds.
+    #[default]
+    None,
+    /// Bearer-key auth against the `[auth] api_key_env` value.
+    Bearer,
+}
+
+impl AuthMode {
+    /// Parse the `[server] auth` file key; whitespace-insensitive,
+    /// case-insensitive; anything but `none`/`bearer` is a config error.
+    fn parse(raw: &str, where_: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "bearer" => Ok(Self::Bearer),
+            other => Err(format!(
+                "{where_}: invalid [server] auth value {other:?} (expected none or bearer)"
+            )),
+        }
+    }
+}
+
+/// Resolved auth settings (REQ-7): the `[server] auth` mode plus the NAME
+/// of the env var holding the bearer key (`[auth] api_key_env`). The key
+/// VALUE is never stored here — the route middleware reads it per request
+/// via `std::env`, so it cannot leak into logs, metrics, or dumps.
+#[derive(Debug, Clone)]
+pub struct AuthConfig {
+    /// `[server] auth`.
+    pub mode: AuthMode,
+    /// `[auth] api_key_env`: env var NAME read at request time.
+    pub api_key_env: String,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: AuthMode::None,
+            api_key_env: "HONKBOX_API_KEY".to_owned(),
+        }
+    }
+}
+
+/// Validate `[auth] api_key_env`: trimmed, non-empty env-var NAME; empty is
+/// a config error (an unnameable key would fail every bearer request).
+fn parse_api_key_env(raw: &str, where_: &str) -> Result<String, String> {
+    let name = raw.trim();
+    if name.is_empty() {
+        Err(format!("{where_}: [auth] api_key_env must name an env var"))
+    } else {
+        Ok(name.to_owned())
+    }
+}
+
+/// Fail-closed bind check (REQ-7 acceptance): `auth = none` on a
+/// non-loopback bind refuses to start unless the operator passed the
+/// explicit acknowledgement flag. `host` is loopback iff `localhost`,
+/// `127.0.0.0/8`, or `::1`. Pure (args) so tests stay thread-safe.
+pub fn check_bind_auth(
+    mode: AuthMode,
+    host: &str,
+    allow_unauthenticated_bind: bool,
+) -> Result<(), String> {
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    // Refuse when unauthenticated AND exposed; any of bearer auth, a
+    // loopback bind, or the explicit ack makes the start safe.
+    if mode == AuthMode::Bearer || loopback || allow_unauthenticated_bind {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to bind {host}: [server] auth = none on a non-loopback \
+         address exposes every route without a key; set [server] auth = \
+         bearer with [auth] api_key_env, or pass \
+         --allow-unauthenticated-bind to acknowledge"
+    ))
+}
+
+/// Parse the `--host` serve flag into a bind `IpAddr`: `localhost` binds
+/// the IPv4 loopback (matching the historical default); anything else must
+/// be a literal IP (`::1` included).
+pub fn parse_bind_host(host: &str) -> Result<std::net::IpAddr, String> {
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok(std::net::IpAddr::from([127, 0, 0, 1]));
+    }
+    host.parse::<std::net::IpAddr>()
+        .map_err(|_| format!("invalid --host {host:?}: expected an IP or localhost"))
 }
 
 /// `[jobs]` section: startup GC of `<data_dir>/jobs` + stale temp PNGs.
@@ -357,8 +460,31 @@ fn resolve_data_dir(
 pub struct LoadedConfig {
     /// Model roots + `[jobs]` + `[swap]` settings.
     pub models: ModelConfig,
+    /// Auth settings (REQ-7): `[server] auth` + `[auth] api_key_env` name.
+    pub auth: AuthConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
+}
+
+/// Resolve the REQ-7 auth knobs: defaults → `[server] auth` +
+/// `[auth] api_key_env` file keys. Missing keys keep the defaults
+/// (`none` / `HONKBOX_API_KEY`); invalid values are config errors. There is
+/// deliberately NO env stage for these: `HONKBOX_API_KEY` (or whatever name
+/// is configured) holds the key VALUE at request time, not a config
+/// override. Pure (args) so tests stay thread-safe.
+fn auth_settings(
+    auth: Option<&str>,
+    api_key_env: Option<&str>,
+    where_: &str,
+) -> Result<AuthConfig, String> {
+    let mode = auth.map_or(Ok(AuthMode::None), |raw| AuthMode::parse(raw, where_))?;
+    let env = api_key_env.map_or(Ok(AuthConfig::default().api_key_env), |raw| {
+        parse_api_key_env(raw, where_)
+    })?;
+    Ok(AuthConfig {
+        mode,
+        api_key_env: env,
+    })
 }
 
 /// Final data dir: flag > env > `[core] data_dir` file key > located default
@@ -409,6 +535,10 @@ struct FileStages {
     vram_budget: Option<u64>,
     /// `[[models.entry]]` bindings (REQ-2), parse-validated.
     entries: Vec<ModelEntryConfig>,
+    /// `[server] auth` raw value (REQ-7), validated in `load`.
+    auth: Option<String>,
+    /// `[auth] api_key_env` raw value (REQ-7), validated in `load`.
+    api_key_env: Option<String>,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -463,6 +593,8 @@ fn stage_config_file(
     out.jobs = file.jobs;
     out.swap = file.swap;
     out.core = file.core;
+    out.auth = file.server.auth;
+    out.api_key_env = file.auth.api_key_env;
     out.vram_budget = file.models.vram_budget_bytes;
     out.entries = file
         .models
@@ -563,6 +695,8 @@ pub fn load(
         core: file_core,
         vram_budget,
         entries,
+        auth,
+        api_key_env,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -621,7 +755,15 @@ pub fn load(
     if let Some(base) = &data_dir {
         append_managed_roots(&mut models, base);
     }
-    Ok(LoadedConfig { models, data_dir })
+    let display = path
+        .as_deref()
+        .map_or_else(|| "<none>".to_owned(), |p| p.display().to_string());
+    let auth = auth_settings(auth.as_deref(), api_key_env.as_deref(), &display)?;
+    Ok(LoadedConfig {
+        models,
+        auth,
+        data_dir,
+    })
 }
 
 /// Append the managed download roots under `base/models` to a resolved
@@ -779,9 +921,16 @@ fn expand_home(value: &str) -> PathBuf {
 }
 
 /// Whole-file shape: `[core]` + `[models]` (base roots) + optional
-/// `[discovery]` + optional `[jobs]` + optional `[swap]`.
+/// `[discovery]` + optional `[jobs]` + optional `[swap]` + optional
+/// `[server]`/`[auth]` (REQ-7).
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileConfig {
+    /// `[server]` keys (REQ-7 auth mode); absent table keeps the default.
+    #[serde(default)]
+    server: FileServer,
+    /// `[auth]` keys (REQ-7 key env-var NAME); absent table keeps the default.
+    #[serde(default)]
+    auth: FileAuth,
     #[serde(default)]
     core: FileCore,
     #[serde(default)]
@@ -798,6 +947,21 @@ struct FileConfig {
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileCore {
     data_dir: Option<String>,
+}
+
+/// `[server]` keys: `auth` (`none` | `bearer`, REQ-7); parsed by
+/// `AuthMode::parse` in the file stage (invalid values are config errors).
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileServer {
+    auth: Option<String>,
+}
+
+/// `[auth]` keys: `api_key_env` — the NAME of the env var holding the
+/// bearer key. The value is read per request in the route middleware and
+/// is never logged or dumped; only the name lives in config.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileAuth {
+    api_key_env: Option<String>,
 }
 
 /// `[models]` keys; each missing key keeps its default.
@@ -1398,5 +1562,78 @@ mod tests {
         )
         .expect_err("duplicate alias");
         assert!(dup.contains("twice"), "{dup}");
+    }
+
+    /// REQ-7: `[server] auth` + `[auth] api_key_env` parse from the file;
+    /// missing keys keep the defaults; invalid values are config errors.
+    #[test]
+    fn auth_settings_parse_and_validate() {
+        // Defaults: no auth keys at all.
+        let loaded = load_toml("auth-default", "[core]\n").expect("load");
+        assert_eq!(loaded.auth.mode, AuthMode::None);
+        assert_eq!(loaded.auth.api_key_env, "HONKBOX_API_KEY");
+
+        // Both keys set (bearer + a custom env var NAME).
+        let loaded = load_toml(
+            "auth-bearer",
+            concat!(
+                "[server]\n",
+                "auth = \"bearer\"\n",
+                "\n",
+                "[auth]\n",
+                "api_key_env = \"MY_KEY_VAR\"\n"
+            ),
+        )
+        .expect("load");
+        assert_eq!(loaded.auth.mode, AuthMode::Bearer);
+        assert_eq!(loaded.auth.api_key_env, "MY_KEY_VAR");
+
+        // Explicit `none` is accepted (case/whitespace-insensitive).
+        let loaded = load_toml("auth-none", "[server]\nauth = \" None \"\n").expect("load");
+        assert_eq!(loaded.auth.mode, AuthMode::None);
+
+        // An unknown mode is a config error naming the file.
+        let err = load_toml("auth-bad", "[server]\nauth = \"magic\"\n").expect_err("bad auth mode");
+        assert!(
+            err.contains("honkbox.toml") && err.contains("magic"),
+            "{err}"
+        );
+
+        // An empty env-var NAME is a config error.
+        let err = load_toml("auth-empty-env", "[auth]\napi_key_env = \"   \"\n")
+            .expect_err("empty env name");
+        assert!(err.contains("api_key_env"), "{err}");
+    }
+
+    /// REQ-7: the fail-closed bind check — `none` + non-loopback refuses,
+    /// the ack flag escapes, loopback and bearer pass.
+    #[test]
+    fn check_bind_auth_is_fail_closed() {
+        // auth=none + loopback hosts: fine (127.x, ::1, localhost).
+        for host in ["127.0.0.1", "localhost", "::1", "127.200.3.4"] {
+            check_bind_auth(AuthMode::None, host, false).expect("loopback none");
+        }
+        // auth=none + non-loopback: refused unless acked.
+        let err = check_bind_auth(AuthMode::None, "0.0.0.0", false).expect_err("no ack");
+        assert!(err.contains("refusing to bind"), "{err}");
+        check_bind_auth(AuthMode::None, "0.0.0.0", true).expect("acked");
+        check_bind_auth(AuthMode::None, "192.168.1.10", false).expect_err("lan no ack");
+        // bearer + non-loopback: allowed (the key is the protection).
+        check_bind_auth(AuthMode::Bearer, "0.0.0.0", false).expect("bearer any bind");
+    }
+
+    /// `--host` parsing: `localhost` maps to the IPv4 loopback; real IPs
+    /// (v4 and v6) pass through; garbage is an error.
+    #[test]
+    fn parse_bind_host_accepts_ips_and_localhost() {
+        assert_eq!(
+            parse_bind_host("localhost").expect("localhost"),
+            std::net::IpAddr::from([127, 0, 0, 1])
+        );
+        assert_eq!(
+            parse_bind_host("::1").expect("v6 loopback"),
+            std::net::IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])
+        );
+        assert!(parse_bind_host("not-an-ip").is_err());
     }
 }

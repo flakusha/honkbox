@@ -28,13 +28,15 @@ use axum::{
 use honkbox_api_types::{
     CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
     ChatTool, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
-    DownloadRequest, DownloadState, DownloadStatus, FinishReason, FunctionCall, FunctionDefinition,
-    GgufMetadata, Health, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
-    ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
-    OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
-    OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType, RunningList,
-    RunningModel, SafetensorsMetadata, SynthesizeRequest, ToolCall, ToolCallType, ToolChoiceSpec,
-    ToolType, Transcript, TranscriptSegment, UnloadAllResult, UnloadResult, Version,
+    DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
+    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
+    FunctionDefinition, GgufMetadata, Health, JsonSchemaSpec, MemoryCapacity, MemoryGpu,
+    MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata,
+    NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk,
+    OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat,
+    ResponseFormatType, RunningList, RunningModel, SafetensorsMetadata, SynthesizeRequest,
+    ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
+    UnloadAllResult, UnloadResult, Version,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -134,6 +136,11 @@ struct EmbeddedUi;
         OpenAiChunkChoice,
         OpenAiChunk,
         OpenAiError,
+        EmbeddingsRequest,
+        EmbeddingsInput,
+        EmbeddingsData,
+        EmbeddingsUsage,
+        EmbeddingsResponse,
         DownloadKind,
         DownloadStatus,
         DownloadRequest,
@@ -190,6 +197,12 @@ pub struct AppConfig {
     /// `[swap] enabled = false`). 429 semantics are unchanged either way —
     /// the residency slot stays the only inference gate.
     pub swap: Option<Arc<crate::swap::SwapManager>>,
+    /// POST /v1/embeddings pipeline cache (REQ-4): load-once per slug with
+    /// idle-TTL reuse, capacity 1 (see [`crate::swap::EmbedCache`] for why
+    /// this is not the chat swap manager). Deliberately absent from
+    /// `/running` + `/v1/memory`: embedding pipelines are cheap and
+    /// single-slot; the residency readout stays the chat warm set.
+    pub embed: Arc<crate::swap::EmbedCache>,
     /// Ceiling on per-request `ttl_seconds` advice (`[swap] max_ttl_secs`):
     /// over-cap values are clamped here with a `warn!` — never rejected.
     /// Known even when the swap manager is off, so every route applies the
@@ -239,6 +252,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/chat/completions", post(post_chat_completions))
+        .route("/v1/embeddings", post(post_embeddings))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
         .route("/running", get(get_running))
@@ -1809,6 +1823,175 @@ fn resolve_constraints(req: &OpenAiChatRequest) -> Result<ChatConstraints, (&'st
     })
 }
 
+/// Small error payload from [`validate_embeddings_request`]; the route
+/// turns it into the `OpenAI` error envelope.
+struct EmbeddingsRejection {
+    status: StatusCode,
+    message: String,
+    code: &'static str,
+}
+
+impl EmbeddingsRejection {
+    fn response(self) -> Response {
+        openai_error_response(self.status, self.message, Some(self.code))
+    }
+}
+
+/// Parse and validate an embeddings request: JSON shape, known model,
+/// embeddings capability, and non-empty inputs.
+fn validate_embeddings_request(
+    config: &AppConfig,
+    body: &Bytes,
+) -> Result<(ModelCatalogEntry, Vec<String>), EmbeddingsRejection> {
+    let req: EmbeddingsRequest =
+        serde_json::from_slice(body).map_err(|err| EmbeddingsRejection {
+            status: StatusCode::BAD_REQUEST,
+            message: format!("invalid JSON body: {err}"),
+            code: "invalid_json_body",
+        })?;
+    let model = req.model.trim();
+    let catalog = config.catalog_snapshot();
+    let entry = resolve_model_entry(model, &catalog).ok_or_else(|| EmbeddingsRejection {
+        status: StatusCode::NOT_FOUND,
+        message: format!(
+            "unknown model {model:?}: not an alias or registry slug (see GET /v1/models)"
+        ),
+        code: "model_not_found",
+    })?;
+    // Capability gate (REQ-4 acceptance): only models the operator declared
+    // embeddings-capable load at all — a chat GGUF handed to the embedding
+    // path would produce garbage vectors, so it is refused by name.
+    if !entry.capabilities.embeddings {
+        return Err(EmbeddingsRejection {
+            status: StatusCode::BAD_REQUEST,
+            message: format!(
+                "model {:?} is not embeddings-capable: declare capabilities.embeddings = true for it ([[models.entry]]) and use an embedding GGUF",
+                entry.id
+            ),
+            code: "not_embeddings_capable",
+        });
+    }
+    let inputs = req.input.into_vec();
+    if inputs.is_empty() || inputs.iter().any(String::is_empty) {
+        return Err(EmbeddingsRejection {
+            status: StatusCode::BAD_REQUEST,
+            message: "input is required: at least one non-empty string".to_owned(),
+            code: "input_required",
+        });
+    }
+    Ok((entry.clone(), inputs))
+}
+
+/// `POST /v1/embeddings` (REQ-4): OpenAI-shaped embeddings over the same
+/// residency model as chat — one GPU slot, `spawn_blocking` inference.
+/// Resolution: alias/slug → 404 envelope when unknown; a model without
+/// `capabilities.embeddings` is refused with an explicit 400 (never
+/// loaded, never garbage tokens). The pipeline is cached per slug
+/// (`EmbedCache`: load-once, idle-TTL reuse, capacity 1) outside the
+/// slot; the embed call itself runs inside the lease.
+///
+/// Errors: 400 bad body / not-embeddings-capable, 404 unknown model, 429
+/// busy slot (+`Retry-After` via the shared middleware), 500 embed failure.
+#[utoipa::path(
+    post,
+    path = "/v1/embeddings",
+    request_body = EmbeddingsRequest,
+    responses(
+        (status = 200, description = "Embeddings", body = EmbeddingsResponse),
+        (status = 400, description = "Bad request or not an embeddings-capable model", body = OpenAiError),
+        (status = 404, description = "Unknown model", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Embedding failed", body = OpenAiError)
+    )
+)]
+async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Response {
+    let (entry, inputs) = match validate_embeddings_request(&config, &body) {
+        Ok(pair) => pair,
+        Err(rejection) => return rejection.response(),
+    };
+    let served_id = entry.id.clone();
+    // Pipeline resolution (cache hit = cheap; miss = blocking GGUF load)
+    // runs on the blocking pool, outside the GPU slot — same order as the
+    // chat routes (load first, then reserve).
+    let cache = Arc::clone(&config.embed);
+    let load_entry = entry.clone();
+    let pipe = match tokio::task::spawn_blocking(move || cache.get(&load_entry)).await {
+        Ok(Ok(pipe)) => pipe,
+        Ok(Err(message)) => {
+            return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
+        }
+        Err(err) => {
+            return openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("embed task failed: {err}"),
+                None,
+            );
+        }
+    };
+    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+        Ok(lease) => {
+            let _lease = lease;
+            pipe.embed(&inputs)
+                .map(|embeddings| (embeddings, pipe.prompt_tokens(&inputs)))
+                .map_err(|err| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("embed failed: {err}"),
+                    )
+                })
+        }
+        Err((_, message)) => Err((StatusCode::TOO_MANY_REQUESTS, message)),
+    })
+    .await
+    .map_err(|err| format!("embed task failed: {err}"));
+    let (embeddings, prompt_tokens) = match reply {
+        Ok(Ok(pair)) => pair,
+        Ok(Err((StatusCode::TOO_MANY_REQUESTS, message))) => {
+            return openai_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                message,
+                Some("gpu_slot_busy"),
+            );
+        }
+        Ok(Err((_, message))) | Err(message) => {
+            return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
+        }
+    };
+    Json(EmbeddingsResponse {
+        object: "list".to_owned(),
+        data: embeddings
+            .into_iter()
+            .enumerate()
+            .map(|(index, embedding)| EmbeddingsData {
+                object: "embedding".to_owned(),
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                embedding,
+            })
+            .collect(),
+        model: served_id,
+        usage: EmbeddingsUsage {
+            prompt_tokens,
+            total_tokens: u64::from(prompt_tokens),
+        },
+    })
+    .into_response()
+}
+
+/// REQ-4 reverse gate: an embeddings-capable model never runs through the
+/// chat pipeline (garbage tokens dressed up as a completion). `Some`
+/// carries the explicit 400 response.
+fn embeddings_model_gate(entry: &ModelCatalogEntry, model: &str) -> Option<Response> {
+    entry.capabilities.embeddings.then(|| {
+        openai_error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "model {model:?} is an embeddings model (capabilities.embeddings = true) and cannot serve chat completions"
+            ),
+            Some("embeddings_model_for_chat"),
+        )
+    })
+}
+
 /// Owning catalog entry for a request `model` value (the alias `id` or the
 /// registry `slug`); [`resolve_model_slug`] reads the slug off it.
 fn resolve_model_entry<'a>(
@@ -1904,6 +2087,12 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
     };
     let served_id = entry.id.clone();
     let slug = entry.slug.clone();
+    // REQ-4 acceptance: an embeddings-capable model is never silently run
+    // through the chat pipeline — the reply would be garbage tokens dressed
+    // up as a completion. Refuse with the explicit error instead.
+    if let Some(response) = embeddings_model_gate(entry, model) {
+        return response;
+    }
     // `REQ-3` request surface: resolve tools + output constraints + sampler
     // knobs into the worker protocol (clamps and 400s are inside; nothing
     // is silently dropped).
