@@ -120,6 +120,76 @@
         }
       }
     },
+    "/v1/chat/completions": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/chat/completions`: the `OpenAI`-compatible translation surface\n(REQ-1) over the SAME pipeline, GPU lease, and swap decision as\n`/v1/chat` — never an HTTP proxy. JSON body or `OpenAI` SSE\n(`stream: true`). Errors are `OpenAI` envelopes; statuses: 400 bad\nrequest, 404 unknown model, 429 busy (+`Retry-After` via the shared\nmiddleware), 500 inference failure. Undeclared request keys (`top_p`,\n`stop`, …) are accepted and ignored by serde.",
+        "description": "An omitted/empty `model` is a 400 naming the requirement — the native\nroute's empty-means-server-default fallback stays native-only.",
+        "operationId": "post_chat_completions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenAiChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion (JSON or SSE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiChatCompletion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Inference failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/chat/stream": {
       "post": {
         "tags": [],
@@ -757,6 +827,14 @@
           "cancelled"
         ]
       },
+      "FinishReason": {
+        "type": "string",
+        "description": "Why generation stopped (`choices[].finish_reason`).",
+        "enum": [
+          "stop",
+          "length"
+        ]
+      },
       "GgufMetadata": {
         "type": "object",
         "description": "GGUF header summary (`GET /v1/models` entry `metadata`).",
@@ -1020,6 +1098,317 @@
           }
         ],
         "description": "Optional on-disk header metadata, tagged by container format."
+      },
+      "OpenAiChatCompletion": {
+        "type": "object",
+        "description": "Non-streaming response (`object: \"chat.completion\"`).",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices",
+          "usage"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiChoice"
+            },
+            "description": "Exactly one choice."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds at completion.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "`chatcmpl-<ulid>`."
+          },
+          "model": {
+            "type": "string",
+            "description": "The resolved model's served id (alias when bound, else the slug);\nthe server-default path echoes the request value."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"chat.completion\"`."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/OpenAiUsage",
+            "description": "Token accounting."
+          }
+        }
+      },
+      "OpenAiChatRequest": {
+        "type": "object",
+        "description": "OpenAI-compatible chat completion request (`POST /v1/chat/completions`;\nREQ-1). A translation surface over honkbox's native chat pipeline — the\nrequest is served by the same pipeline, GPU lease, and swap decision as\n`POST /v1/chat`.\n\nUndeclared keys (`top_p`, `stop`, tool fields, anything else) are\naccepted and silently ignored (serde's default unknown-key behavior);\nonly the fields below have honkbox-side meaning. `content` parts and\ntool messages are REQ-8/REQ-3, out of scope.",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Max tokens to generate; backend default when absent.",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Conversation turns (string content; roles user/assistant/system)."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model id: an operator alias or registry slug (`GET /v1/models`).\nRequired on this route — an omitted/empty model is a 400 naming the\nrequirement (the native route's empty-means-server-default fallback\nstays native-only)."
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deterministic sampling seed, honored end-to-end (sampler chain): the\nsame prompt + seed streams the same tokens the non-streaming path\nreturns.",
+            "minimum": 0
+          },
+          "stream": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Stream `OpenAI` SSE chunks (`chat.completion.chunk` frames + a final\n`data: [DONE]` line) instead of one JSON body. Default false."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Sampling temperature; backend default when absent."
+          },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Per-request residency advice; identical contract to\n[`ChatRequest::ttl_seconds`].",
+            "minimum": 0
+          }
+        }
+      },
+      "OpenAiChoice": {
+        "type": "object",
+        "description": "One non-streaming choice (`choices[]`).",
+        "required": [
+          "index",
+          "message",
+          "finish_reason"
+        ],
+        "properties": {
+          "finish_reason": {
+            "$ref": "#/components/schemas/FinishReason",
+            "description": "Why generation stopped."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Always 0 (single choice).",
+            "minimum": 0
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChatMessage",
+            "description": "Assistant turn."
+          }
+        }
+      },
+      "OpenAiChunk": {
+        "type": "object",
+        "description": "Streaming chunk (`object: \"chat.completion.chunk\"`). `usage` rides only\non the final frame.",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiChunkChoice"
+            },
+            "description": "Exactly one choice per frame."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds at stream start.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "`chatcmpl-<ulid>`, shared by every frame of one completion."
+          },
+          "model": {
+            "type": "string",
+            "description": "The resolved model's served id."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"chat.completion.chunk\"`."
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpenAiUsage",
+                "description": "Token accounting; present only on the final frame."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OpenAiChunkChoice": {
+        "type": "object",
+        "description": "One streamed chunk choice (`choices[]` of a chunk).",
+        "required": [
+          "index",
+          "delta"
+        ],
+        "properties": {
+          "delta": {
+            "$ref": "#/components/schemas/OpenAiDelta",
+            "description": "Piece of the turn."
+          },
+          "finish_reason": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FinishReason",
+                "description": "`null` on every frame except the last."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Always 0 (single choice).",
+            "minimum": 0
+          }
+        }
+      },
+      "OpenAiDelta": {
+        "type": "object",
+        "description": "One streamed delta (`choices[].delta` of a chunk). Both fields optional:\nthe first frame carries `role`, token frames carry `content`, the final\nframe carries neither.",
+        "properties": {
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Next text piece, token frames only."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatRole",
+                "description": "Assistant role marker, first frame only."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OpenAiError": {
+        "type": "object",
+        "description": "OpenAI-shaped error body (`{\"error\":{…}}`) for\n`/v1/chat/completions`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAiErrorDetail",
+            "description": "The error detail."
+          }
+        }
+      },
+      "OpenAiErrorDetail": {
+        "type": "object",
+        "description": "`OpenAI` error envelope detail (`error`).",
+        "required": [
+          "message",
+          "type"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Machine-readable code (`model_not_found`, `gpu_slot_busy`, …)."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable cause."
+          },
+          "param": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Offending request field, when known."
+          },
+          "type": {
+            "type": "string",
+            "description": "OpenAI-style class: `invalid_request_error` (400/404),\n`rate_limit_error` (429), `server_error` (5xx)."
+          }
+        }
+      },
+      "OpenAiUsage": {
+        "type": "object",
+        "description": "Token accounting (`usage`).",
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Generated tokens.",
+            "minimum": 0
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Prompt tokens after tokenization (real count on the llama.cpp path;\nthe stub reports 0).",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`prompt_tokens + completion_tokens`.",
+            "minimum": 0
+          }
+        }
       },
       "Pill": {
         "type": "string",

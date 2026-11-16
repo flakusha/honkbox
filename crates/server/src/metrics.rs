@@ -29,7 +29,7 @@ use honkbox_api_types::ModelKind;
 
 /// Known route labels (bounded cardinality); everything else counts under
 /// `"other"` so arbitrary fallback paths cannot explode the series set.
-const ROUTES: [&str; 10] = [
+const ROUTES: [&str; 11] = [
     "/health",
     "/api/version",
     "/v1/openapi.json",
@@ -37,6 +37,7 @@ const ROUTES: [&str; 10] = [
     "/v1/models/refresh",
     "/v1/chat",
     "/v1/chat/stream",
+    "/v1/chat/completions",
     "/v1/transcribe",
     "/v1/synthesize",
     "/metrics",

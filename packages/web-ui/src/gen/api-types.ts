@@ -68,6 +68,166 @@ tokens: number,
  * Wall-clock time in milliseconds.
  */
 millis: bigint, };
+type OpenAiChatRequest = { 
+/**
+ * Model id: an operator alias or registry slug (`GET /v1/models`).
+ * Required on this route — an omitted/empty model is a 400 naming the
+ * requirement (the native route's empty-means-server-default fallback
+ * stays native-only).
+ */
+model?: string | null, 
+/**
+ * Conversation turns (string content; roles user/assistant/system).
+ */
+messages: Array<ChatMessage>, 
+/**
+ * Stream `OpenAI` SSE chunks (`chat.completion.chunk` frames + a final
+ * `data: [DONE]` line) instead of one JSON body. Default false.
+ */
+stream?: boolean | null, 
+/**
+ * Max tokens to generate; backend default when absent.
+ */
+max_tokens?: number | null, 
+/**
+ * Sampling temperature; backend default when absent.
+ */
+temperature?: number | null, 
+/**
+ * Deterministic sampling seed, honored end-to-end (sampler chain): the
+ * same prompt + seed streams the same tokens the non-streaming path
+ * returns.
+ */
+seed?: bigint | null, 
+/**
+ * Per-request residency advice; identical contract to
+ * [`ChatRequest::ttl_seconds`].
+ */
+ttl_seconds?: bigint | null, };
+type FinishReason = "stop" | "length";
+type OpenAiUsage = { 
+/**
+ * Prompt tokens after tokenization (real count on the llama.cpp path;
+ * the stub reports 0).
+ */
+prompt_tokens: number, 
+/**
+ * Generated tokens.
+ */
+completion_tokens: number, 
+/**
+ * `prompt_tokens + completion_tokens`.
+ */
+total_tokens: bigint, };
+type OpenAiChoice = { 
+/**
+ * Always 0 (single choice).
+ */
+index: number, 
+/**
+ * Assistant turn.
+ */
+message: ChatMessage, 
+/**
+ * Why generation stopped.
+ */
+finish_reason: FinishReason, };
+type OpenAiChatCompletion = { 
+/**
+ * `chatcmpl-<ulid>`.
+ */
+id: string, 
+/**
+ * Always `"chat.completion"`.
+ */
+object: string, 
+/**
+ * Unix seconds at completion.
+ */
+created: bigint, 
+/**
+ * The resolved model's served id (alias when bound, else the slug);
+ * the server-default path echoes the request value.
+ */
+model: string, 
+/**
+ * Exactly one choice.
+ */
+choices: Array<OpenAiChoice>, 
+/**
+ * Token accounting.
+ */
+usage: OpenAiUsage, };
+type OpenAiDelta = { 
+/**
+ * Assistant role marker, first frame only.
+ */
+role: ChatRole | null, 
+/**
+ * Next text piece, token frames only.
+ */
+content: string | null, };
+type OpenAiChunkChoice = { 
+/**
+ * Always 0 (single choice).
+ */
+index: number, 
+/**
+ * Piece of the turn.
+ */
+delta: OpenAiDelta, 
+/**
+ * `null` on every frame except the last.
+ */
+finish_reason: FinishReason | null, };
+type OpenAiChunk = { 
+/**
+ * `chatcmpl-<ulid>`, shared by every frame of one completion.
+ */
+id: string, 
+/**
+ * Always `"chat.completion.chunk"`.
+ */
+object: string, 
+/**
+ * Unix seconds at stream start.
+ */
+created: bigint, 
+/**
+ * The resolved model's served id.
+ */
+model: string, 
+/**
+ * Exactly one choice per frame.
+ */
+choices: Array<OpenAiChunkChoice>, 
+/**
+ * Token accounting; present only on the final frame.
+ */
+usage: OpenAiUsage | null, };
+type OpenAiErrorDetail = { 
+/**
+ * Human-readable cause.
+ */
+message: string, 
+/**
+ * OpenAI-style class: `invalid_request_error` (400/404),
+ * `rate_limit_error` (429), `server_error` (5xx).
+ */
+type: string, 
+/**
+ * Offending request field, when known.
+ */
+param: string | null, 
+/**
+ * Machine-readable code (`model_not_found`, `gpu_slot_busy`, …).
+ */
+code: string | null, };
+type OpenAiError = { 
+/**
+ * The error detail.
+ */
+error: OpenAiErrorDetail, };
 type TranscriptSegment = { 
 /**
  * Segment start, milliseconds from the audio start.

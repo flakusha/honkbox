@@ -82,6 +82,184 @@ pub struct ChatResponse {
     pub millis: u64,
 }
 
+/// OpenAI-compatible chat completion request (`POST /v1/chat/completions`;
+/// REQ-1). A translation surface over honkbox's native chat pipeline — the
+/// request is served by the same pipeline, GPU lease, and swap decision as
+/// `POST /v1/chat`.
+///
+/// Undeclared keys (`top_p`, `stop`, tool fields, anything else) are
+/// accepted and silently ignored (serde's default unknown-key behavior);
+/// only the fields below have honkbox-side meaning. `content` parts and
+/// tool messages are REQ-8/REQ-3, out of scope.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct OpenAiChatRequest {
+    /// Model id: an operator alias or registry slug (`GET /v1/models`).
+    /// Required on this route — an omitted/empty model is a 400 naming the
+    /// requirement (the native route's empty-means-server-default fallback
+    /// stays native-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Conversation turns (string content; roles user/assistant/system).
+    pub messages: Vec<ChatMessage>,
+    /// Stream `OpenAI` SSE chunks (`chat.completion.chunk` frames + a final
+    /// `data: [DONE]` line) instead of one JSON body. Default false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    /// Max tokens to generate; backend default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    /// Sampling temperature; backend default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    /// Deterministic sampling seed, honored end-to-end (sampler chain): the
+    /// same prompt + seed streams the same tokens the non-streaming path
+    /// returns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+    /// Per-request residency advice; identical contract to
+    /// [`ChatRequest::ttl_seconds`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<u64>,
+}
+
+/// Why generation stopped (`choices[].finish_reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FinishReason {
+    /// Natural end of generation.
+    Stop,
+    /// `max_tokens` reached (heuristic: reported tokens >= requested cap —
+    /// the worker does not surface a native stop cause).
+    Length,
+}
+
+/// Token accounting (`usage`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiUsage {
+    /// Prompt tokens after tokenization (real count on the llama.cpp path;
+    /// the stub reports 0).
+    pub prompt_tokens: u32,
+    /// Generated tokens.
+    pub completion_tokens: u32,
+    /// `prompt_tokens + completion_tokens`.
+    pub total_tokens: u64,
+}
+
+/// One non-streaming choice (`choices[]`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiChoice {
+    /// Always 0 (single choice).
+    pub index: u8,
+    /// Assistant turn.
+    pub message: ChatMessage,
+    /// Why generation stopped.
+    pub finish_reason: FinishReason,
+}
+
+/// Non-streaming response (`object: "chat.completion"`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiChatCompletion {
+    /// `chatcmpl-<ulid>`.
+    pub id: String,
+    /// Always `"chat.completion"`.
+    pub object: String,
+    /// Unix seconds at completion.
+    pub created: u64,
+    /// The resolved model's served id (alias when bound, else the slug);
+    /// the server-default path echoes the request value.
+    pub model: String,
+    /// Exactly one choice.
+    pub choices: Vec<OpenAiChoice>,
+    /// Token accounting.
+    pub usage: OpenAiUsage,
+}
+
+/// One streamed delta (`choices[].delta` of a chunk). Both fields optional:
+/// the first frame carries `role`, token frames carry `content`, the final
+/// frame carries neither.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiDelta {
+    /// Assistant role marker, first frame only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<ChatRole>,
+    /// Next text piece, token frames only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// One streamed chunk choice (`choices[]` of a chunk).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiChunkChoice {
+    /// Always 0 (single choice).
+    pub index: u8,
+    /// Piece of the turn.
+    pub delta: OpenAiDelta,
+    /// `null` on every frame except the last.
+    pub finish_reason: Option<FinishReason>,
+}
+
+/// Streaming chunk (`object: "chat.completion.chunk"`). `usage` rides only
+/// on the final frame.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiChunk {
+    /// `chatcmpl-<ulid>`, shared by every frame of one completion.
+    pub id: String,
+    /// Always `"chat.completion.chunk"`.
+    pub object: String,
+    /// Unix seconds at stream start.
+    pub created: u64,
+    /// The resolved model's served id.
+    pub model: String,
+    /// Exactly one choice per frame.
+    pub choices: Vec<OpenAiChunkChoice>,
+    /// Token accounting; present only on the final frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<OpenAiUsage>,
+}
+
+/// `OpenAI` error envelope detail (`error`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiErrorDetail {
+    /// Human-readable cause.
+    pub message: String,
+    /// OpenAI-style class: `invalid_request_error` (400/404),
+    /// `rate_limit_error` (429), `server_error` (5xx).
+    #[serde(rename = "type")]
+    pub error_type: String,
+    /// Offending request field, when known.
+    pub param: Option<String>,
+    /// Machine-readable code (`model_not_found`, `gpu_slot_busy`, …).
+    pub code: Option<String>,
+}
+
+/// OpenAI-shaped error body (`{"error":{…}}`) for
+/// `/v1/chat/completions`.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct OpenAiError {
+    /// The error detail.
+    pub error: OpenAiErrorDetail,
+}
+
+impl OpenAiError {
+    /// Build an envelope with the `OpenAI` status-class type string.
+    #[must_use]
+    pub fn new(status: u16, message: String, code: Option<String>) -> Self {
+        let error_type = match status {
+            400 | 404 => "invalid_request_error",
+            429 => "rate_limit_error",
+            _ => "server_error",
+        };
+        Self {
+            error: OpenAiErrorDetail {
+                message,
+                error_type: error_type.to_owned(),
+                param: None,
+                code,
+            },
+        }
+    }
+}
+
 /// One transcript segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct TranscriptSegment {
@@ -471,6 +649,16 @@ mod tests {
             ChatMessage::decl(&config),
             ChatRequest::decl(&config),
             ChatResponse::decl(&config),
+            OpenAiChatRequest::decl(&config),
+            FinishReason::decl(&config),
+            OpenAiUsage::decl(&config),
+            OpenAiChoice::decl(&config),
+            OpenAiChatCompletion::decl(&config),
+            OpenAiDelta::decl(&config),
+            OpenAiChunkChoice::decl(&config),
+            OpenAiChunk::decl(&config),
+            OpenAiErrorDetail::decl(&config),
+            OpenAiError::decl(&config),
             TranscriptSegment::decl(&config),
             Transcript::decl(&config),
             SynthesizeRequest::decl(&config),

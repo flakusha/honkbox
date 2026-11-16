@@ -17,7 +17,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode, Uri, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
@@ -28,9 +28,10 @@ use axum::{
 use honkbox_api_types::{
     CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
     DownloadAccepted, DownloadKind, DownloadList, DownloadRequest, DownloadState, DownloadStatus,
-    GgufMetadata, Health, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind,
-    ModelMetadata, Pill, SafetensorsMetadata, SynthesizeRequest, Transcript, TranscriptSegment,
-    Version,
+    FinishReason, GgufMetadata, Health, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
+    ModelKind, ModelMetadata, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk,
+    OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, SafetensorsMetadata,
+    SynthesizeRequest, Transcript, TranscriptSegment, Version,
 };
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest,
@@ -63,6 +64,7 @@ struct EmbeddedUi;
         metrics_endpoint,
         post_chat,
         post_chat_stream,
+        post_chat_completions,
         post_transcribe,
         post_synthesize,
         post_download,
@@ -88,6 +90,15 @@ struct EmbeddedUi;
         ModelMetadata,
         ModelCatalogEntry,
         ModelCatalog,
+        OpenAiChatRequest,
+        FinishReason,
+        OpenAiUsage,
+        OpenAiChoice,
+        OpenAiChatCompletion,
+        OpenAiDelta,
+        OpenAiChunkChoice,
+        OpenAiChunk,
+        OpenAiError,
         DownloadKind,
         DownloadStatus,
         DownloadRequest,
@@ -186,6 +197,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/openapi.json", get(openapi_json))
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
+        .route("/v1/chat/completions", post(post_chat_completions))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
         .route("/v1/downloads", post(post_download).get(list_downloads))
@@ -200,11 +212,19 @@ pub fn app(config: AppConfig) -> Router {
 }
 
 /// Per-request metrics: one route/code counter + one duration observation
-/// (see `metrics`); no per-request allocation.
+/// (see `metrics`); no per-request allocation. Every 429 (the GPU-slot busy
+/// contract, shared by the native and `OpenAI` chat routes) also carries a
+/// `Retry-After` hint — additive on the native route, whose body/status do
+/// not change.
 async fn track_metrics(req: Request, next: Next) -> Response {
     let route = crate::metrics::route_label(req.uri().path());
     let started = Instant::now();
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    }
     crate::metrics::record_request(route, response.status().as_u16(), started.elapsed());
     response
 }
@@ -1260,6 +1280,13 @@ async fn post_chat_stream(
     }))
 }
 
+/// OpenAI-shaped error body → JSON response (`/v1/chat/completions` only;
+/// the native route keeps its plain-text errors).
+fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
+    let body = OpenAiError::new(status.as_u16(), message, code.map(str::to_owned));
+    (status, Json(body)).into_response()
+}
+
 /// Owning catalog entry for a request `model` value (the alias `id` or the
 /// registry `slug`); [`resolve_model_slug`] reads the slug off it.
 fn resolve_model_entry<'a>(
@@ -1270,6 +1297,300 @@ fn resolve_model_entry<'a>(
         .data
         .iter()
         .find(|e| e.id == model || e.slug == model)
+}
+
+/// Unix seconds (the `OpenAI` `created` field).
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `finish_reason` for a completed reply. The worker does not surface a
+/// native stop cause, so `length` is the documented heuristic: reported
+/// generated tokens reached the requested `max_tokens` cap.
+fn finish_reason(tokens: u32, max_tokens: Option<u32>) -> FinishReason {
+    if max_tokens.is_some_and(|max| tokens >= max) {
+        FinishReason::Length
+    } else {
+        FinishReason::Stop
+    }
+}
+
+/// Token accounting from a worker reply.
+fn usage_of(reply: &honkbox_llm_worker::ChatResponse) -> OpenAiUsage {
+    OpenAiUsage {
+        prompt_tokens: reply.prompt_tokens,
+        completion_tokens: reply.tokens,
+        total_tokens: u64::from(reply.prompt_tokens) + u64::from(reply.tokens),
+    }
+}
+
+/// `POST /v1/chat/completions`: the `OpenAI`-compatible translation surface
+/// (REQ-1) over the SAME pipeline, GPU lease, and swap decision as
+/// `/v1/chat` — never an HTTP proxy. JSON body or `OpenAI` SSE
+/// (`stream: true`). Errors are `OpenAI` envelopes; statuses: 400 bad
+/// request, 404 unknown model, 429 busy (+`Retry-After` via the shared
+/// middleware), 500 inference failure. Undeclared request keys (`top_p`,
+/// `stop`, …) are accepted and ignored by serde.
+///
+/// An omitted/empty `model` is a 400 naming the requirement — the native
+/// route's empty-means-server-default fallback stays native-only.
+#[utoipa::path(
+    post,
+    path = "/v1/chat/completions",
+    request_body = OpenAiChatRequest,
+    responses(
+        (status = 200, description = "Chat completion (JSON or SSE)", body = OpenAiChatCompletion),
+        (status = 400, description = "Bad request", body = OpenAiError),
+        (status = 404, description = "Unknown model", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Inference failed", body = OpenAiError)
+    )
+)]
+async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> Response {
+    let req: OpenAiChatRequest = match serde_json::from_slice(&body) {
+        Ok(req) => req,
+        Err(err) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid JSON body: {err}"),
+                None,
+            );
+        }
+    };
+    let Some(model) = req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    else {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "model is required: pass an operator alias or registry slug from GET /v1/models"
+                .to_owned(),
+            Some("model_required"),
+        );
+    };
+    let catalog = config.catalog_snapshot();
+    let Some(entry) = resolve_model_entry(model, &catalog) else {
+        return openai_error_response(
+            StatusCode::NOT_FOUND,
+            format!("unknown model {model:?}: not an alias or registry slug (see GET /v1/models)"),
+            Some("model_not_found"),
+        );
+    };
+    let served_id = entry.id.clone();
+    let slug = entry.slug.clone();
+    let worker_req = WorkerChatRequest {
+        model: slug.clone(),
+        messages: req.messages.iter().map(worker_message).collect(),
+        max_tokens: req.max_tokens,
+        temperature: req.temperature,
+        seed: req.seed,
+    };
+    // Same swap path as `/v1/chat`: load-on-demand through the swap manager
+    // when active, else the startup pipeline. Unknown/non-LLM slugs are the
+    // route's 404; construction failures 500.
+    let pipe = match &config.swap {
+        Some(swap) => {
+            match swap
+                .get(
+                    &slug,
+                    clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
+                )
+                .await
+            {
+                Ok(pipe) => pipe,
+                Err(crate::swap::SwapError::UnknownSlug(message)) => {
+                    return openai_error_response(StatusCode::NOT_FOUND, message, None);
+                }
+                Err(crate::swap::SwapError::Load(message)) => {
+                    return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
+                }
+            }
+        }
+        None => config.llm.clone(),
+    };
+    if req.stream.is_some_and(|stream| stream) {
+        completions_stream(pipe, worker_req, &served_id, id_frame(), req.max_tokens)
+    } else {
+        completions_json(pipe, worker_req, &served_id, req.max_tokens).await
+    }
+}
+
+/// Non-streaming completion: one blocking worker call inside the GPU lease,
+/// mapped onto the exact `OpenAI` JSON shape.
+async fn completions_json(
+    pipe: Arc<dyn LlmPipeline>,
+    worker_req: WorkerChatRequest,
+    served_id: &str,
+    max_tokens: Option<u32>,
+) -> Response {
+    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+        Ok(lease) => {
+            let _lease = lease;
+            pipe.complete(&worker_req).map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("chat failed: {err}"),
+                )
+            })
+        }
+        Err((_, message)) => Err((StatusCode::TOO_MANY_REQUESTS, message)),
+    })
+    .await
+    .map_err(|err| format!("chat task failed: {err}"));
+    let reply = match reply {
+        Ok(Ok(reply)) => reply,
+        Ok(Err((StatusCode::TOO_MANY_REQUESTS, message))) => {
+            return openai_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                message,
+                Some("gpu_slot_busy"),
+            );
+        }
+        Ok(Err((_, message))) | Err(message) => {
+            return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
+        }
+    };
+    let usage = usage_of(&reply);
+    Json(OpenAiChatCompletion {
+        id: format!("chatcmpl-{}", ulid::Ulid::new()),
+        object: "chat.completion".to_owned(),
+        created: epoch_secs(),
+        model: served_id.to_owned(),
+        choices: vec![OpenAiChoice {
+            index: 0,
+            message: ChatMessage {
+                role: ChatRole::Assistant,
+                content: reply.text,
+            },
+            finish_reason: finish_reason(reply.tokens, max_tokens),
+        }],
+        usage,
+    })
+    .into_response()
+}
+
+/// Fresh completion id + creation timestamp (shared by every SSE frame).
+fn id_frame() -> (String, u64) {
+    (format!("chatcmpl-{}", ulid::Ulid::new()), epoch_secs())
+}
+
+/// One SSE chunk frame (serialization never fails on these DTOs).
+fn chunk_frame(frame: &OpenAiChunk) -> Event {
+    let data = serde_json::to_string(frame).unwrap_or_else(|_| "{}".to_owned());
+    Event::default().data(data)
+}
+
+/// `OpenAI` SSE translation of `complete_stream` (REQ-1): role+first-token
+/// frame, one content frame per token, a final frame with `finish_reason`
+/// and `usage`, then a literal `data: [DONE]`. No `event:` frames on the
+/// success path — they are reserved for errors, which arrive as an
+/// `event: error` data frame before `[DONE]` (the SSE body is already 200
+/// by then, so a busy slot cannot become an HTTP 429).
+fn completions_stream(
+    pipe: Arc<dyn LlmPipeline>,
+    worker_req: WorkerChatRequest,
+    served_id: &str,
+    (id, created): (String, u64),
+    max_tokens: Option<u32>,
+) -> Response {
+    let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
+    let abort_pipe = Arc::clone(&pipe);
+    let worker_cancelled = cancelled.clone();
+    let frame_model = served_id.to_owned();
+    let worker = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+        Ok(lease) => {
+            *lease_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
+            let mut first = true;
+            let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
+                if worker_cancelled.load(Ordering::Relaxed) {
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                    return;
+                }
+                let delta = if first {
+                    first = false;
+                    OpenAiDelta {
+                        role: Some(ChatRole::Assistant),
+                        content: Some(token.to_owned()),
+                    }
+                } else {
+                    OpenAiDelta {
+                        role: None,
+                        content: Some(token.to_owned()),
+                    }
+                };
+                let frame = OpenAiChunk {
+                    id: id.clone(),
+                    object: "chat.completion.chunk".to_owned(),
+                    created,
+                    model: frame_model.clone(),
+                    choices: vec![OpenAiChunkChoice {
+                        index: 0,
+                        delta,
+                        finish_reason: None,
+                    }],
+                    usage: None,
+                };
+                if tx.send(Ok(chunk_frame(&frame))).is_err() {
+                    // Receiver gone without the drop guard (drop raced the send).
+                    worker_cancelled.store(true, Ordering::Relaxed);
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                }
+            });
+            // A disconnect between the last token and completion frees here.
+            free_gpu_lease(&lease_slot);
+            match result {
+                Ok(reply) => {
+                    let final_frame = OpenAiChunk {
+                        id,
+                        object: "chat.completion.chunk".to_owned(),
+                        created,
+                        model: frame_model,
+                        choices: vec![OpenAiChunkChoice {
+                            index: 0,
+                            delta: OpenAiDelta {
+                                role: None,
+                                content: None,
+                            },
+                            finish_reason: Some(finish_reason(reply.tokens, max_tokens)),
+                        }],
+                        usage: Some(usage_of(&reply)),
+                    };
+                    let _ = tx.send(Ok(chunk_frame(&final_frame)));
+                }
+                Err(err) => {
+                    let body = OpenAiError::new(500, format!("chat failed: {err}"), None);
+                    let _ = tx.send(Ok(Event::default()
+                        .event("error")
+                        .data(serde_json::to_string(&body).unwrap_or_default())));
+                }
+            }
+            let _ = tx.send(Ok(Event::default().data("[DONE]")));
+        }
+        Err((_, message)) => {
+            let body = OpenAiError::new(429, message, Some("gpu_slot_busy".to_owned()));
+            let _ = tx.send(Ok(Event::default()
+                .event("error")
+                .data(serde_json::to_string(&body).unwrap_or_default())));
+            let _ = tx.send(Ok(Event::default().data("[DONE]")));
+        }
+    });
+    Sse::new(CancelOnDrop {
+        inner: UnboundedReceiverStream::new(rx),
+        cancelled,
+        pipe: abort_pipe,
+        _worker: worker,
+    })
+    .into_response()
 }
 
 /// `POST /v1/transcribe`: content-type dispatch (`audio/wav` → `decode_wav`,
