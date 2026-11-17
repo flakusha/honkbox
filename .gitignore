@@ -46,3 +46,4 @@ lcov.info
 # over the global file by precedence, and negating the dir re-includes it.
 !.github/
 !.githooks/
+!.plan/
