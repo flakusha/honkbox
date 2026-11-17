@@ -17,6 +17,8 @@ controls, and remove silent tool-choice surprises. Retrieval/rerank stays in
 - `TASK-llm-vision-default.md` — feature default + stale docs (P0).
 - `TASK-llm-prompt-cache.md` — bounded `cache_prompt`/`cache_ram` knobs (P1).
 - `TASK-llm-tool-choice-contract.md` — document/align tool-choice fidelity (P2).
+- `TASK-remote-vision-url-fetch.md` — opt-in SSRF-safe image URL fetch (P2).
+- `TASK-llm-speculative-decoding-spike.md` — draftless `ngram-mod` spike (P2).
 
 ## Acceptance
 
@@ -31,5 +33,6 @@ machine-readable rather than silently clamped.
 
 ## Non-goals
 
-Responses API, reasoning parameters, remote image URLs, speculative decoding,
-and parallel tool calls unless a named consumer requests them.
+Responses API, reasoning parameters, and parallel tool calls unless a named
+consumer requests them. Remote vision URLs and speculative decoding now have
+spike tickets above; draft models stay deferred.

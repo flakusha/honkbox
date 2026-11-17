@@ -57,6 +57,8 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-sd-native-backend.md](epics/epic-sd-native-backend.md)
 - [epic-video-support.md](epics/epic-video-support.md)
 - [epic-audio-streaming.md](epics/epic-audio-streaming.md)
+- [epic-media-timeline.md](epics/epic-media-timeline.md)
+- [epic-voice-identity.md](epics/epic-voice-identity.md)
 
 ## Research promotion map
 
@@ -85,6 +87,12 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `ReviewedSupport-Audio.md` | `epic-audio-streaming` + existing audio-format tickets |
 | `ReviewedSupport-Capabilities.md` | `epic-capabilities-contract` (4 tickets) |
 | `ReviewedSupport-NextSteps.md` | ordered build order below |
+| `ReviewedExpansion-Index.md` | expansion build order below |
+| `ReviewedExpansion-TimelineEditing.md` | `epic-media-timeline` + 2 tickets |
+| `ReviewedExpansion-GameEnginePlugins.md` | `epic-game-engine-export` + import fixture ticket |
+| `ReviewedExpansion-RemoteVisionURLs.md` | `epic-llm-expansion` + URL fetch ticket |
+| `ReviewedExpansion-SpeculativeDecoding.md` | `epic-llm-expansion` + decoding spike |
+| `ReviewedExpansion-VoiceIdentity.md` | `epic-voice-identity` + 2 tickets |
 
 ## Support expansion order (2026-11-17)
 
@@ -94,3 +102,7 @@ P1 also includes the API-version policy. P2: video FFI spike → job class →
 i2v frames, base-model tags, tool-choice contract. P3: video mux. Full
 dependency graph stays in
 `.tmp/research/ReviewedSupport-NextSteps.md`; scratch is reference only.
+
+Expansion additions (`ReviewedExpansion-Index.md`): P2 OTIO sidecar, Godot
+importer fixture, remote vision URL fetch, speculative decoding spike, and
+diarization spike; P3 external edit-process spike and voice-clone policy.

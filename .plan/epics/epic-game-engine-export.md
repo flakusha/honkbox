@@ -14,6 +14,13 @@ loop-lore owns engine project state, export profiles, and MCP calls. Godot and
 Bevy are first targets; Ren'Py via pinned SDK CLI; Unity/Unreal optional
 external-only. Yield after those five.
 
+## Tickets
+
+- `FEAT-game-engine-export-bundles.md` — versioned GLB + PBR + manifest.
+- `TASK-engine-bundle-verification.md` — Godot/Bevy/Ren'Py external verification.
+- `TASK-godot-importer-fixture.md` — engine-owned `EditorImportPlugin` fixture
+  (cross-app; honkbox emits the manifest, it does not ship editor code).
+
 ## Acceptance
 
 - A bundle validates against an explicit glTF extension allowlist; checksums
