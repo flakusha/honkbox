@@ -1,7 +1,9 @@
-import type { OpenAiChatCompletion, OpenAiChunk } from "./gen/api-types";
+import type { ContentPart, OpenAiChatCompletion, OpenAiChunk } from "./gen/api-types";
 
 export type Role = "user" | "assistant" | "system";
-export type ChatMessage = { role: Role; content: string; };
+// One conversation message as the UI holds it: text plus optional image
+// attachments (data: URIs, REQ-8 vision chat).
+export type ChatMessage = { role: Role; content: string; images?: string[]; };
 // Optional generation knobs mapped onto ChatRequest; omitted keys use the
 // server default.
 export type ChatParams = { max_tokens?: number; temperature?: number; };
@@ -34,12 +36,33 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+// One UI message → the wire ChatMessage: attachments ride as `image_url`
+// content parts after the text part — the data:-URI shape the chat routes
+// already parse (REQ-8); a message without images stays the plain string
+// form.
+function wireMessage(message: ChatMessage): {
+  role: Role;
+  content: string | ContentPart[];
+} {
+  const images = message.images ?? [];
+  if (images.length === 0) {
+    return { role: message.role, content: message.content };
+  }
+  return {
+    role: message.role,
+    content: [
+      { type: "text", text: message.content },
+      ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+    ],
+  };
+}
+
 function chatBody(
   model: string,
   messages: ChatMessage[],
   params: ChatParams,
 ): string {
-  return JSON.stringify({ model, messages, ...params });
+  return JSON.stringify({ model, messages: messages.map(wireMessage), ...params });
 }
 
 async function postChat(
@@ -124,7 +147,7 @@ async function postChatOpenAI(
   const res = await fetch("/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, messages, ...params }),
+    body: JSON.stringify({ model, messages: messages.map(wireMessage), ...params }),
   });
   if (!res.ok) {
     const message = openaiErrorMessage(await res.json().catch(() => null))
@@ -149,7 +172,7 @@ async function streamChatOpenAI(
   const res = await fetch("/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model, messages, stream: true, ...params }),
+    body: JSON.stringify({ model, messages: messages.map(wireMessage), stream: true, ...params }),
   });
   if (!res.ok || !res.body) {
     const message = openaiErrorMessage(await res.json().catch(() => null))
@@ -196,30 +219,120 @@ export type ChatControls = {
   // instead of the native /v1/chat endpoints; default stays native. The
   // OpenAI route requires a non-empty model (server 400s otherwise).
   useOpenAI?: () => boolean;
+  // True when the active model is vision-capable (catalog
+  // `capabilities.vision`): shows the image-attach affordance (REQ-8).
+  // Absent/false hides it — the composer never offers images it cannot
+  // attribute to a vision-capable model.
+  supportsVision?: () => boolean;
+};
+
+// Handle to a mounted chat surface; lets callers react to state the
+// composer cannot observe (e.g. a model switch).
+export type ChatCoreHandle = {
+  // Re-evaluate the image-attach affordance visibility; call when the
+  // active model changes.
+  refreshAttach: () => void;
 };
 
 // Shared chat surface: message list + send form with SSE token streaming and
 // a POST /v1/chat fallback. Callers own the host and any controls appended
 // before it.
-export function mountChatCore(host: HTMLElement, controls: ChatControls): void {
+export function mountChatCore(host: HTMLElement, controls: ChatControls): ChatCoreHandle {
   const list = el("div");
   const form = el("form");
+  // Image attach (REQ-8 vision chat): the file picker and drag-drop feed
+  // the pending list; each image renders as a removable thumbnail chip.
+  // The whole affordance stays hidden unless the active model is
+  // vision-capable — the composer never offers images it cannot send.
+  const attach = el("button", "Attach image");
+  attach.type = "button";
+  const fileInput = el("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  const chips = el("div");
+  const pendingImages: string[] = [];
+
+  function renderChips(): void {
+    chips.innerHTML = "";
+    pendingImages.forEach((url, index) => {
+      const chip = el("span");
+      const thumb = el("img");
+      thumb.src = url;
+      thumb.alt = "attached image";
+      thumb.style.maxWidth = "48px";
+      thumb.style.maxHeight = "48px";
+      thumb.style.verticalAlign = "middle";
+      const remove = el("button", "×");
+      remove.type = "button";
+      remove.setAttribute("aria-label", "remove attached image");
+      remove.addEventListener("click", () => {
+        pendingImages.splice(index, 1);
+        renderChips();
+      });
+      chip.append(thumb, remove);
+      chips.append(chip);
+    });
+  }
+
+  function addImageFiles(files: FileList | null): void {
+    if (!files) return;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files.item(i);
+      if (file === null || !file.type.startsWith("image/")) continue;
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        if (typeof reader.result === "string") {
+          pendingImages.push(reader.result);
+          renderChips();
+        }
+      });
+      reader.readAsDataURL(file);
+    }
+  }
+
+  attach.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    addImageFiles(fileInput.files);
+    fileInput.value = "";
+  });
+  form.addEventListener("dragover", (ev) => {
+    if (!attach.hidden) ev.preventDefault();
+  });
+  form.addEventListener("drop", (ev) => {
+    if (attach.hidden) return;
+    ev.preventDefault();
+    addImageFiles(ev.dataTransfer?.files ?? null);
+  });
+
+  function refreshAttach(): void {
+    attach.hidden = controls.supportsVision?.() !== true;
+  }
+  refreshAttach();
+
   const input = el("input");
   input.placeholder = "message";
   const send = el("button", "Send");
-  form.append(input, send);
+  form.append(chips, attach, input, send);
   host.append(list, form);
 
   const history: ChatMessage[] = [];
   form.addEventListener("submit", (ev) => {
     ev.preventDefault();
     const text = input.value.trim();
-    if (!text) return;
+    const images = [...pendingImages];
+    // Text alone or images alone ("describe this") — never both empty.
+    if (!text && images.length === 0) return;
     input.value = "";
+    pendingImages.length = 0;
+    renderChips();
     const model = controls.getModel();
     const params = controls.getParams?.() ?? {};
-    history.push({ role: "user", content: text });
-    list.append(el("p", `you: ${text}`));
+    const message: ChatMessage = { role: "user", content: text };
+    if (images.length > 0) message.images = images;
+    history.push(message);
+    list.append(el("p", `you: ${"[image] ".repeat(images.length)}${text}`));
     const reply = el("p", "assistant: ");
     list.append(reply);
     const append = (token: string): void => {
@@ -238,6 +351,7 @@ export function mountChatCore(host: HTMLElement, controls: ChatControls): void {
       });
     });
   });
+  return { refreshAttach };
 }
 
 export function mountChat(host: HTMLElement): void {

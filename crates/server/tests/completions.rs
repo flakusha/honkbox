@@ -966,6 +966,15 @@ async fn image_url_part_is_400_vision_envelope() {
     );
 }
 
+/// Default build compiles the mtmd vision path (`llm-vision` rides in
+/// the server crate's default features): sibling-mmproj discovery is
+/// allowed to advertise `capabilities.vision`, so the REQ-8 acceptance
+/// paths above run on real default builds — not only behind an explicit
+/// `--features llm-vision`. Compile-time guard: a test build without the
+/// feature fails right here instead of advertising vision it cannot
+/// serve.
+const _: () = assert!(honkbox_llm_worker::VISION_COMPILED);
+
 /// Chat-capability gate: an entry declaring `capabilities.chat = false` —
 /// exactly what a scanned `mmproj*.gguf` projector file advertises — is a
 /// named 400 on the completions surface, never garbage tokens dressed up

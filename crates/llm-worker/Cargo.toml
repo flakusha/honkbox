@@ -23,7 +23,11 @@ llm-cuda = ["llama-cpp-4/cuda"]
 # `vendor::hash` PRIVATE; the sys build script only links cmake-install-dir
 # libs plus `llama-common-base`), so any binary calling the bitmap loaders
 # (`MtmdBitmap::from_buf`/`from_file`) fails to link with an undefined
-# `hash_sha256_hex`. Fix path: a [patch.crates-io] vendor patch adding the
-# missing link directive, then flip this feature on (server `llm-vision`).
+# `hash_sha256_hex`. Fixed: the [patch.crates-io] `llama-cpp-sys-4`
+# vendor patch (workspace Cargo.toml, applied by
+# `bun scripts/vendor-patches.ts sync`) adds the missing link directive,
+# and the server crate carries this feature in its defaults
+# (`llm-vision`). Still off by default here so non-server consumers stay
+# text-only unless they opt in.
 vision = []
 

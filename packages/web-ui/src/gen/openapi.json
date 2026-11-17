@@ -641,10 +641,10 @@
     "/v1/images/edits": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/\n`negative_prompt`/`seed`) validate exactly like `generations` — a named\nrecipe plus per-field overrides, explicit fields winning. No\n`hires_fix` on this route: the output stays at the source image's\ndimensions. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `LoRA` adapters are not\naccepted on this route yet — use `/v1/images/generations`. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\nstrength/size/recipe fields), 404 unknown model, 429 busy, 500 staging\nor generation failure.",
+        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/\n`negative_prompt`/`seed`) validate exactly like `generations` — a named\nrecipe plus per-field overrides, explicit fields winning. `output_format`\n(`png` default | `jpeg` | `webp` lossless) and `output_compression`\n(JPEG quality `[0, 100]`; ignored for lossless PNG/WebP) mirror the\n`generations` knobs — unknown format names and non-numeric/out-of-range\ncompression values are named 400s, never clamps. No\n`hires_fix` on this route: the output stays at the source image's\ndimensions. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `LoRA` adapters are not\naccepted on this route yet — use `/v1/images/generations`. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\n`strength`/`size`/`recipe`/`output_format`/`output_compression` fields), 404\nunknown model, 429 busy, 500 staging or generation failure.",
         "operationId": "post_images_edits",
         "requestBody": {
-          "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?",
+          "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100)",
           "content": {
             "text/plain": {
               "schema": {
@@ -656,7 +656,7 @@
         },
         "responses": {
           "200": {
-            "description": "Edited image (base64 PNG)",
+            "description": "Edited image (base64-encoded bytes in the requested output_format)",
             "content": {
               "application/json": {
                 "schema": {
@@ -712,7 +712,7 @@
       "post": {
         "tags": [],
         "summary": "`POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation\nshape over the startup-configured [`SdPipeline`]. SD pipelines are\nstartup-static (no swap manager), so a request `model` is validated and\nrecorded (bundle sidecar) but the pipeline stays the one built at\nstartup — with the stub backend any slug is honest; with `sd-cpp` the\ncheckpoint is the `--sd-model` one.",
-        "description": "Each image in the request is generated under the GPU lease\n(`spawn_blocking`, like every other GPU route) and written to the\nexisting job bundle store (`<data_dir>/jobs/`), so CLI GC and\nrecordkeeping cover HTTP generations too. Errors are `OpenAI`\nenvelopes: 400 bad `size`/`response_format`/recipe params (unknown\nrecipe/sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `steps`\noutside [1, 100], invalid `hires_fix` scale/target/denoise, `LoRA` slug\n/ strength / count violations), 404 unknown model, 429 busy, 500\nbackend failure. `n` clamps to `[1, 4]` (warn, never reject).\nPer-request `loras` resolve against `ModelKind::Lora` catalog entries;\ntheir license notes surface as response `warnings` (weights are never\nbundled; ReviewedLicense-AGPL §2b/§2c). `recipe` selects a curated\nsampler/scheduler/cfg/steps bundle (per-field overrides win, then\nserver defaults); `hires_fix` runs the vendor-native second-pass\nupscale and is recorded in the bundle sidecar.",
+        "description": "`output_format` selects the container for the returned bytes (`png`\ndefault, `jpeg`, `webp` lossless; unknown names are a 400 naming it) and\nthe bundle sidecar/extension agree with it. `output_compression` is the\nJPEG quality `[0, 100]`; non-numeric/out-of-range values are a named 400,\nand the knob is ignored (as documented) for lossless PNG/WebP.\n\nEach image in the request is generated under the GPU lease\n(`spawn_blocking`, like every other GPU route) and written to the\nexisting job bundle store (`<data_dir>/jobs/`), so CLI GC and\nrecordkeeping cover HTTP generations too. Errors are `OpenAI`\nenvelopes: 400 bad `size`/`response_format`/`output_format`/\n`output_compression`/recipe params (unknown\nrecipe/sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `steps`\noutside [1, 100], invalid `hires_fix` scale/target/denoise, `LoRA` slug\n/ strength / count violations), 404 unknown model, 429 busy, 500\nbackend failure. `n` clamps to `[1, 4]` (warn, never reject).\nPer-request `loras` resolve against `ModelKind::Lora` catalog entries;\ntheir license notes surface as response `warnings` (weights are never\nbundled; ReviewedLicense-AGPL §2b/§2c). `recipe` selects a curated\nsampler/scheduler/cfg/steps bundle (per-field overrides win, then\nserver defaults); `hires_fix` runs the vendor-native second-pass\nupscale and is recorded in the bundle sidecar. A valid `controlnet` +\n`control_image` pair (plus optional `controlnet_strength`) is applied by\nthe sd-cpp pipeline — the weights load with the model context and the\nconditioning image steers the render — while backends without a\n`ControlNet` branch get the named 501 instead.",
         "operationId": "post_images_generations",
         "requestBody": {
           "content": {
@@ -726,7 +726,7 @@
         },
         "responses": {
           "200": {
-            "description": "Generated images (base64 PNG)",
+            "description": "Generated images (base64-encoded bytes in the requested output_format)",
             "content": {
               "application/json": {
                 "schema": {
@@ -736,7 +736,7 @@
             }
           },
           "400": {
-            "description": "Bad size, response_format, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)",
+            "description": "Bad size, response_format, output_format, output_compression, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1782,7 +1782,7 @@
         "properties": {
           "b64_json": {
             "type": "string",
-            "description": "The PNG bytes, base64-encoded (`response_format: \"b64_json\"`)."
+            "description": "The generated image bytes (in the requested `output_format`),\nbase64-encoded (`response_format: \"b64_json\"`)."
           }
         }
       },
@@ -1806,14 +1806,22 @@
               "string",
               "null"
             ],
-            "description": "Conditioning image for [`ImagesGenerationRequest::controlnet`]:\nbase64-encoded PNG. Validated (bad base64 / not a PNG = 400) and\nthen subject to the same honest 501 as the slug."
+            "description": "Conditioning image for [`ImagesGenerationRequest::controlnet`]:\nbase64-encoded PNG. Validated (bad base64 / not a PNG = 400) and\napplied as-is by the sd-cpp pipeline — pass a preprocessed\nconditioning map (depth, edges, pose); the engine resizes it to the\ngeneration size."
           },
           "controlnet": {
             "type": [
               "string",
               "null"
             ],
-            "description": "`ControlNet` slug or alias of a `controlnet`-kind catalog entry\n(honkbox extension, not part of the `OpenAI` image shape). Accepted\nand validated (unknown slug = 400) together with\n[`ImagesGenerationRequest::control_image`]; applying it is NOT\npossible today — the sd pipeline seam carries no control inputs —\nso a fully valid pair is answered with an explicit 501\n(`controlnet_unsupported`), never silently ignored."
+            "description": "`ControlNet` slug or alias of a `controlnet`-kind catalog entry\n(honkbox extension, not part of the `OpenAI` image shape). Accepted\nand validated (unknown slug = 400) together with\n[`ImagesGenerationRequest::control_image`]; a fully valid pair is\napplied by the sd-cpp pipeline (weights load with the model\ncontext, the conditioning image steers the render). A pipeline that\ncannot apply control inputs (the stub backend) is answered with an\nexplicit 501 (`controlnet_unsupported`), never silently ignored."
+          },
+          "controlnet_strength": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "`ControlNet` guidance strength in `(0, 1]` (how hard the conditioning\nimage steers the render); values outside the range are rejected with\na 400 (`invalid_controlnet_strength`), never clamped. Omitted = the\nvendor default 0.9 (stable-diffusion.cpp `--control-strength`).\nOnly meaningful with `controlnet` + `control_image`."
           },
           "hires_fix": {
             "oneOf": [
@@ -1858,6 +1866,16 @@
               "null"
             ],
             "description": "Negative prompt (empty/omitted = none)."
+          },
+          "output_compression": {
+            "description": "JPEG quality in `[0, 100]` (the `OpenAI` `output_compression`\nprecedent). Only meaningful with `output_format: \"jpeg\"` — PNG is\nlossless and WebP is encoded lossless-only today, so the value is\ndocumented-and-ignored there. Non-integer or out-of-range values are\nrejected with a 400 (`invalid_output_compression`), never clamped.\nOmitted = JPEG quality 90."
+          },
+          "output_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output container for the returned image bytes: `\"png\"` (default),\n`\"jpeg\"`, or `\"webp\"` (lossless). Unknown names are rejected with a\n400 listing the accepted values. The `response_format` transport\nencoding stays `\"b64_json\"` either way."
           },
           "prompt": {
             "type": "string",

@@ -1,8 +1,8 @@
 import { el, mountChatCore } from "./chat";
 import type { ChatParams } from "./chat";
-import type { CatalogList } from "./gen/api-types";
+import type { ModelCatalog } from "./gen/api-types";
 
-function isCatalog(value: unknown): value is CatalogList {
+function isCatalog(value: unknown): value is ModelCatalog {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -19,7 +19,7 @@ function isCatalog(value: unknown): value is CatalogList {
   );
 }
 
-async function loadCatalog(): Promise<CatalogList | null> {
+async function loadCatalog(): Promise<ModelCatalog | null> {
   try {
     const res = await fetch("/v1/models");
     if (!res.ok) {
@@ -44,6 +44,10 @@ export function mountPlayground(host: HTMLElement): void {
   const status = el("p", "loading catalog…");
   let catalogOk = false;
   const modelSelect = el("select");
+  // Ids of catalog entries declaring `capabilities.vision` (REQ-8): the
+  // composer's image-attach affordance tracks the selected model's
+  // declared support.
+  const visionModels = new Set<string>();
   const serverDefault = el("option", "(server default)");
   serverDefault.value = "";
   modelSelect.append(serverDefault);
@@ -65,11 +69,14 @@ export function mountPlayground(host: HTMLElement): void {
       return;
     }
     status.textContent = "";
+    visionModels.clear();
     for (const entry of catalog.data) {
+      if (entry.capabilities?.vision === true) visionModels.add(entry.id);
       const option = el("option", entry.id);
       option.value = entry.id;
       modelSelect.append(option);
     }
+    chat.refreshAttach();
   });
 
   const knobs = el("div");
@@ -191,9 +198,15 @@ export function mountPlayground(host: HTMLElement): void {
 
   const core = el("div");
   host.append(status, modelSelect, modelInput, knobs, openaiLabel, core);
-  mountChatCore(core, {
+  // Vision gating (REQ-8): the attach affordance only shows for the
+  // selected catalog entry's declared `capabilities.vision`. The
+  // "(server default)" selection names no entry, so the UI never guesses
+  // support it cannot see.
+  const supportsVision = (): boolean => catalogOk && visionModels.has(modelSelect.value);
+  const chat = mountChatCore(core, {
     getModel: () => (catalogOk ? modelSelect.value : modelInput.value),
     useOpenAI: () => openai.checked,
+    supportsVision,
     getParams: (): ChatParams => {
       const params: ChatParams = {};
       const max = parseKnob(maxTokens.value);
@@ -203,4 +216,5 @@ export function mountPlayground(host: HTMLElement): void {
       return params;
     },
   });
+  modelSelect.addEventListener("change", () => chat.refreshAttach());
 }

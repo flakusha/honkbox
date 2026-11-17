@@ -48,9 +48,13 @@ experimental-ash-sd = []
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
 vulkan = ["honkbox-sd-core/vulkan"]
 # Vision chat (mtmd/mmproj): compiles the worker's mtmd path and derives
-# `capabilities.vision` from sibling-mmproj discovery. Opt-in for the same
-# vendor-link reason as `honkbox-llm-worker/vision` (see its Cargo.toml):
-# llama-cpp-sys-4 0.11.0 static builds cannot link the mtmd bitmap loader
-# until a vendor patch adds the missing `vendor-hash` link directive.
+# `capabilities.vision` from sibling-mmproj discovery. Default-on: the
+# [patch.crates-io] llama-cpp-sys-4 vendor patch (workspace Cargo.toml,
+# applied by `bun scripts/vendor-patches.ts sync`) adds the `vendor-hash`
+# link directive the mtmd bitmap loaders reference, so the default build
+# serves image input on models with a sibling mmproj projector. Kept a
+# real feature: `--no-default-features` builds a text-only server where
+# image parts get the named `vision_unsupported` 400 and a configured
+# mmproj is a loud load error (backend.rs) — never a silent drop.
 llm-vision = ["honkbox-llm-worker/vision"]
-default = ["vulkan"]
+default = ["vulkan", "llm-vision"]
