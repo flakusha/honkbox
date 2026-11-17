@@ -17,6 +17,11 @@ pub const SAMPLER: &str = "euler";
 /// Default scheduler recorded in bundle sidecars when a request omits one.
 pub const SCHEDULER: &str = "normal";
 
+/// Vendor default img2img denoise strength (stable-diffusion.cpp
+/// `--strength`, 0.75); also the HTTP-surface default when a request omits
+/// `strength`.
+pub const IMG2IMG_STRENGTH: f32 = 0.75;
+
 /// Sampler selection, mirroring the vendor `SampleMethod` C enum exactly
 /// (wire names are the sd.cpp CLI spellings, e.g. `dpm++2m`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,7 +227,21 @@ impl Scheduler {
     }
 }
 
-/// Minimal txt2img request crossing the `server` → `sd-core` seam.
+/// One resolved `LoRA` adapter for a generation: an absolute weight-file
+/// path (resolved by `server` from a catalog slug) plus its multiplier.
+#[derive(Debug, Clone)]
+pub struct LoraRef {
+    /// Absolute path to the `LoRA` weight file.
+    pub path: PathBuf,
+    /// Multiplier applied to the adapter delta (`1.0` = as-trained; the
+    /// accepted HTTP range is documented on the DTO).
+    pub strength: f32,
+}
+
+/// Minimal txt2img request crossing the `server` → `sd-core` seam. The same
+/// struct carries img2img/inpaint inputs: `init_image` present switches the
+/// real backend to img2img (mask optional); the stub honestly ignores all
+/// three image-input fields.
 #[derive(Debug, Clone)]
 pub struct Txt2ImgRequest {
     /// Text prompt.
@@ -252,6 +271,17 @@ pub struct Txt2ImgRequest {
     pub cfg_scale: Option<f32>,
     /// Negative prompt; `None`/empty = none (vendor default `""`).
     pub negative_prompt: Option<String>,
+    /// Per-request `LoRA` adapters; `None` = none. All entries must share one
+    /// parent directory (the vendor applies a single `LoRA` dir per model
+    /// config) — `server` enforces that at slug-resolution time.
+    pub loras: Option<Vec<LoraRef>>,
+    /// img2img input image (PNG file path); `None` = txt2img.
+    pub init_image: Option<PathBuf>,
+    /// Inpaint mask (PNG file path); requires [`Txt2ImgRequest::init_image`].
+    pub mask_image: Option<PathBuf>,
+    /// img2img denoise strength in `(0, 1]`; `None` = the vendor default
+    /// [`IMG2IMG_STRENGTH`]. Only meaningful with [`Txt2ImgRequest::init_image`].
+    pub strength: Option<f32>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -303,9 +333,10 @@ pub trait SdPipeline: Send + Sync {
 
 /// Deterministic stub: pixels are a pure function of the seed
 /// (SAME seed = byte-identical PNG); honors `width`/`height`. Recipe
-/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`) are
-/// honestly ignored: the stub has no sampler — they only affect the
-/// real `SdCppPipeline` backend.
+/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`) and the
+/// image inputs (`loras`/`init_image`/`mask_image`/`strength`) are honestly
+/// ignored: the stub has no sampler and no img2img branch — they only
+/// affect the real `SdCppPipeline` backend.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubPipeline;
 
@@ -493,7 +524,7 @@ impl SdPipeline for SdCppPipeline {
         #[cfg(feature = "vulkan")]
         use diffusion_rs::api::{BackendDevice, Module};
         use diffusion_rs::api::{
-            ConfigBuilder, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
+            ConfigBuilder, LoraSpec, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
         };
 
         let edge = req.width.max(req.height);
@@ -523,6 +554,14 @@ impl SdPipeline for SdCppPipeline {
                 Some(sampler) => sampler_vendor(sampler),
                 None => SampleMethod::EULER_SAMPLE_METHOD,
             })
+            // img2img/inpaint: the vendor reads both images from paths (empty
+            // path = txt2img) and takes the denoise strength here. `strength`
+            // is only consumed by the img2img branch upstream, and the None
+            // values are byte-identical to the vendor defaults, so txt2img
+            // behavior is unchanged by these three lines.
+            .init_img(req.init_image.clone().unwrap_or_default())
+            .mask_img(req.mask_image.clone().unwrap_or_default())
+            .strength(req.strength.unwrap_or(IMG2IMG_STRENGTH))
             .output(out.clone())
             .build()
             .map_err(|e| SdError::Backend(e.to_string()))?;
@@ -552,6 +591,33 @@ impl SdPipeline for SdCppPipeline {
         }
         if let Some(vae) = req.vae.clone() {
             model.vae(vae);
+        }
+        // Per-request LoRA adapters: the vendor maps file STEMS inside one
+        // directory to (path, multiplier) pairs, so the server resolves
+        // catalog slugs to same-dir absolute paths and we re-derive the parts
+        // here. High-noise split stays fixed off (not exposed on the API).
+        if let Some(loras) = &req.loras {
+            let first = loras
+                .first()
+                .ok_or_else(|| SdError::Backend("empty lora list".to_owned()))?;
+            let dir = first
+                .path
+                .parent()
+                .ok_or_else(|| SdError::Backend("lora path has no parent directory".to_owned()))?;
+            let specs = loras
+                .iter()
+                .map(|lora| LoraSpec {
+                    file_name: lora
+                        .path
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                    is_high_noise: false,
+                    multiplier: lora.strength,
+                })
+                .collect();
+            model.lora_models(dir, specs);
         }
         #[cfg(feature = "vulkan")]
         model.backend(std::collections::HashMap::from([(
@@ -673,6 +739,10 @@ mod tests {
             scheduler: None,
             cfg_scale: None,
             negative_prompt: None,
+            loras: None,
+            init_image: None,
+            mask_image: None,
+            strength: None,
         }
     }
 
@@ -742,6 +812,26 @@ mod tests {
         let a = StubPipeline.generate(&req(1, 16, 16)).expect("gen");
         let b = StubPipeline.generate(&req(2, 16, 16)).expect("gen");
         assert_ne!(a.rgba, b.rgba);
+    }
+
+    /// Image-input fields never change the stub output: same seed with and
+    /// without img2img/mask/`LoRA` fields is byte-identical (honest ignore).
+    #[test]
+    fn stub_ignores_image_inputs() {
+        let plain = req(9, 16, 16);
+        let with = Txt2ImgRequest {
+            loras: Some(vec![LoraRef {
+                path: PathBuf::from("/models/loras/x.safetensors"),
+                strength: 0.8,
+            }]),
+            init_image: Some(PathBuf::from("/tmp/in.png")),
+            mask_image: Some(PathBuf::from("/tmp/mask.png")),
+            strength: Some(0.5),
+            ..req(9, 16, 16)
+        };
+        let a = StubPipeline.generate(&plain).expect("gen");
+        let b = StubPipeline.generate(&with).expect("gen");
+        assert_eq!(a.rgba, b.rgba);
     }
 
     /// Minimal safetensors prelude: 8 B LE header len plus a JSON header.

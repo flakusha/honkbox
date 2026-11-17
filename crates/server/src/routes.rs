@@ -33,14 +33,14 @@ use honkbox_api_types::{
     DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
     FunctionDefinition, GgufMetadata, Health, ImageB64, ImagesGenerationRequest,
-    ImagesGenerationResponse, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo,
-    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind,
-    ModelMetadata, NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice,
-    OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel,
-    ResponseFormat, ResponseFormatType, RunningList, RunningModel, SafetensorsMetadata,
-    SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript,
-    TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult,
-    Version, Voice, VoiceList,
+    ImagesGenerationResponse, ImagesLora, JobCancelResult, JobInfo, JobList, JsonSchemaSpec,
+    MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
+    ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
+    OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
+    OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType, RunningList,
+    RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType,
+    ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
+    TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, Voice, VoiceList,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -49,8 +49,8 @@ use honkbox_api_types::{
 pub use crate::config::{AuthConfig, AuthMode};
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest, SynthesizedAudio,
-    TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript, TtsPipeline,
-    decode_wav, encode_wav,
+    TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript,
+    TranscriptSegment as WorkerTranscriptSegment, TtsPipeline, decode_wav, encode_wav,
 };
 use honkbox_llm_worker::{
     ChatMessage as WorkerChatMessage, ChatRequest as WorkerChatRequest, LlmError, LlmPipeline,
@@ -82,11 +82,16 @@ struct EmbeddedUi;
         post_chat,
         post_chat_stream,
         post_chat_completions,
+        post_images_generations,
+        post_images_edits,
         post_transcribe,
         post_synthesize,
         post_audio_transcriptions,
+        post_audio_translations,
         post_audio_speech,
         get_audio_voices,
+        get_jobs,
+        post_job_cancel,
         delete_model,
         post_download,
         list_downloads,
@@ -156,8 +161,12 @@ struct EmbeddedUi;
         EmbeddingsUsage,
         EmbeddingsResponse,
         ImagesGenerationRequest,
+        ImagesLora,
         ImageB64,
         ImagesGenerationResponse,
+        JobInfo,
+        JobList,
+        JobCancelResult,
         DownloadKind,
         DownloadStatus,
         DownloadRequest,
@@ -291,11 +300,15 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/chat/completions", post(post_chat_completions))
         .route("/v1/embeddings", post(post_embeddings))
         .route("/v1/images/generations", post(post_images_generations))
+        .route("/v1/images/edits", post(post_images_edits))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
         .route("/v1/audio/voices", get(get_audio_voices))
         .route("/v1/audio/transcriptions", post(post_audio_transcriptions))
+        .route("/v1/audio/translations", post(post_audio_translations))
         .route("/v1/audio/speech", post(post_audio_speech))
+        .route("/v1/jobs", get(get_jobs))
+        .route("/v1/jobs/{id}/cancel", post(post_job_cancel))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))
         .route("/api/models/unload/{model}", post(post_unload_one))
@@ -433,15 +446,19 @@ fn unauthorized_response() -> Response {
 }
 
 /// Per-request metrics: one route/code counter + one duration observation
-/// (see `metrics`); no per-request allocation. Every 429 (the GPU-slot busy
-/// contract, shared by the native and `OpenAI` chat routes) also carries a
-/// `Retry-After` hint — additive on the native route, whose body/status do
-/// not change.
+/// (see `metrics`); no per-request allocation. Every 429 without an
+/// explicit `Retry-After` (the GPU-slot busy contract, shared by the native
+/// and `OpenAI` chat routes) carries a 1s hint — additive on the native
+/// route, whose body/status do not change. The admission queue's own
+/// rejections rely on this default (the queue has no better estimate than
+/// the operator's retry cadence), so an explicit header is never clobbered.
 async fn track_metrics(req: Request, next: Next) -> Response {
     let route = crate::metrics::route_label(req.uri().path());
     let started = Instant::now();
     let mut response = next.run(req).await;
-    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+    if response.status() == StatusCode::TOO_MANY_REQUESTS
+        && !response.headers().contains_key(header::RETRY_AFTER)
+    {
         response
             .headers_mut()
             .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
@@ -1619,13 +1636,19 @@ fn worker_request_base(
     }
 }
 
-/// Try to reserve the process-wide GPU slot; a `Busy` rejection counts the
-/// `honkbox_gpu_slot_busy_rejections_total` metric and maps to a 429.
-fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, String)> {
-    honkbox_residency::global().try_reserve().map_err(|err| {
-        crate::metrics::note_gpu_slot_busy(crate::metrics::BusyReason::NoWait);
-        (StatusCode::TOO_MANY_REQUESTS, err.to_string())
-    })
+/// `X-Job-Id` response-header name (NEW-3): every GPU route stamps its
+/// in-flight registry id. On SSE routes it precedes the stream body (a
+/// client can cancel the stream it is reading); on sync routes it arrives
+/// with the completed response, so cancel-discovery goes through
+/// `GET /v1/jobs`.
+const JOB_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-job-id");
+
+/// Attach the job id header to a built response.
+fn with_job_id(mut response: Response, job_id: &str) -> Response {
+    if let Ok(value) = HeaderValue::from_str(job_id) {
+        response.headers_mut().insert(JOB_ID_HEADER, value);
+    }
+    response
 }
 
 /// REQ-8: the named vision refusal, shared by `/v1/chat/completions` and
@@ -1716,7 +1739,7 @@ async fn chat_pipeline(
 async fn post_chat(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
@@ -1737,23 +1760,31 @@ async fn post_chat(
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
+    // NEW-3: register the in-flight job (the registry holds it while the
+    // request lives, including an admission-queue wait), then take the GPU
+    // slot through the admission queue (REQ-6 Option A). The blocking FFI
+    // call itself is not interruptible — the cancel token is marked but
+    // never checked here.
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Chat,
+        Some(slug.clone()),
+        false,
+    );
+    let lease = crate::admission::acquire().await?;
     let worker_req = worker_request_base(
         slug,
         req.messages.iter().map(worker_message).collect(),
         req.max_tokens,
         req.temperature,
     );
-    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.complete(&worker_req).map_err(|err| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("chat failed: {err}"),
-                )
-            })
-        }
-        Err(rejection) => Err(rejection),
+    let reply = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        pipe.complete(&worker_req).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("chat failed: {err}"),
+            )
+        })
     })
     .await
     .map_err(|err| {
@@ -1762,21 +1793,27 @@ async fn post_chat(
             format!("chat task failed: {err}"),
         )
     })??;
-    Ok(Json(ChatResponse {
-        backend_id: reply.backend_id,
-        text: reply.text,
-        tokens: reply.tokens,
-        millis: reply.millis,
-    }))
+    Ok(with_job_id(
+        Json(ChatResponse {
+            backend_id: reply.backend_id,
+            text: reply.text,
+            tokens: reply.tokens,
+            millis: reply.millis,
+        })
+        .into_response(),
+        job.id(),
+    ))
 }
 
 /// Drop the GPU residency lease immediately (the disconnect path): the slot
 /// frees at the token boundary while `abort()` stops the FFI loop one token
-/// later.
-fn free_gpu_lease(slot: &Mutex<Option<honkbox_residency::Lease<'static>>>) {
-    *slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+/// later. Taking the [`crate::admission::GpuLease`] out of the slot drops
+/// it, which releases residency AND pokes the admission queue so a queued
+/// waiter wakes now instead of at its deadline.
+fn free_gpu_lease(slot: &Mutex<Option<crate::admission::GpuLease>>) {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
 }
 
 /// SSE body wrapper: dropping the body (client disconnect, or the stream
@@ -1833,10 +1870,7 @@ impl<S> Drop for CancelOnDrop<S> {
 async fn post_chat_stream(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
-) -> Result<
-    Sse<CancelOnDrop<UnboundedReceiverStream<Result<Event, Infallible>>>>,
-    (StatusCode, String),
-> {
+) -> Result<Response, (StatusCode, String)> {
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.llm_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
@@ -1856,33 +1890,51 @@ async fn post_chat_stream(
     )
     .await?;
     let worker_req = worker_request_base(
-        slug,
+        slug.clone(),
         req.messages.iter().map(worker_message).collect(),
         req.max_tokens,
         req.temperature,
     );
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    // NEW-3: the stream job is registry-visible and interruptible — its
+    // cancel token is checked at every token boundary below (the same
+    // abort-at-next-boundary path an SSE disconnect takes).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Chat,
+        Some(slug),
+        true,
+    );
     // REQ-6 (Option B): the busy condition must be an HTTP 429, never a 200
-    // with an error frame - so the slot is reserved HERE, before the handler
-    // returns the SSE body. A busy slot short-circuits above as a real 429.
-    let lease = reserve_gpu_slot()?;
+    // with an error frame - so the slot is taken HERE through the admission
+    // queue (REQ-6 Option A on top: a busy slot grants one bounded wait),
+    // before the handler returns the SSE body. A rejection short-circuits
+    // above as a real 429.
+    let lease = crate::admission::acquire().await?;
     // The lease sits in a slot the token sink can drain: once the client is
     // gone, the next token boundary frees the slot right away. The handler
     // returns the SSE body without awaiting the worker, so tokens stream as
     // they are produced.
-    let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
+    let lease_slot = Arc::new(Mutex::new(None::<crate::admission::GpuLease>));
     // Separate handle for the SSE body: the worker closure consumes its own
     // clone, the drop path calls `abort` through this one.
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
+    let job_token = job.token().clone();
+    let job_id = job.id().to_owned();
     let worker = tokio::task::spawn_blocking(move || {
+        // The job guard rides with the worker: the registry entry lives
+        // exactly as long as the stream (the JoinHandle is dropped/detached
+        // when the SSE body goes away, the task still unwinds and
+        // unregisters).
+        let _job = job;
         *lease_slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-            if worker_cancelled.load(Ordering::Relaxed) {
-                // Also abort the FFI loop itself, not just delivery.
+            if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
+                // Also abort the FFI loop itself, not just delivery
+                // (disconnect, or `POST /v1/jobs/{id}/cancel`).
                 pipe.abort();
                 free_gpu_lease(&lease_slot);
                 return;
@@ -1904,12 +1956,16 @@ async fn post_chat_stream(
         }
         let _ = tx.send(Ok(Event::default().data("[DONE]")));
     });
-    Ok(Sse::new(CancelOnDrop {
-        inner: UnboundedReceiverStream::new(rx),
-        cancelled,
-        pipe: abort_pipe,
-        _worker: worker,
-    }))
+    Ok(with_job_id(
+        Sse::new(CancelOnDrop {
+            inner: UnboundedReceiverStream::new(rx),
+            cancelled,
+            pipe: abort_pipe,
+            _worker: worker,
+        })
+        .into_response(),
+        &job_id,
+    ))
 }
 
 /// OpenAI-shaped error body → JSON response (`/v1/chat/completions` only;
@@ -2134,19 +2190,33 @@ async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Respon
             );
         }
     };
-    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.embed(&inputs)
-                .map(|embeddings| (embeddings, pipe.prompt_tokens(&inputs)))
-                .map_err(|err| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("embed failed: {err}"),
-                    )
-                })
+    // NEW-3: the embeddings job is registry-visible (never interruptible:
+    // one blocking FFI call), then the slot comes through the admission
+    // queue (REQ-6 Option A) — the 429 paths below keep their envelopes.
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Embeddings,
+        Some(entry.slug.clone()),
+        false,
+    );
+    let lease = match crate::admission::acquire().await {
+        Ok(lease) => lease,
+        Err((status, message)) => {
+            return with_job_id(
+                openai_error_response(status, message, Some("gpu_slot_busy")),
+                job.id(),
+            );
         }
-        Err((_, message)) => Err((StatusCode::TOO_MANY_REQUESTS, message)),
+    };
+    let reply = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        pipe.embed(&inputs)
+            .map(|embeddings| (embeddings, pipe.prompt_tokens(&inputs)))
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("embed failed: {err}"),
+                )
+            })
     })
     .await
     .map_err(|err| format!("embed task failed: {err}"));
@@ -2163,24 +2233,27 @@ async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Respon
             return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
         }
     };
-    Json(EmbeddingsResponse {
-        object: "list".to_owned(),
-        data: embeddings
-            .into_iter()
-            .enumerate()
-            .map(|(index, embedding)| EmbeddingsData {
-                object: "embedding".to_owned(),
-                index: u32::try_from(index).unwrap_or(u32::MAX),
-                embedding,
-            })
-            .collect(),
-        model: served_id,
-        usage: EmbeddingsUsage {
-            prompt_tokens,
-            total_tokens: u64::from(prompt_tokens),
-        },
-    })
-    .into_response()
+    with_job_id(
+        Json(EmbeddingsResponse {
+            object: "list".to_owned(),
+            data: embeddings
+                .into_iter()
+                .enumerate()
+                .map(|(index, embedding)| EmbeddingsData {
+                    object: "embedding".to_owned(),
+                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                    embedding,
+                })
+                .collect(),
+            model: served_id,
+            usage: EmbeddingsUsage {
+                prompt_tokens,
+                total_tokens: u64::from(prompt_tokens),
+            },
+        })
+        .into_response(),
+        job.id(),
+    )
 }
 
 /// REQ-4 reverse gate: an embeddings-capable model never runs through the
@@ -2226,6 +2299,69 @@ struct ImageRecipe {
 
 /// CFG guidance bounds for the HTTP surface (documented on the DTO).
 const IMAGE_CFG_SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=30.0;
+/// Shared recipe validation for both images routes: `generations` passes
+/// JSON DTO fields straight through; `edits` passes multipart-parsed
+/// strings. `Err` is (message, error code) for a 400 `OpenAI` envelope.
+/// Unknown sampler/scheduler names and out-of-range `cfg_scale` are hard
+/// 400s — silently substituting a recipe the caller did not ask for would
+/// be dishonest about what was rendered.
+fn validate_recipe(
+    sampler: Option<&str>,
+    scheduler: Option<&str>,
+    cfg_scale: Option<f32>,
+    negative_prompt: Option<&str>,
+    seed: Option<u64>,
+) -> Result<ImageRecipe, (String, &'static str)> {
+    let sampler_name = sampler.map(str::trim).filter(|s| !s.is_empty());
+    let sampler = match sampler_name {
+        Some(name) => honkbox_sd_core::Sampler::parse(name).ok_or_else(|| {
+            (
+                format!(
+                    "unknown sampler {name:?}: accepted values are {}",
+                    honkbox_sd_core::SAMPLER_NAMES.join(", ")
+                ),
+                "unknown_sampler",
+            )
+        })?,
+        None => honkbox_sd_core::Sampler::Euler,
+    };
+    let scheduler_name = scheduler.map(str::trim).filter(|s| !s.is_empty());
+    let scheduler = match scheduler_name {
+        Some(name) => honkbox_sd_core::Scheduler::parse(name).ok_or_else(|| {
+            (
+                format!(
+                    "unknown scheduler {name:?}: accepted values are {}",
+                    honkbox_sd_core::SCHEDULER_NAMES.join(", ")
+                ),
+                "unknown_scheduler",
+            )
+        })?,
+        // The fixed recipe's recorded `normal` name IS the vendor discrete
+        // schedule; wire spellings follow sd.cpp (`discrete`).
+        None => honkbox_sd_core::Scheduler::Discrete,
+    };
+    let cfg_scale = match cfg_scale {
+        Some(v) if IMAGE_CFG_SCALE_RANGE.contains(&v) && v.is_finite() => v,
+        Some(v) => {
+            return Err((
+                format!("cfg_scale {v} outside accepted range [1.0, 30.0]: rejected, not clamped"),
+                "invalid_cfg_scale",
+            ));
+        }
+        None => 7.0,
+    };
+    let negative_prompt = negative_prompt
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    Ok(ImageRecipe {
+        sampler,
+        scheduler,
+        cfg_scale,
+        negative_prompt,
+        seed_base: seed.unwrap_or(IMAGE_SEED_BASE),
+    })
+}
 
 fn validate_images_request(
     req: &ImagesGenerationRequest,
@@ -2250,66 +2386,125 @@ fn validate_images_request(
             "images n outside [1, 4]; clamping (never rejected)"
         );
     }
-    let sampler_name = req
-        .sampler
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let sampler = match sampler_name {
-        Some(name) => honkbox_sd_core::Sampler::parse(name).ok_or_else(|| {
-            (
-                format!(
-                    "unknown sampler {name:?}: accepted values are {}",
-                    honkbox_sd_core::SAMPLER_NAMES.join(", ")
-                ),
-                "unknown_sampler",
-            )
-        })?,
-        None => honkbox_sd_core::Sampler::Euler,
-    };
-    let scheduler_name = req
-        .scheduler
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let scheduler = match scheduler_name {
-        Some(name) => honkbox_sd_core::Scheduler::parse(name).ok_or_else(|| {
-            (
-                format!(
-                    "unknown scheduler {name:?}: accepted values are {}",
-                    honkbox_sd_core::SCHEDULER_NAMES.join(", ")
-                ),
-                "unknown_scheduler",
-            )
-        })?,
-        // The fixed recipe's recorded `normal` name IS the vendor discrete
-        // schedule; wire spellings follow sd.cpp (`discrete`).
-        None => honkbox_sd_core::Scheduler::Discrete,
-    };
-    let cfg_scale = match req.cfg_scale {
-        Some(v) if IMAGE_CFG_SCALE_RANGE.contains(&v) && v.is_finite() => v,
-        Some(v) => {
+    let recipe = validate_recipe(
+        req.sampler.as_deref(),
+        req.scheduler.as_deref(),
+        req.cfg_scale,
+        req.negative_prompt.as_deref(),
+        req.seed,
+    )?;
+    Ok((width, height, n.clamp(1, 4), recipe))
+}
+
+/// Accepted `LoRA` multiplier range for the HTTP surface (documented on the
+/// DTO); outside it is a 400, never a silent clamp.
+const IMAGE_LORA_STRENGTH_RANGE: std::ops::RangeInclusive<f32> = -2.0..=2.0;
+
+/// Max `LoRA` adapters per images request (documented on the DTO); more is a
+/// 400 — the vendor applies them sequentially, and cost scales linearly.
+const IMAGE_LORA_MAX: usize = 2;
+
+/// Resolve request `LoRA` references against the catalog (`ModelKind::Lora`
+/// entries, alias-or-slug exactly like SD models). Returns the
+/// pipeline-ready refs, sidecar records, and advisory warnings. Rejections:
+/// more than [`IMAGE_LORA_MAX`] adapters, empty/unknown slug or alias,
+/// strength outside [`IMAGE_LORA_STRENGTH_RANGE`], and adapters spanning
+/// more than one directory (the vendor applies a single `LoRA` dir per model
+/// config).
+///
+/// License rule on record (ReviewedLicense-AGPL §2b/§2c): honkbox never
+/// bundles `LoRA` weights. The curated catalog `license` is surfaced as a
+/// response warning when a manifest row matches the local file name; a
+/// missing license means all-rights-reserved, i.e. local-only use. A
+/// base-model mismatch cannot be detected today (no base tags are recorded
+/// on scan entries or `LoRA` files), so it is neither warned about nor
+/// rejected — an honest gap, not a silent pass.
+/// Resolved `LoRA` request: pipeline-ready refs, sidecar records, and the
+/// advisory license warnings (a tuple alias keeps `resolve_loras`'s
+/// signature readable).
+type ResolvedLoras = (
+    Vec<honkbox_sd_core::LoraRef>,
+    Vec<crate::jobs::LoraRecord>,
+    Vec<String>,
+);
+
+fn resolve_loras(
+    loras: &[ImagesLora],
+    catalog: &ModelCatalog,
+) -> Result<ResolvedLoras, (String, &'static str)> {
+    if loras.len() > IMAGE_LORA_MAX {
+        return Err((
+            format!(
+                "loras: at most {IMAGE_LORA_MAX} adapters per request (got {})",
+                loras.len()
+            ),
+            "too_many_loras",
+        ));
+    }
+    let mut refs = Vec::with_capacity(loras.len());
+    let mut records = Vec::with_capacity(loras.len());
+    let mut warnings = Vec::with_capacity(loras.len());
+    for lora in loras {
+        let slug = lora.slug.trim();
+        if slug.is_empty() {
+            return Err(("loras: slug must not be empty".to_owned(), "unknown_lora"));
+        }
+        let Some(entry) =
+            resolve_model_entry(slug, catalog).filter(|entry| entry.kind == ModelKind::Lora)
+        else {
             return Err((
-                format!("cfg_scale {v} outside accepted range [1.0, 30.0]: rejected, not clamped"),
-                "invalid_cfg_scale",
+                format!(
+                    "unknown lora {slug:?}: not a LoRA catalog slug or alias (see GET /v1/models)"
+                ),
+                "unknown_lora",
+            ));
+        };
+        let strength = match lora.strength {
+            Some(v) if IMAGE_LORA_STRENGTH_RANGE.contains(&v) && v.is_finite() => v,
+            Some(v) => {
+                return Err((
+                    format!(
+                        "lora {slug:?}: strength {v} outside accepted range [-2.0, 2.0]: rejected, not clamped"
+                    ),
+                    "invalid_lora_strength",
+                ));
+            }
+            None => 1.0,
+        };
+        // License surfacing: the curated manifest carries a per-file
+        // `license`; scan-only entries have none. Join is by file name (the
+        // same stable key the catalog build uses).
+        let file_name = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+        let license = crate::catalog::manifest()
+            .iter()
+            .find(|m| m.kind == ModelKind::Lora && m.file.rsplit('/').next() == Some(file_name))
+            .map(|m| m.license.as_str())
+            .filter(|license| !license.is_empty());
+        warnings.push(match license {
+            Some(license) => format!("lora {slug}: license {license}"),
+            None => format!(
+                "lora {slug}: no license recorded — treat as all-rights-reserved (local-only)"
+            ),
+        });
+        refs.push(honkbox_sd_core::LoraRef {
+            path: PathBuf::from(&entry.path),
+            strength,
+        });
+        records.push(crate::jobs::LoraRecord {
+            slug: entry.slug.clone(),
+            strength,
+        });
+    }
+    if let Some(first) = refs.first() {
+        let dir = first.path.parent();
+        if refs.iter().any(|r| r.path.parent() != dir) {
+            return Err((
+                "loras: all adapters must live in one directory (the vendor applies a single LoRA dir per generation)".to_owned(),
+                "mixed_lora_dirs",
             ));
         }
-        None => 7.0,
-    };
-    let negative_prompt = req
-        .negative_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
-    let recipe = ImageRecipe {
-        sampler,
-        scheduler,
-        cfg_scale,
-        negative_prompt,
-        seed_base: req.seed.unwrap_or(IMAGE_SEED_BASE),
-    };
-    Ok((width, height, n.clamp(1, 4), recipe))
+    }
+    Ok((refs, records, warnings))
 }
 
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
@@ -2337,33 +2532,6 @@ const IMAGE_SEED_BASE: u64 = 42;
 /// Fixed diffusion steps for the HTTP surface (CLI default).
 const IMAGE_STEPS: u32 = 20;
 
-/// `POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation
-/// shape over the startup-configured [`SdPipeline`]. SD pipelines are
-/// startup-static (no swap manager), so a request `model` is validated and
-/// recorded (bundle sidecar) but the pipeline stays the one built at
-/// startup — with the stub backend any slug is honest; with `sd-cpp` the
-/// checkpoint is the `--sd-model` one.
-///
-/// Each image in the request is generated under the GPU lease
-/// (`spawn_blocking`, like every other GPU route) and written to the
-/// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
-/// recordkeeping cover HTTP generations too. Errors are `OpenAI`
-/// envelopes: 400 bad `size`/`response_format`/recipe params (unknown
-/// sampler/scheduler name, `cfg_scale` outside [1.0, 30.0]), 404 unknown
-/// model, 429 busy, 500 backend failure. `n` clamps to `[1, 4]` (warn,
-/// never reject).
-#[utoipa::path(
-    post,
-    path = "/v1/images/generations",
-    request_body = ImagesGenerationRequest,
-    responses(
-        (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
-        (status = 400, description = "Bad size, response_format, sampler, scheduler, or cfg_scale", body = OpenAiError),
-        (status = 404, description = "Unknown model", body = OpenAiError),
-        (status = 429, description = "GPU slot busy", body = OpenAiError),
-        (status = 500, description = "Generation failed", body = OpenAiError)
-    )
-)]
 /// One PNG generation under `spawn_blocking` (GPU work off the async
 /// runtime, like every other GPU route). Returns the encoded container
 /// bytes or the backend failure.
@@ -2391,6 +2559,39 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
     }
 }
 
+/// `POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation
+/// shape over the startup-configured [`SdPipeline`]. SD pipelines are
+/// startup-static (no swap manager), so a request `model` is validated and
+/// recorded (bundle sidecar) but the pipeline stays the one built at
+/// startup — with the stub backend any slug is honest; with `sd-cpp` the
+/// checkpoint is the `--sd-model` one.
+///
+/// Each image in the request is generated under the GPU lease
+/// (`spawn_blocking`, like every other GPU route) and written to the
+/// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
+/// recordkeeping cover HTTP generations too. Errors are `OpenAI`
+/// envelopes: 400 bad `size`/`response_format`/recipe params (unknown
+/// sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `LoRA` slug /
+/// strength / count violations), 404 unknown model, 429 busy, 500 backend
+/// failure. `n` clamps to `[1, 4]` (warn, never reject). Per-request
+/// `loras` resolve against `ModelKind::Lora` catalog entries; their
+/// license notes surface as response `warnings` (weights are never
+/// bundled; ReviewedLicense-AGPL §2b/§2c).
+// Route handlers read long but stay linear: parse → validate → resolve →
+// generate → bundle. `completions_stream` carries the same allow.
+#[allow(clippy::too_many_lines)]
+#[utoipa::path(
+    post,
+    path = "/v1/images/generations",
+    request_body = ImagesGenerationRequest,
+    responses(
+        (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
+        (status = 400, description = "Bad size, response_format, sampler, scheduler, cfg_scale, or loras", body = OpenAiError),
+        (status = 404, description = "Unknown model", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Generation failed", body = OpenAiError)
+    )
+)]
 async fn post_images_generations(
     State(config): State<AppConfig>,
     Json(req): Json<ImagesGenerationRequest>,
@@ -2402,6 +2603,13 @@ async fn post_images_generations(
         }
     };
     let catalog = config.catalog_snapshot();
+    let (pipeline_loras, lora_records, lora_warnings) =
+        match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
+            Ok(resolved) => resolved,
+            Err((message, code)) => {
+                return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+            }
+        };
     let slug: String = match req
         .model
         .as_deref()
@@ -2426,13 +2634,41 @@ async fn post_images_generations(
     let pipeline = Arc::clone(&config.sd);
     let prompt = req.prompt;
     let started = Instant::now();
-    let lease = match reserve_gpu_slot() {
+    // NEW-3: the images job is registry-visible and — for n > 1 —
+    // interruptible: the loop below checks the cancel token BETWEEN images
+    // (the running sd.cpp FFI call itself cannot be aborted mid-flight).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Images,
+        Some(slug.clone()),
+        n > 1,
+    );
+    let lease = match crate::admission::acquire().await {
         Ok(lease) => lease,
-        Err((status, message)) => return openai_error_response(status, message, None),
+        Err((status, message)) => {
+            return with_job_id(openai_error_response(status, message, None), job.id());
+        }
     };
     let mut images = Vec::with_capacity(n as usize);
     let backend_id = pipeline.backend_id();
     for i in 0..u64::from(n) {
+        // Cooperative cancellation (NEW-3): honored BETWEEN images only —
+        // including a cancel that arrived while this request waited in the
+        // admission queue (then 0 images are generated). The in-flight
+        // sd.cpp call always runs to completion.
+        if job.token().is_cancelled() {
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "job {} cancelled before completion ({} of {n} image(s) generated)",
+                        job.id(),
+                        i
+                    ),
+                    Some("job_cancelled"),
+                ),
+                job.id(),
+            );
+        }
         // Per-image seeds keep n>1 outputs distinct while staying
         // deterministic per request (explicit seed base when given).
         let seed = recipe.seed_base.wrapping_add(i);
@@ -2451,6 +2687,10 @@ async fn post_images_generations(
                 scheduler: Some(recipe.scheduler),
                 cfg_scale: Some(recipe.cfg_scale),
                 negative_prompt: recipe.negative_prompt.clone(),
+                loras: (!pipeline_loras.is_empty()).then(|| pipeline_loras.clone()),
+                init_image: None,
+                mask_image: None,
+                strength: None,
             },
         )
         .await
@@ -2479,6 +2719,8 @@ async fn post_images_generations(
                 scheduler: image_scheduler_name(recipe.scheduler),
                 cfg_scale: recipe.cfg_scale,
                 negative_prompt: recipe.negative_prompt.clone(),
+                loras: lora_records.clone(),
+                strength: None,
             },
             &bytes,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -2488,9 +2730,369 @@ async fn post_images_generations(
         });
     }
     drop(lease);
+    with_job_id(
+        Json(ImagesGenerationResponse {
+            created: epoch_secs(),
+            data: images,
+            warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
+        })
+        .into_response(),
+        job.id(),
+    )
+}
+
+/// PNG magic bytes: every PNG stream opens with these 8 bytes.
+const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+
+/// Output dimensions from a PNG's IHDR (big-endian `u32` at offsets 16/20).
+/// Only called on magic-verified bytes; `None` for truncated/foreign data.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || bytes[..8] != *PNG_MAGIC {
+        return None;
+    }
+    Some((
+        u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+        u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+    ))
+}
+
+/// Collected multipart fields for `/v1/images/edits`.
+struct ImageEditUpload {
+    /// `image` part: the source PNG (declared content type + bytes).
+    image: Option<(String, Bytes)>,
+    /// `mask` part: optional inpaint-mask PNG.
+    mask: Option<(String, Bytes)>,
+    /// Render prompt (required).
+    prompt: Option<String>,
+    /// Optional SD model (alias or catalog slug).
+    model: Option<String>,
+    /// img2img denoise strength in `(0, 1]`; default
+    /// [`honkbox_sd_core::IMG2IMG_STRENGTH`] (the vendor default).
+    strength: Option<f32>,
+    /// Output size `WxH`; default = the source image's dimensions.
+    size: Option<String>,
+    /// Recipe overrides, validated exactly like `generations`.
+    sampler: Option<String>,
+    scheduler: Option<String>,
+    cfg_scale: Option<f32>,
+    negative_prompt: Option<String>,
+    seed: Option<u64>,
+}
+
+/// Collect the multipart fields. Unknown fields are ignored (client SDKs
+/// add extras). The boxed error is the ready-made `OpenAI` envelope.
+async fn parse_image_edit_upload(
+    mut multipart: Multipart,
+) -> Result<ImageEditUpload, Box<Response>> {
+    let mut edit = ImageEditUpload {
+        image: None,
+        mask: None,
+        prompt: None,
+        model: None,
+        strength: None,
+        size: None,
+        sampler: None,
+        scheduler: None,
+        cfg_scale: None,
+        negative_prompt: None,
+        seed: None,
+    };
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| bad_multipart(format!("invalid multipart body: {err}")))?
+    {
+        let name = field.name().unwrap_or("").to_owned();
+        match name.as_str() {
+            "image" | "mask" => {
+                let content_type = field.content_type().unwrap_or("").to_owned();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| bad_multipart(format!("unreadable {name} field: {err}")))?;
+                if name == "image" {
+                    edit.image = Some((content_type, bytes));
+                } else {
+                    edit.mask = Some((content_type, bytes));
+                }
+            }
+            "prompt" | "model" | "size" | "sampler" | "scheduler" | "negative_prompt"
+            | "strength" | "cfg_scale" | "seed" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|err| bad_multipart(format!("unreadable {name} field: {err}")))?;
+                set_edit_field(&mut edit, &name, &text)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(edit)
+}
+
+/// One non-file multipart field, with per-field parse validation (the
+/// semantic range checks live in the handler, next to their 400 codes).
+fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<(), Box<Response>> {
+    let value = text.trim().to_owned();
+    match name {
+        "prompt" | "model" | "size" | "sampler" | "scheduler" | "negative_prompt" => {
+            let value = (!value.is_empty()).then_some(value);
+            match name {
+                "prompt" => edit.prompt = value,
+                "model" => edit.model = value,
+                "size" => edit.size = value,
+                "sampler" => edit.sampler = value,
+                "scheduler" => edit.scheduler = value,
+                _ => edit.negative_prompt = value,
+            }
+        }
+        "strength" => {
+            edit.strength =
+                Some(value.parse().map_err(|_| {
+                    bad_multipart("strength must be a number in (0, 1]".to_owned())
+                })?);
+        }
+        "cfg_scale" => {
+            edit.cfg_scale = Some(value.parse().map_err(|_| {
+                bad_multipart("cfg_scale must be a number in [1.0, 30.0]".to_owned())
+            })?);
+        }
+        "seed" => {
+            edit.seed =
+                Some(value.parse().map_err(|_| {
+                    bad_multipart("seed must be a non-negative integer".to_owned())
+                })?);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// `POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over
+/// the same SD pipeline seam as `/v1/images/generations` (single image per
+/// request, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the
+/// declared content type is not trusted), `mask` an optional PNG that
+/// turns the run into inpainting; `prompt` is required; `strength` (the
+/// denoise amount, `(0, 1]`, default 0.75) applies to the init image;
+/// `size` defaults to the source image's dimensions; the remaining recipe
+/// fields validate exactly like `generations`. Inputs are staged as temp
+/// PNG paths (the vendor reads images from the filesystem) and removed
+/// after the generation, including on failure. `LoRA` adapters are not
+/// accepted on this route yet — use `/v1/images/generations`. The stub
+/// backend honestly ignores image inputs, so its pixels never depend on
+/// the upload; tests cover the wire/validation paths. Errors are `OpenAI`
+/// envelopes: 400 (missing image/prompt, non-PNG bytes, bad
+/// strength/size/recipe fields), 404 unknown model, 429 busy, 500 staging
+/// or generation failure.
+#[allow(clippy::too_many_lines)] // linear multipart handler; see `post_images_generations`
+#[utoipa::path(
+    post,
+    path = "/v1/images/edits",
+    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, sampler?, scheduler?, cfg_scale?, negative_prompt?, seed?"),
+    responses(
+        (status = 200, description = "Edited image (base64 PNG)", body = ImagesGenerationResponse),
+        (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, or recipe fields", body = OpenAiError),
+        (status = 404, description = "Unknown model", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Generation failed", body = OpenAiError)
+    )
+)]
+async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart) -> Response {
+    let edit = match parse_image_edit_upload(multipart).await {
+        Ok(edit) => edit,
+        Err(response) => return *response,
+    };
+    let Some((_, image_bytes)) = edit.image else {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "image is required: attach the source PNG as the `image` form field".to_owned(),
+            Some("image_required"),
+        );
+    };
+    let dims = png_dimensions(&image_bytes).filter(|(w, h)| *w > 0 && *h > 0);
+    if dims.is_none() {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "image must be PNG bytes (magic sniff failed)".to_owned(),
+            Some("invalid_image"),
+        );
+    }
+    if edit
+        .mask
+        .as_ref()
+        .is_some_and(|(_, bytes)| png_dimensions(bytes).is_none())
+    {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "mask must be PNG bytes (magic sniff failed)".to_owned(),
+            Some("invalid_mask"),
+        );
+    }
+    let Some(prompt) = edit.prompt else {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "prompt is required".to_owned(),
+            Some("prompt_required"),
+        );
+    };
+    let strength = match edit.strength {
+        Some(v) if v.is_finite() && (0.0..=1.0).contains(&v) && v > 0.0 => v,
+        Some(v) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("strength {v} outside accepted range (0, 1]: rejected, not clamped"),
+                Some("invalid_strength"),
+            );
+        }
+        None => honkbox_sd_core::IMG2IMG_STRENGTH,
+    };
+    let (width, height) = match edit.size.as_deref() {
+        Some(raw) => match crate::jobs::parse_size(raw) {
+            Ok(size) => size,
+            Err(err) => {
+                return openai_error_response(StatusCode::BAD_REQUEST, err, Some("invalid_size"));
+            }
+        },
+        // Default: the source image's own dimensions (PNG IHDR, verified
+        // by the sniff above).
+        None => dims.expect("PNG dimensions verified above"),
+    };
+    let recipe = match validate_recipe(
+        edit.sampler.as_deref(),
+        edit.scheduler.as_deref(),
+        edit.cfg_scale,
+        edit.negative_prompt.as_deref(),
+        edit.seed,
+    ) {
+        Ok(recipe) => recipe,
+        Err((message, code)) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        }
+    };
+    let catalog = config.catalog_snapshot();
+    let slug: String = match edit
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        Some(model) => match resolve_sd_model(model, &catalog) {
+            Some(slug) => slug.to_owned(),
+            None => {
+                return openai_error_response(
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "unknown model {model:?}: not an SD catalog slug or alias (see GET /v1/models)"
+                    ),
+                    Some("model_not_found"),
+                );
+            }
+        },
+        // Server default: the startup-configured SD pipeline.
+        None => config.sd_model.clone().unwrap_or_default(),
+    };
+    // Shared admission gate (REQ-6 Option A): same slot acquisition as the
+    // generations route (lease dropped at the route ends below).
+    let lease = match crate::admission::acquire().await {
+        Ok(lease) => lease,
+        Err((status, message)) => return openai_error_response(status, message, None),
+    };
+    // Stage the inputs as scratch PNGs (the vendor reads images from
+    // paths); both are removed after the generation, on every path below.
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let init_path = std::env::temp_dir().join(format!(
+        "honkbox-edit-init-{}-{token}.png",
+        std::process::id()
+    ));
+    let mask_path = std::env::temp_dir().join(format!(
+        "honkbox-edit-mask-{}-{token}.png",
+        std::process::id()
+    ));
+    let staged_mask = edit.mask.is_some();
+    let staging =
+        std::fs::write(&init_path, &image_bytes).and_then(|()| match edit.mask.as_ref() {
+            Some((_, mask_bytes)) => std::fs::write(&mask_path, mask_bytes),
+            None => Ok(()),
+        });
+    if let Err(err) = staging {
+        let _ = std::fs::remove_file(&init_path);
+        let _ = std::fs::remove_file(&mask_path);
+        drop(lease);
+        return openai_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to stage input image: {err}"),
+            Some("staging_failed"),
+        );
+    }
+    let pipeline = Arc::clone(&config.sd);
+    let backend_id = pipeline.backend_id();
+    let started = Instant::now();
+    let generated = generate_image_bytes(
+        pipeline,
+        honkbox_sd_core::Txt2ImgRequest {
+            prompt: prompt.clone(),
+            seed: recipe.seed_base,
+            steps: IMAGE_STEPS,
+            width,
+            height,
+            model_slug: slug.clone(),
+            clip: None,
+            vae: None,
+            sampler: Some(recipe.sampler),
+            scheduler: Some(recipe.scheduler),
+            cfg_scale: Some(recipe.cfg_scale),
+            negative_prompt: recipe.negative_prompt.clone(),
+            loras: None,
+            init_image: Some(init_path.clone()),
+            mask_image: staged_mask.then(|| mask_path.clone()),
+            strength: Some(strength),
+        },
+    )
+    .await;
+    let _ = std::fs::remove_file(&init_path);
+    if staged_mask {
+        let _ = std::fs::remove_file(&mask_path);
+    }
+    let bytes = match generated {
+        Ok(bytes) => bytes,
+        Err(message) => {
+            return openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                message,
+                Some("generation_failed"),
+            );
+        }
+    };
+    write_generation_bundle(
+        &config,
+        &crate::jobs::BundleInputs {
+            model_slug: slug,
+            prompt,
+            seed: recipe.seed_base,
+            steps: IMAGE_STEPS,
+            width,
+            height,
+            format: honkbox_sd_core::OutputFormat::Png,
+            backend_id,
+            sampler: recipe.sampler.name().to_string(),
+            scheduler: image_scheduler_name(recipe.scheduler),
+            cfg_scale: recipe.cfg_scale,
+            negative_prompt: recipe.negative_prompt,
+            loras: Vec::new(),
+            strength: Some(strength),
+        },
+        &bytes,
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
+    drop(lease);
     Json(ImagesGenerationResponse {
         created: epoch_secs(),
-        data: images,
+        data: vec![ImageB64 {
+            b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        }],
+        warnings: None,
     })
     .into_response()
 }
@@ -2556,6 +3158,11 @@ fn usage_of(reply: &honkbox_llm_worker::ChatResponse) -> OpenAiUsage {
         (status = 500, description = "Inference failed", body = OpenAiError)
     )
 )]
+// ~105 lines: validation gates, constraint resolution, the swap decision,
+// and the two wire shapes (JSON + SSE) share one handler; splitting the
+// dispatch would break the REQ-6/NEW-3 ordering story (register, queue,
+// branch on the stream flag) across two functions.
+#[allow(clippy::too_many_lines)]
 async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> Response {
     let req: OpenAiChatRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
@@ -2639,20 +3246,33 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
         }
         None => config.llm.clone(),
     };
-    if req.stream.is_some_and(|stream| stream) {
-        // REQ-6 (Option B): reserve the slot BEFORE returning the SSE body,
-        // so a busy slot is a real 429 with the OpenAI envelope + the
-        // shared `Retry-After` middleware hint - never a 200 whose only
+    // NEW-3 + REQ-6: register the job (interruptible only on the streaming
+    // path — the sync completion is one blocking FFI call), then take the
+    // GPU slot ONCE through the admission queue for either shape. The busy
+    // rejection keeps the OpenAI envelope + shared `Retry-After` hint.
+    let streaming = req.stream.is_some_and(|stream| stream);
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Chat,
+        Some(slug.clone()),
+        streaming,
+    );
+    let lease = match crate::admission::acquire().await {
+        Ok(lease) => lease,
+        Err((status, message)) => {
+            return with_job_id(
+                openai_error_response(status, message, Some("gpu_slot_busy")),
+                job.id(),
+            );
+        }
+    };
+    if streaming {
+        // REQ-6 (Option B): the slot is held BEFORE the SSE body is
+        // returned, so a busy slot is a real 429 — never a 200 whose only
         // content is an error frame (loop-lore's `data:`-only parser would
         // read that as a clean empty completion).
-        let lease = match reserve_gpu_slot() {
-            Ok(lease) => lease,
-            Err((status, message)) => {
-                return openai_error_response(status, message, Some("gpu_slot_busy"));
-            }
-        };
         completions_stream(
             lease,
+            job,
             pipe,
             worker_req,
             &served_id,
@@ -2660,44 +3280,36 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
             req.max_tokens,
         )
     } else {
-        completions_json(pipe, worker_req, &served_id, req.max_tokens).await
+        completions_json(lease, job, pipe, worker_req, &served_id, req.max_tokens).await
     }
 }
 
 /// Non-streaming completion: one blocking worker call inside the GPU lease,
 /// mapped onto the exact `OpenAI` JSON shape.
 async fn completions_json(
+    lease: crate::admission::GpuLease,
+    job: crate::jobs_registry::JobGuard,
     pipe: Arc<dyn LlmPipeline>,
     worker_req: WorkerChatRequest,
     served_id: &str,
     max_tokens: Option<u32>,
 ) -> Response {
-    let reply = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.complete(&worker_req).map_err(|err| {
-                // `REQ-3`: unusable constraints (unparseable grammar, non-
-                // convertible schema) are client errors, not server ones.
-                let status = match &err {
-                    LlmError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
-                    _ => StatusCode::INTERNAL_SERVER_ERROR,
-                };
-                (status, format!("chat failed: {err}"))
-            })
-        }
-        Err((_, message)) => Err((StatusCode::TOO_MANY_REQUESTS, message)),
+    let reply = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        pipe.complete(&worker_req).map_err(|err| {
+            // `REQ-3`: unusable constraints (unparseable grammar, non-
+            // convertible schema) are client errors, not server ones.
+            let status = match &err {
+                LlmError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, format!("chat failed: {err}"))
+        })
     })
     .await
     .map_err(|err| format!("chat task failed: {err}"));
     let reply = match reply {
         Ok(Ok(reply)) => reply,
-        Ok(Err((StatusCode::TOO_MANY_REQUESTS, message))) => {
-            return openai_error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                message,
-                Some("gpu_slot_busy"),
-            );
-        }
         Ok(Err((StatusCode::BAD_REQUEST, message))) => {
             return openai_error_response(
                 StatusCode::BAD_REQUEST,
@@ -2735,24 +3347,27 @@ async fn completions_json(
         // Tool-call-only reply: `OpenAI` sends `content: null` there.
         ChatContent::default()
     };
-    Json(OpenAiChatCompletion {
-        id: format!("chatcmpl-{}", ulid::Ulid::new()),
-        object: "chat.completion".to_owned(),
-        created: epoch_secs(),
-        model: served_id.to_owned(),
-        choices: vec![OpenAiChoice {
-            index: 0,
-            message: ChatMessage {
-                role: ChatRole::Assistant,
-                content,
-                tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-                tool_call_id: None,
-            },
-            finish_reason: finish,
-        }],
-        usage,
-    })
-    .into_response()
+    with_job_id(
+        Json(OpenAiChatCompletion {
+            id: format!("chatcmpl-{}", ulid::Ulid::new()),
+            object: "chat.completion".to_owned(),
+            created: epoch_secs(),
+            model: served_id.to_owned(),
+            choices: vec![OpenAiChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: ChatRole::Assistant,
+                    content,
+                    tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+                    tool_call_id: None,
+                },
+                finish_reason: finish,
+            }],
+            usage,
+        })
+        .into_response(),
+        job.id(),
+    )
 }
 
 /// Fresh completion id + creation timestamp (shared by every SSE frame).
@@ -2779,7 +3394,8 @@ fn chunk_frame(frame: &OpenAiChunk) -> Event {
 // [DONE]) is one linear pipeline; splitting it hurts readability.
 #[allow(clippy::too_many_lines)]
 fn completions_stream(
-    lease: honkbox_residency::Lease<'static>,
+    lease: crate::admission::GpuLease,
+    job: crate::jobs_registry::JobGuard,
     pipe: Arc<dyn LlmPipeline>,
     worker_req: WorkerChatRequest,
     served_id: &str,
@@ -2788,9 +3404,11 @@ fn completions_stream(
 ) -> Response {
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let lease_slot = Arc::new(Mutex::new(None::<honkbox_residency::Lease<'static>>));
+    let lease_slot = Arc::new(Mutex::new(None::<crate::admission::GpuLease>));
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
+    let job_token = job.token().clone();
+    let job_id = job.id().to_owned();
     let frame_model = served_id.to_owned();
     // `REQ-3`: with tools on the table, pieces are buffered until the
     // parsed tool calls are known, then framed as `delta.tool_calls`
@@ -2799,15 +3417,20 @@ fn completions_stream(
     // token-by-token as before — including `json_object` replies.
     let tool_streaming = worker_req.tools_json.is_some();
     let worker = tokio::task::spawn_blocking(move || {
-        // The slot was reserved in the handler (REQ-6); park the lease where
-        // the token sink can drain it at the first cancel/disconnect.
+        // The job guard rides with the worker (the registry entry lives as
+        // long as the stream). The slot was taken in the handler (REQ-6);
+        // park the lease where the token sink can drain it at the first
+        // cancel/disconnect.
+        let _job = job;
         *lease_slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         let mut first = true;
         let mut buffered: Vec<String> = Vec::new();
         let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-            if worker_cancelled.load(Ordering::Relaxed) {
+            if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
+                // Disconnect, or `POST /v1/jobs/{id}/cancel` (NEW-3): abort
+                // the FFI loop itself, not just delivery.
                 pipe.abort();
                 free_gpu_lease(&lease_slot);
                 return;
@@ -2874,13 +3497,16 @@ fn completions_stream(
         }
         let _ = tx.send(Ok(Event::default().data("[DONE]")));
     });
-    Sse::new(CancelOnDrop {
-        inner: UnboundedReceiverStream::new(rx),
-        cancelled,
-        pipe: abort_pipe,
-        _worker: worker,
-    })
-    .into_response()
+    with_job_id(
+        Sse::new(CancelOnDrop {
+            inner: UnboundedReceiverStream::new(rx),
+            cancelled,
+            pipe: abort_pipe,
+            _worker: worker,
+        })
+        .into_response(),
+        &job_id,
+    )
 }
 
 /// Emit a buffered tools stream: a role marker frame, then the parsed
@@ -3079,7 +3705,7 @@ async fn post_transcribe(
     Query(query): Query<TranscribeQuery>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<Json<Transcript>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let catalog = config.catalog_snapshot();
     validate_model(
         query.model.as_deref(),
@@ -3125,22 +3751,34 @@ async fn post_transcribe(
     let worker_req = WorkerTranscribeRequest {
         model: query.model.unwrap_or_default(),
         language: query.language,
+        translate: false,
     };
+    // NEW-3: registry-visible while the request lives (never interruptible:
+    // one blocking FFI call; the token is only marked by a cancel).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Transcribe,
+        (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
+        false,
+    );
     let out = run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await?;
-    Ok(Json(Transcript {
-        backend_id: out.backend_id,
-        text: out.text,
-        segments: out
-            .segments
-            .into_iter()
-            .map(|segment| TranscriptSegment {
-                start_ms: segment.start_ms,
-                end_ms: segment.end_ms,
-                text: segment.text,
-            })
-            .collect(),
-        millis: out.millis,
-    }))
+    Ok(with_job_id(
+        Json(Transcript {
+            backend_id: out.backend_id,
+            text: out.text,
+            segments: out
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegment {
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                    text: segment.text,
+                })
+                .collect(),
+            millis: out.millis,
+        })
+        .into_response(),
+        job.id(),
+    ))
 }
 
 /// `POST /v1/synthesize`: JSON in, WAV bytes out (`audio/wav`).
@@ -3164,37 +3802,47 @@ async fn post_synthesize(
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     let _ttl = clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds);
     let worker_req = WorkerSynthRequest {
-        model: req.model,
+        model: req.model.clone(),
         text: req.text,
         voice: req.voice,
         sample_rate: req.sample_rate,
     };
+    // NEW-3: registry-visible while the request lives (one blocking FFI
+    // call — the cancel token is marked but never checked).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Synthesize,
+        (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
+        false,
+    );
     let audio = run_synthesis(config.tts.clone(), worker_req).await?;
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
-    Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+    Ok(with_job_id(
+        ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response(),
+        job.id(),
+    ))
 }
 
 /// Shared STT execution (native `/v1/transcribe` and REQ-9
 /// `/v1/audio/transcriptions` are the same worker call under two wire
-/// shapes): run the pipeline inside the GPU slot on the blocking pool.
+/// shapes): run the pipeline inside the GPU slot on the blocking pool. The
+/// slot comes through the admission queue (REQ-6 Option A); the caller
+/// registered the job (NEW-3) — one blocking FFI call, never interruptible.
 async fn run_transcription(
     pipe: Arc<dyn SttPipeline>,
     worker_req: WorkerTranscribeRequest,
     sample_rate: u32,
     pcm: Vec<i16>,
 ) -> Result<WorkerTranscript, (StatusCode, String)> {
-    tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.transcribe(&pcm, sample_rate, &worker_req)
-                .map_err(|err| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("transcribe failed: {err}"),
-                    )
-                })
-        }
-        Err(rejection) => Err(rejection),
+    let lease = crate::admission::acquire().await?;
+    tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        pipe.transcribe(&pcm, sample_rate, &worker_req)
+            .map_err(|err| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("transcribe failed: {err}"),
+                )
+            })
     })
     .await
     .map_err(|err| {
@@ -3211,17 +3859,15 @@ async fn run_synthesis(
     pipe: Arc<dyn TtsPipeline>,
     worker_req: WorkerSynthRequest,
 ) -> Result<SynthesizedAudio, (StatusCode, String)> {
-    tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.synthesize(&worker_req).map_err(|err| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("synthesize failed: {err}"),
-                )
-            })
-        }
-        Err(rejection) => Err(rejection),
+    let lease = crate::admission::acquire().await?;
+    tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        pipe.synthesize(&worker_req).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("synthesize failed: {err}"),
+            )
+        })
     })
     .await
     .map_err(|err| {
@@ -3390,17 +4036,19 @@ fn bad_multipart(message: String) -> Box<Response> {
 /// required (`audio/wav`, RIFF-sniffed `application/octet-stream`, or
 /// `audio/pcm-s16le` + `sample_rate` form field / query); `model` is
 /// optional (server default STT); `language` optional; `response_format`
-/// `json` (default) or `verbose_json` (adds the worker's timestamped
-/// segments). Errors are `OpenAI` envelopes; only a request that is not
-/// multipart at all gets axum's transport-level 400 before the handler
-/// runs. The native route is unchanged.
+/// `json` (default), `verbose_json` (adds the worker's timestamped
+/// segments), `srt` or `vtt` (`SubRip` / `WebVTT` subtitles rendered from the
+/// same segments; `application/x-subrip` / `text/vtt`). Errors are
+/// `OpenAI` envelopes; only a request that is not multipart at all gets
+/// axum's transport-level 400 before the handler runs. The native route is
+/// unchanged.
 #[utoipa::path(
     post,
     path = "/v1/audio/transcriptions",
-    request_body(content = String, description = "multipart/form-data: file, model?, language?, response_format?, sample_rate?"),
+    request_body(content = String, description = "multipart/form-data: file, model?, language?, response_format? (json|verbose_json|srt|vtt), sample_rate?"),
     responses(
-        (status = 200, description = "Transcription", body = TranscriptionText),
-        (status = 400, description = "Missing file, bad audio, unknown model, or missing sample_rate", body = OpenAiError),
+        (status = 200, description = "Transcription (json / verbose_json / srt / vtt)", body = TranscriptionText),
+        (status = 400, description = "Missing file, bad audio, unknown model, unsupported response_format, or missing sample_rate", body = OpenAiError),
         (status = 415, description = "Unsupported audio content type", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Transcription failed", body = OpenAiError)
@@ -3423,12 +4071,12 @@ async fn post_audio_transcriptions(
         );
     };
     match upload.response_format.as_deref() {
-        None | Some("json" | "verbose_json") => {}
+        None | Some("json" | "verbose_json" | "srt" | "vtt") => {}
         Some(other) => {
             return openai_error_response(
                 StatusCode::BAD_REQUEST,
                 format!(
-                    "unsupported response_format {other:?}: only \"json\" and \"verbose_json\""
+                    "unsupported response_format {other:?}: only \"json\", \"verbose_json\", \"srt\", \"vtt\""
                 ),
                 None,
             );
@@ -3449,20 +4097,31 @@ async fn post_audio_transcriptions(
     let worker_req = WorkerTranscribeRequest {
         model: upload.model.unwrap_or_default(),
         language: upload.language,
+        translate: false,
     };
+    // NEW-3: registry-visible while the request lives (one blocking FFI
+    // call — the cancel token is marked but never checked).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Transcribe,
+        (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
+        false,
+    );
     let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await {
         Ok(out) => out,
         Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
-            return openai_error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                message,
-                Some("gpu_slot_busy"),
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    message,
+                    Some("gpu_slot_busy"),
+                ),
+                job.id(),
             );
         }
         Err((code, message)) => return openai_error_response(code, message, None),
     };
-    if upload.response_format.as_deref() == Some("verbose_json") {
-        Json(TranscriptionVerbose {
+    let response = match upload.response_format.as_deref() {
+        Some("verbose_json") => Json(TranscriptionVerbose {
             text: out.text,
             segments: out
                 .segments
@@ -3474,9 +4133,246 @@ async fn post_audio_transcriptions(
                 })
                 .collect(),
         })
-        .into_response()
-    } else {
-        Json(TranscriptionText { text: out.text }).into_response()
+        .into_response(),
+        Some("srt") => (
+            [(header::CONTENT_TYPE, "application/x-subrip")],
+            render_srt(&out.segments),
+        )
+            .into_response(),
+        Some("vtt") => (
+            [(header::CONTENT_TYPE, "text/vtt; charset=utf-8")],
+            render_vtt(&out.segments),
+        )
+            .into_response(),
+        _ => Json(TranscriptionText { text: out.text }).into_response(),
+    };
+    with_job_id(response, job.id())
+}
+
+/// SRT timestamp: `HH:MM:SS,mmm` (comma decimal separator, per the
+/// `SubRip` spec).
+fn srt_timestamp(ms: u32) -> String {
+    subtitle_timestamp(ms, ',')
+}
+
+/// `WebVTT` timestamp: `HH:MM:SS.mmm`.
+fn vtt_timestamp(ms: u32) -> String {
+    subtitle_timestamp(ms, '.')
+}
+
+/// `HH:MM:SS{sep}mmm` from milliseconds. Hours grow past two digits
+/// unclamped (both formats allow it; whisper segments never get there).
+fn subtitle_timestamp(ms: u32, sep: char) -> String {
+    let hours = ms / 3_600_000;
+    let minutes = (ms % 3_600_000) / 60_000;
+    let seconds = (ms % 60_000) / 1_000;
+    let millis = ms % 1_000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}{sep}{millis:03}")
+}
+
+/// Render worker segments as `SubRip` (`response_format = "srt"`):
+/// `index\nstart --> end\ntext\n\n` per cue, 1-based. No segments = an
+/// empty body (a no-speech input yields an empty subtitle track).
+fn render_srt(segments: &[WorkerTranscriptSegment]) -> String {
+    let mut out = String::new();
+    for (index, segment) in segments.iter().enumerate() {
+        out.push_str(&(index + 1).to_string());
+        out.push('\n');
+        out.push_str(&srt_timestamp(segment.start_ms));
+        out.push_str(" --> ");
+        out.push_str(&srt_timestamp(segment.end_ms));
+        out.push('\n');
+        out.push_str(&segment.text);
+        out.push_str("\n\n");
+    }
+    out
+}
+
+/// Render worker segments as `WebVTT` (`response_format = "vtt"`): the
+/// `WEBVTT` header, then the same cue shape with dot-decimal timestamps.
+fn render_vtt(segments: &[WorkerTranscriptSegment]) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for (index, segment) in segments.iter().enumerate() {
+        out.push_str(&(index + 1).to_string());
+        out.push('\n');
+        out.push_str(&vtt_timestamp(segment.start_ms));
+        out.push_str(" --> ");
+        out.push_str(&vtt_timestamp(segment.end_ms));
+        out.push('\n');
+        out.push_str(&segment.text);
+        out.push_str("\n\n");
+    }
+    out
+}
+
+/// `POST /v1/audio/translations` (REQ-9 sibling; `ReviewedAudio` P1):
+/// `OpenAI` translation shape — the multipart `file` is decoded exactly
+/// like `/v1/audio/transcriptions` and transcribed with whisper's
+/// **translate** task (source language auto-detected, output always
+/// English). `model` optional (server default STT); `response_format`
+/// `json` (default) / `verbose_json` / `srt` / `vtt`. No `language` field:
+/// the endpoint contract fixes the OUTPUT language, and whisper's translate
+/// task takes none. Errors are `OpenAI` envelopes, same as transcriptions.
+#[utoipa::path(
+    post,
+    path = "/v1/audio/translations",
+    request_body(content = String, description = "multipart/form-data: file, model?, response_format? (json|verbose_json|srt|vtt), sample_rate?"),
+    responses(
+        (status = 200, description = "English translation (json / verbose_json / srt / vtt)", body = TranscriptionText),
+        (status = 400, description = "Missing file, bad audio, unknown model, unsupported response_format, unexpected language field, or missing sample_rate", body = OpenAiError),
+        (status = 415, description = "Unsupported audio content type", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Translation failed", body = OpenAiError)
+    )
+)]
+async fn post_audio_translations(
+    State(config): State<AppConfig>,
+    Query(query): Query<AudioSampleRateQuery>,
+    multipart: Multipart,
+) -> Response {
+    let upload = match parse_transcription_upload(multipart, query.sample_rate).await {
+        Ok(upload) => upload,
+        Err(response) => return *response,
+    };
+    let Some((content_type, bytes)) = upload.file else {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "file is required: attach the audio payload as a `file` form field".to_owned(),
+            None,
+        );
+    };
+    // The shared parser accepts `language` (the transcriptions field); on
+    // the translations contract it is a client error, never silently
+    // ignored — the output language is fixed to English.
+    if upload.language.is_some() {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "language is not a /v1/audio/translations field: the output is always English"
+                .to_owned(),
+            None,
+        );
+    }
+    match upload.response_format.as_deref() {
+        None | Some("json" | "verbose_json" | "srt" | "vtt") => {}
+        Some(other) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unsupported response_format {other:?}: only \"json\", \"verbose_json\", \"srt\", \"vtt\""
+                ),
+                None,
+            );
+        }
+    }
+    let catalog = config.catalog_snapshot();
+    if let Err(message) = validate_model(
+        upload.model.as_deref(),
+        config.stt_model.as_deref(),
+        &catalog,
+    ) {
+        return openai_error_response(StatusCode::BAD_REQUEST, message, None);
+    }
+    let (sample_rate, pcm) = match decode_upload_audio(&content_type, &bytes, upload.sample_rate) {
+        Ok(pair) => pair,
+        Err((code, message)) => return openai_error_response(code, message, None),
+    };
+    let worker_req = WorkerTranscribeRequest {
+        model: upload.model.unwrap_or_default(),
+        language: None,
+        translate: true,
+    };
+    // NEW-3: registry-visible while the request lives (one blocking FFI
+    // call — the cancel token is marked but never checked).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Translations,
+        (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
+        false,
+    );
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await {
+        Ok(out) => out,
+        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    message,
+                    Some("gpu_slot_busy"),
+                ),
+                job.id(),
+            );
+        }
+        Err((code, message)) => return openai_error_response(code, message, None),
+    };
+    let response = match upload.response_format.as_deref() {
+        Some("verbose_json") => Json(TranscriptionVerbose {
+            text: out.text,
+            segments: out
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegment {
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                    text: segment.text,
+                })
+                .collect(),
+        })
+        .into_response(),
+        Some("srt") => (
+            [(header::CONTENT_TYPE, "application/x-subrip")],
+            render_srt(&out.segments),
+        )
+            .into_response(),
+        Some("vtt") => (
+            [(header::CONTENT_TYPE, "text/vtt; charset=utf-8")],
+            render_vtt(&out.segments),
+        )
+            .into_response(),
+        _ => Json(TranscriptionText { text: out.text }).into_response(),
+    };
+    with_job_id(response, job.id())
+}
+
+/// `GET /v1/jobs` (NEW-3): the in-flight registry — admitted GPU requests
+/// (running, or waiting in the admission queue), oldest first. Entries
+/// appear when a route admits a request and vanish when it ends; this is a
+/// liveness view, not history (see `jobs_registry`).
+#[utoipa::path(
+    get,
+    path = "/v1/jobs",
+    responses(
+        (status = 200, description = "In-flight jobs", body = JobList),
+    )
+)]
+async fn get_jobs() -> Json<JobList> {
+    Json(JobList {
+        object: "list".to_owned(),
+        data: crate::jobs_registry::global().list(),
+    })
+}
+
+/// `POST /v1/jobs/{id}/cancel` (NEW-3): mark the job's cooperative-stop
+/// token. 200 `{cancelled: bool}` — honest about what a cancel achieves:
+/// `true` only for jobs that check the token between work units
+/// (multi-image generations between images, streaming chat at the next
+/// token boundary); `false` = the job was found but its single blocking
+/// FFI call cannot be interrupted mid-flight and runs to completion
+/// (engine-level cancellation needs a per-backend spike, per the design
+/// record). 404: unknown id (never registered, or the request already
+/// ended — the registry holds live work only).
+#[utoipa::path(
+    post,
+    path = "/v1/jobs/{id}/cancel",
+    responses(
+        (status = 200, description = "Token marked", body = JobCancelResult),
+        (status = 404, description = "Unknown job id"),
+    )
+)]
+async fn post_job_cancel(AxumPath(id): AxumPath<String>) -> Response {
+    match crate::jobs_registry::global().cancel(&id) {
+        Some(interruptible) => Json(JobCancelResult {
+            cancelled: interruptible,
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, format!("unknown job id {id:?}")).into_response(),
     }
 }
 
@@ -3600,13 +4496,23 @@ async fn post_audio_speech(
         voice: req.voice,
         sample_rate: None,
     };
+    // NEW-3: registry-visible while the request lives (one blocking FFI
+    // call — the cancel token is marked but never checked).
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::Synthesize,
+        (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
+        false,
+    );
     let audio = match run_synthesis(config.tts.clone(), worker_req).await {
         Ok(audio) => audio,
         Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
-            return openai_error_response(
-                StatusCode::TOO_MANY_REQUESTS,
-                message,
-                Some("gpu_slot_busy"),
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    message,
+                    Some("gpu_slot_busy"),
+                ),
+                job.id(),
             );
         }
         Err((code, message)) => return openai_error_response(code, message, None),
@@ -3617,16 +4523,80 @@ async fn post_audio_speech(
         for sample in &audio.pcm16 {
             raw.extend_from_slice(&sample.to_le_bytes());
         }
-        return ([(header::CONTENT_TYPE, "audio/pcm-s16le")], raw).into_response();
+        return with_job_id(
+            ([(header::CONTENT_TYPE, "audio/pcm-s16le")], raw).into_response(),
+            job.id(),
+        );
     }
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
-    ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response()
+    with_job_id(
+        ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response(),
+        job.id(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{ModelCapabilitiesOverride, ModelEntryConfig};
+
+    /// SRT timestamps use the `SubRip` comma separator; hours pad to two
+    /// digits and roll over correctly at minute/second/hour boundaries.
+    #[test]
+    fn srt_timestamps_render_deterministically() {
+        assert_eq!(srt_timestamp(0), "00:00:00,000");
+        assert_eq!(srt_timestamp(100), "00:00:00,100");
+        assert_eq!(srt_timestamp(3_661_001), "01:01:01,001");
+        assert_eq!(srt_timestamp(u32::MAX), "1193:02:47,295");
+    }
+
+    /// VTT timestamps use the dot separator; everything else matches SRT.
+    #[test]
+    fn vtt_timestamps_render_deterministically() {
+        assert_eq!(vtt_timestamp(0), "00:00:00.000");
+        assert_eq!(vtt_timestamp(1_000), "00:00:01.000");
+        assert_eq!(vtt_timestamp(3_661_001), "01:01:01.001");
+    }
+
+    /// SRT cue rendering: 1-based numbering, arrow line, blank-line tail.
+    #[test]
+    fn srt_renders_numbered_cues() {
+        let segments = vec![
+            WorkerTranscriptSegment {
+                start_ms: 0,
+                end_ms: 1_500,
+                text: "hello".to_owned(),
+            },
+            WorkerTranscriptSegment {
+                start_ms: 2_000,
+                end_ms: 3_250,
+                text: "world".to_owned(),
+            },
+        ];
+        assert_eq!(
+            render_srt(&segments),
+            "1\n00:00:00,000 --> 00:00:01,500\nhello\n\n\
+             2\n00:00:02,000 --> 00:00:03,250\nworld\n\n"
+        );
+        // No segments = an empty (valid) subtitle track.
+        assert_eq!(render_srt(&[]), "");
+    }
+
+    /// VTT cue rendering: the WEBVTT header, then the same cue shape.
+    #[test]
+    fn vtt_renders_header_and_cues() {
+        let segments = vec![WorkerTranscriptSegment {
+            start_ms: 0,
+            end_ms: 1_500,
+            text: "hello".to_owned(),
+        }];
+        assert_eq!(
+            render_vtt(&segments),
+            "WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.500\nhello\n\n"
+        );
+        // Header-only track for a no-speech input.
+        assert_eq!(render_vtt(&[]), "WEBVTT\n\n");
+    }
     use honkbox_registry::RootKind;
 
     /// One scan hit for a synthetic file path.

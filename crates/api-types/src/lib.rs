@@ -822,6 +822,18 @@ pub struct EmbeddingsResponse {
 /// - `negative_prompt`: text steered away from in CFG models.
 /// - `seed`: RNG base; per-image seed = `seed + i`. Omitted = the
 ///   server-chosen fixed base (deterministic, like today).
+/// - `loras`: per-request `LoRA` adapters (max 2; each `slug` resolves
+///   against catalog entries of kind `lora` by slug or alias — unknown
+///   names are a 400 naming the offender). `strength` is the adapter
+///   multiplier, default 1.0, accepted range `[-2.0, 2.0]` (out of range
+///   is a 400, never clamped). Weight licensing is the operator's
+///   responsibility: honkbox never bundles `LoRA` weights, and the curated
+///   catalog `license` is surfaced as a response warning when known — a
+///   missing license means all-rights-reserved, i.e. local-only use
+///   (ReviewedLicense-AGPL §2b/§2c). The high-noise adapter split is not
+///   exposed; requests always apply adapters as standard `LoRA`s. Base-model
+///   mismatch cannot be detected today (no base tags are recorded on scan
+///   entries or `LoRA` files), so it is neither warned about nor rejected.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesGenerationRequest {
     /// Model id (alias or registry slug) from the SD catalog; omitted →
@@ -860,6 +872,21 @@ pub struct ImagesGenerationRequest {
     /// server-chosen base (deterministic across identical requests).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Per-request `LoRA` adapters (see the struct-level docs for the
+    /// licensing and validation rules); omit = plain checkpoint render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loras: Option<Vec<ImagesLora>>,
+}
+
+/// One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ImagesLora {
+    /// Catalog slug or alias of a `lora`-kind entry (e.g.
+    /// `comfy:loras/detail.safetensors`); unknown names are a 400.
+    pub slug: String,
+    /// Adapter multiplier; default 1.0, accepted range `[-2.0, 2.0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<f32>,
 }
 
 /// One generated image in the `POST /v1/images/generations` response.
@@ -877,6 +904,9 @@ pub struct ImagesGenerationResponse {
     pub created: u64,
     /// One entry per requested image, in order.
     pub data: Vec<ImageB64>,
+    /// Advisory notes (`LoRA` license surfacing); omitted when empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
 }
 
 /// `POST /v1/audio/transcriptions` plain shape (`response_format` absent
@@ -1374,6 +1404,53 @@ pub struct DownloadList {
     pub downloads: Vec<DownloadState>,
 }
 
+/// One in-flight GPU job of `GET /v1/jobs` (NEW-3). Entries appear when a
+/// GPU route admits a request and vanish when the request ends — this is a
+/// liveness view, not history.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct JobInfo {
+    /// Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.
+    /// Also stamped as the `X-Job-Id` response header of the owning request
+    /// (on SSE routes it precedes the stream body).
+    pub id: String,
+    /// Modality: `chat`, `embeddings`, `images`, `transcribe`,
+    /// `synthesize`, or `translations`.
+    pub kind: String,
+    /// Model slug the job runs against, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Registration time, Unix milliseconds.
+    pub started_at_ms: u64,
+    /// Whether the job checks its cancel token between work units:
+    /// `true` = a cancel stops it at the next checkpoint (multi-image
+    /// generations between images, streaming chat at the next token);
+    /// `false` = the single blocking FFI call cannot be interrupted and
+    /// runs to completion (engine-level cancellation needs a per-backend
+    /// spike, per the design record).
+    pub interruptible: bool,
+}
+
+/// `GET /v1/jobs` response: OpenAI-style list envelope over in-flight GPU
+/// jobs, oldest first.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct JobList {
+    /// Always `"list"`.
+    pub object: String,
+    /// The in-flight jobs.
+    pub data: Vec<JobInfo>,
+}
+
+/// `POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` mirrors the
+/// job's `interruptible` flag: `true` = the job will actually stop at its
+/// next checkpoint; `false` = the job was found and marked, but its single
+/// blocking inference call is not interruptible mid-flight. An unknown id
+/// (finished or never registered) is a plain-text 404.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct JobCancelResult {
+    /// Whether the cancel will stop the job at its next work-unit boundary.
+    pub cancelled: bool,
+}
+
 /// Fit-pill verdict for a curated catalog entry against the configured
 /// `[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind
 /// overhead factors over weight bytes), never a measurement.
@@ -1504,6 +1581,7 @@ mod tests {
             EmbeddingsUsage::decl(&config),
             EmbeddingsResponse::decl(&config),
             ImagesGenerationRequest::decl(&config),
+            ImagesLora::decl(&config),
             ImageB64::decl(&config),
             ImagesGenerationResponse::decl(&config),
             TranscriptionText::decl(&config),
@@ -1536,6 +1614,9 @@ mod tests {
             DownloadAccepted::decl(&config),
             DownloadState::decl(&config),
             DownloadList::decl(&config),
+            JobInfo::decl(&config),
+            JobList::decl(&config),
+            JobCancelResult::decl(&config),
             Pill::decl(&config),
             CatalogLocal::decl(&config),
             CatalogEntry::decl(&config),

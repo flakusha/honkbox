@@ -46,6 +46,20 @@ pub struct BundleInputs {
     pub cfg_scale: f32,
     /// Negative prompt actually used; `None`/empty = none.
     pub negative_prompt: Option<String>,
+    /// `LoRA` adapters actually applied (HTTP generations only; empty
+    /// otherwise).
+    pub loras: Vec<LoraRecord>,
+    /// img2img/inpaint denoise strength actually used; `None` = txt2img.
+    pub strength: Option<f32>,
+}
+
+/// One `LoRA` adapter actually applied to a generation (sidecar record).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LoraRecord {
+    /// Catalog slug as resolved for the request.
+    pub slug: String,
+    /// Multiplier actually used.
+    pub strength: f32,
 }
 
 /// Parse `WxH` (e.g. `1024x1024`) into `(width, height)`; zero dims rejected.
@@ -94,6 +108,8 @@ pub fn write_bundle_into(
         "scheduler": inputs.scheduler,
         "cfg_scale": inputs.cfg_scale,
         "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
+        "loras": inputs.loras,
+        "strength": inputs.strength,
     });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
@@ -107,6 +123,8 @@ pub fn write_bundle_into(
         "model_slug": inputs.model_slug,
         "format": inputs.format.name(),
         "backend_id": inputs.backend_id,
+        "loras": inputs.loras,
+        "strength": inputs.strength,
     });
     let metrics = serde_json::json!({
         "event": "done",
@@ -319,6 +337,8 @@ mod tests {
             scheduler: "normal".to_string(),
             cfg_scale: 7.0,
             negative_prompt: None,
+            loras: Vec::new(),
+            strength: None,
         }
     }
 
@@ -401,6 +421,39 @@ mod tests {
         assert_eq!(side["scheduler"], "karras");
         assert_eq!(side["cfg_scale"], 4.5);
         assert_eq!(side["negative_prompt"], "blurry");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `LoRA` adapters and the img2img strength land in the sidecar when set,
+    /// and stay `[]`/`null` (not missing) for plain txt2img records.
+    #[test]
+    fn sidecar_records_loras_and_strength() {
+        let dir = std::env::temp_dir().join(format!("honkbox-jobs-lora-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+
+        let mut bundle = inputs();
+        bundle.loras = vec![LoraRecord {
+            slug: "comfy:loras/detail.safetensors".to_string(),
+            strength: 0.8,
+        }];
+        bundle.strength = Some(0.6);
+        write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        // f32 strengths widen to f64 in the sidecar JSON: compare exactly
+        // representable values with a tolerance, not equality.
+        assert!((side["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(side["loras"][0]["slug"], "comfy:loras/detail.safetensors");
+        assert!((side["strength"].as_f64().unwrap() - 0.6).abs() < 1e-6);
+
+        write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("plain bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert_eq!(side["loras"], serde_json::json!([]));
+        assert!(side["strength"].is_null());
         fs::remove_dir_all(&dir).ok();
     }
 

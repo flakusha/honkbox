@@ -591,6 +591,22 @@ export type ImagesGenerationRequest = {
    * server-chosen base (deterministic across identical requests).
    */
   seed?: bigint | null;
+  /**
+   * Per-request `LoRA` adapters (see the struct-level docs for the
+   * licensing and validation rules); omit = plain checkpoint render.
+   */
+  loras?: Array<ImagesLora> | null;
+};
+export type ImagesLora = {
+  /**
+   * Catalog slug or alias of a `lora`-kind entry (e.g.
+   * `comfy:loras/detail.safetensors`); unknown names are a 400.
+   */
+  slug: string;
+  /**
+   * Adapter multiplier; default 1.0, accepted range `[-2.0, 2.0]`.
+   */
+  strength?: number | null;
 };
 export type ImageB64 = {
   /**
@@ -607,6 +623,10 @@ export type ImagesGenerationResponse = {
    * One entry per requested image, in order.
    */
   data: Array<ImageB64>;
+  /**
+   * Advisory notes (`LoRA` license surfacing); omitted when empty.
+   */
+  warnings: Array<string> | null;
 };
 export type TranscriptionText = {
   /**
@@ -1075,6 +1095,52 @@ export type DownloadList = {
    * Known downloads, sorted by id.
    */
   downloads: Array<DownloadState>;
+};
+export type JobInfo = {
+  /**
+   * Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.
+   * Also stamped as the `X-Job-Id` response header of the owning request
+   * (on SSE routes it precedes the stream body).
+   */
+  id: string;
+  /**
+   * Modality: `chat`, `embeddings`, `images`, `transcribe`,
+   * `synthesize`, or `translations`.
+   */
+  kind: string;
+  /**
+   * Model slug the job runs against, when known.
+   */
+  model: string | null;
+  /**
+   * Registration time, Unix milliseconds.
+   */
+  started_at_ms: bigint;
+  /**
+   * Whether the job checks its cancel token between work units:
+   * `true` = a cancel stops it at the next checkpoint (multi-image
+   * generations between images, streaming chat at the next token);
+   * `false` = the single blocking FFI call cannot be interrupted and
+   * runs to completion (engine-level cancellation needs a per-backend
+   * spike, per the design record).
+   */
+  interruptible: boolean;
+};
+export type JobList = {
+  /**
+   * Always `"list"`.
+   */
+  object: string;
+  /**
+   * The in-flight jobs.
+   */
+  data: Array<JobInfo>;
+};
+export type JobCancelResult = {
+  /**
+   * Whether the cancel will stop the job at its next work-unit boundary.
+   */
+  cancelled: boolean;
 };
 export type Pill = "ok" | "slow" | "fail";
 export type CatalogLocal = {

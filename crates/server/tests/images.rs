@@ -6,6 +6,9 @@
 //! job bundle landing under `<data_dir>/jobs/`.
 
 #[allow(dead_code)]
+#[path = "../src/admission.rs"]
+mod admission;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -17,6 +20,9 @@ mod downloads;
 #[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
+#[allow(dead_code)]
+#[path = "../src/jobs_registry.rs"]
+mod jobs_registry;
 #[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
@@ -419,4 +425,179 @@ async fn bundle_records_requested_recipe() {
     assert_eq!(side["negative_prompt"], "blurry");
     assert_eq!(side["seed"], 9);
     std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// One `LoRA` catalog entry (registry-scan shape; `path` mirrors the
+/// absolute weight-file path a real scan produces).
+fn lora_entry(id: &str, path: &str) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        kind: ModelKind::Lora,
+        capabilities: ModelCapabilities::for_kind(ModelKind::Lora),
+        modalities: vec!["image".to_owned()],
+        category: "loras".to_owned(),
+        path: path.to_owned(),
+        ..sd_entry(id)
+    }
+}
+
+/// An unknown `LoRA` slug — or a known non-`LoRA` slug — is a 400 naming the
+/// offender (resolution is alias-or-slug over `ModelKind::Lora` only).
+#[tokio::test]
+async fn unknown_lora_slug_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut catalog = catalog_with(&[sd_entry("comfy:f.safetensors")]);
+    catalog.data.push(lora_entry(
+        "comfy:loras/detail.safetensors",
+        "/models/loras/detail.safetensors",
+    ));
+    let app = app_with(catalog, None);
+    for slug in ["comfy:loras/missing.safetensors", "comfy:f.safetensors"] {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "loras": [{"slug": slug}]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "slug {slug}: {body}");
+        assert_eq!(body["error"]["code"], "unknown_lora", "slug {slug}: {body}");
+    }
+}
+
+/// More than two adapters per request is a documented 400 (`too_many_loras`).
+#[tokio::test]
+async fn too_many_loras_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry("comfy:loras/a.safetensors", "/models/loras/a.safetensors"),
+        lora_entry("comfy:loras/b.safetensors", "/models/loras/b.safetensors"),
+    ]);
+    let (status, body) = images(
+        app_with(catalog, None),
+        json!({"prompt": "hi", "loras": [
+            {"slug": "comfy:loras/a.safetensors"},
+            {"slug": "comfy:loras/b.safetensors"},
+            {"slug": "comfy:loras/c.safetensors"}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "too_many_loras", "{body}");
+}
+
+/// A `LoRA` strength outside `[-2.0, 2.0]` (or non-finite) is a 400, never a
+/// silent clamp — the same reject-not-clamp policy as `cfg_scale`.
+#[tokio::test]
+async fn lora_strength_out_of_range_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry("comfy:loras/a.safetensors", "/models/loras/a.safetensors"),
+    ]);
+    let app = app_with(catalog, None);
+    for strength in [5.0_f64, -3.0] {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "loras": [
+                {"slug": "comfy:loras/a.safetensors", "strength": strength}
+            ]}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "strength {strength}: {body}"
+        );
+        assert_eq!(body["error"]["code"], "invalid_lora_strength", "{body}");
+    }
+}
+
+/// Adapters spanning more than one directory are a 400: the vendor applies
+/// a single `LoRA` dir per model config, so honoring both is impossible.
+#[tokio::test]
+async fn mixed_lora_dirs_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/a.safetensors",
+            "/roots/one/loras/a.safetensors",
+        ),
+        lora_entry(
+            "comfy:loras/b.safetensors",
+            "/roots/two/loras/b.safetensors",
+        ),
+    ]);
+    let (status, body) = images(
+        app_with(catalog, None),
+        json!({"prompt": "hi", "loras": [
+            {"slug": "comfy:loras/a.safetensors"},
+            {"slug": "comfy:loras/b.safetensors"}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "mixed_lora_dirs", "{body}");
+}
+
+/// A valid `LoRA` request renders (stub backend) with the license warning
+/// recorded (no curated manifest row ⇒ all-rights-reserved note), and the
+/// bundle sidecar records the resolved slug + strength.
+#[tokio::test]
+async fn loras_warn_and_record() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-img-lora-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/detail.safetensors",
+            "/models/loras/detail.safetensors",
+        ),
+    ]);
+    let (status, body) = images(
+        app_with(catalog, Some(data_dir.clone())),
+        json!({"prompt": "hi", "loras": [
+            {"slug": "comfy:loras/detail.safetensors", "strength": 0.8}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let warnings = body["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1, "{body}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .is_some_and(|w| w.contains("no license recorded")
+                && w.contains("comfy:loras/detail.safetensors")),
+        "{body}"
+    );
+    let jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    for dir in jobs.filter_map(Result::ok) {
+        let request: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("request.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            request["loras"][0]["slug"],
+            "comfy:loras/detail.safetensors"
+        );
+        // f32 strengths widen to f64 in the sidecar JSON: compare with a
+        // tolerance, not equality.
+        assert!((request["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+    }
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Without `loras` the `warnings` key is omitted entirely (skip-if-none),
+/// keeping the response byte-compatible with pre-`LoRA` consumers.
+#[tokio::test]
+async fn warnings_absent_without_loras() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("warnings").is_none(), "{body}");
 }

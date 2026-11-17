@@ -623,6 +623,10 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         scheduler: None,
         cfg_scale: None,
         negative_prompt: None,
+        loras: None,
+        init_image: None,
+        mask_image: None,
+        strength: None,
     }));
     let format = match format {
         Format::Png => honkbox_sd_core::OutputFormat::Png,
@@ -651,6 +655,8 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
             scheduler: honkbox_sd_core::SCHEDULER.to_string(),
             cfg_scale: 7.0,
             negative_prompt: None,
+            loras: Vec::new(),
+            strength: None,
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
