@@ -95,6 +95,8 @@ fn test_app(catalog: ModelCatalog) -> Router {
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
@@ -875,4 +877,152 @@ async fn streamed_tool_choice_none_falls_back_to_content() {
     let last = chunks.last().expect("chunks");
     assert_eq!(last["choices"][0]["finish_reason"], "stop");
     assert!(!last["usage"].is_null());
+}
+
+/// REQ-8 acceptance: a `content` array with text parts is accepted and
+/// flattens (order preserved, `OpenAI` concatenation); the reply's
+/// serialized `content` stays a plain string (`string | null` wire shape
+/// unchanged), and the plain string form keeps working byte-for-byte.
+#[tokio::test]
+async fn content_parts_flatten_and_string_form_compat() {
+    let _slot = SLOT_LOCK.lock().await;
+    // Array form: two text parts concatenate.
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello "},
+                    {"type": "text", "text": "world"}
+                ]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let content = parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("string content");
+    assert_eq!(content, "stub reply to: Hello world", "{parsed}");
+    // String form: identical, unchanged behavior.
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{"role": "user", "content": "plain string"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(
+        parsed["choices"][0]["message"]["content"],
+        "stub reply to: plain string"
+    );
+}
+
+/// REQ-8 acceptance: an `image_url` part is an explicit 400 with the
+/// `OpenAI` envelope naming the vision refusal — never a silent drop or
+/// silent flatten.
+#[tokio::test]
+async fn image_url_part_is_400_vision_envelope() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, content_type, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0K"}}
+                ]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        content_type.starts_with("application/json"),
+        "{content_type}"
+    );
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let error = &parsed["error"];
+    assert_eq!(error["code"], "vision_unsupported", "{parsed}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("vision not supported by backend")),
+        "{parsed}"
+    );
+}
+
+/// REQ-8 acceptance: an unsupported part type is a 400 naming the type.
+#[tokio::test]
+async fn unknown_part_type_is_400_named() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, body) = completions(
+        test_app(catalog_with(&["llm:fake.gguf"])),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [{"type": "input_audio", "input_audio": {"data": "", "format": "wav"}}]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    let message = parsed["error"]["message"].as_str().expect("message");
+    assert!(
+        message.contains("unsupported content part type"),
+        "{parsed}"
+    );
+    assert!(message.contains("input_audio"), "{parsed}");
+}
+
+/// REQ-8 parity on the native route: an `image_url` part there is the
+/// same refusal in the native plain-text error shape.
+#[tokio::test]
+async fn native_chat_rejects_image_parts_plain_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(catalog_with(&["llm:fake.gguf"]));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "llm:fake.gguf",
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "look"},
+                                {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}}
+                            ]
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    assert!(content_type.starts_with("text/plain"), "{content_type}");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("vision not supported by backend"), "{text}");
 }

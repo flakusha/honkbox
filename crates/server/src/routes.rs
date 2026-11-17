@@ -1,5 +1,6 @@
 //! HTTP surface: `/health`, `/api/version`, `/v1/models`(+`/refresh`),
-//! `/metrics`, `/v1/openapi.json`, chat/transcribe/synthesize, UI fallback.
+//! `/metrics`, `/v1/openapi.json`, chat/transcribe/synthesize, image
+//! generations (REQ-10), UI fallback.
 //!
 //! The `OpenAPI` document is served as plain JSON via `Json` — no
 //! `utoipa-axum` router glue.
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path as AxumPath, Query, Request, State},
+    extract::{Multipart, Path as AxumPath, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{
@@ -25,18 +26,20 @@ use axum::{
     },
     routing::{get, post},
 };
+use base64::Engine as _;
 use honkbox_api_types::{
-    CatalogEntry, CatalogList, CatalogLocal, ChatMessage, ChatRequest, ChatResponse, ChatRole,
-    ChatTool, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
+    CatalogEntry, CatalogList, CatalogLocal, ChatContent, ChatMessage, ChatRequest, ChatResponse,
+    ChatRole, ChatTool, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
     DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
-    FunctionDefinition, GgufMetadata, Health, JsonSchemaSpec, MemoryCapacity, MemoryGpu,
-    MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata,
-    NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk,
-    OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat,
-    ResponseFormatType, RunningList, RunningModel, SafetensorsMetadata, SynthesizeRequest,
-    ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
-    UnloadAllResult, UnloadResult, Version,
+    FunctionDefinition, GgufMetadata, Health, ImageB64, ImagesGenerationRequest,
+    ImagesGenerationResponse, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo,
+    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, NamedFunction,
+    OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice,
+    OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType,
+    RunningList, RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall,
+    ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
+    TranscriptionVerbose, UnloadAllResult, UnloadResult, Version,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -44,7 +47,7 @@ use honkbox_api_types::{
 #[allow(unused_imports)] // which name is used varies per #[path]-included test binary
 pub use crate::config::{AuthConfig, AuthMode};
 use honkbox_audio_worker::{
-    SttPipeline, SynthesizeRequest as WorkerSynthRequest,
+    SttPipeline, SynthesizeRequest as WorkerSynthRequest, SynthesizedAudio,
     TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript, TtsPipeline,
     decode_wav, encode_wav,
 };
@@ -99,6 +102,9 @@ struct EmbeddedUi;
         Transcript,
         TranscriptSegment,
         SynthesizeRequest,
+        SpeechRequest,
+        TranscriptionText,
+        TranscriptionVerbose,
         ModelKind,
         ModelCapabilities,
         GgufMetadata,
@@ -141,6 +147,9 @@ struct EmbeddedUi;
         EmbeddingsData,
         EmbeddingsUsage,
         EmbeddingsResponse,
+        ImagesGenerationRequest,
+        ImageB64,
+        ImagesGenerationResponse,
         DownloadKind,
         DownloadStatus,
         DownloadRequest,
@@ -190,6 +199,14 @@ pub struct AppConfig {
     pub stt: Arc<dyn SttPipeline>,
     /// Shared synthesis pipeline (`stub-tts` or `kokoro-*`).
     pub tts: Arc<dyn TtsPipeline>,
+    /// Startup-configured image pipeline (REQ-10): `stub` (no `--sd-model`)
+    /// or `sd-cpp` on the `--sd-model` checkpoint. Shared across requests;
+    /// generations acquire the GPU lease per request like every other
+    /// GPU route.
+    pub sd: Arc<dyn honkbox_sd_core::SdPipeline>,
+    /// Startup-configured image slug (`--sd-model`); accepted as a request
+    /// `model` on `POST /v1/images/generations` alongside the catalog.
+    pub sd_model: Option<String>,
     /// LLM swap manager (P1 of the llama-swap parity plan). When `Some`,
     /// `/v1/chat`(+`/stream`) resolve the request `model` slug through it:
     /// load-on-demand construction, per-entry idle TTL, LRU capacity. `None`
@@ -253,8 +270,11 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/chat/completions", post(post_chat_completions))
         .route("/v1/embeddings", post(post_embeddings))
+        .route("/v1/images/generations", post(post_images_generations))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
+        .route("/v1/audio/transcriptions", post(post_audio_transcriptions))
+        .route("/v1/audio/speech", post(post_audio_speech))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))
         .route("/api/models/unload/{model}", post(post_unload_one))
@@ -613,11 +633,15 @@ async fn post_model_unload(
 )]
 async fn get_memory(State(config): State<AppConfig>) -> Response {
     let catalog = config.catalog_snapshot();
-    let (resident, capacity) = match &config.swap {
+    let (resident, capacity, bytes_reserved) = match &config.swap {
         Some(swap) => {
-            let resident: Vec<ResidentModel> = swap
-                .residency()
-                .into_iter()
+            let entries = swap.residency();
+            // REQ-12: per-entry estimated bytes from the catalog snapshot's
+            // registry scan (`bytes` = on-disk weight file size — an
+            // estimate, never a measurement); unknown slugs (catalog no
+            // longer holds them) contribute nothing.
+            let resident: Vec<ResidentModel> = entries
+                .iter()
                 .map(|entry| ResidentModel {
                     alias: catalog
                         .data
@@ -625,19 +649,28 @@ async fn get_memory(State(config): State<AppConfig>) -> Response {
                         .find(|e| e.slug == entry.slug && e.id != e.slug)
                         .map(|e| e.id.clone()),
                     kind: "llm".to_owned(),
-                    slug: entry.slug,
+                    slug: entry.slug.clone(),
                     loaded_at: entry.loaded_at,
                     expires_at: entry.expires_at,
                     pinned: entry.pinned,
                     in_use: entry.in_use,
+                    bytes: catalog
+                        .data
+                        .iter()
+                        .find(|e| e.slug == entry.slug)
+                        .map(|e| e.bytes),
                 })
                 .collect();
+            let bytes_reserved = resident
+                .iter()
+                .filter_map(|r| r.bytes)
+                .reduce(u64::wrapping_add);
             let (llm_max_loaded, llm_ttl_secs) = swap.capacity();
             let capacity = MemoryCapacity {
                 llm_max_loaded: u32::try_from(llm_max_loaded).unwrap_or(u32::MAX),
                 llm_ttl_secs,
             };
-            (resident, capacity)
+            (resident, capacity, bytes_reserved)
         }
         None => (
             Vec::new(),
@@ -645,6 +678,7 @@ async fn get_memory(State(config): State<AppConfig>) -> Response {
                 llm_max_loaded: 0,
                 llm_ttl_secs: 0,
             },
+            None,
         ),
     };
     Json(MemoryInfo {
@@ -653,6 +687,7 @@ async fn get_memory(State(config): State<AppConfig>) -> Response {
         gpu: MemoryGpu {
             slot_busy: honkbox_residency::global().is_busy(),
         },
+        bytes_reserved,
     })
     .into_response()
 }
@@ -1416,7 +1451,7 @@ fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
     };
     WorkerChatMessage {
         role,
-        content: message.content.clone().unwrap_or_default(),
+        content: message.content.text.clone().unwrap_or_default(),
         tool_call_id: message.tool_call_id.clone(),
         tool_calls: message
             .tool_calls
@@ -1460,6 +1495,35 @@ fn reserve_gpu_slot() -> Result<honkbox_residency::Lease<'static>, (StatusCode, 
     honkbox_residency::global().try_reserve().map_err(|err| {
         crate::metrics::note_gpu_slot_busy(crate::metrics::BusyReason::NoWait);
         (StatusCode::TOO_MANY_REQUESTS, err.to_string())
+    })
+}
+
+/// REQ-8: the named vision refusal, shared by `/v1/chat/completions` and
+/// the native chat routes (honkbox ships no mmproj/vision backend).
+const VISION_UNSUPPORTED: &str = "vision not supported by backend: image_url content parts require an mmproj vision backend honkbox does not ship";
+
+/// Request gates before any pipeline work (`/v1/chat/completions`): REQ-4
+/// — an embeddings-capable model is never silently run through the chat
+/// pipeline (the reply would be garbage tokens dressed up as a
+/// completion); REQ-8 — an `image_url` content part is an explicit
+/// vision refusal, never a silently dropped (or silently flattened)
+/// image. `Some(response)` is the ready-made rejection.
+fn completions_request_gates(
+    entry: &ModelCatalogEntry,
+    model: &str,
+    messages: &[ChatMessage],
+) -> Option<Response> {
+    embeddings_model_gate(entry, model).or_else(|| {
+        messages
+            .iter()
+            .any(|message| message.content.has_image)
+            .then(|| {
+                openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    VISION_UNSUPPORTED.to_owned(),
+                    Some("vision_unsupported"),
+                )
+            })
     })
 }
 
@@ -1531,6 +1595,12 @@ async fn post_chat(
     // startup-configured model, same as before aliases existed).
     let slug =
         resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
+    // REQ-8 parity with `/v1/chat/completions`: an `image_url` content
+    // part is an explicit refusal (plain-text 400 on the native route),
+    // never a silently flattened image.
+    if req.messages.iter().any(|message| message.content.has_image) {
+        return Err((StatusCode::BAD_REQUEST, VISION_UNSUPPORTED.to_owned()));
+    }
     let pipe = chat_pipeline(
         &config,
         &slug,
@@ -1643,6 +1713,12 @@ async fn post_chat_stream(
     // Alias → owning slug (same contract as `post_chat`).
     let slug =
         resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
+    // REQ-8 parity with `/v1/chat/completions`: an `image_url` content
+    // part is an explicit refusal (plain-text 400 on the native route),
+    // never a silently flattened image.
+    if req.messages.iter().any(|message| message.content.has_image) {
+        return Err((StatusCode::BAD_REQUEST, VISION_UNSUPPORTED.to_owned()));
+    }
     let pipe = chat_pipeline(
         &config,
         &slug,
@@ -1992,6 +2068,198 @@ fn embeddings_model_gate(entry: &ModelCatalogEntry, model: &str) -> Option<Respo
     })
 }
 
+/// SD-side model resolution for `POST /v1/images/generations` (REQ-10):
+/// alias-or-slug over the catalog, restricted to `ModelKind::Sd` entries
+/// (the comfy/SD category). Returns the owning registry slug.
+fn resolve_sd_model<'a>(model: &str, catalog: &'a ModelCatalog) -> Option<&'a str> {
+    resolve_model_entry(model, catalog)
+        .filter(|e| e.kind == ModelKind::Sd)
+        .map(|e| e.slug.as_str())
+}
+
+/// Validated image request: parsed size, clamped count. The only rejection
+/// paths for `POST /v1/images/generations` before the GPU slot; `Err` is
+/// (message, error code) for a 400 `OpenAI` envelope.
+fn validate_images_request(
+    req: &ImagesGenerationRequest,
+) -> Result<(u32, u32, u32), (String, &'static str)> {
+    let (width, height) = crate::jobs::parse_size(req.size.as_deref().unwrap_or("1024x1024"))
+        .map_err(|err| (err, "invalid_size"))?;
+    if let Some(format) = req
+        .response_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| *f != "b64_json")
+    {
+        return Err((
+            format!("unsupported response_format {format:?}: only \"b64_json\" is supported"),
+            "unsupported_response_format",
+        ));
+    }
+    let n = req.n.unwrap_or(1);
+    if n == 0 || n > 4 {
+        tracing::warn!(
+            requested = n,
+            "images n outside [1, 4]; clamping (never rejected)"
+        );
+    }
+    Ok((width, height, n.clamp(1, 4)))
+}
+
+/// Write one HTTP generation's job bundle (best-effort: a bundle-write
+/// failure never fails an otherwise successful generation).
+fn write_generation_bundle(
+    config: &AppConfig,
+    inputs: &crate::jobs::BundleInputs,
+    bytes: &[u8],
+    elapsed_ms: u64,
+) {
+    let Some(data_dir) = &config.data_dir else {
+        return;
+    };
+    if let Err(err) = crate::jobs::write_bundle(data_dir, inputs, bytes, elapsed_ms) {
+        tracing::warn!(error = %err, "job bundle write failed for HTTP generation");
+    }
+}
+
+/// Fixed generation recipe for the HTTP surface: the same defaults as
+/// `honkbox generate` (seed 42 base, 20 steps, euler/normal), recorded in
+/// the bundle sidecars. Per-image seed = base + index.
+const IMAGE_SEED_BASE: u64 = 42;
+/// Fixed diffusion steps for the HTTP surface (CLI default).
+const IMAGE_STEPS: u32 = 20;
+
+/// `POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation
+/// shape over the startup-configured [`SdPipeline`]. SD pipelines are
+/// startup-static (no swap manager), so a request `model` is validated and
+/// recorded (bundle sidecar) but the pipeline stays the one built at
+/// startup — with the stub backend any slug is honest; with `sd-cpp` the
+/// checkpoint is the `--sd-model` one.
+///
+/// Each image in the request is generated under the GPU lease
+/// (`spawn_blocking`, like every other GPU route) and written to the
+/// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
+/// recordkeeping cover HTTP generations too. Errors are `OpenAI`
+/// envelopes: 400 bad `size`/`response_format`, 404 unknown model, 429
+/// busy, 500 backend failure. `n` clamps to `[1, 4]` (warn, never reject).
+#[utoipa::path(
+    post,
+    path = "/v1/images/generations",
+    request_body = ImagesGenerationRequest,
+    responses(
+        (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
+        (status = 400, description = "Bad size or response_format", body = OpenAiError),
+        (status = 404, description = "Unknown model", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Generation failed", body = OpenAiError)
+    )
+)]
+async fn post_images_generations(
+    State(config): State<AppConfig>,
+    Json(req): Json<ImagesGenerationRequest>,
+) -> Response {
+    let (width, height, n) = match validate_images_request(&req) {
+        Ok(valid) => valid,
+        Err((message, code)) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        }
+    };
+    let catalog = config.catalog_snapshot();
+    let slug: String = match req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        Some(model) => match resolve_sd_model(model, &catalog) {
+            Some(slug) => slug.to_owned(),
+            None => {
+                return openai_error_response(
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "unknown model {model:?}: not an SD catalog slug or alias (see GET /v1/models)"
+                    ),
+                    Some("model_not_found"),
+                );
+            }
+        },
+        // Server default: the startup-configured SD pipeline.
+        None => config.sd_model.clone().unwrap_or_default(),
+    };
+    let pipeline = Arc::clone(&config.sd);
+    let prompt = req.prompt;
+    let started = Instant::now();
+    let lease = match reserve_gpu_slot() {
+        Ok(lease) => lease,
+        Err((status, message)) => return openai_error_response(status, message, None),
+    };
+    let mut images = Vec::with_capacity(n as usize);
+    let backend_id = pipeline.backend_id();
+    for i in 0..u64::from(n) {
+        let pipeline = Arc::clone(&pipeline);
+        let gen_prompt = prompt.clone();
+        let gen_slug = slug.clone();
+        let outcome =
+            tokio::task::spawn_blocking(move || -> Result<Vec<u8>, honkbox_sd_core::SdError> {
+                let img = pipeline.generate(&honkbox_sd_core::Txt2ImgRequest {
+                    // Per-image seeds keep n>1 outputs distinct while staying
+                    // deterministic per request.
+                    seed: IMAGE_SEED_BASE.wrapping_add(i),
+                    steps: IMAGE_STEPS,
+                    prompt: gen_prompt,
+                    width,
+                    height,
+                    model_slug: gen_slug,
+                    clip: None,
+                    vae: None,
+                })?;
+                honkbox_sd_core::encode_image(img, honkbox_sd_core::OutputFormat::Png)
+            })
+            .await;
+        let bytes = match outcome {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(err)) => {
+                return openai_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    err.to_string(),
+                    Some("generation_failed"),
+                );
+            }
+            Err(err) => {
+                return openai_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("generation task failed: {err}"),
+                    Some("generation_failed"),
+                );
+            }
+        };
+        write_generation_bundle(
+            &config,
+            &crate::jobs::BundleInputs {
+                model_slug: slug.clone(),
+                prompt: prompt.clone(),
+                seed: IMAGE_SEED_BASE.wrapping_add(i),
+                steps: IMAGE_STEPS,
+                width,
+                height,
+                format: honkbox_sd_core::OutputFormat::Png,
+                backend_id,
+            },
+            &bytes,
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        images.push(ImageB64 {
+            b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        });
+    }
+    drop(lease);
+    Json(ImagesGenerationResponse {
+        created: epoch_secs(),
+        data: images,
+    })
+    .into_response()
+}
+
 /// Owning catalog entry for a request `model` value (the alias `id` or the
 /// registry `slug`); [`resolve_model_slug`] reads the slug off it.
 fn resolve_model_entry<'a>(
@@ -2087,10 +2355,8 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
     };
     let served_id = entry.id.clone();
     let slug = entry.slug.clone();
-    // REQ-4 acceptance: an embeddings-capable model is never silently run
-    // through the chat pipeline — the reply would be garbage tokens dressed
-    // up as a completion. Refuse with the explicit error instead.
-    if let Some(response) = embeddings_model_gate(entry, model) {
+    // REQ-4 + REQ-8 request gates (see [`completions_request_gates`]).
+    if let Some(response) = completions_request_gates(entry, model, &req.messages) {
         return response;
     }
     // `REQ-3` request surface: resolve tools + output constraints + sampler
@@ -2229,10 +2495,10 @@ async fn completions_json(
         FinishReason::ToolCalls
     };
     let content = if tool_calls.is_empty() || !reply.text.is_empty() {
-        Some(reply.text)
+        ChatContent::text(reply.text)
     } else {
         // Tool-call-only reply: `OpenAI` sends `content: null` there.
-        None
+        ChatContent::default()
     };
     Json(OpenAiChatCompletion {
         id: format!("chatcmpl-{}", ulid::Ulid::new()),
@@ -2625,27 +2891,7 @@ async fn post_transcribe(
         model: query.model.unwrap_or_default(),
         language: query.language,
     };
-    let pipe = config.stt.clone();
-    let out: WorkerTranscript = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
-        Ok(lease) => {
-            let _lease = lease;
-            pipe.transcribe(&pcm, sample_rate, &worker_req)
-                .map_err(|err| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("transcribe failed: {err}"),
-                    )
-                })
-        }
-        Err(rejection) => Err(rejection),
-    })
-    .await
-    .map_err(|err| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("transcribe task failed: {err}"),
-        )
-    })??;
+    let out = run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await?;
     Ok(Json(Transcript {
         backend_id: out.backend_id,
         text: out.text,
@@ -2688,8 +2934,49 @@ async fn post_synthesize(
         voice: req.voice,
         sample_rate: req.sample_rate,
     };
-    let pipe = config.tts.clone();
-    let audio = tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+    let audio = run_synthesis(config.tts.clone(), worker_req).await?;
+    let wav = encode_wav(audio.sample_rate, &audio.pcm16);
+    Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+}
+
+/// Shared STT execution (native `/v1/transcribe` and REQ-9
+/// `/v1/audio/transcriptions` are the same worker call under two wire
+/// shapes): run the pipeline inside the GPU slot on the blocking pool.
+async fn run_transcription(
+    pipe: Arc<dyn SttPipeline>,
+    worker_req: WorkerTranscribeRequest,
+    sample_rate: u32,
+    pcm: Vec<i16>,
+) -> Result<WorkerTranscript, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
+        Ok(lease) => {
+            let _lease = lease;
+            pipe.transcribe(&pcm, sample_rate, &worker_req)
+                .map_err(|err| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("transcribe failed: {err}"),
+                    )
+                })
+        }
+        Err(rejection) => Err(rejection),
+    })
+    .await
+    .map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("transcribe task failed: {err}"),
+        )
+    })?
+}
+
+/// Shared TTS execution (native `/v1/synthesize` and REQ-9
+/// `/v1/audio/speech` are the same worker call under two wire shapes).
+async fn run_synthesis(
+    pipe: Arc<dyn TtsPipeline>,
+    worker_req: WorkerSynthRequest,
+) -> Result<SynthesizedAudio, (StatusCode, String)> {
+    tokio::task::spawn_blocking(move || match reserve_gpu_slot() {
         Ok(lease) => {
             let _lease = lease;
             pipe.synthesize(&worker_req).map_err(|err| {
@@ -2707,9 +2994,325 @@ async fn post_synthesize(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("synthesize task failed: {err}"),
         )
-    })??;
+    })?
+}
+
+/// Decode an uploaded audio payload for the REQ-9 transcriptions route:
+/// the same formats the native `/v1/transcribe` accepts (`audio/wav`,
+/// `audio/pcm-s16le` + `sample_rate`), plus a RIFF sniff for
+/// `application/octet-stream` parts (the `openai` SDK's default file
+/// content type).
+fn decode_upload_audio(
+    content_type: &str,
+    bytes: &[u8],
+    sample_rate: Option<u32>,
+) -> Result<(u32, Vec<i16>), (StatusCode, String)> {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match mime.as_str() {
+        "audio/wav" | "audio/wave" | "audio/x-wav" => decode_wav(bytes)
+            .map_err(|err| (StatusCode::BAD_REQUEST, format!("invalid wav: {err}"))),
+        "audio/pcm-s16le" => {
+            let sample_rate = sample_rate.ok_or((
+                StatusCode::BAD_REQUEST,
+                "audio/pcm-s16le requires a `sample_rate` form field or `?sample_rate=` query"
+                    .to_owned(),
+            ))?;
+            if !bytes.len().is_multiple_of(2) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "odd audio/pcm-s16le length".to_owned(),
+                ));
+            }
+            let (pairs, _) = bytes.as_chunks::<2>();
+            let pcm = pairs.iter().map(|pair| i16::from_le_bytes(*pair)).collect();
+            Ok((sample_rate, pcm))
+        }
+        "" | "application/octet-stream" | "binary/octet-stream" => {
+            if bytes.starts_with(b"RIFF") {
+                decode_wav(bytes)
+                    .map_err(|err| (StatusCode::BAD_REQUEST, format!("invalid wav: {err}")))
+            } else {
+                Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "unrecognized audio payload: send audio/wav (or a RIFF wav under application/octet-stream), or audio/pcm-s16le with a sample_rate".to_owned(),
+                ))
+            }
+        }
+        other => Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            format!("unsupported file content-type {other:?}; use audio/wav or audio/pcm-s16le"),
+        )),
+    }
+}
+
+/// Collected multipart fields for `/v1/audio/transcriptions`.
+struct TranscriptionUpload {
+    /// `file` part: content type + bytes.
+    file: Option<(String, Bytes)>,
+    /// Optional server-default-overridable STT model.
+    model: Option<String>,
+    /// Optional language hint.
+    language: Option<String>,
+    /// `json` (default) | `verbose_json`.
+    response_format: Option<String>,
+    /// pcm-s16le input rate (form field; query supplies the fallback).
+    sample_rate: Option<u32>,
+}
+
+/// Collect the multipart fields. Unknown fields are ignored (`OpenAI`
+/// SDKs add `purpose` and friends). The boxed error is the ready-made
+/// `OpenAI` envelope response.
+async fn parse_transcription_upload(
+    mut multipart: Multipart,
+    sample_rate_query: Option<u32>,
+) -> Result<TranscriptionUpload, Box<Response>> {
+    let mut upload = TranscriptionUpload {
+        file: None,
+        model: None,
+        language: None,
+        response_format: None,
+        sample_rate: sample_rate_query,
+    };
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| bad_multipart(format!("invalid multipart body: {err}")))?
+    {
+        let name = field.name().unwrap_or("").to_owned();
+        match name.as_str() {
+            "file" => {
+                let content_type = field.content_type().unwrap_or("").to_owned();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| bad_multipart(format!("unreadable file field: {err}")))?;
+                upload.file = Some((content_type, bytes));
+            }
+            "model" | "language" | "response_format" | "sample_rate" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|err| bad_multipart(format!("unreadable {name} field: {err}")))?;
+                set_upload_field(&mut upload, name.as_str(), text)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(upload)
+}
+
+/// One non-file multipart field, with per-field validation.
+fn set_upload_field(
+    upload: &mut TranscriptionUpload,
+    name: &str,
+    text: String,
+) -> Result<(), Box<Response>> {
+    let value = (!text.trim().is_empty()).then_some(text);
+    match name {
+        "model" => upload.model = value,
+        "language" => upload.language = value,
+        "response_format" => upload.response_format = value,
+        "sample_rate" => {
+            match value
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .and_then(|text| text.parse::<u32>().ok())
+            {
+                Some(rate) => upload.sample_rate = Some(rate),
+                None if value.is_some() => {
+                    return Err(bad_multipart(
+                        "sample_rate must be a positive integer (Hz)".to_owned(),
+                    ));
+                }
+                None => {}
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Multipart parse failure → `OpenAI` 400 envelope. Deliberately boxed:
+/// the `Result` error variant must stay small (`result_large_err`),
+/// trading the `unnecessary_box_returns` nag.
+#[allow(clippy::unnecessary_box_returns)]
+fn bad_multipart(message: String) -> Box<Response> {
+    Box::new(openai_error_response(
+        StatusCode::BAD_REQUEST,
+        message,
+        None,
+    ))
+}
+
+/// `POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart
+/// wrapper over the same STT worker as `/v1/transcribe`. `file` is
+/// required (`audio/wav`, RIFF-sniffed `application/octet-stream`, or
+/// `audio/pcm-s16le` + `sample_rate` form field / query); `model` is
+/// optional (server default STT); `language` optional; `response_format`
+/// `json` (default) or `verbose_json` (adds the worker's timestamped
+/// segments). Errors are `OpenAI` envelopes; only a request that is not
+/// multipart at all gets axum's transport-level 400 before the handler
+/// runs. The native route is unchanged.
+#[utoipa::path(
+    post,
+    path = "/v1/audio/transcriptions",
+    request_body(content = String, description = "multipart/form-data: file, model?, language?, response_format?, sample_rate?"),
+    responses(
+        (status = 200, description = "Transcription", body = TranscriptionText),
+        (status = 400, description = "Missing file, bad audio, unknown model, or missing sample_rate", body = OpenAiError),
+        (status = 415, description = "Unsupported audio content type", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Transcription failed", body = OpenAiError)
+    )
+)]
+async fn post_audio_transcriptions(
+    State(config): State<AppConfig>,
+    Query(query): Query<AudioSampleRateQuery>,
+    multipart: Multipart,
+) -> Response {
+    let upload = match parse_transcription_upload(multipart, query.sample_rate).await {
+        Ok(upload) => upload,
+        Err(response) => return *response,
+    };
+    let Some((content_type, bytes)) = upload.file else {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "file is required: attach the audio payload as a `file` form field".to_owned(),
+            None,
+        );
+    };
+    match upload.response_format.as_deref() {
+        None | Some("json" | "verbose_json") => {}
+        Some(other) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unsupported response_format {other:?}: only \"json\" and \"verbose_json\""
+                ),
+                None,
+            );
+        }
+    }
+    let catalog = config.catalog_snapshot();
+    if let Err(message) = validate_model(
+        upload.model.as_deref(),
+        config.stt_model.as_deref(),
+        &catalog,
+    ) {
+        return openai_error_response(StatusCode::BAD_REQUEST, message, None);
+    }
+    let (sample_rate, pcm) = match decode_upload_audio(&content_type, &bytes, upload.sample_rate) {
+        Ok(pair) => pair,
+        Err((code, message)) => return openai_error_response(code, message, None),
+    };
+    let worker_req = WorkerTranscribeRequest {
+        model: upload.model.unwrap_or_default(),
+        language: upload.language,
+    };
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await {
+        Ok(out) => out,
+        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
+            return openai_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                message,
+                Some("gpu_slot_busy"),
+            );
+        }
+        Err((code, message)) => return openai_error_response(code, message, None),
+    };
+    if upload.response_format.as_deref() == Some("verbose_json") {
+        Json(TranscriptionVerbose {
+            text: out.text,
+            segments: out
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegment {
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                    text: segment.text,
+                })
+                .collect(),
+        })
+        .into_response()
+    } else {
+        Json(TranscriptionText { text: out.text }).into_response()
+    }
+}
+
+/// Query carried over from the native route: `audio/pcm-s16le` uploads
+/// without a `sample_rate` form field.
+#[derive(Debug, Deserialize)]
+struct AudioSampleRateQuery {
+    /// Input sample rate in Hz (pcm-s16le uploads only).
+    sample_rate: Option<u32>,
+}
+
+/// `POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as
+/// `/v1/synthesize`; returns `audio/wav` bytes. `model` optional (server
+/// default TTS), `voice` passed through, `response_format` only `"wav"`.
+#[utoipa::path(
+    post,
+    path = "/v1/audio/speech",
+    request_body = SpeechRequest,
+    responses(
+        (status = 200, description = "WAV audio", content_type = "audio/wav"),
+        (status = 400, description = "Empty input, unknown model, or unsupported response_format", body = OpenAiError),
+        (status = 429, description = "GPU slot busy", body = OpenAiError),
+        (status = 500, description = "Synthesis failed", body = OpenAiError)
+    )
+)]
+async fn post_audio_speech(
+    State(config): State<AppConfig>,
+    Json(req): Json<SpeechRequest>,
+) -> Response {
+    match req.response_format.as_deref() {
+        None | Some("wav") => {}
+        Some(other) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("unsupported response_format {other:?}: only \"wav\" is produced"),
+                None,
+            );
+        }
+    }
+    if req.input.trim().is_empty() {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "input is required: the text to synthesize".to_owned(),
+            None,
+        );
+    }
+    let catalog = config.catalog_snapshot();
+    if let Err(message) =
+        validate_model(req.model.as_deref(), config.tts_model.as_deref(), &catalog)
+    {
+        return openai_error_response(StatusCode::BAD_REQUEST, message, None);
+    }
+    let worker_req = WorkerSynthRequest {
+        model: req.model.unwrap_or_default(),
+        text: req.input,
+        voice: req.voice,
+        sample_rate: None,
+    };
+    let audio = match run_synthesis(config.tts.clone(), worker_req).await {
+        Ok(audio) => audio,
+        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
+            return openai_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                message,
+                Some("gpu_slot_busy"),
+            );
+        }
+        Err((code, message)) => return openai_error_response(code, message, None),
+    };
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
-    Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+    ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response()
 }
 
 #[cfg(test)]

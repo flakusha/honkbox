@@ -72,16 +72,135 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+/// One `OpenAI` content part (REQ-8). Parsed from the widened
+/// `ChatMessage.content` array form; text parts flatten into the message
+/// text, `image_url` parts are flagged for the explicit vision refusal.
+/// Requests naming any other `type` are a deserialization 400 naming the
+/// offending type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// Plain text.
+    Text {
+        /// The text itself.
+        text: String,
+    },
+    /// An image reference (data URI or http(s) URL). Honkbox ships no
+    /// vision backend: carrying this part is an explicit 400
+    /// (`vision not supported by backend`), never a silent drop.
+    ImageUrl {
+        /// The image reference.
+        image_url: ImageUrl,
+    },
+}
+
+/// `image_url` part payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ImageUrl {
+    /// Data URI or http(s) URL.
+    pub url: String,
+}
+
+/// Widened `ChatMessage.content` (REQ-8). Deserializes from a plain
+/// string, `null`, a missing field, or the `OpenAI` content-parts array:
+/// `text` parts concatenate into `text` (order preserved, no separator —
+/// the `OpenAI` flattening), `image_url` parts set `has_image`, any other
+/// part type is a deserialization error naming the type. Serializes
+/// **always** as the plain string or `null` — the flattened text — so the
+/// response wire shape (`string | null`), the TS bindings and every
+/// existing consumer stay byte-for-byte identical. An `image_url` message
+/// is rejected upstream (`vision not supported by backend` → 400 `OpenAI`
+/// envelope); the flag exists so the drop is explicit, never silent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatContent {
+    /// Flattened text of the message (`None` = absent/`null`).
+    pub text: Option<String>,
+    /// At least one `image_url` part was present in the request.
+    pub has_image: bool,
+}
+
+impl ChatContent {
+    /// Plain-text content (reply shape; no image flag).
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: Some(text.into()),
+            has_image: false,
+        }
+    }
+
+    /// Parse the wire form: string | null | array of parts.
+    fn parse(value: &serde_json::Value) -> Result<Self, String> {
+        match value {
+            serde_json::Value::Null => Ok(Self::default()),
+            serde_json::Value::String(text) => Ok(Self::text(text.clone())),
+            serde_json::Value::Array(parts) => {
+                let mut text_parts: Vec<String> = Vec::new();
+                let mut has_image = false;
+                for part in parts {
+                    let Some(object) = part.as_object() else {
+                        return Err(format!(
+                            "content part must be an object with a `type` field, got {part}"
+                        ));
+                    };
+                    match object.get("type").and_then(serde_json::Value::as_str) {
+                        Some("text") => {
+                            let text = object
+                                .get("text")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or("text part requires a string `text` field")?;
+                            text_parts.push(text.to_owned());
+                        }
+                        Some("image_url") => has_image = true,
+                        Some(other) => {
+                            return Err(format!(
+                                "unsupported content part type {other:?}: supported types are `text` and `image_url`"
+                            ));
+                        }
+                        None => {
+                            return Err("content part requires a string `type` field".to_owned());
+                        }
+                    }
+                }
+                let text = (!text_parts.is_empty()).then(|| text_parts.join(""));
+                Ok(Self { text, has_image })
+            }
+            other => Err(format!(
+                "content must be a string, null, or an array of content parts, got {other}"
+            )),
+        }
+    }
+}
+
+impl Serialize for ChatContent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.text {
+            Some(text) => serializer.serialize_str(text),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ChatContent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 /// One chat message.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatMessage {
     /// Who said it.
     pub role: ChatRole,
-    /// Message text. Nullable on the assistant-with-`tool_calls` shape
-    /// (`OpenAI` sends `content: null` there); missing content deserializes
-    /// as `null` and is treated as empty.
+    /// Message content (REQ-8): accepts the plain string, `null` (the
+    /// assistant-with-`tool_calls` shape), or the `OpenAI` content-parts
+    /// array; always serializes as `string | null`. Carrying an
+    /// `image_url` part is an explicit 400 upstream, never a silent drop.
     #[serde(default)]
-    pub content: Option<String>,
+    #[ts(type = "string | null")]
+    #[schema(value_type = String, nullable)]
+    pub content: ChatContent,
     /// Assistant turn: tool calls the model already made (`REQ-3`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -89,6 +208,90 @@ pub struct ChatMessage {
     /// answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+#[cfg(test)]
+mod chat_content_tests {
+    use super::*;
+
+    #[test]
+    fn string_null_and_missing_round_trip_as_plain_text() {
+        let message: ChatMessage =
+            serde_json::from_str(r#"{"role":"user","content":"hi"}"#).expect("string form");
+        assert_eq!(message.content.text.as_deref(), Some("hi"));
+        assert!(!message.content.has_image);
+        // Serialized form is the plain string again.
+        assert_eq!(serde_json::to_string(&message.content).unwrap(), r#""hi""#);
+
+        let message: ChatMessage =
+            serde_json::from_str(r#"{"role":"assistant","content":null,"tool_calls":[]}"#)
+                .expect("null form");
+        assert_eq!(message.content.text, None);
+        assert_eq!(serde_json::to_string(&message.content).unwrap(), "null");
+
+        // Missing content deserializes as null (assistant tool-call shape).
+        let message: ChatMessage =
+            serde_json::from_str(r#"{"role":"assistant"}"#).expect("missing content");
+        assert_eq!(message.content.text, None);
+    }
+
+    #[test]
+    fn parts_array_flattens_text_and_flags_images() {
+        let message: ChatMessage = serde_json::from_str(
+            r#"{"role":"user","content":[
+                {"type":"text","text":"What is in "},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,x"}},
+                {"type":"text","text":"this image?"}
+            ]}"#,
+        )
+        .expect("parts form");
+        assert_eq!(
+            message.content.text.as_deref(),
+            Some("What is in this image?")
+        );
+        assert!(message.content.has_image);
+        // Serialization stays the flattened string: the response wire shape
+        // is unchanged.
+        assert_eq!(
+            serde_json::to_string(&message.content).unwrap(),
+            "\"What is in this image?\""
+        );
+    }
+
+    #[test]
+    fn unknown_part_type_names_the_type() {
+        let error = serde_json::from_str::<ChatMessage>(
+            r#"{"role":"user","content":[{"type":"input_audio"}]}"#,
+        )
+        .expect_err("unknown type");
+        assert!(error.to_string().contains("input_audio"), "{error}");
+        assert!(error.to_string().contains("supported types"), "{error}");
+    }
+
+    #[test]
+    fn malformed_parts_are_rejected_with_named_causes() {
+        // Non-object part.
+        let error = serde_json::from_str::<ChatMessage>(r#"{"role":"user","content":["plain"]}"#)
+            .expect_err("non-object part");
+        assert!(error.to_string().contains("`type`"), "{error}");
+        // Missing type.
+        let error =
+            serde_json::from_str::<ChatMessage>(r#"{"role":"user","content":[{"text":"x"}]}"#)
+                .expect_err("missing type");
+        assert!(error.to_string().contains("string `type` field"), "{error}");
+        // Text part without text.
+        let error =
+            serde_json::from_str::<ChatMessage>(r#"{"role":"user","content":[{"type":"text"}]}"#)
+                .expect_err("text part without text");
+        assert!(error.to_string().contains("string `text` field"), "{error}");
+        // Scalar content.
+        let error = serde_json::from_str::<ChatMessage>(r#"{"role":"user","content":42}"#)
+            .expect_err("scalar content");
+        assert!(
+            error.to_string().contains("string, null, or an array"),
+            "{error}"
+        );
+    }
 }
 
 /// One `OpenAI` tool definition (`REQ-3`).
@@ -602,6 +805,88 @@ pub struct EmbeddingsResponse {
     pub usage: EmbeddingsUsage,
 }
 
+/// `POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`
+/// required; `model` optional (server default SD pipeline); `size` is
+/// `"WxH"` pixels (default `1024x1024`, longest edge capped by sd-core);
+/// `n` defaults to 1 and is clamped (never rejected) to 4;
+/// `response_format` currently only accepts `"b64_json"`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ImagesGenerationRequest {
+    /// Model id (alias or registry slug) from the SD catalog; omitted →
+    /// the startup-configured SD pipeline (`--sd-model`, stub default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Text prompt (required).
+    pub prompt: String,
+    /// Image size as `"WxH"` pixels (e.g. `"1024x1024"`); default
+    /// `1024x1024`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// Number of images (1-4; above 4 is clamped down with a warn, never a
+    /// 400 — the same clamp-not-reject policy as `ttl_seconds`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
+    /// Output encoding; only `"b64_json"` is supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+}
+
+/// One generated image in the `POST /v1/images/generations` response.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct ImageB64 {
+    /// The PNG bytes, base64-encoded (`response_format: "b64_json"`).
+    pub b64_json: String,
+}
+
+/// `POST /v1/images/generations` response: Unix `created` seconds plus one
+/// `data` entry per requested image (`n`).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct ImagesGenerationResponse {
+    /// Creation time, Unix seconds.
+    pub created: u64,
+    /// One entry per requested image, in order.
+    pub data: Vec<ImageB64>,
+}
+
+/// `POST /v1/audio/transcriptions` plain shape (`response_format` absent
+/// or `"json"`; REQ-9).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct TranscriptionText {
+    /// The transcript text.
+    pub text: String,
+}
+
+/// `POST /v1/audio/transcriptions` verbose shape
+/// (`response_format = "verbose_json"`; REQ-9): the transcript plus the
+/// STT worker's timestamped segments (millisecond integers, honkbox
+/// segment shape).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct TranscriptionVerbose {
+    /// The transcript text.
+    pub text: String,
+    /// Timestamped segments from the STT worker.
+    pub segments: Vec<TranscriptSegment>,
+}
+
+/// `POST /v1/audio/speech` request (REQ-9). `model` is optional (server
+/// default TTS); `response_format` currently only accepts `"wav"` (the
+/// only format honkbox produces; anything else is an explicit 400).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct SpeechRequest {
+    /// Model id (alias or registry slug); omitted → server default TTS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Text to synthesize (required).
+    pub input: String,
+    /// Voice name; passed through to the TTS worker (Kokoro voice or
+    /// backend default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    /// Output format; only `"wav"` is supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<String>,
+}
+
 /// One transcript segment.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct TranscriptSegment {
@@ -845,6 +1130,12 @@ pub struct ResidentModel {
     /// Best-effort: another holder than the manager owns the pipeline `Arc`
     /// right now (an in-flight request).
     pub in_use: bool,
+    /// Estimated resident weight size in bytes, taken from the registry
+    /// scan's `bytes` for the slug (REQ-12). An **estimate** (on-disk
+    /// weight file size), never a measurement; absent when the catalog no
+    /// longer holds the slug (e.g. a re-scan removed it while resident).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
 }
 
 /// Configured warm-pipeline capacity (`GET /v1/memory`).
@@ -873,6 +1164,12 @@ pub struct MemoryInfo {
     pub capacity: MemoryCapacity,
     /// GPU slot state.
     pub gpu: MemoryGpu,
+    /// Sum of the resident entries' estimated bytes (REQ-12); an
+    /// **estimate** (registry on-disk weight sizes), never a measurement.
+    /// Absent when no resident entry has a known estimate (or the swap
+    /// manager is off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_reserved: Option<u64>,
 }
 
 /// One llama-swap-compat running entry (`GET /running`). The envelope key
@@ -1101,6 +1398,8 @@ mod tests {
             // it, so its definition must ship alongside them.
             serde_json::Value::decl(&config),
             ChatRole::decl(&config),
+            ContentPart::decl(&config),
+            ImageUrl::decl(&config),
             ChatMessage::decl(&config),
             ToolCall::decl(&config),
             ToolCallType::decl(&config),
@@ -1132,6 +1431,12 @@ mod tests {
             EmbeddingsData::decl(&config),
             EmbeddingsUsage::decl(&config),
             EmbeddingsResponse::decl(&config),
+            ImagesGenerationRequest::decl(&config),
+            ImageB64::decl(&config),
+            ImagesGenerationResponse::decl(&config),
+            TranscriptionText::decl(&config),
+            TranscriptionVerbose::decl(&config),
+            SpeechRequest::decl(&config),
             TranscriptSegment::decl(&config),
             Transcript::decl(&config),
             SynthesizeRequest::decl(&config),

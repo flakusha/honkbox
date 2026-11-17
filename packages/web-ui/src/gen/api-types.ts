@@ -23,15 +23,35 @@ export type JsonValue =
   | { [key in string]: JsonValue; }
   | null;
 export type ChatRole = "user" | "assistant" | "system" | "tool";
+export type ContentPart = {
+  "type": "text";
+  /**
+   * The text itself.
+   */
+  text: string;
+} | {
+  "type": "image_url";
+  /**
+   * The image reference.
+   */
+  image_url: ImageUrl;
+};
+export type ImageUrl = {
+  /**
+   * Data URI or http(s) URL.
+   */
+  url: string;
+};
 export type ChatMessage = {
   /**
    * Who said it.
    */
   role: ChatRole;
   /**
-   * Message text. Nullable on the assistant-with-`tool_calls` shape
-   * (`OpenAI` sends `content: null` there); missing content deserializes
-   * as `null` and is treated as empty.
+   * Message content (REQ-8): accepts the plain string, `null` (the
+   * assistant-with-`tool_calls` shape), or the `OpenAI` content-parts
+   * array; always serializes as `string | null`. Carrying an
+   * `image_url` part is an explicit 400 upstream, never a silent drop.
    */
   content: string | null;
   /**
@@ -523,6 +543,82 @@ export type EmbeddingsResponse = {
    */
   usage: EmbeddingsUsage;
 };
+export type ImagesGenerationRequest = {
+  /**
+   * Model id (alias or registry slug) from the SD catalog; omitted →
+   * the startup-configured SD pipeline (`--sd-model`, stub default).
+   */
+  model?: string | null;
+  /**
+   * Text prompt (required).
+   */
+  prompt: string;
+  /**
+   * Image size as `"WxH"` pixels (e.g. `"1024x1024"`); default
+   * `1024x1024`.
+   */
+  size?: string | null;
+  /**
+   * Number of images (1-4; above 4 is clamped down with a warn, never a
+   * 400 — the same clamp-not-reject policy as `ttl_seconds`).
+   */
+  n?: number | null;
+  /**
+   * Output encoding; only `"b64_json"` is supported.
+   */
+  response_format?: string | null;
+};
+export type ImageB64 = {
+  /**
+   * The PNG bytes, base64-encoded (`response_format: "b64_json"`).
+   */
+  b64_json: string;
+};
+export type ImagesGenerationResponse = {
+  /**
+   * Creation time, Unix seconds.
+   */
+  created: bigint;
+  /**
+   * One entry per requested image, in order.
+   */
+  data: Array<ImageB64>;
+};
+export type TranscriptionText = {
+  /**
+   * The transcript text.
+   */
+  text: string;
+};
+export type TranscriptionVerbose = {
+  /**
+   * The transcript text.
+   */
+  text: string;
+  /**
+   * Timestamped segments from the STT worker.
+   */
+  segments: Array<TranscriptSegment>;
+};
+export type SpeechRequest = {
+  /**
+   * Model id (alias or registry slug); omitted → server default TTS.
+   */
+  model?: string | null;
+  /**
+   * Text to synthesize (required).
+   */
+  input: string;
+  /**
+   * Voice name; passed through to the TTS worker (Kokoro voice or
+   * backend default).
+   */
+  voice?: string | null;
+  /**
+   * Output format; only `"wav"` is supported.
+   */
+  response_format?: string | null;
+};
 export type TranscriptSegment = {
   /**
    * Segment start, milliseconds from the audio start.
@@ -761,6 +857,13 @@ export type ResidentModel = {
    * right now (an in-flight request).
    */
   in_use: boolean;
+  /**
+   * Estimated resident weight size in bytes, taken from the registry
+   * scan's `bytes` for the slug (REQ-12). An **estimate** (on-disk
+   * weight file size), never a measurement; absent when the catalog no
+   * longer holds the slug (e.g. a re-scan removed it while resident).
+   */
+  bytes: bigint | null;
 };
 export type MemoryCapacity = {
   /**
@@ -791,6 +894,13 @@ export type MemoryInfo = {
    * GPU slot state.
    */
   gpu: MemoryGpu;
+  /**
+   * Sum of the resident entries' estimated bytes (REQ-12); an
+   * **estimate** (registry on-disk weight sizes), never a measurement.
+   * Absent when no resident entry has a known estimate (or the swap
+   * manager is off).
+   */
+  bytes_reserved: bigint | null;
 };
 export type RunningModel = {
   /**

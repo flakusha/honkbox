@@ -707,7 +707,7 @@
               "string",
               "null"
             ],
-            "description": "Message text. Nullable on the assistant-with-`tool_calls` shape\n(`OpenAI` sends `content: null` there); missing content deserializes\nas `null` and is treated as empty."
+            "description": "Message content (REQ-8): accepts the plain string, `null` (the\nassistant-with-`tool_calls` shape), or the `OpenAI` content-parts\narray; always serializes as `string | null`. Carrying an\n`image_url` part is an explicit 400 upstream, never a silent drop."
           },
           "role": {
             "$ref": "#/components/schemas/ChatRole",
@@ -1270,6 +1270,85 @@
           }
         }
       },
+      "ImageB64": {
+        "type": "object",
+        "description": "One generated image in the `POST /v1/images/generations` response.",
+        "required": [
+          "b64_json"
+        ],
+        "properties": {
+          "b64_json": {
+            "type": "string",
+            "description": "The PNG bytes, base64-encoded (`response_format: \"b64_json\"`)."
+          }
+        }
+      },
+      "ImagesGenerationRequest": {
+        "type": "object",
+        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model id (alias or registry slug) from the SD catalog; omitted →\nthe startup-configured SD pipeline (`--sd-model`, stub default)."
+          },
+          "n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Number of images (1-4; above 4 is clamped down with a warn, never a\n400 — the same clamp-not-reject policy as `ttl_seconds`).",
+            "minimum": 0
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Text prompt (required)."
+          },
+          "response_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output encoding; only `\"b64_json\"` is supported."
+          },
+          "size": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image size as `\"WxH\"` pixels (e.g. `\"1024x1024\"`); default\n`1024x1024`."
+          }
+        }
+      },
+      "ImagesGenerationResponse": {
+        "type": "object",
+        "description": "`POST /v1/images/generations` response: Unix `created` seconds plus one\n`data` entry per requested image (`n`).",
+        "required": [
+          "created",
+          "data"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Creation time, Unix seconds.",
+            "minimum": 0
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageB64"
+            },
+            "description": "One entry per requested image, in order."
+          }
+        }
+      },
       "JsonSchemaSpec": {
         "type": "object",
         "description": "Schema payload of `response_format: {\"type\":\"json_schema\"}`.",
@@ -1339,6 +1418,15 @@
           "gpu"
         ],
         "properties": {
+          "bytes_reserved": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sum of the resident entries' estimated bytes (REQ-12); an\n**estimate** (registry on-disk weight sizes), never a measurement.\nAbsent when no resident entry has a known estimate (or the swap\nmanager is off).",
+            "minimum": 0
+          },
           "capacity": {
             "$ref": "#/components/schemas/MemoryCapacity",
             "description": "Configured warm-set capacity."
@@ -1973,7 +2061,7 @@
       },
       "OpenAiErrorDetail": {
         "type": "object",
-        "description": "/// `OpenAI` error envelope detail (`error`).",
+        "description": "`OpenAI` error envelope detail (`error`).",
         "required": [
           "message",
           "type"
@@ -2058,6 +2146,15 @@
               "null"
             ],
             "description": "Served alias when the operator bound one, else absent (the raw slug\nis always a valid request id)."
+          },
+          "bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Estimated resident weight size in bytes, taken from the registry\nscan's `bytes` for the slug (REQ-12). An **estimate** (on-disk\nweight file size), never a measurement; absent when the catalog no\nlonger holds the slug (e.g. a re-scan removed it while resident).",
+            "minimum": 0
           },
           "expires_at": {
             "type": [
@@ -2193,6 +2290,40 @@
             "format": "int64",
             "description": "Tensor entries in the JSON header (`__metadata__` excluded).",
             "minimum": 0
+          }
+        }
+      },
+      "SpeechRequest": {
+        "type": "object",
+        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` currently only accepts `\"wav\"` (the\nonly format honkbox produces; anything else is an explicit 400).",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "Text to synthesize (required)."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model id (alias or registry slug); omitted → server default TTS."
+          },
+          "response_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output format; only `\"wav\"` is supported."
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Voice name; passed through to the TTS worker (Kokoro voice or\nbackend default)."
           }
         }
       },
@@ -2354,6 +2485,40 @@
           "text": {
             "type": "string",
             "description": "Segment text."
+          }
+        }
+      },
+      "TranscriptionText": {
+        "type": "object",
+        "description": "`POST /v1/audio/transcriptions` plain shape (`response_format` absent\nor `\"json\"`; REQ-9).",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The transcript text."
+          }
+        }
+      },
+      "TranscriptionVerbose": {
+        "type": "object",
+        "description": "`POST /v1/audio/transcriptions` verbose shape\n(`response_format = \"verbose_json\"`; REQ-9): the transcript plus the\nSTT worker's timestamped segments (millisecond integers, honkbox\nsegment shape).",
+        "required": [
+          "text",
+          "segments"
+        ],
+        "properties": {
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "description": "Timestamped segments from the STT worker."
+          },
+          "text": {
+            "type": "string",
+            "description": "The transcript text."
           }
         }
       },
