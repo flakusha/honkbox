@@ -59,6 +59,11 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-audio-streaming.md](epics/epic-audio-streaming.md)
 - [epic-media-timeline.md](epics/epic-media-timeline.md)
 - [epic-voice-identity.md](epics/epic-voice-identity.md)
+- [epic-mesh-integration.md](epics/epic-mesh-integration.md)
+- [epic-vector-materials.md](epics/epic-vector-materials.md)
+- [epic-model-feedback.md](epics/epic-model-feedback.md)
+- [epic-editor-integration.md](epics/epic-editor-integration.md)
+- [epic-binary-formats.md](epics/epic-binary-formats.md)
 
 ## Research promotion map
 
@@ -93,6 +98,11 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `ReviewedExpansion-RemoteVisionURLs.md` | `epic-llm-expansion` + URL fetch ticket |
 | `ReviewedExpansion-SpeculativeDecoding.md` | `epic-llm-expansion` + decoding spike |
 | `ReviewedExpansion-VoiceIdentity.md` | `epic-voice-identity` + 2 tickets |
+| `ReviewedMesh-*.md` (5 docs) | `epic-mesh-integration` + 7 tickets |
+| `ReviewedCreative-Index.md`, `ReviewedCreative-SVG.md`, `ReviewedCreative-TexturesMaterials.md` | `epic-vector-materials` + 5 tickets |
+| `ReviewedCreative-BakingModels.md`, `ReviewedCreative-FeedbackLoop.md` | `epic-model-feedback` + 5 tickets |
+| `ReviewedImageEdit-*.md` (4 docs) | `epic-editor-integration` + 7 tickets |
+| `ReviewedBinaryFormats.md` | `epic-binary-formats` + 6 tickets |
 
 ## Support expansion order (2026-11-17)
 
@@ -106,3 +116,11 @@ dependency graph stays in
 Expansion additions (`ReviewedExpansion-Index.md`): P2 OTIO sidecar, Godot
 importer fixture, remote vision URL fetch, speculative decoding spike, and
 diarization spike; P3 external edit-process spike and voice-clone policy.
+
+Final research wave (2026-11-17): P1 format registry, container safety,
+capability advertisement, editor command DTO/route, cheap pixel ops, and mesh
+capability advertisement. P2 mesh client/discovery/reroute/stream-safety, SVG/PBR
+validation, bake/model gates, scene spec, ORA, editor plugin fixtures, upscale
+probe, and binary artifact transport. P3 generators, catalog links, LOD naming,
+critique loop, and the mesh-lane federated-provider assessment (likely
+non-feature).
