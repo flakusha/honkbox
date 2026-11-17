@@ -18,7 +18,9 @@ RGBA pixels and PCM16, so only video is vendor-blocked.
 - `TASK-speech-input-cap.md` — cap `SpeechRequest.input` (blocking-grade).
 - `FEAT-job-bundle-zip.md` — downloadable job zip (S).
 - `FEAT-response-compression.md` — gzip/brotli layer, SSE excluded (S).
-- `FEAT-video-output.md` — vendor patch + wrapper; **postponed** (L).
+
+Video work now lives in `epic-video-support`; this epic covers only bytes that
+leave already-implemented routes.
 
 ## Acceptance
 

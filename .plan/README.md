@@ -52,6 +52,11 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-external-tools.md](epics/epic-external-tools.md)
 - [epic-cross-app-integration.md](epics/epic-cross-app-integration.md)
 - [epic-docs-tooling.md](epics/epic-docs-tooling.md)
+- [epic-capabilities-contract.md](epics/epic-capabilities-contract.md)
+- [epic-llm-expansion.md](epics/epic-llm-expansion.md)
+- [epic-sd-native-backend.md](epics/epic-sd-native-backend.md)
+- [epic-video-support.md](epics/epic-video-support.md)
+- [epic-audio-streaming.md](epics/epic-audio-streaming.md)
 
 ## Research promotion map
 
@@ -72,3 +77,20 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `ReviewedFullCycle-LoopLore-Acceleration.md` | `epic-cross-app-integration` |
 | `ReviewedOutput-Formats.md` | `epic-output-formats` + 6 tickets |
 | `ReviewedDocs-Ticketing.md`, `ReviewedDocs-Organization.md` | this file, `docs/README.md`, `epic-docs-tooling` |
+| `ReviewedSupport-Index.md` | support epics + build order below |
+| `ReviewedSupport-CurrentState.md` | `TASK-support-doc-truth`, `FEAT-capabilities-api` |
+| `ReviewedSupport-LLM.md` | `epic-llm-expansion` (3 tickets) |
+| `ReviewedSupport-SD.md` | `epic-sd-native-backend` (5 tickets) |
+| `ReviewedSupport-Video.md` | `epic-video-support` + migrated `FEAT-video-output.md` |
+| `ReviewedSupport-Audio.md` | `epic-audio-streaming` + existing audio-format tickets |
+| `ReviewedSupport-Capabilities.md` | `epic-capabilities-contract` (4 tickets) |
+| `ReviewedSupport-NextSteps.md` | ordered build order below |
+
+## Support expansion order (2026-11-17)
+
+P0: flag/doc truth, capabilities API + contract test, native ControlNet and
+cancel. P1: LLM cache, edit LoRA, mask semantics, VAD + streaming STT.
+P1 also includes the API-version policy. P2: video FFI spike → job class →
+i2v frames, base-model tags, tool-choice contract. P3: video mux. Full
+dependency graph stays in
+`.tmp/research/ReviewedSupport-NextSteps.md`; scratch is reference only.

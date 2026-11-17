@@ -2,11 +2,11 @@
 
 Status: postponed
 Priority: P3
-Epic: epic-output-formats
+Epic: epic-video-support
 Owner: unassigned
 Acceptance: not committed for v1 — this ticket records the blocker and the seam.
 Verification: none until unblocked
-Links: `.tmp/research/ReviewedOutput-Formats.md` §3, §5
+Links: `.tmp/research/ReviewedOutput-Formats.md` §3, §5; `.tmp/research/ReviewedSupport-Video.md`
 Resources: none (research-only until unblocked)
 
 ## Blocker
