@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: headless Blender jobs normalize generated maps and geometry into engine-ready assets with a deterministic manifest.
 Verification: `cargo test --locked -p honkbox-server`, `bun run codegen:check`, headless fixture bake + retopo run
 Links: `.tmp/research/ReviewedFullCycle-Blender-Workstream.md`, `ReviewedFullCycle-Blender-Addons.md`
+Resources: per-job temp `.blend` and map dirs; no shared Blender process
 
 ## Change
 

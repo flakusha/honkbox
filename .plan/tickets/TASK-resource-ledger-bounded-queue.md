@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: `residency::global()` becomes a capability/VRAM-aware ledger while keeping the RAII `Lease`; per-kind bounded queues with cancel, TTL, and bounded-label metrics.
 Verification: `cargo test --locked -p honkbox-residency`, `bun run test:server`, `bun run lint:rs`
 Links: `.tmp/research/ReviewedFullCycle-Resource-Queues.md`
+Resources: per-test ledger instances; no global slot reused across tests
 
 ## Change
 

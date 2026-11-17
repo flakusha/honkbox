@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: submit/cancel/events/artifacts for pinned API-format workflow templates through an external ComfyUI server.
 Verification: `bun run test:server`, `bun run codegen:check`, `bun run check`
 Links: `.tmp/research/ReviewedFullCycle-ComfyUI-Pipelines.md`
+Resources: per-test prompt IDs and temp output dirs; no shared ComfyUI queue state
 
 ## Change
 

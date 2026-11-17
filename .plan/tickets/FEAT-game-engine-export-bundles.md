@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: a versioned glTF/texture bundle with checksums and an explicit extension allowlist, consumable by loop-lore's Godot/Bevy/Ren'Py export tiers.
 Verification: `gltf-transform inspect/validate <bundle.glb>`, `bun run check`, `cargo test --locked -p honkbox-server`
 Links: `.tmp/research/ReviewedFullCycle-GameEngines.md`
+Resources: per-test bundle dirs; no shared glTF cache
 
 ## Change
 

@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: text-layer-first document ingest producing page text, bounding boxes, confidence, engine version, and a stable cache key; registered as a cancellable job.
 Verification: `bun run test:server`, `bun run codegen:check`, `bun run check`
 Links: `.tmp/research/ReviewedFullCycle-OCR.md`
+Resources: per-test input files and cache dirs; no shared OCR engine process
 
 ## Change
 

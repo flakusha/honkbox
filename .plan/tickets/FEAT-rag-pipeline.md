@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: ingest → chunk → embed → hybrid retrieve → rerank → cited answer, with versioned index and a labelled local eval gate.
 Verification: `bun run check`, `bun run test`, `bun run codegen:check`
 Links: `.tmp/research/ReviewedFullCycle-RAG.md`, depends on `FEAT-ocr-ingest.md`
+Resources: per-test index dirs under runner tmp; no shared vector store
 
 ## Change
 

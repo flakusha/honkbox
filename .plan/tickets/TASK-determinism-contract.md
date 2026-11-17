@@ -7,6 +7,7 @@ Owner: unassigned
 Acceptance: published reproducibility levels and canonical hash keys; bundle metadata records seed, model hash, engine version, and all sampling/parser params.
 Verification: `cargo test --locked -p honkbox-server`, `cargo test --locked -p honkbox-sd-core --test parity`, `bun run check`
 Links: `.tmp/research/ReviewedFullCycle-Determinism.md`
+Resources: per-test temp bundles; no shared hash cache
 
 ## Change
 

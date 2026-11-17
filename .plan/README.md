@@ -47,3 +47,28 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-full-ai-cycle.md](epics/epic-full-ai-cycle.md)
 - [epic-blender-assets.md](epics/epic-blender-assets.md)
 - [epic-game-engine-export.md](epics/epic-game-engine-export.md)
+- [epic-output-formats.md](epics/epic-output-formats.md)
+- [epic-3d-capture.md](epics/epic-3d-capture.md)
+- [epic-external-tools.md](epics/epic-external-tools.md)
+- [epic-cross-app-integration.md](epics/epic-cross-app-integration.md)
+- [epic-docs-tooling.md](epics/epic-docs-tooling.md)
+
+## Research promotion map
+
+Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
+
+| Research doc | Promoted to |
+| --- | --- |
+| `ReviewedFullCycle-Index.md` | `epic-full-ai-cycle` + build order |
+| `ReviewedFullCycle-Resource-Queues.md` | `TASK-resource-ledger-bounded-queue`, `epic-external-tools` |
+| `ReviewedFullCycle-Determinism.md` | `TASK-determinism-contract` |
+| `ReviewedFullCycle-OCR.md` | `FEAT-ocr-ingest` |
+| `ReviewedFullCycle-RAG.md` | `FEAT-rag-pipeline` |
+| `ReviewedFullCycle-ComfyUI-Pipelines.md` | `FEAT-comfyui-workflow-pipeline` |
+| `ReviewedFullCycle-Tool-Management.md` | `epic-external-tools` |
+| `ReviewedFullCycle-Blender-Workstream.md`, `ReviewedFullCycle-Blender-Addons.md`, `ReviewedFullCycle-Blender-Rigging.md` | `epic-blender-assets` + 3 tickets |
+| `ReviewedFullCycle-3D.md` | `epic-3d-capture` + 2 tickets |
+| `ReviewedFullCycle-GameEngines.md` | `epic-game-engine-export` + 2 tickets |
+| `ReviewedFullCycle-LoopLore-Acceleration.md` | `epic-cross-app-integration` |
+| `ReviewedOutput-Formats.md` | `epic-output-formats` + 6 tickets |
+| `ReviewedDocs-Ticketing.md`, `ReviewedDocs-Organization.md` | this file, `docs/README.md`, `epic-docs-tooling` |
