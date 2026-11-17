@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use backends::{LlmBackend, SttBackend, TtsBackend};
+use backends::{LlmBackend, SdBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
 use routes::{ApiDoc, AppConfig, app};
 use tracing::info;
@@ -120,6 +120,13 @@ struct ServeArgs {
     /// Registry slug for the synthesis model (file backends only).
     #[arg(long)]
     tts_model: Option<String>,
+    /// Image backend (`stub` needs no model/GPU) serving
+    /// `POST /v1/images/generations` (REQ-10).
+    #[arg(long, value_enum, default_value = "stub")]
+    sd_backend: SdBackend,
+    /// Registry slug for the image checkpoint (file backends only).
+    #[arg(long)]
+    sd_model: Option<String>,
 }
 
 /// `generate` flags (one struct: the handler takes a single argument).
@@ -347,6 +354,17 @@ fn resolve_bind(
     Ok((SocketAddr::new(bind_ip, port), auth))
 }
 
+/// Startup GC of job bundles + stale temp files, off the async runtime;
+/// removals log at `debug!`.
+fn spawn_startup_gc(jobs: &config::JobsConfig, data_dir: Option<&std::path::Path>) {
+    let gc_ttl = jobs.gc_ttl;
+    let gc_max_bytes = jobs.gc_max_bytes;
+    let jobs_root = data_dir.map(|base| base.join("jobs"));
+    tokio::task::spawn_blocking(move || {
+        jobs::gc_jobs(jobs_root.as_deref(), gc_ttl, gc_max_bytes);
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
     let ServeArgs {
@@ -362,6 +380,8 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         llm_model,
         stt_model,
         tts_model,
+        sd_backend,
+        sd_model,
     } = args;
     // Config loads BEFORE logging: the file-refined data dir relocates
     // the log too, and config-parse errors go to stderr via `or_exit`.
@@ -374,6 +394,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         info!("honkbox data dir: <unresolved>");
     }
     let cfg = loaded.models;
+    spawn_startup_gc(&cfg.jobs, data_dir.as_deref());
     let (addr, auth) = or_exit(resolve_bind(
         &host,
         port,
@@ -389,14 +410,6 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let swap_cfg = cfg.swap.clone();
     // VRAM budget for the curated catalog's fit pills (`Copy`).
     let vram_budget = cfg.vram_budget_bytes;
-    // Startup GC of job bundles + stale temp files, off the async runtime;
-    // removals log at `debug!`.
-    let gc_ttl = cfg.jobs.gc_ttl;
-    let gc_max_bytes = cfg.jobs.gc_max_bytes;
-    let jobs_root = data_dir.as_deref().map(|base| base.join("jobs"));
-    tokio::task::spawn_blocking(move || {
-        jobs::gc_jobs(jobs_root.as_deref(), gc_ttl, gc_max_bytes);
-    });
     // One registry scan feeds both slug resolution for file backends (stubs
     // never call `resolve`) and the `/v1/models` catalog. The roots stay in
     // `AppConfig` so `POST /v1/models/refresh` can re-scan them on demand.
@@ -425,6 +438,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
     let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
+    let sd = backends::make_sd(sd_backend, sd_model.as_deref(), &resolve);
     let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
     // POST /v1/embeddings (REQ-4): load-once cache keyed by slug; the idle
     // reuse window reuses `[swap] max_ttl` (see `EmbedCache::catalog`).
@@ -448,9 +462,11 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         llm_model,
         stt_model,
         tts_model,
+        sd_model,
         llm,
         stt,
         tts,
+        sd,
         swap,
         embed,
         swap_max_ttl: swap_cfg.max_ttl,

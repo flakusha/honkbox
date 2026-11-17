@@ -84,11 +84,60 @@ export function mountPlayground(host: HTMLElement): void {
   temperature.min = "0";
   temperature.max = "2";
   temperature.step = "0.1";
-  // No image-generation endpoint exists server-side; disabled until one lands.
+  // Image generation (REQ-10): POST /v1/images/generations, render the
+  // returned base64 PNG inline.
+  const imagePrompt = el("input");
+  imagePrompt.placeholder = "image prompt";
+  const imageSize = el("input");
+  imageSize.placeholder = "size";
+  imageSize.value = "1024x1024";
   const image = el("button", "Generate image");
-  image.disabled = true;
-  image.title = "not available";
-  knobs.append(maxTokens, temperature, image);
+  const imageOut = el("div");
+  image.addEventListener("click", () => {
+    const prompt = imagePrompt.value.trim();
+    if (!prompt || image.disabled) return;
+    image.disabled = true;
+    image.textContent = "generating…";
+    fetch("/v1/images/generations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: catalogOk ? modelSelect.value : modelInput.value,
+        prompt,
+        size: imageSize.value.trim() || "1024x1024",
+        n: 1,
+        response_format: "b64_json",
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body: { error?: { message?: string; }; } | null = await res
+            .json()
+            .catch(() => null);
+          const message = body?.error?.message ?? res.statusText;
+          throw new Error(message);
+        }
+        return res.json() as Promise<{ data: { b64_json: string; }[]; }>;
+      })
+      .then((body) => {
+        imageOut.innerHTML = "";
+        for (const item of body.data) {
+          const img = el("img");
+          img.src = `data:image/png;base64,${item.b64_json}`;
+          img.alt = prompt;
+          imageOut.append(img);
+        }
+        status.textContent = "";
+      })
+      .catch((err: unknown) => {
+        status.textContent = err instanceof Error ? err.message : "image generation failed";
+      })
+      .finally(() => {
+        image.disabled = false;
+        image.textContent = "Generate image";
+      });
+  });
+  knobs.append(maxTokens, temperature, imagePrompt, imageSize, image, imageOut);
 
   // Route toggle: native /v1/chat* by default; checked sends the same chat
   // surface through POST /v1/chat/completions (OpenAI shape, stream:true).

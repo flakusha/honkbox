@@ -184,6 +184,8 @@ fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
         swap: Some(Arc::new(manager)),
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
@@ -467,6 +469,13 @@ async fn memory_readout_fields() {
     );
     assert_eq!(unpinned["pinned"], false);
     assert_eq!(unpinned["in_use"], false, "no request in flight");
+    // REQ-12: estimated bytes from the registry scan (an estimate, not a
+    // measurement) and the top-level sum.
+    assert_eq!(unpinned["bytes"], 1, "registry bytes estimate reported");
+    assert_eq!(
+        memory["bytes_reserved"], 2,
+        "sum of the resident entries' estimates"
+    );
 
     let pinned = resident
         .iter()

@@ -65,6 +65,35 @@ pub fn make_llm(
     }
 }
 
+/// `--sd-backend` values: instant stub or the real diffusion-rs pipeline.
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub enum SdBackend {
+    /// Instant deterministic stub (no model, no GPU).
+    #[default]
+    Stub,
+    /// Real txt2img via stable-diffusion.cpp on a registry checkpoint.
+    SdCpp,
+}
+/// Image pipeline: stub unit struct, or file backend via `resolve` slug→path.
+#[must_use]
+pub fn make_sd(
+    backend: SdBackend,
+    model: Option<&str>,
+    resolve: &dyn Fn(&str) -> std::path::PathBuf,
+) -> Arc<dyn honkbox_sd_core::SdPipeline> {
+    match backend {
+        SdBackend::Stub => Arc::new(honkbox_sd_core::StubPipeline),
+        SdBackend::SdCpp => {
+            let slug = model.unwrap_or_else(|| {
+                eprintln!("error: --sd-model <slug> is required with --sd-backend sd-cpp");
+                std::process::exit(1);
+            });
+            let path = resolve(slug);
+            Arc::new(honkbox_sd_core::SdCppPipeline::new(path))
+        }
+    }
+}
+
 /// Transcription pipeline: stub unit struct, or file backend via slug→path.
 #[must_use]
 pub fn make_stt(

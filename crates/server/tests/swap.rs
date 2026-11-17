@@ -196,6 +196,8 @@ fn swap_app(
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
         swap: Some(manager_with(
             settings(ttl, max_loaded, max_ttl, &[]),
             loader,
@@ -319,6 +321,46 @@ async fn lru_evicts_beyond_max_loaded() {
         1,
         "the incoming load swapped b out again"
     );
+}
+
+/// Multi-residency (REQ-12): with `llm_max_loaded = 2` two different slugs
+/// stay co-resident (no reload on reuse), and the third load evicts the
+/// LRU one — which then must reload on its next request.
+#[tokio::test]
+async fn max_loaded_two_coresident_third_evicts_lru() {
+    let probe = Arc::new(Probe::default());
+    let mgr = manager(Duration::from_secs(3600), 2, counting_loader(&probe, &[]));
+    let a = mgr.get("llm:a.gguf", None).await.unwrap();
+    let b = mgr.get("llm:b.gguf", None).await.unwrap();
+    assert_eq!(probe.loads.load(Ordering::Relaxed), 2);
+    // Both stay resident: touching `a` again reuses (no reload).
+    drop(b);
+    drop(a);
+    let a2 = mgr.get("llm:a.gguf", None).await.unwrap();
+    let b2 = mgr.get("llm:b.gguf", None).await.unwrap();
+    assert_eq!(
+        probe.loads.load(Ordering::Relaxed),
+        2,
+        "co-residency: neither slug reloaded"
+    );
+    // The third load evicts the LRU entry (a); live stays at capacity.
+    let c = mgr.get("llm:c.gguf", None).await.unwrap();
+    assert_eq!(probe.loads.load(Ordering::Relaxed), 3);
+    drop(a2);
+    drop(b2);
+    drop(c);
+    assert_eq!(
+        probe.live.load(Ordering::Relaxed),
+        2,
+        "capacity 2: a evicted, b + c resident"
+    );
+    let a3 = mgr.get("llm:a.gguf", None).await.unwrap();
+    assert_eq!(
+        probe.loads.load(Ordering::Relaxed),
+        4,
+        "evicted a must reload"
+    );
+    drop(a3);
 }
 
 /// Per-request `ttl_seconds = 0` on a fresh load = use-then-unload (Ollama
@@ -704,6 +746,8 @@ async fn stub_path_unaffected_without_swap_manager() {
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),

@@ -72,6 +72,8 @@ fn bearer_app(auth: AuthConfig) -> Router {
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
