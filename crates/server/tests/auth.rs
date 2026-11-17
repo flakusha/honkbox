@@ -8,6 +8,9 @@
 // This binary exercises only the auth surface, so every included module
 // carries `allow(dead_code)` for the unused rest.
 #[allow(dead_code)]
+#[path = "../src/admission.rs"]
+mod admission;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -20,9 +23,11 @@ mod downloads;
 #[path = "../src/jobs.rs"]
 mod jobs;
 #[allow(dead_code)]
+#[path = "../src/jobs_registry.rs"]
+mod jobs_registry;
+#[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
-#[allow(dead_code)]
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]

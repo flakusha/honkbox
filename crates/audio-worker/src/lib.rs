@@ -67,6 +67,9 @@ pub struct TranscribeRequest {
     pub model: String,
     /// BCP-47 language hint (`None` = auto-detect).
     pub language: Option<String>,
+    /// Translate the output to English (whisper.cpp `translate`; the
+    /// `/v1/audio/translations` semantics). Ignored by the stub backend.
+    pub translate: bool,
 }
 
 /// One timestamped STT segment.

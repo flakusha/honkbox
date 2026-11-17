@@ -12,6 +12,9 @@
 // This binary exercises the audio surfaces of `routes.rs`; every included
 // module carries `allow(dead_code)` for the unused rest.
 #[allow(dead_code)]
+#[path = "../src/admission.rs"]
+mod admission;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -24,9 +27,11 @@ mod downloads;
 #[path = "../src/jobs.rs"]
 mod jobs;
 #[allow(dead_code)]
+#[path = "../src/jobs_registry.rs"]
+mod jobs_registry;
+#[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
-#[allow(dead_code)]
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -438,9 +443,10 @@ async fn transcriptions_rejections_are_envelopes() {
         "{parsed}"
     );
 
-    // Unsupported response_format.
+    // Unsupported response_format (`srt`/`vtt` are supported now; an
+    // unknown format stays an explicit 400 envelope).
     let (content_type, body) = multipart_body(&[
-        part("response_format", "srt"),
+        part("response_format", "html"),
         Part {
             name: "file",
             filename: None,
@@ -642,8 +648,9 @@ async fn voices_lists_supported_kokoro_set() {
 }
 
 /// H3 (ReviewedAudio): the served `OpenAPI` document must carry the REQ-9
-/// audio routes, the voices route, and the model deletion route — clients
-/// codegen from this document, so unlisted endpoints are undiscoverable.
+/// audio routes (translations included), the voices route, and the model
+/// deletion route — clients codegen from this document, so unlisted
+/// endpoints are undiscoverable.
 #[tokio::test]
 async fn openapi_documents_audio_and_delete_routes() {
     let (status, _, bytes) = send(
@@ -662,6 +669,9 @@ async fn openapi_documents_audio_and_delete_routes() {
         "/v1/audio/voices",
         "/v1/audio/speech",
         "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+        "/v1/jobs",
+        "/v1/jobs/{id}/cancel",
         "/v1/models/{slug}",
     ] {
         assert!(paths.contains_key(path), "missing {path} in {paths:?}");
@@ -671,5 +681,237 @@ async fn openapi_documents_audio_and_delete_routes() {
             .as_object()
             .is_some_and(|ops| ops.contains_key("delete")),
         "DELETE /v1/models/{{slug}} not documented"
+    );
+}
+
+/// SRT/VTT render deterministically from the same worker segments the
+/// `verbose_json` path serves: `HH:MM:SS,mmm` (`SubRip`) vs `HH:MM:SS.mmm`
+/// (`WebVTT`, with the `WEBVTT` header). The test wav is 100 ms of 16 kHz,
+/// so the stub's single segment spans 0→100 ms.
+#[tokio::test]
+async fn transcriptions_srt_and_vtt_render_from_segments() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app();
+    let wav = test_wav();
+    let cases = [
+        (
+            "srt",
+            "application/x-subrip",
+            "1\n00:00:00,000 --> 00:00:00,100\nstub transcription\n\n".as_bytes(),
+        ),
+        (
+            "vtt",
+            "text/vtt; charset=utf-8",
+            "WEBVTT\n\n1\n00:00:00.000 --> 00:00:00.100\nstub transcription\n\n".as_bytes(),
+        ),
+    ];
+    for (format, want_type, want_body) in cases {
+        let (content_type, body) = multipart_body(&[
+            part("model", "llm:stt-fake.gguf"),
+            Part {
+                name: "file",
+                filename: Some("a.wav"),
+                content_type: Some("audio/wav"),
+                data: wav.clone(),
+            },
+            part("response_format", format),
+        ]);
+        let (status, got_type, bytes) = send(
+            app.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/v1/audio/transcriptions")
+                .header("content-type", content_type)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "({format})");
+        assert_eq!(got_type, want_type, "({format})");
+        assert_eq!(bytes, want_body, "({format})");
+    }
+
+    // An unsupported format stays an explicit OpenAI 400 envelope.
+    let (content_type, body) = multipart_body(&[
+        part("model", "llm:stt-fake.gguf"),
+        Part {
+            name: "file",
+            filename: Some("a.wav"),
+            content_type: Some("audio/wav"),
+            data: wav.clone(),
+        },
+        part("response_format", "html"),
+    ]);
+    let (status, _, bytes) = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/transcriptions")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("srt")),
+        "{parsed}"
+    );
+}
+
+/// `POST /v1/audio/translations`: same decode + STT worker, `translate`
+/// wired on; the plain shape mirrors `/v1/audio/transcriptions` and the
+/// verbose shape carries the timestamped segments.
+#[tokio::test]
+async fn translations_return_english_json_and_verbose() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app();
+    let wav = test_wav();
+
+    // Plain json (default format).
+    let (content_type, body) = multipart_body(&[
+        part("model", "llm:stt-fake.gguf"),
+        Part {
+            name: "file",
+            filename: Some("a.wav"),
+            content_type: Some("audio/wav"),
+            data: wav.clone(),
+        },
+    ]);
+    let (status, got_type, bytes) = send(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/translations")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(got_type, "application/json");
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed["text"], "stub transcription");
+
+    // verbose_json carries the segments (same shape as transcriptions).
+    let (content_type, body) = multipart_body(&[
+        part("model", "llm:stt-fake.gguf"),
+        Part {
+            name: "file",
+            filename: Some("a.wav"),
+            content_type: Some("audio/wav"),
+            data: wav,
+        },
+        part("response_format", "verbose_json"),
+    ]);
+    let (status, _, bytes) = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/translations")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed["text"], "stub transcription");
+    let segments = parsed["segments"].as_array().expect("segments");
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0]["start_ms"], 0);
+    assert_eq!(segments[0]["end_ms"], 100);
+}
+
+/// Translations rejections: missing file, the transcriptions-only
+/// `language` field, and an unsupported `response_format` are explicit
+/// `OpenAI` 400 envelopes.
+#[tokio::test]
+async fn translations_rejections_are_envelopes() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app();
+
+    // Missing file.
+    let (content_type, body) = multipart_body(&[part("model", "llm:stt-fake.gguf")]);
+    let (status, _, bytes) = send(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/translations")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("file is required")),
+        "{parsed}"
+    );
+
+    // `language` is not a translations field (output is always English).
+    let (content_type, body) = multipart_body(&[
+        part("model", "llm:stt-fake.gguf"),
+        Part {
+            name: "file",
+            filename: Some("a.wav"),
+            content_type: Some("audio/wav"),
+            data: test_wav(),
+        },
+        part("language", "de"),
+    ]);
+    let (status, _, bytes) = send(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/translations")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("always English")),
+        "{parsed}"
+    );
+
+    // Unsupported response_format.
+    let (content_type, body) = multipart_body(&[
+        part("model", "llm:stt-fake.gguf"),
+        Part {
+            name: "file",
+            filename: Some("a.wav"),
+            content_type: Some("audio/wav"),
+            data: test_wav(),
+        },
+        part("response_format", "tsv"),
+    ]);
+    let (status, _, bytes) = send(
+        app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/audio/translations")
+            .header("content-type", content_type)
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("response_format")),
+        "{parsed}"
     );
 }

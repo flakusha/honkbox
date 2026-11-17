@@ -1,10 +1,12 @@
 //! `honkbox` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
+mod admission;
 mod backends;
 mod catalog;
 mod config;
 mod downloads;
 mod jobs;
+mod jobs_registry;
 mod logging;
 mod metrics;
 mod routes;
@@ -365,7 +367,23 @@ fn spawn_startup_gc(jobs: &config::JobsConfig, data_dir: Option<&std::path::Path
     });
 }
 
+/// Install the REQ-6 Option A admission queue from the resolved config and
+/// log the operator-visible state (disabled = the pre-REQ-6 immediate 429).
+fn install_admission_queue(queue_wait: Duration) {
+    crate::admission::configure(queue_wait);
+    if queue_wait.is_zero() {
+        info!("GPU admission queue: disabled (busy requests 429 immediately)");
+    } else {
+        info!(
+            "GPU admission queue: one waiter, {}s bound",
+            queue_wait.as_secs_f64()
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
+// Startup wiring reads long but stays linear: args → config → pipelines → router.
+#[allow(clippy::too_many_lines)]
 async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
     let ServeArgs {
         port,
@@ -394,6 +412,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         info!("honkbox data dir: <unresolved>");
     }
     let cfg = loaded.models;
+    // REQ-6 Option A: install the resolved admission-queue bound before any
+    // route can acquire the GPU slot.
+    install_admission_queue(loaded.server.queue_wait);
     spawn_startup_gc(&cfg.jobs, data_dir.as_deref());
     let (addr, auth) = or_exit(resolve_bind(
         &host,
@@ -749,7 +770,11 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
     let out_tx = or_exit(pipe.transcribe(
         &pcm,
         sample_rate,
-        &honkbox_audio_worker::TranscribeRequest { model, language },
+        &honkbox_audio_worker::TranscribeRequest {
+            model,
+            language,
+            translate: false, // the CLI transcribes; translations are HTTP-only
+        },
     ));
     let transcript = honkbox_api_types::Transcript {
         backend_id: out_tx.backend_id,

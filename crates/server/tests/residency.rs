@@ -7,6 +7,9 @@
 // `allow(dead_code)`: each test binary exercises a slice of `routes.rs` /
 // `swap.rs`, so the unused remainder must not trip `-D warnings`.
 #[allow(dead_code)]
+#[path = "../src/admission.rs"]
+mod admission;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -19,9 +22,11 @@ mod downloads;
 #[path = "../src/jobs.rs"]
 mod jobs;
 #[allow(dead_code)]
+#[path = "../src/jobs_registry.rs"]
+mod jobs_registry;
+#[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
-#[allow(dead_code)]
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]

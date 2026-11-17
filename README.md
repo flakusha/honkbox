@@ -105,13 +105,22 @@ comfyui_dir = "~/git-ai/ai-models/Data/Models"
 
 [server]
 auth = "none"                 # "none" (default) or "bearer"
+queue_wait_secs = 10          # admission-queue bound (REQ-6); 0 = queue off
 
 [auth]
 api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
 ```
 
 - Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over
-  file).
+  file), `HONKBOX_QUEUE_WAIT_SECS` for the queue bound.
+- Jobs & cancellation: every GPU request is stamped with an `X-Job-Id`
+  response header and listed (while in flight) by `GET /v1/jobs`;
+  `POST /v1/jobs/{id}/cancel` marks a job's cooperative-stop token — it
+  actually stops multi-image generations (between images; the request then
+  answers 409 `job_cancelled`) and streaming chat (at the next token
+  boundary); single-shot FFI calls (one image, sync chat, embeddings,
+  audio) are not interruptible mid-flight and run to completion, which the
+  cancel response reports honestly (`{"cancelled": false}`).
 - Auth (`[server] auth`, REQ-7): with `auth = "bearer"`, every route except
   `GET /health`, `GET /metrics`, and the static web UI requires
   `Authorization: Bearer <key>`; failures return a 401 with an OpenAI-shaped
@@ -124,6 +133,16 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
   `<data_dir>/logs/honkbox.log` (stderr human-readable, file JSONL).
 - Registry cache: `HONKBOX_REGISTRY_DB` (path; `off`/empty disables) >
   `<data_dir>/registry.sqlite3`.
+- Busy slot (REQ-6): when one job holds the GPU slot, the NEXT request
+  waits up to `[server] queue_wait_secs` for it to free (a waiting client
+  sees latency, not an error); any further concurrent request gets the
+  immediate 429 (`queue_full`) and a waiter past its bound gets 429
+  (`queue_timeout`), both with a `Retry-After` hint. `0` restores the old
+  fail-fast 429 for every request. Audio: `/v1/audio/transcriptions`
+  `response_format` also accepts `srt` / `vtt`, and
+  `POST /v1/audio/translations` (multipart `file`, `model?`,
+  `response_format?`) transcribes with whisper's translate task — output
+  always English.
 
 ## Migrating from sd-rip
 

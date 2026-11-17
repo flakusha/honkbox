@@ -98,6 +98,9 @@ impl SttPipeline for WhisperStt {
                 .map_or(1, |n| i32::try_from(n.get()).unwrap_or(i32::MAX)),
         );
         params.set_language(req.language.as_deref());
+        // `/v1/audio/translations`: whisper's translate task decodes the
+        // (non-English) source audio straight into English text.
+        params.set_translate(req.translate);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
@@ -163,6 +166,7 @@ mod tests {
         TranscribeRequest {
             model: "stub".into(),
             language: None,
+            translate: false,
         }
     }
 

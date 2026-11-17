@@ -4,7 +4,9 @@
 //! `HONKBOX_GC_MAX_BYTES`), `[swap]` LLM swap settings (`enabled`,
 //! `llm_ttl_secs`, `llm_max_loaded`, `max_ttl_secs`, `pin`, env
 //! `HONKBOX_SWAP_LLM_TTL` / `HONKBOX_SWAP_LLM_MAX_LOADED` /
-//! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), and `[core] data_dir`.
+//! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), `[core] data_dir`, and the
+//! `[server] queue_wait_secs` admission-queue bound (REQ-6 Option A, env
+//! `HONKBOX_QUEUE_WAIT_SECS`).
 //!
 //! The ONE data-dir knob resolves `--data-dir` CLI flag > `HONKBOX_DATA_DIR`
 //! env > `[core] data_dir` file key > `$XDG_STATE_HOME/honkbox` (empty or
@@ -146,6 +148,10 @@ impl ModelCapabilitiesOverride {
     }
 }
 
+/// Default `[server] queue_wait_secs` (REQ-6 Option A): how long THE ONE
+/// admission-queue waiter may wait for the GPU slot before the 429. `0`
+/// disables queueing (immediate 429, the pre-REQ-6 behavior).
+pub const DEFAULT_QUEUE_WAIT_SECS: u64 = 10;
 /// Default `[swap]` idle TTL: 10 minutes (llama-swap defaults to never
 /// unload; a bounded default is the safer choice for a single-GPU studio).
 pub const DEFAULT_SWAP_TTL_SECS: u64 = 600;
@@ -228,6 +234,24 @@ impl Default for AuthConfig {
         Self {
             mode: AuthMode::None,
             api_key_env: "HONKBOX_API_KEY".to_owned(),
+        }
+    }
+}
+
+/// Resolved `[server]` serving knobs. Currently one: the REQ-6 Option A
+/// admission-queue bound (`queue_wait_secs`); `Duration::ZERO` keeps the
+/// pre-REQ-6 immediate-429 behavior (queueing disabled).
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    /// `[server] queue_wait_secs` (env `HONKBOX_QUEUE_WAIT_SECS`), installed
+    /// on the admission queue at serve startup.
+    pub queue_wait: Duration,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            queue_wait: Duration::from_secs(DEFAULT_QUEUE_WAIT_SECS),
         }
     }
 }
@@ -454,16 +478,37 @@ fn resolve_data_dir(
     default_data_dir(xdg, home)
 }
 
-/// Load result: model/job/swap config plus the final data dir (after the
-/// `[core] data_dir` refinement).
+/// Load result: model/job/swap/server config plus the final data dir (after
+/// the `[core] data_dir` refinement).
 #[derive(Debug)]
 pub struct LoadedConfig {
     /// Model roots + `[jobs]` + `[swap]` settings.
     pub models: ModelConfig,
     /// Auth settings (REQ-7): `[server] auth` + `[auth] api_key_env` name.
     pub auth: AuthConfig,
+    /// `[server]` serving knobs (REQ-6 admission-queue bound).
+    pub server: ServerConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
+}
+
+/// Resolve the `[server] queue_wait_secs` knob (REQ-6 Option A): defaults
+/// → file key → env override (`HONKBOX_QUEUE_WAIT_SECS`, seconds). Invalid
+/// env values warn-and-keep the previous stage, matching the GC/swap
+/// knobs; `0` disables queueing (immediate 429). Pure (env as args) so
+/// tests stay thread-safe.
+fn server_settings(file: Option<u64>, env: Option<&str>) -> ServerConfig {
+    let mut cfg = ServerConfig::default();
+    if let Some(secs) = file {
+        cfg.queue_wait = Duration::from_secs(secs);
+    }
+    if let Some(v) = env
+        && !v.is_empty()
+        && let Ok(secs) = v.parse::<u64>()
+    {
+        cfg.queue_wait = Duration::from_secs(secs);
+    }
+    cfg
 }
 
 /// Resolve the REQ-7 auth knobs: defaults → `[server] auth` +
@@ -539,6 +584,8 @@ struct FileStages {
     auth: Option<String>,
     /// `[auth] api_key_env` raw value (REQ-7), validated in `load`.
     api_key_env: Option<String>,
+    /// `[server] queue_wait_secs` raw value (REQ-6), resolved in `load`.
+    queue_wait: Option<u64>,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -595,6 +642,7 @@ fn stage_config_file(
     out.core = file.core;
     out.auth = file.server.auth;
     out.api_key_env = file.auth.api_key_env;
+    out.queue_wait = file.server.queue_wait_secs;
     out.vram_budget = file.models.vram_budget_bytes;
     out.entries = file
         .models
@@ -697,6 +745,7 @@ pub fn load(
         entries,
         auth,
         api_key_env,
+        queue_wait: queue_wait_file,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -759,9 +808,14 @@ pub fn load(
         .as_deref()
         .map_or_else(|| "<none>".to_owned(), |p| p.display().to_string());
     let auth = auth_settings(auth.as_deref(), api_key_env.as_deref(), &display)?;
+    let server = server_settings(
+        queue_wait_file,
+        std::env::var("HONKBOX_QUEUE_WAIT_SECS").ok().as_deref(),
+    );
     Ok(LoadedConfig {
         models,
         auth,
+        server,
         data_dir,
     })
 }
@@ -949,11 +1003,14 @@ struct FileCore {
     data_dir: Option<String>,
 }
 
-/// `[server]` keys: `auth` (`none` | `bearer`, REQ-7); parsed by
-/// `AuthMode::parse` in the file stage (invalid values are config errors).
+/// `[server]` keys: `auth` (`none` or `bearer`, REQ-7; parsed by
+/// `AuthMode::parse` in the file stage - invalid values are config errors)
+/// and `queue_wait_secs` (REQ-6 Option A admission-queue bound, seconds;
+/// resolved by `server_settings`).
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileServer {
     auth: Option<String>,
+    queue_wait_secs: Option<u64>,
 }
 
 /// `[auth]` keys: `api_key_env` — the NAME of the env var holding the
@@ -1620,6 +1677,34 @@ mod tests {
         check_bind_auth(AuthMode::None, "192.168.1.10", false).expect_err("lan no ack");
         // bearer + non-loopback: allowed (the key is the protection).
         check_bind_auth(AuthMode::Bearer, "0.0.0.0", false).expect("bearer any bind");
+    }
+
+    /// REQ-6 Option A: `[server] queue_wait_secs` parses from the file with
+    /// env override; invalid env warns-and-keeps; `0` disables queueing.
+    #[test]
+    fn server_queue_wait_resolves() {
+        // Default (no keys).
+        let loaded = load_toml("queue-default", "[core]\n").expect("load");
+        assert_eq!(
+            loaded.server.queue_wait,
+            Duration::from_secs(DEFAULT_QUEUE_WAIT_SECS)
+        );
+
+        // File key wins over the default.
+        let loaded = load_toml("queue-file", "[server]\nqueue_wait_secs = 3\n").expect("load");
+        assert_eq!(loaded.server.queue_wait, Duration::from_secs(3));
+
+        // `0` is meaningful: queueing disabled.
+        let loaded = load_toml("queue-zero", "[server]\nqueue_wait_secs = 0\n").expect("load");
+        assert_eq!(loaded.server.queue_wait, Duration::ZERO);
+
+        // Env wins over the file; invalid env keeps the file value.
+        let loaded = server_settings(Some(3), Some("7"));
+        assert_eq!(loaded.queue_wait, Duration::from_secs(7));
+        let kept = server_settings(Some(3), Some("not-a-number"));
+        assert_eq!(kept.queue_wait, Duration::from_secs(3));
+        let empty = server_settings(Some(3), Some(""));
+        assert_eq!(empty.queue_wait, Duration::from_secs(3));
     }
 
     /// `--host` parsing: `localhost` maps to the IPv4 loopback; real IPs

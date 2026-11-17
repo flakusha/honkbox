@@ -192,24 +192,21 @@ static REQUEST_DURATION: LazyLock<Histogram> = LazyLock::new(|| Histogram {
 });
 
 /// Why a 429 GPU-slot rejection happened (`reason` label of
-/// `honkbox_gpu_slot_busy_rejections_total`). The queue reasons are
-/// reserved for the bounded FIFO admission queue (deferred): today every
-/// rejection is immediate (`no_wait`).
+/// `honkbox_gpu_slot_busy_rejections_total`). `no_wait` = the admission
+/// queue is disabled (or the fast path lost); `queue_full` / `queue_timeout`
+/// are the REQ-6 Option A admission-queue rejections (see `admission`).
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum BusyReason {
-    /// Rejected immediately - no queue configured (the only reachable
-    /// reason; REQ-6 Option B).
+    /// Rejected immediately - no queue configured (queue off; REQ-6
+    /// Option B behavior).
     NoWait,
-    /// Reserved: the admission queue was full.
-    #[allow(dead_code)] // reserved label in the bounded exposition set
+    /// The admission queue already had its one waiter.
     QueueFull,
-    /// Reserved: the admission wait exceeded its bound.
-    #[allow(dead_code)] // reserved label in the bounded exposition set
+    /// The admission wait exceeded its `[server] queue_wait_secs` bound.
     QueueTimeout,
 }
 
-/// Busy rejection reason labels (bounded exposition set; queue reasons
-/// render zero series until the queue lands).
+/// Busy rejection reason labels (bounded exposition set).
 const BUSY_REASONS: [&str; 3] = ["no_wait", "queue_full", "queue_timeout"];
 
 const BUSY_REASON_SLOTS: usize = BUSY_REASONS.len();
