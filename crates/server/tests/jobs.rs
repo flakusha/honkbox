@@ -44,10 +44,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use base64::Engine as _;
-use honkbox_api_types::ModelCatalog;
+use honkbox_api_types::{ModelCatalog, ModelKind};
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
 use serde_json::{Value, json};
+use tokio_stream::StreamExt as _;
 use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, app};
@@ -112,13 +113,20 @@ impl honkbox_sd_core::SdPipeline for GatedSd {
 }
 
 fn test_app(sd: Arc<dyn honkbox_sd_core::SdPipeline>) -> Router {
+    test_app_with_entries(sd, Vec::new())
+}
+
+fn test_app_with_entries(
+    sd: Arc<dyn honkbox_sd_core::SdPipeline>,
+    entries: Vec<honkbox_api_types::ModelCatalogEntry>,
+) -> Router {
     app(AppConfig {
         auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {
             object: "list".to_owned(),
-            data: Vec::new(),
+            data: entries,
         }))),
         roots: honkbox_registry::ModelRoots {
             llm_dirs: Vec::new(),
@@ -328,4 +336,384 @@ async fn cancel_unknown_job_is_404() {
     // The empty registry lists nothing.
     let listed = jobs_list(app).await;
     assert_eq!(listed["data"].as_array().unwrap().len(), 0);
+}
+
+/// `DELETE /v1/jobs/{id}` is the REST-shaped spelling of the cancel: same
+/// honest `{cancelled}` contract, and it actually stops an interruptible
+/// multi-image generation (between images); a finished id is 404 again.
+#[tokio::test]
+async fn delete_job_alias_cancels_in_flight() {
+    let _slot = SLOT_LOCK.lock().await;
+    let gate = Arc::new(Gate::new());
+    let sd = Arc::new(GatedSd {
+        gate: Arc::clone(&gate),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+    });
+    let app = test_app(sd.clone());
+
+    let generation = tokio::spawn(images(
+        app.clone(),
+        json!({"prompt": "a honk", "n": 3, "size": "64x64"}),
+    ));
+    wait_entered(&sd.entered).await;
+    let listed = jobs_list(app.clone()).await;
+    let id = listed["data"].as_array().unwrap()[0]["id"]
+        .as_str()
+        .expect("job id")
+        .to_owned();
+
+    let (status, _, body) = send(
+        app.clone(),
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/v1/jobs/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["cancelled"], true, "{body}");
+
+    gate.open();
+    let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
+        .await
+        .expect("generation finishes")
+        .unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "job_cancelled");
+    assert_eq!(sd.calls.load(Ordering::SeqCst), 1);
+
+    // The id is gone once the request ended.
+    let (status, _, body) = send(
+        app,
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/v1/jobs/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// DELETE on an unknown id is the same plain 404 as the cancel endpoint.
+#[tokio::test]
+async fn delete_unknown_job_is_404() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(Arc::new(honkbox_sd_core::StubPipeline));
+    let (status, _, body) = send(
+        app,
+        Request::builder()
+            .method("DELETE")
+            .uri("/v1/jobs/job_00000000000000000000000000")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(body.contains("unknown job id"), "{body}");
+}
+
+/// Parse one complete SSE frame text into (event name, parsed JSON data);
+/// `None` for comment/keep-alive frames without data.
+fn parse_frame(frame: &str) -> Option<(String, Value)> {
+    // Last occurrence wins, matching the SSE spec's field semantics (a
+    // frame carries one `event:` and one `data:` in practice).
+    let event = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("event: "))
+        .next_back()
+        .map(str::to_owned);
+    let data = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .next_back()?;
+    let parsed: Value = serde_json::from_str(data)
+        .unwrap_or_else(|err| panic!("frame data not JSON: {err}: {data}"));
+    Some((event.unwrap_or_default(), parsed))
+}
+
+/// The next complete SSE frame (through its blank line). Chunks may split
+/// frames, so bytes accumulate until a blank line shows up.
+async fn next_frame(stream: &mut axum::body::BodyDataStream) -> (String, Value) {
+    let mut buffer = String::new();
+    loop {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("sse frame within 5s")
+            .expect("stream alive")
+            .expect("frame bytes");
+        buffer.push_str(std::str::from_utf8(&chunk).expect("utf8"));
+        while let Some(pos) = buffer.find("\n\n") {
+            let frame: String = buffer.drain(..pos + 2).collect();
+            if let Some(parsed) = parse_frame(&frame) {
+                return parsed;
+            }
+        }
+    }
+}
+
+/// Read frames until one matches (event name + job id). Other tests in
+/// this binary run concurrently against the SAME global registry, so the
+/// stream legitimately carries foreign jobs' events — filtering by id is
+/// what keeps the assertion meaningful.
+async fn frame_for(stream: &mut axum::body::BodyDataStream, event: &str, id: &str) -> Value {
+    loop {
+        let (name, data) = next_frame(stream).await;
+        if name == event && data["id"].as_str() == Some(id) {
+            return data;
+        }
+    }
+}
+
+/// `GET /v1/events` streams the lifecycle of a real in-flight generation:
+/// registered (kind/model/interruptible mirror `GET /v1/jobs`) → cancelled
+/// (a cancel was REQUESTED) → finished (`cancelled: true`, the token was
+/// marked).
+#[tokio::test]
+async fn events_stream_delivers_the_lifecycle() {
+    let _slot = SLOT_LOCK.lock().await;
+    let gate = Arc::new(Gate::new());
+    let sd = Arc::new(GatedSd {
+        gate: Arc::clone(&gate),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+    });
+    let app = test_app(sd.clone());
+
+    // Subscribe FIRST so the registered event cannot race the stream.
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    assert_eq!(
+        sse.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/event-stream"),
+    );
+    let mut stream = sse.into_body().into_data_stream();
+
+    let generation = tokio::spawn(images(
+        app.clone(),
+        json!({"prompt": "a honk", "n": 3, "size": "64x64"}),
+    ));
+    wait_entered(&sd.entered).await;
+    let listed = jobs_list(app.clone()).await;
+    let row = &listed["data"].as_array().unwrap()[0];
+    let id = row["id"].as_str().expect("job id").to_owned();
+
+    let registered = frame_for(&mut stream, "job_registered", &id).await;
+    assert_eq!(registered["kind"], "images");
+    assert_eq!(registered["interruptible"], true);
+    assert_eq!(registered["cancelled"], false);
+    assert_eq!(registered["event"], "job_registered");
+    assert!(registered["started_at_ms"].as_u64().is_some());
+
+    let (status, _, body) = cancel_job(app.clone(), &id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cancelled = frame_for(&mut stream, "job_cancelled", &id).await;
+    assert_eq!(cancelled["cancelled"], true);
+
+    gate.open();
+    let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
+        .await
+        .expect("generation finishes")
+        .unwrap();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let finished = frame_for(&mut stream, "job_finished", &id).await;
+    assert_eq!(finished["cancelled"], true);
+    assert_eq!(finished["started_at_ms"], registered["started_at_ms"]);
+}
+
+/// A job that ends without a cancel finishes with `cancelled: false` —
+/// the flag is "a cancel had been requested", never an outcome claim.
+#[tokio::test]
+async fn events_stream_reports_plain_finish() {
+    let _slot = SLOT_LOCK.lock().await;
+    let gate = Arc::new(Gate::new());
+    let sd = Arc::new(GatedSd {
+        gate: Arc::clone(&gate),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+    });
+    let app = test_app(sd.clone());
+
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut stream = sse.into_body().into_data_stream();
+
+    let generation = tokio::spawn(images(
+        app.clone(),
+        json!({"prompt": "a honk", "n": 1, "size": "64x64"}),
+    ));
+    wait_entered(&sd.entered).await;
+    let listed = jobs_list(app.clone()).await;
+    let id = listed["data"].as_array().unwrap()[0]["id"]
+        .as_str()
+        .expect("job id")
+        .to_owned();
+
+    let registered = frame_for(&mut stream, "job_registered", &id).await;
+    assert_eq!(registered["interruptible"], false);
+
+    gate.open();
+    let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
+        .await
+        .expect("generation finishes")
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let finished = frame_for(&mut stream, "job_finished", &id).await;
+    assert_eq!(finished["cancelled"], false);
+}
+
+/// `iVBORw0KGgo=` is base64 of the 8-byte PNG magic — enough for the
+/// magic-sniffing `control_image` check (full decoding is not the route's
+/// job at validation time).
+const CONTROL_PNG_B64: &str = "iVBORw0KGgo=";
+
+/// One `controlnet`-kind catalog entry for the app catalog.
+fn controlnet_entry() -> honkbox_api_types::ModelCatalogEntry {
+    honkbox_api_types::ModelCatalogEntry {
+        id: "comfy:controlnet/c.safetensors".to_owned(),
+        slug: "comfy:controlnet/c.safetensors".to_owned(),
+        kind: ModelKind::ControlNet,
+        owned_by: "local".to_owned(),
+        context_length: None,
+        max_output: None,
+        thinking: false,
+        tool_calling: false,
+        modalities: vec!["text".to_owned()],
+        capabilities: honkbox_api_types::ModelCapabilities::for_kind(ModelKind::ControlNet),
+        category: "controlnet".to_owned(),
+        path: "/models/controlnet/c.safetensors".to_owned(),
+        bytes: 100,
+        metadata: None,
+    }
+}
+
+/// Every rejection path of the controlnet pair is a precise 400, checked
+/// in order: missing half of the pair, undecodable base64, non-PNG bytes,
+/// unknown slug. None of them may reach the GPU pipeline.
+#[tokio::test]
+async fn controlnet_rejections_are_precise_400s() {
+    let _slot = SLOT_LOCK.lock().await;
+    let gate = Arc::new(Gate::new());
+    let sd = Arc::new(GatedSd {
+        gate: Arc::clone(&gate),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        entered: AtomicBool::new(false),
+    });
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+
+    // Slug without the conditioning image.
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "controlnet": "comfy:controlnet/c.safetensors"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "controlnet_pair");
+
+    // Conditioning image without the slug.
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "control_image": CONTROL_PNG_B64}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "controlnet_pair");
+
+    // Undecodable base64 (both halves present).
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": "not base64!!"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "invalid_control_image");
+
+    // Decodable bytes that are not a PNG.
+    let not_png = base64::engine::general_purpose::STANDARD.encode(b"hello");
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": not_png}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "invalid_control_image");
+
+    // Known-good image, but the slug is not a controlnet catalog entry.
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "controlnet": "comfy:controlnet/missing.safetensors",
+               "control_image": CONTROL_PNG_B64}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "unknown_controlnet");
+
+    // The GPU pipeline was never entered: every rejection is pre-slot.
+    assert_eq!(sd.calls.load(Ordering::SeqCst), 0);
+}
+
+/// Fully valid controlnet inputs are accepted-and-validated, then honestly
+/// refused with 501 `controlnet_unsupported` — before any GPU work, and
+/// never silently ignored. Whitespace-only fields are NOT a request: the
+/// request proceeds as plain generation.
+#[tokio::test]
+async fn controlnet_valid_inputs_answer_501_and_empties_fall_through() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app_with_entries(
+        Arc::new(honkbox_sd_core::StubPipeline),
+        vec![controlnet_entry()],
+    );
+
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "controlnet_unsupported");
+    let message = parsed["error"]["message"].as_str().expect("message");
+    assert!(message.contains("comfy:controlnet/c.safetensors"), "{body}");
+
+    // Whitespace-only controlnet fields are not a request: plain render.
+    let (status, _, body) = images(
+        app,
+        json!({"prompt": "a honk", "size": "64x64", "controlnet": "   "}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["data"].as_array().unwrap().len(), 1);
 }

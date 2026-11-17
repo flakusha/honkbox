@@ -31,7 +31,7 @@ honkbox-sd-core = { workspace = true }
 ulid = { workspace = true }
 honkbox-llm-worker = { path = "../llm-worker" }
 honkbox-audio-worker = { path = "../audio-worker" }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
 reqwest = { workspace = true }
 tokio-util = { workspace = true }
@@ -47,4 +47,10 @@ experimental-ash-sd = []
 # Vulkan execution for the sd-cpp backend (honkbox-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
 vulkan = ["honkbox-sd-core/vulkan"]
+# Vision chat (mtmd/mmproj): compiles the worker's mtmd path and derives
+# `capabilities.vision` from sibling-mmproj discovery. Opt-in for the same
+# vendor-link reason as `honkbox-llm-worker/vision` (see its Cargo.toml):
+# llama-cpp-sys-4 0.11.0 static builds cannot link the mtmd bitmap loader
+# until a vendor patch adds the missing `vendor-hash` link directive.
+llm-vision = ["honkbox-llm-worker/vision"]
 default = ["vulkan"]

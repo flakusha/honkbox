@@ -470,8 +470,9 @@ pub fn spawn_reaper(manager: Arc<SwapManager>) -> tokio::task::JoinHandle<()> {
 
 /// Production loader: resolve a catalog slug to its on-disk path via the
 /// current `/v1/models` snapshot (stays fresh across
-/// `POST /v1/models/refresh`) and load it with `LlamaCppLlm` + default
-/// options. Non-LLM catalog entries (STT/TTS/SD weights) and unknown slugs
+/// `POST /v1/models/refresh`) and load it with `LlamaCppLlm` (plus the
+/// sibling mmproj projector when one sits next to the weights — vision
+/// chat). Non-LLM catalog entries (STT/TTS/SD weights) and unknown slugs
 /// are [`SwapError::UnknownSlug`] — a 400 at the route.
 #[must_use]
 pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader {
@@ -498,7 +499,17 @@ pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader 
             )));
         }
         let path = std::path::PathBuf::from(&entry.path);
-        match LlamaCppLlm::load(&path, &LlmOptions::default()) {
+        // Vision chat (REQ-8): a sibling mmproj projector upgrades the
+        // pipeline to multimodal (same discovery + same `VISION_COMPILED`
+        // flag the catalog's `capabilities.vision` derives from); none is
+        // text-only.
+        let opts = LlmOptions {
+            mmproj_path: honkbox_llm_worker::VISION_COMPILED
+                .then(|| honkbox_registry::sibling_mmproj(&path))
+                .flatten(),
+            ..LlmOptions::default()
+        };
+        match LlamaCppLlm::load(&path, &opts) {
             Ok(pipe) => Ok(Arc::new(pipe) as Arc<dyn LlmPipeline>),
             Err(err) => Err(SwapError::Load(format!(
                 "loading {slug:?} from {} failed: {err}",

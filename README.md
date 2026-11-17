@@ -115,12 +115,64 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
   file), `HONKBOX_QUEUE_WAIT_SECS` for the queue bound.
 - Jobs & cancellation: every GPU request is stamped with an `X-Job-Id`
   response header and listed (while in flight) by `GET /v1/jobs`;
-  `POST /v1/jobs/{id}/cancel` marks a job's cooperative-stop token — it
-  actually stops multi-image generations (between images; the request then
-  answers 409 `job_cancelled`) and streaming chat (at the next token
-  boundary); single-shot FFI calls (one image, sync chat, embeddings,
-  audio) are not interruptible mid-flight and run to completion, which the
-  cancel response reports honestly (`{"cancelled": false}`).
+  `POST /v1/jobs/{id}/cancel` — or the REST-shaped `DELETE /v1/jobs/{id}`,
+  same contract — marks a job's cooperative-stop token: it actually stops
+  multi-image generations (between images; the request then answers 409
+  `job_cancelled`) and streaming chat (at the next token boundary);
+  single-shot FFI calls (one image, sync chat, embeddings, audio) are not
+  interruptible mid-flight and run to completion, which the cancel
+  response reports honestly (`{"cancelled": false}`).
+- Job events (`GET /v1/events`): a read-only Server-Sent-Events feed of the
+  job registry, all job kinds. Three SSE event types, each also
+  self-labeled in the JSON `event` field: `job_registered` (a route
+  admitted the request; may still be queued), `job_cancelled` (a cancel
+  was REQUESTED — not a completion event), and `job_finished` (the job's
+  request ended, any outcome). Data shape (`JobEvent`): `id`, `kind`
+  (`chat`/`embeddings`/`images`/`transcribe`/`synthesize`/`translations`),
+  `model` (when known), `started_at_ms`, `interruptible`, and `cancelled`
+  — whether a cancel had been requested at that point (`true` on
+  `job_finished` for a token-marked job, which for a non-interruptible job
+  still ran to completion). The stream is transition-only: reconnects
+  replay nothing (`GET /v1/jobs` is the snapshot), keep-alive comments
+  keep the connection warm, and a consumer that falls >256 events behind
+  gets an `events_dropped` frame naming the skipped count instead of a
+  silent gap.
+- ControlNet: `comfy:controlnet/*` weight files are discovered by the model
+  scan (kind `controlnet`, listed in `GET /v1/models`). `POST
+  /v1/images/generations` accepts a honkbox extension pair — `controlnet`
+  (catalog slug/alias) + `control_image` (base64 PNG) — and validates it
+  (half-specified pairs, undecodable base64 / non-PNG bytes, and unknown
+  slugs are 400s), but the sd pipeline cannot apply control inputs yet, so
+  a fully valid pair is answered with an explicit 501
+  (`controlnet_unsupported`) rather than silently ignored. The vendor's
+  C++ engine supports ControlNet; the gap is the Rust generation path and
+  the `sd-core` seam, not the weights on disk.
+- Vision chat (mmproj, REQ-8): an LLM weights file with a sibling mmproj
+  projector (`mmproj*.gguf` in the same directory, the HF multimodal-repo
+  convention) is discovered automatically at catalog time — such entries
+  report `capabilities.vision: true` and `modalities: ["text", "vision"]`
+  in `GET /v1/models`, and the chat pipeline loads the projector alongside
+  the model. All three chat routes (`POST /v1/chat`, `/v1/chat/stream`,
+  `/v1/chat/completions`) then accept OpenAI-style content-parts arrays:
+  `image_url` parts must be `data:<mime>;base64,...` URIs (the server
+  decodes the bytes inline; remote URLs are never fetched — an explicit
+  400 `image_url_unsupported`), spliced as media markers at the part's
+  position, and evaluated through llama.cpp's mtmd projector before the
+  text tokens. Image content on a text-only model (no sibling projector,
+  no operator `capabilities.vision = true` override) is a named 400 —
+  `vision_unsupported` (`OpenAI` envelope on the completions route,
+  plain text on the native routes), never a silently flattened image. A
+  projector file itself (`mmproj*.gguf`) is listed by the scan but is not
+  chat-capable (`capabilities.chat: false`) — it is a component, not a
+  model. Undecodable payloads answer 400 `invalid_image_data`.
+  Opt-in: `cargo build --features llm-vision` compiles the mtmd path
+  (feature `llm-vision` → `honkbox-llm-worker/vision`); without it the
+  catalog reports text-only and image parts 400 by name. The gate is a
+  vendor packaging caveat, not a missing capability: llama-cpp-sys-4
+  0.11.0 static builds cannot link the mtmd bitmap loader (its
+  `mtmd-helper.cpp` needs the `vendor-hash` library, which the sys build
+  script does not link); once a `[patch.crates-io]` vendor patch adds the
+  missing link directive, the feature can move into `default`.
 - Auth (`[server] auth`, REQ-7): with `auth = "bearer"`, every route except
   `GET /health`, `GET /metrics`, and the static web UI requires
   `Authorization: Bearer <key>`; failures return a 401 with an OpenAI-shaped

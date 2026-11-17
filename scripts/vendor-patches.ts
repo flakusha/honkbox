@@ -1,4 +1,6 @@
-// Dynamic fetch + patch stack for vendor/diffusion-rs.
+// Dynamic fetch + patch stack for vendor/diffusion-rs (git mode) and
+// crates.io tarballs ([[vendor.crate]] — e.g. llama-cpp-sys-4, sha256-
+// pinned, extracted verbatim from the static CDN, no submodules).
 //
 // vendor/ is gitignored scratch, never committed. `sync` converges it from
 // the pins in vendor.manifest.toml: shallow-fetch the diffusion-rs checkout
@@ -23,7 +25,7 @@
 // Network-free after the first fetch: a converged tree needs no network.
 // Usage: bun scripts/vendor-patches.ts sync [--dry-run]
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
@@ -43,11 +45,23 @@ interface Nested {
   prune: string[];
 }
 
+// A crates.io tarball vendored verbatim (git-tag-less dependencies: the
+// tarball is the exact artifact cargo builds from and ships e.g. llama.cpp
+// sources inline, where the upstream git repo uses submodules).
+interface Crate {
+  name: string;
+  version: string;
+  sha256: string;
+  dir: string;
+  patches: string[];
+}
+
 interface Manifest {
   url: string;
   rev: string;
   patches: string[];
   nested: Nested[];
+  crate: Crate[];
 }
 
 interface GitResult {
@@ -102,6 +116,30 @@ function parseNested(value: unknown): Nested[] {
   });
 }
 
+function parseCrate(value: unknown): Crate[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("manifest: [vendor].crate must be a list");
+  return value.map((entry: unknown, i: number) => {
+    const where = `manifest: [vendor].crate[${i}]`;
+    if (typeof entry !== "object" || entry === null) throw new Error(`${where} must be a table`);
+    const { name, version, sha256, dir, patches } = entry as Record<string, unknown>;
+    if (typeof name !== "string" || name === "") throw new Error(`${where}.name must be a string`);
+    if (typeof version !== "string" || version === "") {
+      throw new Error(`${where}.version must be a string`);
+    }
+    if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
+      throw new Error(`${where}.sha256 must be a 64-hex checksum of the crates.io tarball`);
+    }
+    if (typeof dir !== "string" || dir === "" || dir.includes("..")) {
+      throw new Error(`${where}.dir must be a safe path relative to vendor/`);
+    }
+    if (!Array.isArray(patches) || !patches.every((p: unknown) => typeof p === "string")) {
+      throw new Error(`${where}.patches must be a list of strings`);
+    }
+    return { name, version, sha256, dir, patches: [...patches] };
+  });
+}
+
 function parseManifest(text: string): Manifest {
   let data: unknown;
   try {
@@ -117,11 +155,13 @@ function parseManifest(text: string): Manifest {
     throw new Error("manifest: [vendor] must be a table");
   }
   for (const key of Object.keys(table)) {
-    if (key !== "url" && key !== "rev" && key !== "patches" && key !== "nested") {
+    if (
+      key !== "url" && key !== "rev" && key !== "patches" && key !== "nested" && key !== "crate"
+    ) {
       throw new Error(`manifest: unknown [vendor] key: ${key}`);
     }
   }
-  const { url, rev, patches, nested } = table as Record<string, unknown>;
+  const { url, rev, patches, nested, crate } = table as Record<string, unknown>;
   if (typeof url !== "string" || url === "") {
     throw new Error("manifest: [vendor].url must be a string");
   }
@@ -131,7 +171,7 @@ function parseManifest(text: string): Manifest {
   if (!Array.isArray(patches) || !patches.every((p: unknown) => typeof p === "string")) {
     throw new Error("manifest: [vendor].patches must be a list of strings");
   }
-  return { url, rev, patches: [...patches], nested: parseNested(nested) };
+  return { url, rev, patches: [...patches], nested: parseNested(nested), crate: parseCrate(crate) };
 }
 
 function readLines(path: string): string[] {
@@ -246,6 +286,124 @@ function ensureRepo(repo: Repo, dryRun: boolean): string {
   return "moved";
 }
 
+// ── crates.io tarball vendoring ([[vendor.crate]]) ──────────────────────────
+
+// The exact crates.io download URL (static CDN); the sha256 pin in the
+// manifest is computed from the same published artifact the cargo registry
+// cache stores, so a fresh-machine sync reproduces byte-identical vendor
+// trees.
+function crateUrl(c: Crate): string {
+  return `https://static.crates.io/crates/${c.name}/${c.name}-${c.version}.crate`;
+}
+
+// Converge one vendored crate from its crates.io tarball. Idempotence: a
+// `.crate-sha256` stamp records the extracted artifact's checksum — a
+// matching stamp is "same"; an absent or mismatched stamp (version bump,
+// interrupted run) is a clean re-fetch + re-extract. Returns "same" |
+// "created", or "would-fetch" under --dry-run (no network, no mutation).
+function ensureCrate(c: Crate, dryRun: boolean): string {
+  const dir = join(ROOT, VENDOR_DIR, c.dir);
+  const stamp = join(dir, ".crate-sha256");
+  if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === c.sha256) {
+    return "same";
+  }
+  if (dryRun) return "would-fetch";
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const tmp = join(ROOT, VENDOR_DIR, `.${c.name}-${c.version}.crate.tmp`);
+  const download = Bun.spawnSync(["curl", "-fsSL", crateUrl(c), "-o", tmp], {
+    cwd: ROOT,
+    env: BASE_ENV,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (download.exitCode !== 0) {
+    fail(
+      `cannot download ${crateUrl(c)} (network?): ${
+        new TextDecoder().decode(download.stderr).trim()
+      }`,
+    );
+  }
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(readFileSync(tmp));
+  const digest = hasher.digest("hex");
+  if (digest !== c.sha256) {
+    rmSync(tmp, { force: true });
+    fail(`${c.name}-${c.version}.crate checksum mismatch: got ${digest}, want ${c.sha256}`);
+  }
+  const extract = join(ROOT, VENDOR_DIR, `.${c.name}-extract`);
+  rmSync(extract, { recursive: true, force: true });
+  mkdirSync(extract, { recursive: true });
+  const untar = Bun.spawnSync(["tar", "-xzf", tmp, "-C", extract], {
+    cwd: ROOT,
+    env: BASE_ENV,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (untar.exitCode !== 0) {
+    fail(
+      `cannot extract ${c.name}-${c.version}.crate: ${
+        new TextDecoder().decode(untar.stderr).trim()
+      }`,
+    );
+  }
+  const inner = join(extract, `${c.name}-${c.version}`);
+  if (!existsSync(join(inner, "Cargo.toml"))) {
+    fail(`tarball ${c.name}-${c.version}.crate has no ${c.name}-${c.version}/Cargo.toml`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+  renameSync(inner, dir);
+  rmSync(extract, { recursive: true, force: true });
+  rmSync(tmp, { force: true });
+  writeFileSync(stamp, `${c.sha256}\n`);
+  return "created";
+}
+
+// Apply one crate's patch stack at the repo root (repo-root-relative
+// headers, the diffusion-patch convention). Same semantics as the main
+// stack: a reverse-applying patch is already applied (skip); a forward
+// check that fails is a loud refusal naming the patch — never a silent
+// skip. Returns { applied, skipped } ("applied" = would-apply under
+// --dry-run).
+function applyCratePatches(
+  c: Crate,
+  dryRun: boolean,
+  willFetch = false,
+): { applied: number; skipped: number; } {
+  let applied = 0;
+  let skipped = 0;
+  for (const patch of c.patches) {
+    const file = patch.startsWith("/") ? patch : join(PATCHES_DIR, patch);
+    if (!existsSync(file.startsWith("/") ? file : join(ROOT, file))) {
+      fail(`declared patch file not found: ${file}`);
+    }
+    // A crate that would be fetched has no extracted tree yet, so its
+    // patches are pending by definition (nothing to reverse-check).
+    if (!willFetch) {
+      if (git(ROOT, ["apply", "--check", "--reverse", "--", file]).rc === 0) {
+        if (dryRun) console.log(`${NODE}: already applied: ${file}`);
+        skipped++;
+        continue;
+      }
+      const check = git(ROOT, ["apply", "--check", "--", file]);
+      if (check.rc !== 0) {
+        fail(`patch failed to apply: ${file}: ${check.err || check.out}`);
+      }
+    }
+    if (dryRun) {
+      console.log(`${NODE}: would apply: ${file}`);
+      applied++;
+      continue;
+    }
+    const result = git(ROOT, ["apply", "--", file]);
+    if (result.rc !== 0) {
+      fail(`patch failed to apply: ${file}: ${result.err || result.out}`);
+    }
+    applied++;
+  }
+  return { applied, skipped };
+}
+
 const argv = Bun.argv.slice(2);
 const command = argv[0];
 const dryRun = argv.includes("--dry-run");
@@ -267,6 +425,7 @@ try {
 const files = manifest.patches.map((n) => (n.startsWith("/") ? n : join(PATCHES_DIR, n)));
 const missing = files.find((f) => !existsSync(f.startsWith("/") ? f : join(ROOT, f)));
 if (missing !== undefined) fail(`declared patch file not found: ${missing}`);
+const crates = manifest.crate;
 
 const repos: Repo[] = [
   { dir: join(VENDOR_DIR, TOP_NAME), url: manifest.url, rev: manifest.rev, prune: [], top: true },
@@ -321,6 +480,18 @@ if (dryRun) {
         `patch does not apply (and is not applied): ${file}; rm -rf ${VENDOR_DIR}/ + sync, then report`,
       );
     }
+  }
+  // Crate accounting (a crate needing a fetch is a change; converged
+  // crates still report pending patches).
+  for (const c of crates) {
+    const wouldFetch = ensureCrate(c, true) === "would-fetch";
+    if (wouldFetch) {
+      console.log(
+        `${NODE}: would fetch crate ${c.name}-${c.version} (+${c.patches.length} patch)`,
+      );
+      changes++;
+    }
+    pending += applyCratePatches(c, true, wouldFetch).applied;
   }
   if (changes > 0 || pending > 0) {
     console.log(`${NODE}: dry-run: sync would change the tree`);
@@ -403,3 +574,19 @@ for (const file of files.slice(skipped)) {
 console.log(
   `${NODE}: patches already applied (${skipped}), applied now (${appliedThisRun.length}), total ${files.length}`,
 );
+
+// crates.io tarball vendoring ([[vendor.crate]]): fetch + extract + patch
+// stack, after the diffusion flow so a diffusion rev move fails loudly
+// before any crate work mutates the tree.
+for (const c of crates) {
+  const state = ensureCrate(c, false);
+  if (state === "created") {
+    console.log(`${NODE}: fetched crate ${c.name}-${c.version} -> ${c.dir}`);
+  }
+  const outcome = applyCratePatches(c, false);
+  if (outcome.applied > 0 || outcome.skipped > 0) {
+    console.log(
+      `${NODE}: ${c.dir}: patches already applied (${outcome.skipped}), applied now (${outcome.applied})`,
+    );
+  }
+}

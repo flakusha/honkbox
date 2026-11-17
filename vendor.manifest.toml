@@ -33,6 +33,26 @@ url = "https://github.com/newfla/diffusion-rs"
 rev = "89dcf933f754a173c31b2db30ca3df14ec899dac"
 patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch", "0003-sys-cargo-lints-allow.patch"]
 
+# Vendored crates.io tarball (llama-cpp-sys-4 0.11.0): [patch.crates-io]
+# points at the extracted tree (vendor/llama-cpp-sys-4-0.11.0) once sync
+# lands it. The tarball is the exact published artifact (sha256 pinned;
+# the registry cache stores the same bytes), chosen over the upstream git
+# repo because the tarball ships the llama.cpp sources inline while the
+# repo tracks them as a submodule. Reason for vendoring: the 0.11.0 build
+# script cannot link the mtmd/vision path statically — its CMake installs
+# the `mtmd` archive but never the `vendor-hash` archive that
+# `mtmd-helper.cpp` references (`hash_sha256_hex`), so any binary touching
+# the mtmd bitmap loaders fails with an undefined-symbol link error. The
+# patch below emits the missing link directive (build-tree search +
+# `static=vendor-hash`), the same pattern as the crate's own
+# `llama-common-base` special case.
+[[vendor.crate]]
+name = "llama-cpp-sys-4"
+version = "0.11.0"
+sha256 = "814738cddce0c910aa0f5192fd9d3e2ff7e447453e66326dd2f5df7f1375aea3"
+dir = "llama-cpp-sys-4-0.11.0"
+patches = ["1000-llama-cpp-sys-4-vendor-hash-link.patch"]
+
 [[vendor.nested]]
 path = "diffusion-rs/sys/stable-diffusion.cpp"
 url = "https://github.com/leejet/stable-diffusion.cpp"

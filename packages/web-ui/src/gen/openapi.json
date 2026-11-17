@@ -622,13 +622,29 @@
         }
       }
     },
+    "/v1/events": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/events`: the registry-wide job lifecycle feed as a\nServer-Sent-Events stream (observability only — it registers no job and\ntouches no GPU slot). Every in-flight GPU job of every kind emits:",
+        "description": "- `event: job_registered` — the job entered the registry (route\n  admitted the request; it may still be waiting in the admission\n  queue);\n- `event: job_cancelled` — a cancel was REQUESTED for the job (POST\n  `.../cancel` or DELETE `/v1/jobs/{id}`); not a completion event;\n- `event: job_finished` — the job left the registry (its request ended,\n  any outcome).\n\nEach frame's JSON `data` mirrors the SSE `event` line in its `event`\nfield (`JobEvent`): `id`, `kind`, `model` (when known),\n`started_at_ms`, `interruptible`, and `cancelled` (= a cancel had been\nrequested at that point; on `job_finished` it is `true` for a\ntoken-marked job, which for a non-interruptible job still ran to\ncompletion). Frames are transition-only: a subscriber that falls more\nthan 256 events behind gets an `events_dropped` frame naming the skipped\ncount (honest gap marker, never silent skipping), and (re)connecting\nreplays nothing — `GET /v1/jobs` is the current-state snapshot.",
+        "operationId": "get_events",
+        "responses": {
+          "200": {
+            "description": "SSE stream of job lifecycle events (job_registered / job_cancelled / job_finished; catalogue above)",
+            "content": {
+              "text/event-stream": {}
+            }
+          }
+        }
+      }
+    },
     "/v1/images/edits": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields validate exactly like `generations`. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `LoRA` adapters are not\naccepted on this route yet — use `/v1/images/generations`. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\nstrength/size/recipe fields), 404 unknown model, 429 busy, 500 staging\nor generation failure.",
+        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/\n`negative_prompt`/`seed`) validate exactly like `generations` — a named\nrecipe plus per-field overrides, explicit fields winning. No\n`hires_fix` on this route: the output stays at the source image's\ndimensions. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `LoRA` adapters are not\naccepted on this route yet — use `/v1/images/generations`. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\nstrength/size/recipe fields), 404 unknown model, 429 busy, 500 staging\nor generation failure.",
         "operationId": "post_images_edits",
         "requestBody": {
-          "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, sampler?, scheduler?, cfg_scale?, negative_prompt?, seed?",
+          "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?",
           "content": {
             "text/plain": {
               "schema": {
@@ -696,7 +712,7 @@
       "post": {
         "tags": [],
         "summary": "`POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation\nshape over the startup-configured [`SdPipeline`]. SD pipelines are\nstartup-static (no swap manager), so a request `model` is validated and\nrecorded (bundle sidecar) but the pipeline stays the one built at\nstartup — with the stub backend any slug is honest; with `sd-cpp` the\ncheckpoint is the `--sd-model` one.",
-        "description": "Each image in the request is generated under the GPU lease\n(`spawn_blocking`, like every other GPU route) and written to the\nexisting job bundle store (`<data_dir>/jobs/`), so CLI GC and\nrecordkeeping cover HTTP generations too. Errors are `OpenAI`\nenvelopes: 400 bad `size`/`response_format`/recipe params (unknown\nsampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `LoRA` slug /\nstrength / count violations), 404 unknown model, 429 busy, 500 backend\nfailure. `n` clamps to `[1, 4]` (warn, never reject). Per-request\n`loras` resolve against `ModelKind::Lora` catalog entries; their\nlicense notes surface as response `warnings` (weights are never\nbundled; ReviewedLicense-AGPL §2b/§2c).",
+        "description": "Each image in the request is generated under the GPU lease\n(`spawn_blocking`, like every other GPU route) and written to the\nexisting job bundle store (`<data_dir>/jobs/`), so CLI GC and\nrecordkeeping cover HTTP generations too. Errors are `OpenAI`\nenvelopes: 400 bad `size`/`response_format`/recipe params (unknown\nrecipe/sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `steps`\noutside [1, 100], invalid `hires_fix` scale/target/denoise, `LoRA` slug\n/ strength / count violations), 404 unknown model, 429 busy, 500\nbackend failure. `n` clamps to `[1, 4]` (warn, never reject).\nPer-request `loras` resolve against `ModelKind::Lora` catalog entries;\ntheir license notes surface as response `warnings` (weights are never\nbundled; ReviewedLicense-AGPL §2b/§2c). `recipe` selects a curated\nsampler/scheduler/cfg/steps bundle (per-field overrides win, then\nserver defaults); `hires_fix` runs the vendor-native second-pass\nupscale and is recorded in the bundle sidecar.",
         "operationId": "post_images_generations",
         "requestBody": {
           "content": {
@@ -720,7 +736,7 @@
             }
           },
           "400": {
-            "description": "Bad size, response_format, sampler, scheduler, cfg_scale, or loras",
+            "description": "Bad size, response_format, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)",
             "content": {
               "application/json": {
                 "schema": {
@@ -758,6 +774,16 @@
                 }
               }
             }
+          },
+          "501": {
+            "description": "Valid controlnet params accepted but not applicable by the sd pipeline (controlnet_unsupported)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
           }
         }
       }
@@ -781,10 +807,32 @@
         }
       }
     },
+    "/v1/jobs/{id}": {
+      "delete": {
+        "tags": [],
+        "summary": "`DELETE /v1/jobs/{id}`: the REST-shaped spelling of\n`POST /v1/jobs/{id}/cancel` — deleting an in-flight job means requesting\nits cooperative cancel, nothing more. Same token machinery, same honest\n200 `{cancelled}` / 404 contract (see [`cancel_job_response`]); the\nDELETE does not wait for the job to end and never removes finished-work\nrecords (job bundles under `<data_dir>/jobs/` are a separate concern).",
+        "operationId": "delete_job",
+        "responses": {
+          "200": {
+            "description": "Cancel requested (same contract as POST /v1/jobs/{id}/cancel)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCancelResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job id"
+          }
+        }
+      }
+    },
     "/v1/jobs/{id}/cancel": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/jobs/{id}/cancel` (NEW-3): mark the job's cooperative-stop\ntoken. 200 `{cancelled: bool}` — honest about what a cancel achieves:\n`true` only for jobs that check the token between work units\n(multi-image generations between images, streaming chat at the next\ntoken boundary); `false` = the job was found but its single blocking\nFFI call cannot be interrupted mid-flight and runs to completion\n(engine-level cancellation needs a per-backend spike, per the design\nrecord). 404: unknown id (never registered, or the request already\nended — the registry holds live work only).",
+        "summary": "`POST /v1/jobs/{id}/cancel` (NEW-3): mark the job's cooperative-stop\ntoken. See [`cancel_job_response`] for the honest response contract.",
         "operationId": "post_job_cancel",
         "responses": {
           "200": {
@@ -1740,7 +1788,7 @@
       },
       "ImagesGenerationRequest": {
         "type": "object",
-        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).\n- `loras`: per-request `LoRA` adapters (max 2; each `slug` resolves\n  against catalog entries of kind `lora` by slug or alias — unknown\n  names are a 400 naming the offender). `strength` is the adapter\n  multiplier, default 1.0, accepted range `[-2.0, 2.0]` (out of range\n  is a 400, never clamped). Weight licensing is the operator's\n  responsibility: honkbox never bundles `LoRA` weights, and the curated\n  catalog `license` is surfaced as a response warning when known — a\n  missing license means all-rights-reserved, i.e. local-only use\n  (ReviewedLicense-AGPL §2b/§2c). The high-noise adapter split is not\n  exposed; requests always apply adapters as standard `LoRA`s. Base-model\n  mismatch cannot be detected today (no base tags are recorded on scan\n  entries or `LoRA` files), so it is neither warned about nor rejected.",
+        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).\n- `loras`: per-request `LoRA` adapters (max 2; each `slug` resolves\n  against catalog entries of kind `lora` by slug or alias — unknown\n  names are a 400 naming the offender). `strength` is the adapter\n  multiplier, default 1.0, accepted range `[-2.0, 2.0]` (out of range\n  is a 400, never clamped). Weight licensing is the operator's\n  responsibility: honkbox never bundles `LoRA` weights, and the curated\n  catalog `license` is surfaced as a response warning when known — a\n  missing license means all-rights-reserved, i.e. local-only use\n  (ReviewedLicense-AGPL §2b/§2c). The high-noise adapter split is not\n  exposed; requests always apply adapters as standard `LoRA`s. Base-model\n  mismatch cannot be detected today (no base tags are recorded on scan\n  entries or `LoRA` files), so it is neither warned about nor rejected.\n\n**Named recipes and precedence**: `recipe` selects a curated bundle\n(sampler/scheduler/cfg/steps for a checkpoint family; names come from\nsd-core's supported enums and mirror the vendored stable-diffusion.cpp\npresets — e.g. `sd15`, `sdxl`, `sd35`, `turbo`, `lcm`, `flux-dev`,\n`flux-schnell`; an unknown name is a 400 listing every accepted value).\nExplicit per-field overrides ALWAYS win over the recipe defaults, which\nin turn win over the server defaults: request field > recipe > server\ndefault. Omitting `recipe` and every override field reproduces the\npre-recipe fixed recipe exactly (euler, discrete, CFG 7.0, 20 steps).\nThe applied recipe name — and which fields a recipe actually supplied —\nland verbatim in the job bundle sidecar.",
         "required": [
           "prompt"
         ],
@@ -1752,6 +1800,31 @@
             ],
             "format": "float",
             "description": "Classifier-free guidance scale; accepted range `[1.0, 30.0]`, values\noutside it are rejected with a 400 (never silently clamped)."
+          },
+          "control_image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Conditioning image for [`ImagesGenerationRequest::controlnet`]:\nbase64-encoded PNG. Validated (bad base64 / not a PNG = 400) and\nthen subject to the same honest 501 as the slug."
+          },
+          "controlnet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ControlNet` slug or alias of a `controlnet`-kind catalog entry\n(honkbox extension, not part of the `OpenAI` image shape). Accepted\nand validated (unknown slug = 400) together with\n[`ImagesGenerationRequest::control_image`]; applying it is NOT\npossible today — the sd pipeline seam carries no control inputs —\nso a fully valid pair is answered with an explicit 501\n(`controlnet_unsupported`), never silently ignored."
+          },
+          "hires_fix": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImagesHiresFix",
+                "description": "Optional hires-fix second pass: generate at `size`, interpolate the\nlatent up to the target, re-denoise (see [`ImagesHiresFix`])."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "loras": {
             "type": [
@@ -1790,6 +1863,13 @@
             "type": "string",
             "description": "Text prompt (required)."
           },
+          "recipe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Named generation recipe (curated sampler/scheduler/cfg/steps bundle\nper checkpoint family); unknown names are rejected with a 400 listing\nevery accepted value. Explicit per-field overrides win over recipe\ndefaults (see the struct-level precedence docs)."
+          },
           "response_format": {
             "type": [
               "string",
@@ -1826,6 +1906,15 @@
               "null"
             ],
             "description": "Image size as `\"WxH\"` pixels (e.g. `\"1024x1024\"`); default\n`1024x1024`."
+          },
+          "steps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Diffusion steps override; accepted range `[1, 100]`, outside it is a\n400 (rejected, never clamped). Omitted = the recipe default, else the\nserver default of 20.",
+            "minimum": 0
           }
         }
       },
@@ -1862,6 +1951,35 @@
           }
         }
       },
+      "ImagesHiresFix": {
+        "type": "object",
+        "description": "Optional hires-fix second pass on [`ImagesGenerationRequest::hires_fix`].\nVendor-native two-pass upscale (stable-diffusion.cpp `sd_hires_params_t`,\nlatent upscaler): the image is generated at the requested `size`, the\nlatent is interpolated up to the target, and a second pass re-denoises at\n`denoise`. `target` wins over `scale`. The final edge stays under the\nsame 2048 px cap as plain generation; violations are a 400.",
+        "properties": {
+          "denoise": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Second-pass denoising strength `(0, 1]`; default 0.7."
+          },
+          "scale": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Upscale factor over the requested `size`; accepted range\n`[1.0, 4.0]`, default 2.0."
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Explicit target size `\"WxH\"` (e.g. `\"2048x1152\"`); overrides\n`scale` when present."
+          }
+        }
+      },
       "ImagesLora": {
         "type": "object",
         "description": "One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].",
@@ -1895,6 +2013,62 @@
             "description": "Whether the cancel will stop the job at its next work-unit boundary."
           }
         }
+      },
+      "JobEvent": {
+        "type": "object",
+        "description": "One job lifecycle event streamed by `GET /v1/events`. The registry is a\nliveness view, so events are transitional: no history is replayed on\n(re)connect — a fresh stream only sees jobs registered after it opened.",
+        "required": [
+          "event",
+          "id",
+          "kind",
+          "started_at_ms",
+          "interruptible",
+          "cancelled"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean",
+            "description": "Whether a cancel had been requested for the job at the event's\npoint in time: always `true` on `job_cancelled`, `false` on\n`job_registered`, and on `job_finished` `true` means the token was\nmarked before the job ended — for a non-interruptible job that\nstill means the work ran to completion."
+          },
+          "event": {
+            "$ref": "#/components/schemas/JobEventType",
+            "description": "Lifecycle transition (also carried as the SSE `event:` line so\nJSON-only consumers do not need the envelope)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Registry id (`job_<ulid>`); matches `GET /v1/jobs` and `X-Job-Id`."
+          },
+          "interruptible": {
+            "type": "boolean",
+            "description": "Whether the job checks its cancel token between work units (same\ncontract as [`JobInfo::interruptible`])."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Modality label (`chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, `translations`)."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model slug the job runs against, when known."
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Registration time, Unix milliseconds (same value `GET /v1/jobs`\nreports for the live entry).",
+            "minimum": 0
+          }
+        }
+      },
+      "JobEventType": {
+        "type": "string",
+        "description": "Which lifecycle transition a [`JobEvent`] carries (`GET /v1/events`\nSSE frames; the wire labels double as the SSE `event:` line).",
+        "enum": [
+          "job_registered",
+          "job_cancelled",
+          "job_finished"
+        ]
       },
       "JobInfo": {
         "type": "object",
@@ -2232,6 +2406,7 @@
         "enum": [
           "llm",
           "sd",
+          "controlnet",
           "lora",
           "embedding",
           "vae",

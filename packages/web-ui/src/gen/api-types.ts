@@ -596,6 +596,40 @@ export type ImagesGenerationRequest = {
    * licensing and validation rules); omit = plain checkpoint render.
    */
   loras?: Array<ImagesLora> | null;
+  /**
+   * Named generation recipe (curated sampler/scheduler/cfg/steps bundle
+   * per checkpoint family); unknown names are rejected with a 400 listing
+   * every accepted value. Explicit per-field overrides win over recipe
+   * defaults (see the struct-level precedence docs).
+   */
+  recipe?: string | null;
+  /**
+   * Diffusion steps override; accepted range `[1, 100]`, outside it is a
+   * 400 (rejected, never clamped). Omitted = the recipe default, else the
+   * server default of 20.
+   */
+  steps?: number | null;
+  /**
+   * Optional hires-fix second pass: generate at `size`, interpolate the
+   * latent up to the target, re-denoise (see [`ImagesHiresFix`]).
+   */
+  hires_fix?: ImagesHiresFix | null;
+  /**
+   * `ControlNet` slug or alias of a `controlnet`-kind catalog entry
+   * (honkbox extension, not part of the `OpenAI` image shape). Accepted
+   * and validated (unknown slug = 400) together with
+   * [`ImagesGenerationRequest::control_image`]; applying it is NOT
+   * possible today — the sd pipeline seam carries no control inputs —
+   * so a fully valid pair is answered with an explicit 501
+   * (`controlnet_unsupported`), never silently ignored.
+   */
+  controlnet?: string | null;
+  /**
+   * Conditioning image for [`ImagesGenerationRequest::controlnet`]:
+   * base64-encoded PNG. Validated (bad base64 / not a PNG = 400) and
+   * then subject to the same honest 501 as the slug.
+   */
+  control_image?: string | null;
 };
 export type ImagesLora = {
   /**
@@ -607,6 +641,22 @@ export type ImagesLora = {
    * Adapter multiplier; default 1.0, accepted range `[-2.0, 2.0]`.
    */
   strength?: number | null;
+};
+export type ImagesHiresFix = {
+  /**
+   * Upscale factor over the requested `size`; accepted range
+   * `[1.0, 4.0]`, default 2.0.
+   */
+  scale?: number | null;
+  /**
+   * Explicit target size `"WxH"` (e.g. `"2048x1152"`); overrides
+   * `scale` when present.
+   */
+  target?: string | null;
+  /**
+   * Second-pass denoising strength `(0, 1]`; default 0.7.
+   */
+  denoise?: number | null;
 };
 export type ImageB64 = {
   /**
@@ -763,7 +813,7 @@ export type ModelDeleteResult = {
    */
   removed: Array<string>;
 };
-export type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae" | "stt" | "tts";
+export type ModelKind = "llm" | "sd" | "controlnet" | "lora" | "embedding" | "vae" | "stt" | "tts";
 export type ModelCapabilities = {
   /**
    * Chat-template conversation turns (an LLM pipeline can serve it).
@@ -1139,6 +1189,45 @@ export type JobList = {
 export type JobCancelResult = {
   /**
    * Whether the cancel will stop the job at its next work-unit boundary.
+   */
+  cancelled: boolean;
+};
+export type JobEventType = "job_registered" | "job_cancelled" | "job_finished";
+export type JobEvent = {
+  /**
+   * Lifecycle transition (also carried as the SSE `event:` line so
+   * JSON-only consumers do not need the envelope).
+   */
+  event: JobEventType;
+  /**
+   * Registry id (`job_<ulid>`); matches `GET /v1/jobs` and `X-Job-Id`.
+   */
+  id: string;
+  /**
+   * Modality label (`chat`, `embeddings`, `images`, `transcribe`,
+   * `synthesize`, `translations`).
+   */
+  kind: string;
+  /**
+   * Model slug the job runs against, when known.
+   */
+  model: string | null;
+  /**
+   * Registration time, Unix milliseconds (same value `GET /v1/jobs`
+   * reports for the live entry).
+   */
+  started_at_ms: bigint;
+  /**
+   * Whether the job checks its cancel token between work units (same
+   * contract as [`JobInfo::interruptible`]).
+   */
+  interruptible: boolean;
+  /**
+   * Whether a cancel had been requested for the job at the event's
+   * point in time: always `true` on `job_cancelled`, `false` on
+   * `job_registered`, and on `job_finished` `true` means the token was
+   * marked before the job ended — for a non-interruptible job that
+   * still means the work ran to completion.
    */
   cancelled: boolean;
 };

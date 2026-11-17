@@ -31,12 +31,66 @@ pub struct ChatMessage {
     /// Who said it.
     pub role: Role,
     /// Message text (already normalized to empty when the caller sent
-    /// `content: null`).
+    /// `content: null`). For vision requests the server has already spliced
+    /// the projector's media marker into this text, once per
+    /// [`ChatMessage::images`] entry, at the offsets the client's content
+    /// parts occupied.
     pub content: String,
     /// `role: Tool`: the assistant `tool_call` id this message answers.
     pub tool_call_id: Option<String>,
     /// `role: Assistant`: tool calls already made (`REQ-3`).
     pub tool_calls: Vec<ToolCallSpec>,
+    /// Image attachments for this message, in marker order (vision chat).
+    /// Decoded bytes (the server strips the `data:` URI envelope); formats
+    /// are whatever `stb_image` decodes — JPEG/PNG/BMP/GIF in practice.
+    pub images: Vec<ChatImage>,
+}
+
+impl Default for ChatMessage {
+    fn default() -> Self {
+        Self {
+            role: Role::User,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            images: Vec::new(),
+        }
+    }
+}
+
+/// One decoded image attachment (vision chat). A newtype over the bytes
+/// only so `Debug` prints a length, never half a megabyte of pixels.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ChatImage {
+    /// Encoded image file bytes (JPEG/PNG/…; `MtmdBitmap::from_buf`
+    /// sniffs the format).
+    pub bytes: Vec<u8>,
+}
+
+impl ChatImage {
+    /// Wrap encoded image bytes.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Encoded image byte count.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// `true` when the attachment is empty (nothing to embed).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+impl std::fmt::Debug for ChatImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ChatImage({} bytes)", self.bytes.len())
+    }
 }
 
 /// A tool call crossing the worker boundary (`REQ-3`). `arguments` is a
@@ -59,6 +113,12 @@ pub struct ToolCallSpec {
 /// `tools_json` switches onto the model's tool-capable chat template and
 /// enables tool-call parsing. The stub emulates all of them
 /// deterministically.
+///
+/// Vision (`REQ-8`): image attachments ride per-message
+/// ([`ChatMessage::images`]), with the projector's media marker already
+/// spliced into the message text at the right offsets. [`LlamaCppLlm`]
+/// evaluates them through the loaded mmproj; a text-only model (no
+/// `LlmOptions::mmproj_path`) refuses with [`LlmError::Vision`].
 ///
 /// `Default` exists for partial construction (`..Default::default()` on
 /// call sites like the CLI); an empty `model`/`messages` request is an
@@ -152,6 +212,12 @@ pub struct ToolCallOut {
     pub arguments: String,
 }
 
+/// Whether this build compiles the mtmd vision path (feature `vision`): the
+/// catalog derives `capabilities.vision` from sibling-mmproj discovery
+/// AND this flag, so `GET /v1/models` never advertises vision a build
+/// cannot serve.
+pub const VISION_COMPILED: bool = cfg!(feature = "vision");
+
 /// Options for [`LlamaCppLlm::load`].
 #[derive(Debug, Clone)]
 pub struct LlmOptions {
@@ -161,6 +227,11 @@ pub struct LlmOptions {
     pub n_gpu_layers: u32,
     /// CPU threads.
     pub threads: u32,
+    /// Multimodal projector (mmproj) GGUF to load alongside the model
+    /// (vision chat). `None` = text-only: image-bearing requests are
+    /// rejected with [`LlmError::Vision`]. A configured-but-unloadable
+    /// projector is a [`LlmError::Load`] — never a silent text-only start.
+    pub mmproj_path: Option<std::path::PathBuf>,
 }
 
 impl Default for LlmOptions {
@@ -170,6 +241,7 @@ impl Default for LlmOptions {
             n_gpu_layers: u32::MAX,
             threads: std::thread::available_parallelism()
                 .map_or(4, |n| u32::try_from(n.get()).unwrap_or(u32::MAX)),
+            mmproj_path: None,
         }
     }
 }
@@ -187,6 +259,10 @@ pub enum LlmError {
     Context(String),
     /// Prompt decode or token generation failed.
     Decode(String),
+    /// Vision request the loaded pipeline cannot serve: image content on
+    /// a model without an mmproj projector (`REQ-8` refusal; the server
+    /// gates this before the call — this is defense in depth).
+    Vision(String),
     /// Request is unusable (e.g. no messages).
     InvalidRequest(String),
 }
@@ -199,6 +275,7 @@ impl fmt::Display for LlmError {
             Self::Tokenizer(e) => write!(f, "tokenizer failed: {e}"),
             Self::Context(e) => write!(f, "context failed: {e}"),
             Self::Decode(e) => write!(f, "decode failed: {e}"),
+            Self::Vision(e) => write!(f, "vision unsupported: {e}"),
             Self::InvalidRequest(e) => write!(f, "invalid request: {e}"),
         }
     }
@@ -267,7 +344,10 @@ impl AbortState {
 /// `REQ-3` request surface deterministically: `tools` (when not suppressed
 /// by `tool_choice_none`) make it call the first offered tool with
 /// schema-shaped arguments; `grammar`/`json_schema`/`json_object` make it
-/// answer with a parseable JSON object.
+/// answer with a parseable JSON object. Image attachments (`REQ-8` vision
+/// chat) are accepted and — like every other request feature here —
+/// emulated: the reply is the same canned text, no vision inference
+/// happens (the real gate lives in [`LlamaCppLlm`]).
 #[derive(Debug, Default, Clone)]
 pub struct StubLlm {
     abort: Arc<AbortState>,
@@ -469,8 +549,7 @@ mod tests {
             messages: vec![ChatMessage {
                 role: Role::User,
                 content: "hello".to_string(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
+                ..ChatMessage::default()
             }],
             max_tokens: None,
             temperature: None,
@@ -535,8 +614,7 @@ mod tests {
             ChatMessage {
                 role: Role::User,
                 content: "weather?".to_string(),
-                tool_call_id: None,
-                tool_calls: Vec::new(),
+                ..ChatMessage::default()
             },
             ChatMessage {
                 role: Role::Assistant,
@@ -547,12 +625,13 @@ mod tests {
                     name: "lookup_weather".to_owned(),
                     arguments: r#"{"city":"Reykjavik"}"#.to_owned(),
                 }],
+                ..ChatMessage::default()
             },
             ChatMessage {
                 role: Role::Tool,
                 content: "4C, raining".to_string(),
                 tool_call_id: Some("call_1".to_owned()),
-                tool_calls: Vec::new(),
+                ..ChatMessage::default()
             },
         ];
         let resp = llm.complete(&req).unwrap();
@@ -614,6 +693,47 @@ mod tests {
         let err = LlamaCppLlm::load(Path::new("/nonexistent/model.gguf"), &LlmOptions::default())
             .unwrap_err();
         assert!(matches!(err, LlmError::Load(_)));
+    }
+
+    #[test]
+    fn load_missing_mmproj_errors_before_backend_init() {
+        // The projector existence check is fail-fast (before backend init and
+        // model load), so the error names the mmproj even though the "model"
+        // file is also garbage — the misconfiguration is the operator's to
+        // fix, never a silent text-only start.
+        let base = std::env::temp_dir().join(format!("honkbox-llm-mmproj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let model = base.join("model.gguf");
+        std::fs::write(&model, b"not a gguf").unwrap();
+        let opts = LlmOptions {
+            mmproj_path: Some(base.join("missing-mmproj.gguf")),
+            ..LlmOptions::default()
+        };
+        let err = LlamaCppLlm::load(&model, &opts).unwrap_err();
+        std::fs::remove_dir_all(&base).unwrap();
+        let LlmError::Load(message) = err else {
+            panic!("expected Load error, got {err:?}");
+        };
+        assert!(message.contains("mmproj file not found"), "{message}");
+    }
+
+    #[test]
+    fn stub_accepts_image_attachments_as_emulated_text() {
+        // The stub emulates vision requests: image attachments ride along,
+        // the reply stays the canned text (no vision inference happens).
+        let llm = StubLlm::default();
+        let mut req = req();
+        req.messages[0].images = vec![ChatImage::new(vec![1, 2, 3])];
+        let resp = llm.complete(&req).unwrap();
+        assert!(resp.text.contains("hello"));
+        // Debug never prints pixel bytes.
+        assert_eq!(
+            format!("{:?}", ChatImage::new(vec![9; 700_000])),
+            "ChatImage(700000 bytes)"
+        );
+        assert!(ChatImage::new(Vec::new()).is_empty());
+        assert_eq!(ChatImage::new(vec![1, 2]).len(), 2);
     }
 
     #[test]

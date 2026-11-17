@@ -929,9 +929,10 @@ async fn content_parts_flatten_and_string_form_compat() {
     );
 }
 
-/// REQ-8 acceptance: an `image_url` part is an explicit 400 with the
-/// `OpenAI` envelope naming the vision refusal — never a silent drop or
-/// silent flatten.
+/// REQ-8 acceptance: an `image_url` part on a text-only catalog entry (no
+/// sibling mmproj, no override) is an explicit 400 with the `OpenAI`
+/// envelope naming the vision refusal — never a silent drop or silent
+/// flatten.
 #[tokio::test]
 async fn image_url_part_is_400_vision_envelope() {
     let _slot = SLOT_LOCK.lock().await;
@@ -960,9 +961,146 @@ async fn image_url_part_is_400_vision_envelope() {
     assert!(
         error["message"]
             .as_str()
-            .is_some_and(|m| m.contains("vision not supported by backend")),
+            .is_some_and(|m| m.contains("is not vision-capable")),
         "{parsed}"
     );
+}
+
+/// Chat-capability gate: an entry declaring `capabilities.chat = false` —
+/// exactly what a scanned `mmproj*.gguf` projector file advertises — is a
+/// named 400 on the completions surface, never garbage tokens dressed up
+/// as a completion.
+#[tokio::test]
+async fn non_chat_capable_entry_is_400_named() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut entry = entry("llm:mmproj-model-f16.gguf");
+    entry.capabilities.chat = false;
+    entry.capabilities.completion = false;
+    let catalog = ModelCatalog {
+        object: "list".to_owned(),
+        data: vec![entry],
+    };
+    let (status, _, body) = completions(
+        test_app(catalog),
+        completion_body(
+            "llm:mmproj-model-f16.gguf",
+            &json!({"messages": [{"role": "user", "content": "hello"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(parsed["error"]["code"], "chat_unsupported", "{parsed}");
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("is not chat-capable")),
+        "{parsed}"
+    );
+}
+
+/// REQ-8 acceptance, the vision-capable path: an entry whose capabilities
+/// declare vision passes the gate, the data URI decodes, and the request
+/// reaches the pipeline (the stub replies; the marker-spliced text is the
+/// worker's business, the wire response shape is unchanged).
+#[tokio::test]
+async fn image_data_uri_passes_on_vision_capable_entry() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut entry = entry("llm:fake.gguf");
+    entry.capabilities.vision = true;
+    entry.modalities = vec!["text".to_owned(), "vision".to_owned()];
+    let catalog = ModelCatalog {
+        object: "list".to_owned(),
+        data: vec![entry],
+    };
+    let (status, _, body) = completions(
+        test_app(catalog),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in "},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0K"}},
+                    {"type": "text", "text": "this image?"}
+                ]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    // The stub echoes the worker message content — which carries the
+    // marker spliced at the image part's offset (vision plumbing proof).
+    assert_eq!(
+        parsed["choices"][0]["message"]["content"],
+        "stub reply to: What is in <__media__>this image?"
+    );
+}
+
+/// REQ-8 acceptance: a remote `image_url` is refused by name even on a
+/// vision-capable entry — the server never fetches client-supplied URLs.
+#[tokio::test]
+async fn remote_image_url_is_400_named_on_vision_entry() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut entry = entry("llm:fake.gguf");
+    entry.capabilities.vision = true;
+    let catalog = ModelCatalog {
+        object: "list".to_owned(),
+        data: vec![entry],
+    };
+    let (status, _, body) = completions(
+        test_app(catalog),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://example.invalid/cat.png"}}
+                ]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(parsed["error"]["code"], "image_url_unsupported", "{parsed}");
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("only data: URIs are accepted")),
+        "{parsed}"
+    );
+}
+
+/// REQ-8 acceptance: a non-base64 (or empty) `data:` payload is a 400
+/// naming the decode failure (`invalid_image_data`) on a vision-capable
+/// entry — the gate passes, the payload itself is unusable.
+#[tokio::test]
+async fn undecodable_data_uri_is_400_invalid_image_data() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut entry = entry("llm:fake.gguf");
+    entry.capabilities.vision = true;
+    let catalog = ModelCatalog {
+        object: "list".to_owned(),
+        data: vec![entry],
+    };
+    let (status, _, body) = completions(
+        test_app(catalog),
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,!!not-base64!!"}}
+                ]
+            }]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert_eq!(parsed["error"]["code"], "invalid_image_data", "{parsed}");
 }
 
 /// REQ-8 acceptance: an unsupported part type is a 400 naming the type.
@@ -990,8 +1128,8 @@ async fn unknown_part_type_is_400_named() {
     assert!(message.contains("input_audio"), "{parsed}");
 }
 
-/// REQ-8 parity on the native route: an `image_url` part there is the
-/// same refusal in the native plain-text error shape.
+/// REQ-8 parity on the native route: an `image_url` part on a text-only
+/// entry is the same refusal in the native plain-text error shape.
 #[tokio::test]
 async fn native_chat_rejects_image_parts_plain_400() {
     let _slot = SLOT_LOCK.lock().await;
@@ -1029,5 +1167,5 @@ async fn native_chat_rejects_image_parts_plain_400() {
     assert!(content_type.starts_with("text/plain"), "{content_type}");
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("vision not supported by backend"), "{text}");
+    assert!(text.contains("is not vision-capable"), "{text}");
 }

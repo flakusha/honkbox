@@ -1,0 +1,50 @@
+diff --git a/vendor/llama-cpp-sys-4-0.11.0/build.rs b/vendor/llama-cpp-sys-4-0.11.0/build.rs
+index 3b47528..211a684 100644
+--- a/vendor/llama-cpp-sys-4-0.11.0/build.rs
++++ b/vendor/llama-cpp-sys-4-0.11.0/build.rs
+@@ -3287,6 +3287,45 @@ fn main() {
+         }
+     }
+ 
++    // honkbox vendor patch: mtmd-helper.cpp references `hash_sha256_hex`
++    // (tools/mtmd/CMakeLists.txt links `vendor::hash` PRIVATE into mtmd),
++    // but CMake never installs the `vendor-hash` archive — it lives only in
++    // the build tree. Without it, any binary touching the mtmd bitmap
++    // loaders fails with `undefined symbol: hash_sha256_hex`. Walk the
++    // build tree for the archive and link it, the same way
++    // `llama-common-base` is special-cased above.
++    if !build_shared_libs && cfg!(feature = "mtmd") {
++        let build_tree = cmake_out_dir.join("build");
++        let mut stack = vec![build_tree.clone()];
++        let mut hash_dir = None;
++        let mut i = 0;
++        while i < stack.len() && hash_dir.is_none() {
++            let dir = stack[i].clone();
++            i += 1;
++            if let Ok(entries) = std::fs::read_dir(&dir) {
++                for entry in entries.flatten() {
++                    let path = entry.path();
++                    if path.is_dir() {
++                        stack.push(path);
++                    } else if path.file_name().and_then(|n| n.to_str())
++                        == Some("libvendor-hash.a")
++                    {
++                        hash_dir = path.parent().map(std::path::Path::to_path_buf);
++                    }
++                }
++            }
++        }
++        if let Some(dir) = hash_dir {
++            println!("cargo:rustc-link-search=native={}", dir.display());
++            println!("cargo:rustc-link-lib=static=vendor-hash");
++        } else {
++            println!(
++                "cargo:warning=llama-cpp-sys-4[mtmd]: libvendor-hash.a not found under {}; mtmd bitmap loaders will fail to link",
++                build_tree.display()
++            );
++        }
++    }
++
+     compile_shims(Path::new(&manifest_dir), &llama_dst, &target);
+ 
+     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).

@@ -88,3 +88,10 @@ lto = "thin"
 [patch.crates-io]
 diffusion-rs = { path = "vendor/diffusion-rs" }
 diffusion-rs-sys = { path = "vendor/diffusion-rs/sys" }
+# llama-cpp-sys-4 0.11.0: vendored (crates.io tarball, sha256-pinned in
+# vendor.manifest.toml) so the mtmd/vision path can link — the published
+# build script never links the `vendor-hash` archive its mtmd-helper.cpp
+# references (`undefined symbol: hash_sha256_hex`); the patch adds the
+# missing build-tree link directive. Landed by `bun scripts/vendor-patches.ts
+# sync`; the [vendor.crate] manifest entry carries the pin.
+llama-cpp-sys-4 = { path = "vendor/llama-cpp-sys-4-0.11.0" }

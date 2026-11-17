@@ -16,4 +16,14 @@ serde_json = { workspace = true }
 default = ["llm-vulkan"]
 llm-vulkan = ["llama-cpp-4/vulkan"]
 llm-cuda = ["llama-cpp-4/cuda"]
+# Vision chat (mtmd/mmproj). Off by default for a vendor packaging reason,
+# NOT a missing capability: llama-cpp-sys-4 0.11.0 links the installed
+# `mtmd` static library without the `vendor-hash` library its
+# `mtmd-helper.cpp` references (`tools/mtmd/CMakeLists.txt` links
+# `vendor::hash` PRIVATE; the sys build script only links cmake-install-dir
+# libs plus `llama-common-base`), so any binary calling the bitmap loaders
+# (`MtmdBitmap::from_buf`/`from_file`) fails to link with an undefined
+# `hash_sha256_hex`. Fix path: a [patch.crates-io] vendor patch adding the
+# missing link directive, then flip this feature on (server `llm-vision`).
+vision = []
 

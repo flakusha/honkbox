@@ -29,15 +29,37 @@
 //! it is reading. On sync routes the header arrives with the completed
 //! response (too late to cancel that same request) — clients that need to
 //! cancel discover ids from `GET /v1/jobs` instead.
+//!
+//! # Lifecycle events (`GET /v1/events`)
+//!
+//! Every transition emits a [`JobEvent`] on a process-wide
+//! [`tokio::sync::broadcast`] channel (`subscribe`): `job_registered` when
+//! a job enters the registry, `job_cancelled` the moment a cancel is
+//! REQUESTED, and `job_finished` when the job leaves the registry (the
+//! event's `cancelled` flag says whether the token had been marked — for a
+//! non-interruptible job that still means the FFI call ran to completion).
+//! Emission is fire-and-forget: with no live subscribers the send fails and
+//! the event is dropped; a subscriber that falls more than
+//! [`EVENT_CHANNEL_CAPACITY`] events behind gets a `Lagged` error (the SSE
+//! route surfaces that as an `events_dropped` frame, never a lie by
+//! omission). The channel carries transitions only — there is no replay of
+//! the current registry on subscribe; `GET /v1/jobs` is the snapshot.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use honkbox_api_types::JobInfo;
+use honkbox_api_types::{JobEvent, JobEventType, JobInfo};
+
+/// Broadcast capacity for lifecycle events, in events (not bytes). A
+/// subscriber that falls further behind is `Lagged` — surfaced honestly by
+/// the SSE route instead of silently skipped. Small by design: this is a
+/// liveness stream, not a history log.
+const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// The process-wide registry.
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::default);
@@ -98,13 +120,43 @@ struct JobEntry {
     interruptible: bool,
 }
 
+impl JobEntry {
+    /// The event-stream projection of this entry (with the lifecycle
+    /// transition and the cancel-requested flag filled in).
+    fn to_event(&self, event: JobEventType, cancelled: bool) -> JobEvent {
+        JobEvent {
+            event,
+            id: self.id.clone(),
+            kind: self.kind.label().to_owned(),
+            model: self.model.clone(),
+            started_at_ms: self.started_at_ms,
+            interruptible: self.interruptible,
+            cancelled,
+        }
+    }
+}
+
 /// Registry of live GPU jobs: id → entry. The map lives behind an `Arc` so
 /// each [`JobGuard`] unregisters from ITS OWN registry on drop (a locally
-/// built registry in tests behaves exactly like the global one).
-#[derive(Debug, Default)]
+/// built registry in tests behaves exactly like the global one). The
+/// lifecycle-event broadcaster rides alongside: `register`, `cancel`, and
+/// [`JobGuard::drop`] are the only emitters, all keyed by the registry.
+#[derive(Debug)]
 pub(crate) struct Registry {
     entries: Arc<Mutex<HashMap<String, JobEntry>>>,
+    events: broadcast::Sender<JobEvent>,
     seq: AtomicU64,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        Self {
+            entries: Arc::default(),
+            events,
+            seq: AtomicU64::new(0),
+        }
+    }
 }
 
 impl Registry {
@@ -119,12 +171,13 @@ impl Registry {
     ) -> JobGuard {
         let id = format!("job_{}", ulid::Ulid::new());
         let token = CancellationToken::new();
+        let started_at_ms = now_ms();
         let entry = JobEntry {
             id: id.clone(),
             token: token.clone(),
             kind,
-            model,
-            started_at_ms: now_ms(),
+            model: model.clone(),
+            started_at_ms,
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
             interruptible,
         };
@@ -132,8 +185,20 @@ impl Registry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), entry);
+        // Fire-and-forget: no live subscriber is a normal idle state, not
+        // an error (observability never back-pressures GPU work).
+        let _ = self.events.send(JobEvent {
+            event: JobEventType::Registered,
+            id: id.clone(),
+            kind: kind.label().to_owned(),
+            model,
+            started_at_ms,
+            interruptible,
+            cancelled: false,
+        });
         JobGuard {
             entries: Arc::clone(&self.entries),
+            events: self.events.clone(),
             id,
             token,
         }
@@ -142,6 +207,8 @@ impl Registry {
     /// Mark a live job's token. `Some(interruptible)` = the id was found
     /// (freshly marked or already cancelled while still in flight); `None`
     /// = unknown id (never registered, or its request already ended).
+    /// Emits `job_cancelled` — a cancel was REQUESTED, not a completion —
+    /// on the lifecycle channel when the id was found.
     pub(crate) fn cancel(&self, id: &str) -> Option<bool> {
         let mut entries = self
             .entries
@@ -149,6 +216,12 @@ impl Registry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = entries.get_mut(id)?;
         entry.token.cancel();
+        // Fire-and-forget (same contract as `register`); the send touches
+        // only the broadcast channel, never the entries map, so holding the
+        // entries lock here cannot invert any lock order.
+        let _ = self
+            .events
+            .send(entry.to_event(JobEventType::Cancelled, true));
         Some(entry.interruptible)
     }
 
@@ -171,14 +244,24 @@ impl Registry {
             })
             .collect()
     }
+
+    /// Subscribe to job lifecycle events (`GET /v1/events`). Only events
+    /// emitted after the subscription are delivered — there is no replay;
+    /// `list` is the current-state snapshot.
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
+        self.events.subscribe()
+    }
 }
 
 /// Registry id + cancel token + a handle to the OWNING registry; dropping
 /// it unregisters the job from that registry, so a guard must live exactly
-/// as long as the request that owns the work.
+/// as long as the request that owns the work. The drop emits `job_finished`
+/// on the lifecycle channel (`cancelled` = the token had been marked — for
+/// a non-interruptible job the work still ran to completion).
 #[derive(Debug)]
 pub(crate) struct JobGuard {
     entries: Arc<Mutex<HashMap<String, JobEntry>>>,
+    events: broadcast::Sender<JobEvent>,
     id: String,
     token: CancellationToken,
 }
@@ -197,10 +280,20 @@ impl JobGuard {
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
-        self.entries
+        let entry = self
+            .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.id);
+        if let Some(entry) = entry {
+            // The guard's own token says whether a cancel had been marked;
+            // what the work actually did with it is the `interruptible`
+            // contract (documented on the event DTO).
+            let cancelled = self.token.is_cancelled();
+            let _ = self
+                .events
+                .send(entry.to_event(JobEventType::Finished, cancelled));
+        }
     }
 }
 
@@ -267,5 +360,113 @@ mod tests {
         assert_eq!(listed[1].kind, "images");
         drop(first);
         drop(second);
+    }
+
+    /// Receive one event with a generous bound (a missed send fails with
+    /// context at the timeout instead of hanging forever).
+    async fn next_event(receiver: &mut broadcast::Receiver<JobEvent>) -> JobEvent {
+        tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("lifecycle event within 5s")
+            .expect("channel open")
+    }
+
+    /// The full lifecycle for one job: registered → cancelled (request)
+    /// → finished (token was marked). Event fields mirror the live
+    /// `GET /v1/jobs` row.
+    #[tokio::test]
+    async fn events_report_the_full_lifecycle() {
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(
+            JobKind::Images,
+            Some("comfy:checkpoints/s.safetensors".to_owned()),
+            true,
+        );
+        let registered = next_event(&mut receiver).await;
+        assert_eq!(registered.event, JobEventType::Registered);
+        assert_eq!(registered.event.label(), "job_registered");
+        assert_eq!(registered.id, *job.id());
+        assert_eq!(registered.kind, "images");
+        assert_eq!(
+            registered.model.as_deref(),
+            Some("comfy:checkpoints/s.safetensors")
+        );
+        assert!(registered.interruptible);
+        assert!(!registered.cancelled);
+        assert!(registered.started_at_ms > 0);
+
+        assert_eq!(registry.cancel(job.id()), Some(true));
+        let cancelled = next_event(&mut receiver).await;
+        assert_eq!(cancelled.event, JobEventType::Cancelled);
+        assert_eq!(cancelled.event.label(), "job_cancelled");
+        assert_eq!(cancelled.id, *job.id());
+        assert!(cancelled.cancelled);
+        assert!(cancelled.interruptible);
+
+        drop(job);
+        let finished = next_event(&mut receiver).await;
+        assert_eq!(finished.event, JobEventType::Finished);
+        assert_eq!(finished.event.label(), "job_finished");
+        assert_eq!(finished.id, cancelled.id);
+        // The token had been marked before the job ended.
+        assert!(finished.cancelled);
+        assert_eq!(finished.started_at_ms, registered.started_at_ms);
+    }
+
+    /// A job that ends without any cancel reports `cancelled: false` on
+    /// `job_finished` — the flag is "a cancel had been requested", never
+    /// an outcome claim.
+    #[tokio::test]
+    async fn finish_without_cancel_reports_cancelled_false() {
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(JobKind::Synthesize, None, false);
+        let registered = next_event(&mut receiver).await;
+        assert!(!registered.cancelled);
+        drop(job);
+        let finished = next_event(&mut receiver).await;
+        assert_eq!(finished.event, JobEventType::Finished);
+        assert!(!finished.cancelled);
+        assert!(!finished.interruptible);
+        assert!(finished.model.is_none());
+    }
+
+    /// Events are broadcast: every subscriber sees the same sequence, and
+    /// emitting with NO subscriber is a quiet no-op — observability stays
+    /// fire-and-forget, never a panic, never back-pressure.
+    #[tokio::test]
+    async fn events_fan_out_and_send_without_receivers_is_quiet() {
+        let registry = fresh();
+        // No subscriber yet: this emit is silently dropped.
+        let job = registry.register(JobKind::Chat, None, false);
+        let mut first = registry.subscribe();
+        let mut second = registry.subscribe();
+        drop(job);
+        let from_first = next_event(&mut first).await;
+        let from_second = next_event(&mut second).await;
+        assert_eq!(from_first.event, JobEventType::Finished);
+        assert_eq!(from_second.event, JobEventType::Finished);
+        assert_eq!(from_first.id, from_second.id);
+    }
+
+    /// The serialized wire shape: the SSE `event:` label mirrors the JSON
+    /// `event` field (explicit per-variant renames), and `model` is omitted
+    /// when unknown (`skip_serializing_if`).
+    #[tokio::test]
+    async fn event_wire_shape() {
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(JobKind::Embeddings, None, false);
+        let event = next_event(&mut receiver).await;
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["event"], "job_registered");
+        assert_eq!(json["kind"], "embeddings");
+        assert_eq!(json["interruptible"], false);
+        assert_eq!(json["cancelled"], false);
+        assert!(json.get("model").is_none(), "model omitted: {json}");
+        assert!(json["id"].as_str().is_some());
+        assert!(json["started_at_ms"].as_u64().is_some());
+        drop(job);
     }
 }

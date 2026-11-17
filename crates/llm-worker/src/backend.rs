@@ -7,7 +7,12 @@ use llama_cpp_4::chat::{
     ChatApplyParams, ChatParams, ChatTemplates, ToolChoice, json_schema_to_grammar,
     parse_messages_oaicompat,
 };
+use llama_cpp_4::context::LlamaContext;
 use llama_cpp_4::model::LlamaChatMessage;
+#[cfg(feature = "vision")]
+use llama_cpp_4::mtmd::{
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
+};
 use llama_cpp_4::{
     AddBos, LlamaBackend, LlamaBatch, LlamaContextParams, LlamaModel, LlamaModelParams,
     LlamaSampler, Special,
@@ -15,6 +20,8 @@ use llama_cpp_4::{
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(feature = "vision")]
+use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Minimum candidate mass kept by `typical`/`min_p`/`xtc` filters.
@@ -56,9 +63,12 @@ number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
 use llama_cpp_4::token::LlamaToken;
 
 /// Everything [`LlamaCppLlm::run`] needs to start sampling one request: the
-/// tokenized prompt, the tool-template context (for output parsing) and the
-/// grammar sampler head, if any.
+/// rendered prompt (with media markers in place, vision chat), its token
+/// form (unused on the mtmd path — the projector re-tokenizes), the
+/// tool-template context (for output parsing) and the grammar sampler
+/// head, if any.
 struct PromptPlan {
+    prompt: String,
     tokens: Vec<LlamaToken>,
     chat_params: Option<ChatParams>,
     grammar_head: Option<LlamaSampler>,
@@ -71,6 +81,13 @@ pub struct LlamaCppLlm {
     backend: LlamaBackend,
     model: LlamaModel,
     opts: LlmOptions,
+    /// Multimodal projector when one was configured ([`LlmOptions::
+    /// mmproj_path`]); behind a `Mutex` because `eval_chunks` mutates the
+    /// projector's internal encode state (`tokenize` alone would only need
+    /// a shared handle). Compiled only with the `vision` feature (see the
+    /// feature docs in `Cargo.toml` for the vendor link caveat).
+    #[cfg(feature = "vision")]
+    mtmd: Option<Mutex<MtmdContext>>,
     /// Cancel signal: shared with `abort`; checked at each token step.
     abort: Arc<AbortState>,
 }
@@ -96,16 +113,63 @@ impl LlamaCppLlm {
                 model_path.display()
             )));
         }
+        // Fail fast on a misconfigured projector before any backend/model
+        // work: the existence half of the check is cheap and the error
+        // names the mmproj, not the model.
+        if let Some(mmproj_path) = &opts.mmproj_path
+            && !mmproj_path.is_file()
+        {
+            return Err(LlmError::Load(format!(
+                "mmproj file not found: {}",
+                mmproj_path.display()
+            )));
+        }
         let mut backend = LlamaBackend::init()
             .map_err(|e| LlmError::Load(format!("backend init failed: {e:?}")))?;
         backend.void_logs();
         let params = LlamaModelParams::default().with_n_gpu_layers(opts.n_gpu_layers);
         let model = LlamaModel::load_from_file(&backend, model_path, &params)
             .map_err(|e| LlmError::Load(format!("load {} failed: {e:?}", model_path.display())))?;
+        // Vision chat: load the configured mmproj projector against the text
+        // model. A configured-but-failed projector is a loud load error —
+        // never a silent text-only start (the request gate would answer 400
+        // for image parts on a model the operator believes is multimodal).
+        #[cfg(feature = "vision")]
+        let mtmd = match opts.mmproj_path.as_deref() {
+            Some(mmproj_path) => {
+                MtmdContext::void_logs();
+                let mtmd =
+                    MtmdContext::init_from_file(mmproj_path, &model, MtmdContextParams::default())
+                        .map_err(|e| {
+                            LlmError::Load(format!(
+                                "mmproj load {} failed: {e:?}",
+                                mmproj_path.display()
+                            ))
+                        })?;
+                if !mtmd.supports_vision() {
+                    return Err(LlmError::Load(format!(
+                        "mmproj {} carries no vision encoder",
+                        mmproj_path.display()
+                    )));
+                }
+                Some(Mutex::new(mtmd))
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "vision"))]
+        if opts.mmproj_path.is_some() {
+            // Honest refusal, not silent ignoring: the operator asked for a
+            // multimodal pipeline and this build cannot serve one.
+            return Err(LlmError::Load(
+                "mmproj configured but this build lacks the llm-worker `vision` feature (vendor link caveat; rebuild with --features llm-vision)".to_owned(),
+            ));
+        }
         Ok(Self {
             backend,
             model,
             opts: opts.clone(),
+            #[cfg(feature = "vision")]
+            mtmd,
             abort: Arc::default(),
         })
     }
@@ -197,6 +261,7 @@ impl LlamaCppLlm {
                 .map_err(|e| LlmError::Tokenizer(format!("{e:?}")))?;
             let grammar_head = params.grammar_sampler(&self.model);
             return Ok(PromptPlan {
+                prompt: params.prompt.clone(),
                 tokens,
                 chat_params: Some(params),
                 grammar_head,
@@ -229,10 +294,83 @@ impl LlamaCppLlm {
             .str_to_token(&prompt, AddBos::Always)
             .map_err(|e| LlmError::Tokenizer(format!("{e:?}")))?;
         Ok(PromptPlan {
+            prompt,
             tokens,
             chat_params: None,
             grammar_head,
         })
+    }
+
+    /// Vision prefill (mtmd): decode the request's image attachments into
+    /// bitmaps, tokenize the marker-bearing prompt into text+image chunks,
+    /// and evaluate them into `ctx` (logits left on the final token, so
+    /// sampling starts immediately). Returns the KV position after the
+    /// prompt. Requires an mmproj projector; image content on a text-only
+    /// model is the explicit [`LlmError::Vision`] refusal — never a
+    /// flattened or silently dropped image (`REQ-8`).
+    #[cfg(feature = "vision")]
+    fn eval_images(
+        &self,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        req: &ChatRequest,
+    ) -> Result<(i32, usize), LlmError> {
+        let Some(mtmd) = self.mtmd.as_ref() else {
+            return Err(LlmError::Vision(
+                "image content requires an mmproj projector; this model is text-only".to_owned(),
+            ));
+        };
+        let mut mtmd = mtmd
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut bitmaps = Vec::new();
+        for message in &req.messages {
+            for image in &message.images {
+                if image.is_empty() {
+                    return Err(LlmError::InvalidRequest(
+                        "empty image attachment".to_owned(),
+                    ));
+                }
+                // `from_buf` sniffs the container format (stb_image);
+                // a client-sent payload the projector cannot decode is a
+                // request problem, not a server one.
+                bitmaps.push(MtmdBitmap::from_buf(&mtmd, &image.bytes).map_err(|e| {
+                    LlmError::InvalidRequest(format!("image attachment not decodable: {e}"))
+                })?);
+            }
+        }
+        let refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+        // `add_special = true` matches the text path's `AddBos::Always`;
+        // `parse_special = true` so chat-template specials in the rendered
+        // prompt tokenize as specials, exactly as `str_to_token` did.
+        let text = MtmdInputText::new(prompt, true, true);
+        let mut chunks = MtmdInputChunks::new();
+        mtmd.tokenize(&text, &refs, &mut chunks)
+            .map_err(|e| LlmError::Tokenizer(format!("vision tokenize failed: {e:?}")))?;
+        let mut n_past = 0i32;
+        let n_batch = i32::try_from(ctx.n_batch()).unwrap_or(i32::MAX);
+        mtmd.eval_chunks(ctx, &chunks, 0, 0, n_batch, true, &mut n_past)
+            .map_err(|e| LlmError::Context(format!("vision eval failed: {e:?}")))?;
+        Ok((n_past, usize::try_from(n_past).unwrap_or(usize::MAX)))
+    }
+
+    /// Non-`vision` build: every image request is the explicit refusal
+    /// (feature documented in `Cargo.toml`; no image is ever flattened or
+    /// dropped silently).
+    #[cfg(not(feature = "vision"))]
+    fn eval_images(
+        &self,
+        _ctx: &mut LlamaContext<'_>,
+        _prompt: &str,
+        _req: &ChatRequest,
+    ) -> Result<(i32, usize), LlmError> {
+        // Signature parity with the `vision` variant keeps the call site
+        // cfg-free; `self` is deliberately unused here.
+        let _ = self;
+        Err(LlmError::Vision(
+            "this build has no vision support (llm-worker `vision` feature off; vendor link caveat, see Cargo.toml)"
+                .to_owned(),
+        ))
     }
 
     fn run(
@@ -252,15 +390,9 @@ impl LlamaCppLlm {
         // grammar-only constraints (raw grammar, json_schema, json_object)
         // ride the simple render plus a GBNF grammar sampler as chain head.
         let plan = self.plan_prompt(req)?;
-        let prompt_tokens = plan.tokens;
         let chat_params = plan.chat_params;
-        if u64::try_from(prompt_tokens.len()).unwrap_or(u64::MAX) >= u64::from(self.opts.n_ctx) {
-            return Err(LlmError::Context(format!(
-                "prompt ({} tokens) fills n_ctx ({})",
-                prompt_tokens.len(),
-                self.opts.n_ctx
-            )));
-        }
+        let grammar_head = plan.grammar_head;
+        let n_images: usize = req.messages.iter().map(|m| m.images.len()).sum();
 
         let mut ctx = self
             .model
@@ -273,28 +405,47 @@ impl LlamaCppLlm {
             )
             .map_err(|e| LlmError::Context(format!("{e:?}")))?;
 
-        let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
-        for (i, &tok) in prompt_tokens.iter().enumerate() {
-            batch
-                .add(
-                    tok,
-                    i32::try_from(i).unwrap_or(i32::MAX),
-                    &[0],
-                    i + 1 == prompt_tokens.len(),
-                )
+        // Prefill: plain text decodes the tokenized prompt; image content
+        // goes through the projector (tokenize + eval chunks in one call).
+        // `pos` continues from wherever the prefill left the KV cache.
+        let (mut pos, prompt_len) = if n_images == 0 {
+            let prompt_tokens = plan.tokens;
+            if u64::try_from(prompt_tokens.len()).unwrap_or(u64::MAX) >= u64::from(self.opts.n_ctx)
+            {
+                return Err(LlmError::Context(format!(
+                    "prompt ({} tokens) fills n_ctx ({})",
+                    prompt_tokens.len(),
+                    self.opts.n_ctx
+                )));
+            }
+            let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
+            for (i, &tok) in prompt_tokens.iter().enumerate() {
+                batch
+                    .add(
+                        tok,
+                        i32::try_from(i).unwrap_or(i32::MAX),
+                        &[0],
+                        i + 1 == prompt_tokens.len(),
+                    )
+                    .map_err(|e| LlmError::Decode(format!("{e:?}")))?;
+            }
+            ctx.decode(&mut batch)
                 .map_err(|e| LlmError::Decode(format!("{e:?}")))?;
-        }
-        ctx.decode(&mut batch)
-            .map_err(|e| LlmError::Decode(format!("{e:?}")))?;
+            (
+                i32::try_from(prompt_tokens.len()).unwrap_or(i32::MAX),
+                prompt_tokens.len(),
+            )
+        } else {
+            self.eval_images(&mut ctx, &plan.prompt, req)?
+        };
 
         let seed = req.seed.map_or_else(wallclock_seed, |seed| {
             u32::try_from(seed).unwrap_or(u32::MAX)
         });
-        let sampler = self.sampler_chain(req, plan.grammar_head, temperature, seed);
+        let sampler = self.sampler_chain(req, grammar_head, temperature, seed);
 
         let mut text = String::new();
         let mut generated = 0u32;
-        let mut pos = i32::try_from(prompt_tokens.len()).unwrap_or(i32::MAX);
         let mut step = LlamaBatch::new(1, 1);
         while generated < max_tokens {
             // Abort checkpoint: the per-token decode returns to this loop, so
@@ -340,7 +491,7 @@ impl LlamaCppLlm {
             backend_id: self.backend_id().to_string(),
             text,
             tokens: generated,
-            prompt_tokens: u32::try_from(prompt_tokens.len()).unwrap_or(u32::MAX),
+            prompt_tokens: u32::try_from(prompt_len).unwrap_or(u32::MAX),
             tool_calls,
             millis: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
         })
