@@ -140,7 +140,7 @@
     "/v1/audio/speech": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as\n`/v1/synthesize`. `model` optional (server default TTS), `voice` passed\nthrough; `response_format` is `\"wav\"` (default, RIFF/WAVE container) or\n`\"pcm\"` — raw little-endian signed 16-bit mono samples with **no**\ncontainer: the worker already returns mono PCM16, so the pcm path\nserializes the exact same samples minus the 44-byte RIFF header\n(OpenAI pcm semantics).",
+        "summary": "`POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as\n`/v1/synthesize`. `model` optional (server default TTS), `voice` passed\nthrough; `response_format` is `\"wav\"` (default, RIFF/WAVE container) or\n`\"pcm\"` — raw little-endian signed 16-bit mono samples with **no**\ncontainer: the worker already returns mono PCM16, so the pcm path\nserializes the exact same samples minus the 44-byte RIFF header (`OpenAI`\npcm semantics). `response_format` accepts `wav` (default) or `pcm`.",
         "operationId": "post_audio_speech",
         "requestBody": {
           "content": {
@@ -195,10 +195,10 @@
     "/v1/audio/transcriptions": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart\nwrapper over the same STT worker as `/v1/transcribe`. `file` is\nrequired (`audio/wav`, RIFF-sniffed `application/octet-stream`, or\n`audio/pcm-s16le` + `sample_rate` form field / query); `model` is\noptional (server default STT); `language` optional; `response_format`\n`json` (default) or `verbose_json` (adds the worker's timestamped\nsegments). Errors are `OpenAI` envelopes; only a request that is not\nmultipart at all gets axum's transport-level 400 before the handler\nruns. The native route is unchanged.",
+        "summary": "`POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart\nwrapper over the same STT worker as `/v1/transcribe`. `file` is\nrequired (`audio/wav`, RIFF-sniffed `application/octet-stream`, or\n`audio/pcm-s16le` + `sample_rate` form field / query); `model` is\noptional (server default STT); `language` optional; `response_format`\n`json` (default), `verbose_json` (adds the worker's timestamped\nsegments), `srt` or `vtt` (`SubRip` / `WebVTT` subtitles rendered from the\nsame segments; `application/x-subrip` / `text/vtt`). Errors are\n`OpenAI` envelopes; only a request that is not multipart at all gets\naxum's transport-level 400 before the handler runs. The native route is\nunchanged.",
         "operationId": "post_audio_transcriptions",
         "requestBody": {
-          "description": "multipart/form-data: file, model?, language?, response_format?, sample_rate?",
+          "description": "multipart/form-data: file, model?, language?, response_format? (json|verbose_json|srt|vtt), sample_rate?",
           "content": {
             "text/plain": {
               "schema": {
@@ -210,7 +210,7 @@
         },
         "responses": {
           "200": {
-            "description": "Transcription",
+            "description": "Transcription (json / verbose_json / srt / vtt)",
             "content": {
               "application/json": {
                 "schema": {
@@ -220,7 +220,7 @@
             }
           },
           "400": {
-            "description": "Missing file, bad audio, unknown model, or missing sample_rate",
+            "description": "Missing file, bad audio, unknown model, unsupported response_format, or missing sample_rate",
             "content": {
               "application/json": {
                 "schema": {
@@ -251,6 +251,76 @@
           },
           "500": {
             "description": "Transcription failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/audio/translations` (REQ-9 sibling; `ReviewedAudio` P1):\n`OpenAI` translation shape — the multipart `file` is decoded exactly\nlike `/v1/audio/transcriptions` and transcribed with whisper's\n**translate** task (source language auto-detected, output always\nEnglish). `model` optional (server default STT); `response_format`\n`json` (default) / `verbose_json` / `srt` / `vtt`. No `language` field:\nthe endpoint contract fixes the OUTPUT language, and whisper's translate\ntask takes none. Errors are `OpenAI` envelopes, same as transcriptions.",
+        "operationId": "post_audio_translations",
+        "requestBody": {
+          "description": "multipart/form-data: file, model?, response_format? (json|verbose_json|srt|vtt), sample_rate?",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "English translation (json / verbose_json / srt / vtt)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptionText"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing file, bad audio, unknown model, unsupported response_format, unexpected language field, or missing sample_rate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported audio content type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Translation failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -552,6 +622,187 @@
         }
       }
     },
+    "/v1/images/edits": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields validate exactly like `generations`. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `LoRA` adapters are not\naccepted on this route yet — use `/v1/images/generations`. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\nstrength/size/recipe fields), 404 unknown model, 429 busy, 500 staging\nor generation failure.",
+        "operationId": "post_images_edits",
+        "requestBody": {
+          "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, sampler?, scheduler?, cfg_scale?, negative_prompt?, seed?",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Edited image (base64 PNG)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagesGenerationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing image/prompt, non-PNG bytes, bad strength, size, or recipe fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Generation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/images/generations": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/images/generations` (REQ-10): the `OpenAI` image-generation\nshape over the startup-configured [`SdPipeline`]. SD pipelines are\nstartup-static (no swap manager), so a request `model` is validated and\nrecorded (bundle sidecar) but the pipeline stays the one built at\nstartup — with the stub backend any slug is honest; with `sd-cpp` the\ncheckpoint is the `--sd-model` one.",
+        "description": "Each image in the request is generated under the GPU lease\n(`spawn_blocking`, like every other GPU route) and written to the\nexisting job bundle store (`<data_dir>/jobs/`), so CLI GC and\nrecordkeeping cover HTTP generations too. Errors are `OpenAI`\nenvelopes: 400 bad `size`/`response_format`/recipe params (unknown\nsampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `LoRA` slug /\nstrength / count violations), 404 unknown model, 429 busy, 500 backend\nfailure. `n` clamps to `[1, 4]` (warn, never reject). Per-request\n`loras` resolve against `ModelKind::Lora` catalog entries; their\nlicense notes surface as response `warnings` (weights are never\nbundled; ReviewedLicense-AGPL §2b/§2c).",
+        "operationId": "post_images_generations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImagesGenerationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Generated images (base64 PNG)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagesGenerationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad size, response_format, sampler, scheduler, cfg_scale, or loras",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Generation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/jobs` (NEW-3): the in-flight registry — admitted GPU requests\n(running, or waiting in the admission queue), oldest first. Entries\nappear when a route admits a request and vanish when it ends; this is a\nliveness view, not history (see `jobs_registry`).",
+        "operationId": "get_jobs",
+        "responses": {
+          "200": {
+            "description": "In-flight jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/cancel": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/jobs/{id}/cancel` (NEW-3): mark the job's cooperative-stop\ntoken. 200 `{cancelled: bool}` — honest about what a cancel achieves:\n`true` only for jobs that check the token between work units\n(multi-image generations between images, streaming chat at the next\ntoken boundary); `false` = the job was found but its single blocking\nFFI call cannot be interrupted mid-flight and runs to completion\n(engine-level cancellation needs a per-backend spike, per the design\nrecord). 404: unknown id (never registered, or the request already\nended — the registry holds live work only).",
+        "operationId": "post_job_cancel",
+        "responses": {
+          "200": {
+            "description": "Token marked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCancelResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job id"
+          }
+        }
+      }
+    },
     "/v1/memory": {
       "get": {
         "tags": [],
@@ -612,7 +863,7 @@
     "/v1/models/{slug}": {
       "delete": {
         "tags": [],
-        "summary": "`DELETE /v1/models/{slug}` (NewItems §1): explicit, **permanent** model\ndeletion — the weight file (or directory) is removed from disk and the\ncatalog entry is dropped; there is no trash and no undo, recovery means\ndownloading the model again. Guardrails: an unknown slug (alias or\nregistry slug) is a 404; a resident or busy model (chat warm-set\nresidency: resident, pinned, or in-flight) is refused with 409 — unload\nit first (`POST /v1/models/{slug}/unload`). Success removes the file(s),\nre-scans the registry roots (best-effort SQLite cache sync) and drops\nthe entry from the shared catalog snapshot, then returns 200 naming\nexactly what was removed.",
+        "summary": "`DELETE /v1/models/{slug}` (`NewItems` §1): explicit, **permanent** model\ndeletion — the weight file (or directory) is removed from disk and the\ncatalog entry is dropped; there is no trash and no undo, recovery means\ndownloading the model again. Guardrails: an unknown slug (alias or\nregistry slug) is a 404; a resident or busy model (chat warm-set\nresidency: resident, pinned, or in-flight) is refused with 409 — unload\nit first (`POST /v1/models/{slug}/unload`). Success removes the file(s),\nre-scans the registry roots (best-effort SQLite cache sync) and drops\nthe entry from the shared catalog snapshot, then returns 200 naming\nexactly what was removed.",
         "operationId": "delete_model",
         "parameters": [
           {
@@ -1489,7 +1740,7 @@
       },
       "ImagesGenerationRequest": {
         "type": "object",
-        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).",
+        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).\n- `loras`: per-request `LoRA` adapters (max 2; each `slug` resolves\n  against catalog entries of kind `lora` by slug or alias — unknown\n  names are a 400 naming the offender). `strength` is the adapter\n  multiplier, default 1.0, accepted range `[-2.0, 2.0]` (out of range\n  is a 400, never clamped). Weight licensing is the operator's\n  responsibility: honkbox never bundles `LoRA` weights, and the curated\n  catalog `license` is surfaced as a response warning when known — a\n  missing license means all-rights-reserved, i.e. local-only use\n  (ReviewedLicense-AGPL §2b/§2c). The high-noise adapter split is not\n  exposed; requests always apply adapters as standard `LoRA`s. Base-model\n  mismatch cannot be detected today (no base tags are recorded on scan\n  entries or `LoRA` files), so it is neither warned about nor rejected.",
         "required": [
           "prompt"
         ],
@@ -1501,6 +1752,16 @@
             ],
             "format": "float",
             "description": "Classifier-free guidance scale; accepted range `[1.0, 30.0]`, values\noutside it are rejected with a 400 (never silently clamped)."
+          },
+          "loras": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ImagesLora"
+            },
+            "description": "Per-request `LoRA` adapters (see the struct-level docs for the\nlicensing and validation rules); omit = plain checkpoint render."
           },
           "model": {
             "type": [
@@ -1588,6 +1849,108 @@
               "$ref": "#/components/schemas/ImageB64"
             },
             "description": "One entry per requested image, in order."
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Advisory notes (`LoRA` license surfacing); omitted when empty."
+          }
+        }
+      },
+      "ImagesLora": {
+        "type": "object",
+        "description": "One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].",
+        "required": [
+          "slug"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "Catalog slug or alias of a `lora`-kind entry (e.g.\n`comfy:loras/detail.safetensors`); unknown names are a 400."
+          },
+          "strength": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Adapter multiplier; default 1.0, accepted range `[-2.0, 2.0]`."
+          }
+        }
+      },
+      "JobCancelResult": {
+        "type": "object",
+        "description": "`POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` mirrors the\njob's `interruptible` flag: `true` = the job will actually stop at its\nnext checkpoint; `false` = the job was found and marked, but its single\nblocking inference call is not interruptible mid-flight. An unknown id\n(finished or never registered) is a plain-text 404.",
+        "required": [
+          "cancelled"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "boolean",
+            "description": "Whether the cancel will stop the job at its next work-unit boundary."
+          }
+        }
+      },
+      "JobInfo": {
+        "type": "object",
+        "description": "One in-flight GPU job of `GET /v1/jobs` (NEW-3). Entries appear when a\nGPU route admits a request and vanish when the request ends — this is a\nliveness view, not history.",
+        "required": [
+          "id",
+          "kind",
+          "started_at_ms",
+          "interruptible"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.\nAlso stamped as the `X-Job-Id` response header of the owning request\n(on SSE routes it precedes the stream body)."
+          },
+          "interruptible": {
+            "type": "boolean",
+            "description": "Whether the job checks its cancel token between work units:\n`true` = a cancel stops it at the next checkpoint (multi-image\ngenerations between images, streaming chat at the next token);\n`false` = the single blocking FFI call cannot be interrupted and\nruns to completion (engine-level cancellation needs a per-backend\nspike, per the design record)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Modality: `chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, or `translations`."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model slug the job runs against, when known."
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Registration time, Unix milliseconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "description": "`GET /v1/jobs` response: OpenAI-style list envelope over in-flight GPU\njobs, oldest first.",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobInfo"
+            },
+            "description": "The in-flight jobs."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"`."
           }
         }
       },
@@ -2563,7 +2926,7 @@
       },
       "SpeechRequest": {
         "type": "object",
-        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` accepts `\"wav\"` (default, RIFF/WAVE\ncontainer) or `\"pcm\"` (raw little-endian signed 16-bit mono samples,\nOpenAI pcm semantics — no container, no header); anything else is an\nexplicit 400.",
+        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` accepts `wav` (default, RIFF/WAVE\ncontainer) or `pcm` (raw little-endian signed 16-bit mono samples,\nmatching the `OpenAI` pcm semantics — no container, no header); anything\nelse is an explicit 400.",
         "required": [
           "input"
         ],
@@ -2584,7 +2947,7 @@
               "string",
               "null"
             ],
-            "description": "Output format: `\"wav\"` (default) or `\"pcm\"` (raw s16le, no\ncontainer)."
+            "description": "Output format: `wav` (default) or `pcm` (raw s16le, no container)."
           },
           "voice": {
             "type": [
