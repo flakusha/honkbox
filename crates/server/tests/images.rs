@@ -790,3 +790,170 @@ async fn hires_fix_accepted_and_recorded() {
     assert!(recorded.contains(&json!("16x8")), "{recorded:?}");
     std::fs::remove_dir_all(&data_dir).ok();
 }
+/// Decode one `b64_json` entry to raw bytes (magic + length checks).
+fn decode_entry(entry: &Value) -> Vec<u8> {
+    let b64 = entry["b64_json"].as_str().expect("b64_json string");
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("valid base64")
+}
+
+/// `output_format: "jpeg"` returns bytes that decode as JPEG (magic
+/// ffd8ff) instead of the PNG default.
+#[tokio::test]
+async fn jpeg_output_format_returns_jpeg_bytes() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "size": "16x16", "output_format": "jpeg"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bytes = decode_entry(&body["data"][0]);
+    assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF], "JPEG magic, {body}");
+}
+
+/// `output_format: "webp"` returns lossless WebP bytes
+/// (`RIFF`....`WEBP`).
+#[tokio::test]
+async fn webp_output_format_returns_webp_bytes() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "size": "16x16", "output_format": "webp"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bytes = decode_entry(&body["data"][0]);
+    assert_eq!(&bytes[..4], b"RIFF", "WebP RIFF header, {body}");
+    assert_eq!(&bytes[8..12], b"WEBP", "WebP format chunk, {body}");
+}
+
+/// The requested `output_format` lands in the bundle: artifact extension,
+/// request `format`, and sidecar `format` all agree with it (and the MIME
+/// mapping matches the same format).
+#[tokio::test]
+async fn bundle_sidecar_agrees_with_output_format() {
+    let _slot = SLOT_LOCK.lock().await;
+    for (format, artifact, sidecar_format, mime) in [
+        ("jpeg", "final_00.jpg", "jpeg", "image/jpeg"),
+        ("webp", "final_00.webp", "webp", "image/webp"),
+    ] {
+        let data_dir = std::env::temp_dir().join(format!("honkbox-img-fmt-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let (status, body) = images(
+            app_with(
+                catalog_with(&[sd_entry("comfy:f.safetensors")]),
+                Some(data_dir.clone()),
+            ),
+            json!({"prompt": "hi", "size": "16x16", "output_format": format}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+        let dir = jobs.next().expect("one bundle").unwrap().path();
+        assert!(jobs.next().is_none(), "single-image request: one bundle");
+        let art = std::fs::read(dir.join(artifact)).expect("artifact with requested extension");
+        let request: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap())
+                .unwrap();
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap())
+                .unwrap();
+        assert_eq!(request["format"], sidecar_format, "{request}");
+        assert_eq!(sidecar["format"], sidecar_format, "{sidecar}");
+        assert_eq!(
+            honkbox_sd_core::OutputFormat::from_name(sidecar_format)
+                .unwrap()
+                .mime(),
+            mime
+        );
+        assert_eq!(art.len(), decode_entry(&body["data"][0]).len());
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+}
+
+/// An unknown `output_format` is a named 400 listing the accepted values.
+#[tokio::test]
+async fn unknown_output_format_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    for format in ["gif", "JPEG"] {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "output_format": format}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{format:?}: {body}");
+        assert_eq!(body["error"]["code"], "unsupported_output_format", "{body}");
+    }
+}
+
+/// `output_compression` semantics: accepted integers in `[0, 100]` apply to
+/// JPEG; non-numeric, fractional, negative, and out-of-range values are a
+/// named 400 (never clamped); PNG ignores the knob.
+#[tokio::test]
+async fn output_compression_semantics() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    // Accepted (JPEG quality endpoints + middle).
+    for q in [0, 50, 100] {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "size": "16x16", "output_format": "jpeg", "output_compression": q}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "q {q}: {body}");
+        assert_eq!(&decode_entry(&body["data"][0])[..3], &[0xFF, 0xD8, 0xFF]);
+    }
+    // PNG (lossless) documents-and-ignores the knob.
+    let (status, body) = images(
+        app.clone(),
+        json!({"prompt": "hi", "size": "16x16", "output_compression": 42}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        &decode_entry(&body["data"][0])[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    );
+    // Rejected, never clamped.
+    for bad in [
+        json!("80"),      // non-numeric (string)
+        json!(true),      // non-numeric (bool)
+        json!(80.5),      // fractional
+        json!(-1),        // negative
+        json!(101),       // above the cap
+        json!(1_000_000), // far above
+    ] {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "output_format": "jpeg", "output_compression": bad}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+        assert_eq!(
+            body["error"]["code"], "invalid_output_compression",
+            "{body}"
+        );
+    }
+}
+
+/// The default (`png`, no knob) stays byte-compatible with the pre-feature
+/// behavior: PNG magic and IHDR dimensions.
+#[tokio::test]
+async fn default_output_format_unchanged_png() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "size": "16x16"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bytes = decode_entry(&body["data"][0]);
+    assert_eq!(
+        &bytes[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    );
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 16);
+}

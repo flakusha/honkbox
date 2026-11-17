@@ -1,0 +1,31 @@
+diff --git a/vendor/diffusion-rs/src/api.rs b/vendor/diffusion-rs/src/api.rs
+--- a/vendor/diffusion-rs/src/api.rs
++++ b/vendor/diffusion-rs/src/api.rs
+@@ -1503,12 +1503,26 @@ fn gen_img_maybe_progress(
+             flow_shift: model_config.flow_shift,
+             extra_sample_args: model_config.extra_sample_params.as_ptr(),
+         };
+-        let control_image = sd_image_t {
++        // The control image is only sent to the engine when configured: an
++        // all-zero sd_image_t means "no ControlNet conditioning" there.
++        let mut control_image = sd_image_t {
+             width: 0,
+             height: 0,
+             channel: 3,
+             data: null_mut(),
+         };
++        let mut control_buffer;
++        if !config.control_image.0.as_bytes().is_empty() {
++            let img = image::open(PathBuf::from(&config.control_image))?;
++            control_buffer = img.to_rgb8().into_raw();
++
++            control_image = sd_image_t {
++                width: img.width(),
++                height: img.height(),
++                channel: 3,
++                data: control_buffer.as_mut_ptr(),
++            }
++        }
+         let vae_tiling_params = sd_tiling_params_t {
+             enabled: model_config.vae_tiling,
+             tile_size_w: model_config.vae_tile_size.0,

@@ -171,6 +171,16 @@ enum Format {
     Webp,
 }
 
+impl From<Format> for honkbox_sd_core::OutputFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            Format::Png => Self::Png,
+            Format::Jpeg => Self::Jpeg,
+            Format::Webp => Self::Webp,
+        }
+    }
+}
+
 /// `generate` backends: instant stub pixels or the real sd.cpp pipeline.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Backend {
@@ -649,12 +659,11 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         mask_image: None,
         strength: None,
         hires: None,
+        control_net: None,
+        control_image: None,
+        controlnet_strength: None,
     }));
-    let format = match format {
-        Format::Png => honkbox_sd_core::OutputFormat::Png,
-        Format::Jpeg => honkbox_sd_core::OutputFormat::Jpeg,
-        Format::Webp => honkbox_sd_core::OutputFormat::Webp,
-    };
+    let format = honkbox_sd_core::OutputFormat::from(format);
     let bytes = or_exit(honkbox_sd_core::encode_image(img, format));
     let base = data_dir.unwrap_or_else(|| {
         eprintln!(

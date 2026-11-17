@@ -682,6 +682,33 @@ async fn controlnet_rejections_are_precise_400s() {
     assert_eq!(sd.calls.load(Ordering::SeqCst), 0);
 }
 
+/// SD double carrying the real backend's id: captures each request for
+/// assertions and returns a 1x1 image without touching any weights. This
+/// is the honest stand-in for "the configured pipeline can apply control
+/// inputs" — the route threads the resolved `ControlNet` pair through the
+/// seam and the backend contract does the rest.
+struct CapturingSd {
+    captured: Mutex<Option<honkbox_sd_core::Txt2ImgRequest>>,
+}
+
+impl honkbox_sd_core::SdPipeline for CapturingSd {
+    fn generate(
+        &self,
+        req: &honkbox_sd_core::Txt2ImgRequest,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        *self.captured.lock().expect("capture lock") = Some(req.clone());
+        Ok(honkbox_sd_core::GeneratedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+        })
+    }
+
+    fn backend_id(&self) -> &'static str {
+        honkbox_sd_core::SD_CPP_BACKEND_ID
+    }
+}
+
 /// Fully valid controlnet inputs are accepted-and-validated, then honestly
 /// refused with 501 `controlnet_unsupported` — before any GPU work, and
 /// never silently ignored. Whitespace-only fields are NOT a request: the
@@ -717,3 +744,88 @@ async fn controlnet_valid_inputs_answer_501_and_empties_fall_through() {
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["data"].as_array().unwrap().len(), 1);
 }
+
+/// A valid pair on a pipeline that can apply control (backend id `sd-cpp-*`)
+/// rides the generation: the resolved weights path, the decoded PNG bytes,
+/// and the optional strength reach the seam. No model file involved — the
+/// double records the request instead of rendering.
+#[tokio::test]
+async fn controlnet_valid_pair_is_threaded_into_the_sd_cpp_pipeline() {
+    let _slot = SLOT_LOCK.lock().await;
+    let sd = Arc::new(CapturingSd {
+        captured: Mutex::new(None),
+    });
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+
+    let (status, _, body) = images(
+        app,
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "controlnet_strength": 0.5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["data"].as_array().unwrap().len(), 1);
+
+    let captured = sd
+        .captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("request");
+    assert_eq!(
+        captured.control_net.as_deref(),
+        Some(std::path::Path::new("/models/controlnet/c.safetensors")),
+    );
+    assert_eq!(
+        captured.control_image.as_deref(),
+        Some(CONTROL_PNG_B64_AS_BYTES)
+    );
+    assert_eq!(captured.controlnet_strength, Some(0.5));
+}
+
+/// Omitted `controlnet_strength` rides as `None` (the sd-core vendor
+/// default 0.9 applies there), and the out-of-range override is a named
+/// 400 — rejected, not clamped — before any GPU work.
+#[tokio::test]
+async fn controlnet_strength_default_and_rejection() {
+    let _slot = SLOT_LOCK.lock().await;
+    let sd = Arc::new(CapturingSd {
+        captured: Mutex::new(None),
+    });
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let captured = sd
+        .captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("request");
+    assert_eq!(captured.controlnet_strength, None);
+
+    let (status, _, body) = images(
+        app,
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "controlnet_strength": 1.5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "invalid_controlnet_strength");
+    assert!(sd.captured.lock().expect("capture lock").is_none());
+}
+
+/// The exact bytes behind [`CONTROL_PNG_B64`] (the 8-byte PNG magic).
+const CONTROL_PNG_B64_AS_BYTES: &[u8] = b"\x89PNG\r\n\x1a\n";

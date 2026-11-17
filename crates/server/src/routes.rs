@@ -1,6 +1,6 @@
 //! HTTP surface: `/health`, `/api/version`, `/v1/models`(+`/refresh`),
 //! `/metrics`, `/v1/openapi.json`, chat/transcribe/synthesize, image
-//! generations (REQ-10, incl. the `ControlNet` validate-then-501 pair),
+//! generations (REQ-10, incl. the `ControlNet` conditioned render),
 //! `/v1/jobs` (+`DELETE /v1/jobs/{id}`, `POST …/cancel`) and the
 //! `/v1/events` SSE lifecycle feed, UI fallback.
 //!
@@ -2753,7 +2753,48 @@ type ValidatedImages = (
     u32,
     ImageRecipe,
     Option<honkbox_sd_core::HiresFix>,
+    honkbox_sd_core::OutputFormat,
+    Option<u8>,
 );
+
+/// Parse the requested output container (omitted = PNG). Unknown names are a
+/// named 400 listing the accepted values (same reject-don't-guess policy as
+/// `response_format`).
+fn parse_output_format(
+    req: &ImagesGenerationRequest,
+) -> Result<honkbox_sd_core::OutputFormat, (String, &'static str)> {
+    let raw = req.output_format.as_deref().unwrap_or("png").trim();
+    honkbox_sd_core::OutputFormat::from_name(raw).ok_or_else(|| {
+        (
+            format!(
+                "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
+            ),
+            "unsupported_output_format",
+        )
+    })
+}
+
+/// Parse `output_compression`: an integer JPEG quality in `[0, 100]`.
+/// Non-numeric, fractional, negative, or out-of-range values are a named
+/// 400 — rejected, never clamped. The value is only applied to JPEG; PNG is
+/// lossless and WebP is lossless-only today, so there it is ignored (DTO
+/// docs say so). `None` = the sd-core default (quality 90).
+fn parse_output_compression(
+    raw: Option<&serde_json::Value>,
+) -> Result<Option<u8>, (String, &'static str)> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    match raw.as_u64() {
+        Some(q) if q <= 100 => Ok(Some(u8::try_from(q).expect("q <= 100"))),
+        _ => Err((
+            format!(
+                "output_compression must be an integer in [0, 100]; got {raw}: rejected, not clamped"
+            ),
+            "invalid_output_compression",
+        )),
+    }
+}
 
 fn validate_images_request(
     req: &ImagesGenerationRequest,
@@ -2788,7 +2829,17 @@ fn validate_images_request(
         req.steps,
     )?;
     let hires = validate_hires_fix(req.hires_fix.as_ref(), (width, height))?;
-    Ok((width, height, n.clamp(1, 4), recipe, hires))
+    let format = parse_output_format(req)?;
+    let compression = parse_output_compression(req.output_compression.as_ref())?;
+    Ok((
+        width,
+        height,
+        n.clamp(1, 4),
+        recipe,
+        hires,
+        format,
+        compression,
+    ))
 }
 
 /// Accepted `LoRA` multiplier range for the HTTP surface (documented on the
@@ -2902,26 +2953,30 @@ fn resolve_loras(
     Ok((refs, records, warnings))
 }
 
-/// `ControlNet` request handling for `POST /v1/images/generations` (honkbox
-/// extension, not part of the `OpenAI` shape): full validation, then an
-/// explicit unsupported verdict. `None` = nothing actually requested
-/// (whitespace-only fields are not a request) and plain generation proceeds.
+/// Resolved `ControlNet` inputs for a validated generation request: the
+/// catalog-resolved weights file, the decoded PNG conditioning image, and
+/// the optional guidance-strength override.
+struct ResolvedControlNet {
+    weights: PathBuf,
+    image: Vec<u8>,
+    strength: Option<f32>,
+}
+
+/// Outcome of [`controlnet_pair`]: the `(slug, image)` pair (a placeholder
+/// when refusing) plus an optional rejection response.
+type ControlNetPair = ((String, Vec<u8>), Option<Response>);
+
+/// Validate the honkbox `ControlNet` extension fields: the slug/conditioning
+/// pair (both halves or a named 400), strict standard base64, and the PNG
+/// magic (the sd path consumes the control image exactly like every other
+/// PNG input; anything else cannot be honestly accepted).
 ///
-/// Rejections, in order: `controlnet` without `control_image` or vice versa
-/// (400 `controlnet_pair`), undecodable base64 or non-PNG bytes (400
-/// `invalid_control_image`), and a `controlnet` slug/alias that is not a
-/// `controlnet`-kind catalog entry (400 `unknown_controlnet` — the same
-/// alias-or-slug rule as SD models and `LoRA`s). Valid inputs get 501
-/// `controlnet_unsupported`, never a silent ignore: the vendor's C++ engine
-/// supports `ControlNet` (`control_net_path` ctx param, `control_image` in
-/// the generation params, hot-swap load/unload), but the Rust `gen_img`
-/// path honkbox builds on hardcodes an EMPTY control image and
-/// `control_type: NONE`, and the `sd-core` seam (`Txt2ImgRequest`) carries
-/// no control fields — so today there is no honest way to apply the
-/// inputs. Rendering without them and saying nothing would misrepresent
-/// the output; this response is the swap point for the day the plumbing
-/// lands.
-fn controlnet_response(req: &ImagesGenerationRequest, catalog: &ModelCatalog) -> Option<Response> {
+/// `None` = nothing actually requested (whitespace-only fields are not a
+/// request). `Some((pair, None))` = a valid `(slug, decoded image)`;
+/// `Some((_, Some(response)))` = a rejection: `controlnet` without
+/// `control_image` or vice versa (400 `controlnet_pair`), undecodable
+/// base64 or non-PNG bytes (400 `invalid_control_image`).
+fn controlnet_pair(req: &ImagesGenerationRequest) -> Option<ControlNetPair> {
     let slug = req
         .controlnet
         .as_deref()
@@ -2936,60 +2991,133 @@ fn controlnet_response(req: &ImagesGenerationRequest, catalog: &ModelCatalog) ->
         (None, None) => return None,
         (Some(slug), Some(image)) => (slug, image),
         (Some(_), None) => {
-            return Some(openai_error_response(
-                StatusCode::BAD_REQUEST,
-                "controlnet and control_image must be supplied together: control_image is missing (the base64 PNG conditioning image for the controlnet slug)".to_owned(),
-                Some("controlnet_pair"),
+            return Some((
+                (String::new(), Vec::new()),
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "controlnet and control_image must be supplied together: control_image is missing (the base64 PNG conditioning image for the controlnet slug)".to_owned(),
+                    Some("controlnet_pair"),
+                )),
             ));
         }
         (None, Some(_)) => {
-            return Some(openai_error_response(
-                StatusCode::BAD_REQUEST,
-                "controlnet and control_image must be supplied together: controlnet is missing (the catalog slug the conditioning image pairs with)".to_owned(),
-                Some("controlnet_pair"),
+            return Some((
+                (String::new(), Vec::new()),
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "controlnet and control_image must be supplied together: controlnet is missing (the catalog slug the conditioning image pairs with)".to_owned(),
+                    Some("controlnet_pair"),
+                )),
             ));
         }
     };
-    // Conditioning image: strict standard base64, then the PNG magic (the
-    // sd path consumes the control image exactly like every other PNG
-    // input; anything else cannot be honestly accepted).
     let decoded = match base64::engine::general_purpose::STANDARD.decode(image) {
         Ok(bytes) => bytes,
         Err(err) => {
-            return Some(openai_error_response(
-                StatusCode::BAD_REQUEST,
-                format!("control_image is not usable: invalid base64 ({err})"),
-                Some("invalid_control_image"),
+            return Some((
+                (String::new(), Vec::new()),
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("control_image is not usable: invalid base64 ({err})"),
+                    Some("invalid_control_image"),
+                )),
             ));
         }
     };
     if decoded.len() < PNG_MAGIC.len() || decoded[..PNG_MAGIC.len()] != *PNG_MAGIC {
-        return Some(openai_error_response(
-            StatusCode::BAD_REQUEST,
-            "control_image is not usable: decoded bytes are not a PNG".to_owned(),
-            Some("invalid_control_image"),
+        return Some((
+            (String::new(), Vec::new()),
+            Some(openai_error_response(
+                StatusCode::BAD_REQUEST,
+                "control_image is not usable: decoded bytes are not a PNG".to_owned(),
+                Some("invalid_control_image"),
+            )),
         ));
     }
+    Some(((slug.to_owned(), decoded), None))
+}
+
+/// `ControlNet` request handling for `POST /v1/images/generations` (honkbox
+/// extension, not part of the `OpenAI` shape): full validation, then either
+/// resolved inputs threaded into the generation or an explicit unsupported
+/// verdict for a pipeline that cannot apply them. `(None, None)` = nothing
+/// actually requested (whitespace-only fields are not a request) and plain
+/// generation proceeds.
+///
+/// Rejections, in order: the pair/image checks of [`controlnet_pair`], a
+/// `controlnet` slug/alias that is not a `controlnet`-kind catalog entry
+/// (400 `unknown_controlnet` — the same alias-or-slug rule as SD models and
+/// `LoRA`s), a non-finite or out-of-range `controlnet_strength` (400
+/// `invalid_controlnet_strength`, the same reject-not-clamp rule as img2img
+/// `strength`), and a configured pipeline that cannot carry control inputs
+/// (501 `controlnet_unsupported`) — never a silent ignore: rendering
+/// without the requested conditioning image would misrepresent the output.
+fn resolve_controlnet(
+    req: &ImagesGenerationRequest,
+    catalog: &ModelCatalog,
+    pipeline: &dyn honkbox_sd_core::SdPipeline,
+) -> (Option<ResolvedControlNet>, Option<Response>) {
+    let pair = match controlnet_pair(req) {
+        None => return (None, None),
+        Some((pair, None)) => pair,
+        Some((_, Some(response))) => return (None, Some(response)),
+    };
+    let (slug, decoded) = pair;
     // Slug: alias-or-slug against the catalog, `controlnet` kind only.
-    if resolve_model_entry(slug, catalog)
-        .as_ref()
-        .is_none_or(|entry| entry.kind != ModelKind::ControlNet)
-    {
-        return Some(openai_error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "unknown controlnet {slug:?}: not a ControlNet catalog slug or alias (see GET /v1/models)"
-            ),
-            Some("unknown_controlnet"),
-        ));
+    let entry = match resolve_model_entry(&slug, catalog) {
+        Some(entry) if entry.kind == ModelKind::ControlNet => entry,
+        _ => {
+            return (
+                None,
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "unknown controlnet {slug:?}: not a ControlNet catalog slug or alias (see GET /v1/models)"
+                    ),
+                    Some("unknown_controlnet"),
+                )),
+            );
+        }
+    };
+    let strength = match req.controlnet_strength {
+        Some(v) if v.is_finite() && (0.0..=1.0).contains(&v) && v > 0.0 => Some(v),
+        Some(v) => {
+            return (
+                None,
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "controlnet_strength {v} outside accepted range (0, 1]: rejected, not clamped"
+                    ),
+                    Some("invalid_controlnet_strength"),
+                )),
+            );
+        }
+        None => None,
+    };
+    // Honest unsupported verdict: a pipeline without a `ControlNet` branch
+    // (the stub backend) would render the prompt unconditioned.
+    if pipeline.backend_id() != honkbox_sd_core::SD_CPP_BACKEND_ID {
+        return (
+            None,
+            Some(openai_error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                format!(
+                    "controlnet {slug:?} is accepted and validated but not applied: the configured {:?} pipeline does not apply control images — the request is refused rather than rendered without its conditioning image",
+                    pipeline.backend_id()
+                ),
+                Some("controlnet_unsupported"),
+            )),
+        );
     }
-    Some(openai_error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        format!(
-            "controlnet {slug:?} is accepted and validated but not applied: the sd pipeline does not carry control images yet — the request is refused rather than rendered without its conditioning image"
-        ),
-        Some("controlnet_unsupported"),
-    ))
+    (
+        Some(ResolvedControlNet {
+            weights: PathBuf::from(&entry.path),
+            image: decoded,
+            strength,
+        }),
+        None,
+    )
 }
 
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
@@ -3026,10 +3154,15 @@ const IMAGE_STEPS: u32 = 20;
 async fn generate_image_bytes(
     pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
     txt2img: honkbox_sd_core::Txt2ImgRequest,
+    format: honkbox_sd_core::OutputFormat,
+    compression: Option<u8>,
 ) -> Result<Vec<u8>, String> {
     tokio::task::spawn_blocking(move || {
         let img = pipeline.generate(&txt2img)?;
-        honkbox_sd_core::encode_image(img, honkbox_sd_core::OutputFormat::Png)
+        match compression {
+            Some(q) => honkbox_sd_core::encode_image_with_quality(img, format, q),
+            None => honkbox_sd_core::encode_image(img, format),
+        }
     })
     .await
     .map_err(|err| format!("generation task failed: {err}"))?
@@ -3054,11 +3187,18 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
 /// startup — with the stub backend any slug is honest; with `sd-cpp` the
 /// checkpoint is the `--sd-model` one.
 ///
+/// `output_format` selects the container for the returned bytes (`png`
+/// default, `jpeg`, `webp` lossless; unknown names are a 400 naming it) and
+/// the bundle sidecar/extension agree with it. `output_compression` is the
+/// JPEG quality `[0, 100]`; non-numeric/out-of-range values are a named 400,
+/// and the knob is ignored (as documented) for lossless PNG/WebP.
+///
 /// Each image in the request is generated under the GPU lease
 /// (`spawn_blocking`, like every other GPU route) and written to the
 /// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
 /// recordkeeping cover HTTP generations too. Errors are `OpenAI`
-/// envelopes: 400 bad `size`/`response_format`/recipe params (unknown
+/// envelopes: 400 bad `size`/`response_format`/`output_format`/
+/// `output_compression`/recipe params (unknown
 /// recipe/sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `steps`
 /// outside [1, 100], invalid `hires_fix` scale/target/denoise, `LoRA` slug
 /// / strength / count violations), 404 unknown model, 429 busy, 500
@@ -3068,7 +3208,11 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
 /// bundled; ReviewedLicense-AGPL §2b/§2c). `recipe` selects a curated
 /// sampler/scheduler/cfg/steps bundle (per-field overrides win, then
 /// server defaults); `hires_fix` runs the vendor-native second-pass
-/// upscale and is recorded in the bundle sidecar.
+/// upscale and is recorded in the bundle sidecar. A valid `controlnet` +
+/// `control_image` pair (plus optional `controlnet_strength`) is applied by
+/// the sd-cpp pipeline — the weights load with the model context and the
+/// conditioning image steers the render — while backends without a
+/// `ControlNet` branch get the named 501 instead.
 // Route handlers read long but stay linear: parse → validate → resolve →
 // generate → bundle. `completions_stream` carries the same allow.
 #[allow(clippy::too_many_lines)]
@@ -3077,8 +3221,8 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
     path = "/v1/images/generations",
     request_body = ImagesGenerationRequest,
     responses(
-        (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
-        (status = 400, description = "Bad size, response_format, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)", body = OpenAiError),
+        (status = 200, description = "Generated images (base64-encoded bytes in the requested output_format)", body = ImagesGenerationResponse),
+        (status = 400, description = "Bad size, response_format, output_format, output_compression, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Generation failed", body = OpenAiError),
@@ -3089,7 +3233,8 @@ async fn post_images_generations(
     State(config): State<AppConfig>,
     Json(req): Json<ImagesGenerationRequest>,
 ) -> Response {
-    let (width, height, n, recipe, hires) = match validate_images_request(&req) {
+    let (width, height, n, recipe, hires, format, compression) = match validate_images_request(&req)
+    {
         Ok(valid) => valid,
         Err((message, code)) => {
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
@@ -3104,13 +3249,13 @@ async fn post_images_generations(
             }
         };
     // ControlNet (honkbox extension): slug + conditioning image are
-    // validated here, but the pipeline seam cannot apply control inputs
-    // (see [`controlnet_response`]), so a fully valid pair is answered
-    // with an explicit 501 — never a silent ignore that would render
-    // something else than what was asked for.
-    if (req.controlnet.is_some() || req.control_image.is_some())
-        && let Some(response) = controlnet_response(&req, &catalog)
-    {
+    // validated here; a fully valid pair rides the generation request when
+    // the configured pipeline can apply it, and pipelines that cannot are
+    // answered with the honest 501 ([`resolve_controlnet`]) — never a
+    // silent ignore that would render something else than what was asked
+    // for.
+    let (controlnet, controlnet_refusal) = resolve_controlnet(&req, &catalog, config.sd.as_ref());
+    if let Some(response) = controlnet_refusal {
         return response;
     }
     let slug: String = match req
@@ -3195,7 +3340,12 @@ async fn post_images_generations(
                 mask_image: None,
                 strength: None,
                 hires: hires.clone(),
+                control_net: controlnet.as_ref().map(|c| c.weights.clone()),
+                control_image: controlnet.as_ref().map(|c| c.image.clone()),
+                controlnet_strength: controlnet.as_ref().and_then(|c| c.strength),
             },
+            format,
+            compression,
         )
         .await
         {
@@ -3217,7 +3367,7 @@ async fn post_images_generations(
                 steps: recipe.steps,
                 width,
                 height,
-                format: honkbox_sd_core::OutputFormat::Png,
+                format,
                 backend_id,
                 sampler: recipe.sampler.name().to_string(),
                 scheduler: image_scheduler_name(recipe.scheduler),
@@ -3295,6 +3445,12 @@ struct ImageEditUpload {
     seed: Option<u64>,
     /// Diffusion steps override; validated like `generations`.
     steps: Option<u32>,
+    /// Output container: `png` (default) | `jpeg` | `webp`; validated in
+    /// the handler (named 400) like `generations`.
+    output_format: Option<String>,
+    /// JPEG quality `[0, 100]`; kept raw here so the handler can reject
+    /// non-numeric / out-of-range values with the named 400, never a clamp.
+    output_compression: Option<String>,
 }
 
 /// Collect the multipart fields. Unknown fields are ignored (client SDKs
@@ -3316,6 +3472,8 @@ async fn parse_image_edit_upload(
         negative_prompt: None,
         seed: None,
         steps: None,
+        output_format: None,
+        output_compression: None,
     };
     while let Some(field) = multipart
         .next_field()
@@ -3337,7 +3495,8 @@ async fn parse_image_edit_upload(
                 }
             }
             "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler"
-            | "negative_prompt" | "strength" | "cfg_scale" | "seed" | "steps" => {
+            | "negative_prompt" | "strength" | "cfg_scale" | "seed" | "steps" | "output_format"
+            | "output_compression" => {
                 let text = field
                     .text()
                     .await
@@ -3355,7 +3514,8 @@ async fn parse_image_edit_upload(
 fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<(), Box<Response>> {
     let value = text.trim().to_owned();
     match name {
-        "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler" | "negative_prompt" => {
+        "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler" | "negative_prompt"
+        | "output_format" => {
             let value = (!value.is_empty()).then_some(value);
             match name {
                 "prompt" => edit.prompt = value,
@@ -3364,6 +3524,7 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
                 "recipe" => edit.recipe = value,
                 "sampler" => edit.sampler = value,
                 "scheduler" => edit.scheduler = value,
+                "output_format" => edit.output_format = value,
                 _ => edit.negative_prompt = value,
             }
         }
@@ -3390,6 +3551,9 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
                     bad_multipart("steps must be an integer in [1, 100]".to_owned())
                 })?);
         }
+        "output_compression" => {
+            edit.output_compression = (!value.is_empty()).then_some(value);
+        }
         _ => {}
     }
     Ok(())
@@ -3404,7 +3568,11 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 /// `size` defaults to the source image's dimensions; the remaining recipe
 /// fields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/
 /// `negative_prompt`/`seed`) validate exactly like `generations` — a named
-/// recipe plus per-field overrides, explicit fields winning. No
+/// recipe plus per-field overrides, explicit fields winning. `output_format`
+/// (`png` default | `jpeg` | `webp` lossless) and `output_compression`
+/// (JPEG quality `[0, 100]`; ignored for lossless PNG/WebP) mirror the
+/// `generations` knobs — unknown format names and non-numeric/out-of-range
+/// compression values are named 400s, never clamps. No
 /// `hires_fix` on this route: the output stays at the source image's
 /// dimensions. Inputs are staged as temp
 /// PNG paths (the vendor reads images from the filesystem) and removed
@@ -3413,15 +3581,15 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 /// backend honestly ignores image inputs, so its pixels never depend on
 /// the upload; tests cover the wire/validation paths. Errors are `OpenAI`
 /// envelopes: 400 (missing image/prompt, non-PNG bytes, bad
-/// strength/size/recipe fields), 404 unknown model, 429 busy, 500 staging
-/// or generation failure.
+/// `strength`/`size`/`recipe`/`output_format`/`output_compression` fields), 404
+/// unknown model, 429 busy, 500 staging or generation failure.
 #[allow(clippy::too_many_lines)] // linear multipart handler; see `post_images_generations`
 #[utoipa::path(
     post,
     path = "/v1/images/edits",
-    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?"),
+    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100)"),
     responses(
-        (status = 200, description = "Edited image (base64 PNG)", body = ImagesGenerationResponse),
+        (status = 200, description = "Edited image (base64-encoded bytes in the requested output_format)", body = ImagesGenerationResponse),
         (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, or recipe fields", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
@@ -3501,6 +3669,33 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         Err((message, code)) => {
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
         }
+    };
+    let Some(format) = honkbox_sd_core::OutputFormat::from_name(
+        edit.output_format.as_deref().unwrap_or("png").trim(),
+    ) else {
+        let raw = edit.output_format.as_deref().unwrap_or_default().trim();
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
+            ),
+            Some("unsupported_output_format"),
+        );
+    };
+    let compression = match edit.output_compression.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(raw) => match raw.parse::<u8>() {
+            Ok(q) if q <= 100 => Some(q),
+            _ => {
+                return openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "output_compression must be an integer in [0, 100]; got {raw:?}: rejected, not clamped"
+                    ),
+                    Some("invalid_output_compression"),
+                );
+            }
+        },
     };
     let catalog = config.catalog_snapshot();
     let slug: String = match edit
@@ -3585,7 +3780,14 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             // txt2img branch only, and the route fixes the output at the
             // source image's dimensions.
             hires: None,
+            // ControlNet is a generations-route extension; img2img keeps
+            // the plain OpenAI edits shape.
+            control_net: None,
+            control_image: None,
+            controlnet_strength: None,
         },
+        format,
+        compression,
     )
     .await;
     let _ = std::fs::remove_file(&init_path);
@@ -3611,7 +3813,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             steps: recipe.steps,
             width,
             height,
-            format: honkbox_sd_core::OutputFormat::Png,
+            format,
             backend_id,
             sampler: recipe.sampler.name().to_string(),
             scheduler: image_scheduler_name(recipe.scheduler),
@@ -5417,5 +5619,40 @@ mod tests {
         assert!(entry.capabilities.vision);
         assert_eq!(entry.modalities, vec!["text", "vision"]);
         assert!(entry.tool_calling);
+    }
+
+    /// Default-on vision chat: a chat model with a sibling `mmproj*.gguf`
+    /// projector advertises `capabilities.vision` with no operator
+    /// declaration, because the default feature set compiles the mtmd
+    /// path. `/v1/models` must never advertise vision the build cannot
+    /// serve, so a text-only build (no `llm-vision`) keeps the same
+    /// layout text-only — the assertion tracks `VISION_COMPILED` for
+    /// both configs.
+    #[test]
+    fn sibling_mmproj_derives_vision_by_default() {
+        let base =
+            std::env::temp_dir().join(format!("honkbox-vision-catalog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let model_path = base.join("m1.gguf");
+        std::fs::write(&model_path, b"m").expect("write model file");
+        let mmproj_path = base.join("mmproj-m1-f16.gguf");
+        std::fs::write(&mmproj_path, b"p").expect("write mmproj file");
+
+        let found = vec![scan_hit("llm:v/m1.gguf", &model_path.display().to_string())];
+        let bindings = bind_entries(&[], &found).expect("bind");
+        let catalog = build_catalog(&found, &bindings);
+        let entry = &catalog.data[0];
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(
+            entry.capabilities.vision,
+            honkbox_llm_worker::VISION_COMPILED
+        );
+        let expected = if entry.capabilities.vision {
+            vec!["text".to_owned(), "vision".to_owned()]
+        } else {
+            vec!["text".to_owned()]
+        };
+        assert_eq!(entry.modalities, expected);
     }
 }

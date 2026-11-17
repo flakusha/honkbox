@@ -9,6 +9,10 @@ use std::fmt;
 use std::io::Cursor;
 use std::path::PathBuf;
 
+use diffusion_rs::api::{
+    ConfigBuilder, LoraSpec, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
+};
+
 /// Longest image edge in pixels accepted by the stub backend.
 pub const MAX_EDGE: u32 = 2048;
 
@@ -21,6 +25,11 @@ pub const SCHEDULER: &str = "normal";
 /// `--strength`, 0.75); also the HTTP-surface default when a request omits
 /// `strength`.
 pub const IMG2IMG_STRENGTH: f32 = 0.75;
+
+/// Vendor default `ControlNet` guidance strength (stable-diffusion.cpp
+/// `--control-strength`, 0.9); also the HTTP-surface default when a request
+/// omits `controlnet_strength`.
+pub const CONTROLNET_STRENGTH: f32 = 0.9;
 
 /// Sampler selection, mirroring the vendor `SampleMethod` C enum exactly
 /// (wire names are the sd.cpp CLI spellings, e.g. `dpm++2m`).
@@ -277,8 +286,9 @@ pub fn hires_target(base: (u32, u32), fix: &HiresFix) -> (u32, u32) {
 
 /// Minimal txt2img request crossing the `server` → `sd-core` seam. The same
 /// struct carries img2img/inpaint inputs: `init_image` present switches the
-/// real backend to img2img (mask optional); the stub honestly ignores all
-/// three image-input fields.
+/// real backend to img2img (mask optional), and `control_image` +
+/// `control_net` present together switch it to a ControlNet-conditioned
+/// generation; the stub honestly ignores all four image-input fields.
 #[derive(Debug, Clone)]
 pub struct Txt2ImgRequest {
     /// Text prompt.
@@ -322,6 +332,22 @@ pub struct Txt2ImgRequest {
     /// Optional hires-fix second pass (see [`HiresFix`]); `None` = single-pass
     /// generation. Only [`SdCppPipeline`] honors it; the stub ignores it.
     pub hires: Option<HiresFix>,
+    /// `ControlNet` weights file (resolved by `server` from a `controlnet`
+    /// catalog slug). `Some` switches the real backend to a
+    /// ControlNet-conditioned generation and REQUIRES
+    /// [`Txt2ImgRequest::control_image`]: weights alone condition nothing,
+    /// so a lone half is a generation error, not a silent no-op.
+    pub control_net: Option<PathBuf>,
+    /// `ControlNet` conditioning image (PNG bytes); requires
+    /// [`Txt2ImgRequest::control_net`]. The real backend writes it to a temp
+    /// file (the vendor reads every image input from a path) and the engine
+    /// resizes it to the generation size; the image is applied as-is, the
+    /// way a preprocessed conditioning map arrives from a client.
+    pub control_image: Option<Vec<u8>>,
+    /// `ControlNet` guidance strength in `(0, 1]`; `None` = the vendor default
+    /// [`CONTROLNET_STRENGTH`]. Only meaningful with
+    /// [`Txt2ImgRequest::control_image`].
+    pub controlnet_strength: Option<f32>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -375,9 +401,12 @@ pub trait SdPipeline: Send + Sync {
 /// (SAME seed = byte-identical PNG); honors `width`/`height`. Recipe
 /// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`), the
 /// hires-fix pass, and the image inputs
-/// (`loras`/`init_image`/`mask_image`/`strength`) are honestly
-/// ignored: the stub has no sampler and no img2img branch — they only
-/// affect the real `SdCppPipeline` backend.
+/// (`loras`/`init_image`/`mask_image`/`strength`/`control_net`/
+/// `control_image`/`controlnet_strength`) are honestly
+/// ignored: the stub has no sampler, no img2img branch, and no `ControlNet`
+/// — they only affect the real `SdCppPipeline` backend. Callers that need
+/// control inputs applied must check the backend (the HTTP surface answers
+/// `controlnet_unsupported` instead of rendering uncontrolled).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubPipeline;
 
@@ -556,6 +585,52 @@ fn scheduler_vendor(scheduler: Scheduler) -> diffusion_rs::api::Scheduler {
     }
 }
 
+/// `ControlNet` inputs from [`Txt2ImgRequest`]: `Some((weights, image))` when
+/// both halves are present, `None` = plain generation. A lone half is an
+/// error: the engine ignores a control image when no `ControlNet` is loaded
+/// (the weights without one condition nothing), so rendering without the
+/// requested conditioning would misrepresent the output.
+fn control_pair(req: &Txt2ImgRequest) -> Result<Option<(&std::path::Path, &[u8])>, SdError> {
+    match (req.control_net.as_deref(), req.control_image.as_deref()) {
+        (Some(weights), Some(png)) => Ok(Some((weights, png))),
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(SdError::Backend(
+            "control_net weights without control_image: nothing to condition on".to_owned(),
+        )),
+        (None, Some(_)) => Err(SdError::Backend(
+            "control_image without control_net weights: the engine ignores a control image when no ControlNet is loaded".to_owned(),
+        )),
+    }
+}
+
+/// Stage `ControlNet` for a generation: resolve the pair
+/// ([`control_pair`]), write the conditioning PNG to a unique temp file
+/// (the vendor reads every image input from a path), point the generation
+/// config at that path and the model config at the weights (they load with
+/// the sd context). Returns the temp path for post-run cleanup; `None` =
+/// plain generation.
+fn stage_control(
+    req: &Txt2ImgRequest,
+    config: &mut diffusion_rs::api::ConfigBuilder,
+    model: &mut diffusion_rs::api::ModelConfigBuilder,
+) -> Result<Option<PathBuf>, SdError> {
+    let Some((weights, png)) = control_pair(req)? else {
+        return Ok(None);
+    };
+    let path = std::env::temp_dir().join(format!(
+        "honkbox-control-{}-{}-{}.png",
+        std::process::id(),
+        req.seed,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    ));
+    std::fs::write(&path, png).map_err(|e| SdError::Backend(e.to_string()))?;
+    model.control_net(weights.to_path_buf());
+    config.control_image(path.clone());
+    Ok(Some(path))
+}
+
 /// Build the vendor hires-fix bundle for `req`: latent-interpolation
 /// upscaler plus target size (explicit target, else base * scale rounded)
 /// and second-pass denoise. `None` = single-pass generation.
@@ -578,6 +653,57 @@ fn hires_vendor_params(
     )))
 }
 
+/// Per-request model-config wiring for [`SdCppPipeline::generate`]: the
+/// scheduler recipe (vendor design keeps it on the model config), split
+/// encoder/VAE files (`--clip` feeds the llm (Qwen-VL-class) slot, `--vae`
+/// the standalone VAE), per-request `LoRA` adapters (the vendor maps file
+/// STEMS inside one directory to (path, multiplier) pairs, so `server`
+/// resolves catalog slugs to same-dir absolute paths and we re-derive the
+/// parts here; high-noise split stays fixed off, not exposed on the API),
+/// and the vendor-native hires-fix second pass (the latent is interpolated
+/// up to the target after the base pass, then re-denoised at
+/// `denoising_strength`; the interpolation-only upscaler needs no extra
+/// weights — the ESRGAN-backed variant is not wired).
+fn wire_model(req: &Txt2ImgRequest, model: &mut ModelConfigBuilder) -> Result<(), SdError> {
+    model.scheduler(match req.scheduler {
+        Some(scheduler) => scheduler_vendor(scheduler),
+        None => VendorScheduler::DISCRETE_SCHEDULER,
+    });
+    if let Some(clip) = req.clip.clone() {
+        model.llm(clip);
+    }
+    if let Some(vae) = req.vae.clone() {
+        model.vae(vae);
+    }
+    if let Some(loras) = &req.loras {
+        let first = loras
+            .first()
+            .ok_or_else(|| SdError::Backend("empty lora list".to_owned()))?;
+        let dir = first
+            .path
+            .parent()
+            .ok_or_else(|| SdError::Backend("lora path has no parent directory".to_owned()))?;
+        let specs = loras
+            .iter()
+            .map(|lora| LoraSpec {
+                file_name: lora
+                    .path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+                is_high_noise: false,
+                multiplier: lora.strength,
+            })
+            .collect();
+        model.lora_models(dir, specs);
+    }
+    if let Some((upscaler, params)) = hires_vendor_params(req)? {
+        model.hires_params(upscaler, params, None::<&std::path::Path>);
+    }
+    Ok(())
+}
+
 impl SdPipeline for SdCppPipeline {
     fn backend_id(&self) -> &'static str {
         SD_CPP_BACKEND_ID
@@ -586,9 +712,6 @@ impl SdPipeline for SdCppPipeline {
     fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
         #[cfg(feature = "vulkan")]
         use diffusion_rs::api::{BackendDevice, Module};
-        use diffusion_rs::api::{
-            ConfigBuilder, LoraSpec, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
-        };
 
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
@@ -603,7 +726,8 @@ impl SdPipeline for SdCppPipeline {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos()),
         ));
-        let config = ConfigBuilder::default()
+        let mut config = ConfigBuilder::default();
+        config
             .prompt(req.prompt.clone())
             .negative_prompt(req.negative_prompt.clone().unwrap_or_default())
             // Recipe defaults (euler, CFG 7.0) match the pre-passthrough
@@ -617,18 +741,25 @@ impl SdPipeline for SdCppPipeline {
                 Some(sampler) => sampler_vendor(sampler),
                 None => SampleMethod::EULER_SAMPLE_METHOD,
             })
-            // img2img/inpaint: the vendor reads both images from paths (empty
-            // path = txt2img) and takes the denoise strength here. `strength`
-            // is only consumed by the img2img branch upstream, and the None
-            // values are byte-identical to the vendor defaults, so txt2img
-            // behavior is unchanged by these three lines.
+            // img2img/inpaint: the vendor reads both images from paths
+            // (empty path = txt2img) and takes the denoise strength here;
+            // the None values are byte-identical to the vendor defaults.
             .init_img(req.init_image.clone().unwrap_or_default())
             .mask_img(req.mask_image.clone().unwrap_or_default())
             .strength(req.strength.unwrap_or(IMG2IMG_STRENGTH))
-            .output(out.clone())
+            // ControlNet guidance; only consumed when a control image is
+            // set (the pair check in [`stage_control`] rejects a lone
+            // half), and the None branch is byte-identical to the vendor
+            // default (0.9).
+            .control_strength(req.controlnet_strength.unwrap_or(CONTROLNET_STRENGTH))
+            .output(out.clone());
+        let mut model = ModelConfigBuilder::default();
+        // ControlNet conditioning: temp PNG via [`stage_control`]; the
+        // control type stays the vendor default (NONE, preprocessed image).
+        let control_path = stage_control(req, &mut config, &mut model)?;
+        let config = config
             .build()
             .map_err(|e| SdError::Backend(e.to_string()))?;
-        let mut model = ModelConfigBuilder::default();
         // VAE tiling: 1024² fp16 decode needs a ~4.8 GB contiguous Vulkan buffer,
         // over the per-allocation limit (OOM evidence 2026-11-15, 7900 XTX).
         // Sampling stays full-frame; only the VAE decode is tiled.
@@ -641,54 +772,8 @@ impl SdPipeline for SdCppPipeline {
             model.model(self.model_path.clone());
         }
         model.n_threads(0).vae_tiling(true);
-        // Scheduler lives on the model config (vendor design); default is the
-        // fixed recipe's discrete (`normal`) schedule.
-        model.scheduler(match req.scheduler {
-            Some(scheduler) => scheduler_vendor(scheduler),
-            None => VendorScheduler::DISCRETE_SCHEDULER,
-        });
-        // Split encoder/VAE files (new archs ship them separately): `--clip`
-        // feeds the llm (Qwen-VL-class) slot, `--vae` the standalone VAE.
-        if let Some(clip) = req.clip.clone() {
-            model.llm(clip);
-        }
-        if let Some(vae) = req.vae.clone() {
-            model.vae(vae);
-        }
-        // Per-request LoRA adapters: the vendor maps file STEMS inside one
-        // directory to (path, multiplier) pairs, so the server resolves
-        // catalog slugs to same-dir absolute paths and we re-derive the parts
-        // here. High-noise split stays fixed off (not exposed on the API).
-        if let Some(loras) = &req.loras {
-            let first = loras
-                .first()
-                .ok_or_else(|| SdError::Backend("empty lora list".to_owned()))?;
-            let dir = first
-                .path
-                .parent()
-                .ok_or_else(|| SdError::Backend("lora path has no parent directory".to_owned()))?;
-            let specs = loras
-                .iter()
-                .map(|lora| LoraSpec {
-                    file_name: lora
-                        .path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or_default()
-                        .to_owned(),
-                    is_high_noise: false,
-                    multiplier: lora.strength,
-                })
-                .collect();
-            model.lora_models(dir, specs);
-        }
-        // Hires-fix second pass (vendor-native): the latent is interpolated
-        // up to the target after the base pass, then re-denoised at
-        // `denoising_strength`. The interpolation-only upscaler needs no
-        // extra weights (the ESRGAN-backed variant is not wired).
-        if let Some((upscaler, params)) = hires_vendor_params(req)? {
-            model.hires_params(upscaler, params, None::<&std::path::Path>);
-        }
+        // Per-request wiring: scheduler recipe, split files, LoRAs, hires.
+        wire_model(req, &mut model)?;
         #[cfg(feature = "vulkan")]
         model.backend(std::collections::HashMap::from([(
             Module::Model,
@@ -699,6 +784,9 @@ impl SdPipeline for SdCppPipeline {
             .map_err(|e| SdError::Backend(e.to_string()))?;
         let bytes = std::fs::read(&out);
         let _ = std::fs::remove_file(&out);
+        if let Some(path) = &control_path {
+            let _ = std::fs::remove_file(path);
+        }
         let bytes = bytes.map_err(|e| SdError::Backend(e.to_string()))?;
         let img = image::load_from_memory(&bytes)
             .map_err(|e| SdError::Encode(e.to_string()))?
@@ -740,12 +828,45 @@ impl OutputFormat {
             OutputFormat::Webp => "webp",
         }
     }
+
+    /// IANA media type for the encoded bytes (HTTP responses).
+    pub fn mime(self) -> &'static str {
+        match self {
+            OutputFormat::Png => "image/png",
+            OutputFormat::Jpeg => "image/jpeg",
+            OutputFormat::Webp => "image/webp",
+        }
+    }
+
+    /// Parse a wire format name (the `name()` spelling); `None` = unknown.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "png" => Some(OutputFormat::Png),
+            "jpeg" => Some(OutputFormat::Jpeg),
+            "webp" => Some(OutputFormat::Webp),
+            _ => None,
+        }
+    }
 }
+
+/// JPEG quality used when the caller does not override it.
+pub const DEFAULT_JPEG_QUALITY: u8 = 90;
 
 /// Encode an image in the requested container; consumes the image.
 ///
-/// JPEG uses quality 90; WebP is lossless-only in `image` 0.25 (no quality knob).
+/// JPEG uses [`DEFAULT_JPEG_QUALITY`]; WebP is lossless-only in `image` 0.25
+/// (no quality knob).
 pub fn encode_image(img: GeneratedImage, format: OutputFormat) -> Result<Vec<u8>, SdError> {
+    encode_image_with_quality(img, format, DEFAULT_JPEG_QUALITY)
+}
+
+/// [`encode_image`] with an explicit JPEG quality (`0-100`; ignored for PNG
+/// and the lossless WebP encoder).
+pub fn encode_image_with_quality(
+    img: GeneratedImage,
+    format: OutputFormat,
+    jpeg_quality: u8,
+) -> Result<Vec<u8>, SdError> {
     let buf: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
         image::ImageBuffer::from_raw(img.width, img.height, img.rgba)
             .ok_or_else(|| SdError::Encode("bad pixel buffer length".to_string()))?;
@@ -759,7 +880,8 @@ pub fn encode_image(img: GeneratedImage, format: OutputFormat) -> Result<Vec<u8>
         }
         OutputFormat::Jpeg => {
             let rgb = image::DynamicImage::ImageRgba8(buf).to_rgb8();
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90);
+            let mut enc =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, jpeg_quality);
             enc.encode(
                 rgb.as_raw(),
                 img.width,
@@ -814,7 +936,49 @@ mod tests {
             mask_image: None,
             strength: None,
             hires: None,
+            control_net: None,
+            control_image: None,
+            controlnet_strength: None,
         }
+    }
+
+    #[test]
+    fn control_pair_accepts_only_complete_pairs() {
+        // Plain generation: no control fields at all.
+        let plain = req(1, 64, 64);
+        assert!(control_pair(&plain).unwrap().is_none());
+
+        // Both halves: the weights path and the raw PNG bytes come through.
+        let png = b"\x89PNG\r\n\x1a\nfake";
+        let mut both = req(1, 64, 64);
+        both.control_net = Some(PathBuf::from("/models/controlnet/c.safetensors"));
+        both.control_image = Some(png.to_vec());
+        let (weights, image) = control_pair(&both).unwrap().expect("complete pair");
+        assert_eq!(
+            weights,
+            std::path::Path::new("/models/controlnet/c.safetensors")
+        );
+        assert_eq!(image, png);
+
+        // A lone half would render without its conditioning (the engine
+        // drops an unpaired control image): both mismatches are errors.
+        let mut lone_weights = req(1, 64, 64);
+        lone_weights.control_net = Some(PathBuf::from("/models/controlnet/c.safetensors"));
+        assert_eq!(
+            control_pair(&lone_weights),
+            Err(SdError::Backend(
+                "control_net weights without control_image: nothing to condition on".to_owned(),
+            )),
+        );
+
+        let mut lone_image = req(1, 64, 64);
+        lone_image.control_image = Some(png.to_vec());
+        assert_eq!(
+            control_pair(&lone_image),
+            Err(SdError::Backend(
+                "control_image without control_net weights: the engine ignores a control image when no ControlNet is loaded".to_owned(),
+            )),
+        );
     }
 
     #[test]
@@ -886,7 +1050,9 @@ mod tests {
     }
 
     /// Image-input fields never change the stub output: same seed with and
-    /// without img2img/mask/`LoRA` fields is byte-identical (honest ignore).
+    /// without img2img/mask/`LoRA`/`ControlNet` fields is byte-identical
+    /// (honest ignore; the HTTP surface refuses control inputs on non-sd-cpp
+    /// backends instead of relying on this).
     #[test]
     fn stub_ignores_image_inputs() {
         let plain = req(9, 16, 16);
@@ -903,6 +1069,9 @@ mod tests {
                 target: None,
                 denoising_strength: 0.7,
             }),
+            control_net: Some(PathBuf::from("/models/controlnet/c.safetensors")),
+            control_image: Some(vec![0x89, b'P', b'N', b'G']),
+            controlnet_strength: Some(0.5),
             ..req(9, 16, 16)
         };
         let a = StubPipeline.generate(&plain).expect("gen");
@@ -1016,5 +1185,35 @@ mod tests {
             "jpeg mean abs error {}",
             err / want.len() as u64
         );
+    }
+
+    #[test]
+    fn output_format_naming_and_mime_agree() {
+        for (format, name, extension, mime) in [
+            (OutputFormat::Png, "png", "png", "image/png"),
+            (OutputFormat::Jpeg, "jpeg", "jpg", "image/jpeg"),
+            (OutputFormat::Webp, "webp", "webp", "image/webp"),
+        ] {
+            assert_eq!(format.name(), name, "{format:?}");
+            assert_eq!(format.extension(), extension, "{format:?}");
+            assert_eq!(format.mime(), mime, "{format:?}");
+            assert_eq!(OutputFormat::from_name(name), Some(format), "{name}");
+        }
+        assert_eq!(OutputFormat::from_name("jpg"), None);
+        assert_eq!(OutputFormat::from_name("gif"), None);
+    }
+
+    #[test]
+    fn jpeg_quality_knob_changes_bytes_and_default_matches_90() {
+        let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+        let default_bytes = encode_image(img.clone(), OutputFormat::Jpeg).expect("encode");
+        let q90 = encode_image_with_quality(img.clone(), OutputFormat::Jpeg, 90).expect("encode");
+        assert_eq!(default_bytes, q90, "default = quality 90");
+        let q10 = encode_image_with_quality(img.clone(), OutputFormat::Jpeg, 10).expect("encode");
+        assert_ne!(default_bytes, q10, "quality changes JPEG bytes");
+        // The knob is a JPEG-only control: PNG/WebP bytes are unaffected.
+        let png_a = encode_image_with_quality(img.clone(), OutputFormat::Png, 10).expect("encode");
+        let png_b = encode_image_with_quality(img.clone(), OutputFormat::Png, 90).expect("encode");
+        assert_eq!(png_a, png_b);
     }
 }

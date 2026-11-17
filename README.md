@@ -139,14 +139,16 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
   silent gap.
 - ControlNet: `comfy:controlnet/*` weight files are discovered by the model
   scan (kind `controlnet`, listed in `GET /v1/models`). `POST
-  /v1/images/generations` accepts a honkbox extension pair — `controlnet`
-  (catalog slug/alias) + `control_image` (base64 PNG) — and validates it
-  (half-specified pairs, undecodable base64 / non-PNG bytes, and unknown
-  slugs are 400s), but the sd pipeline cannot apply control inputs yet, so
-  a fully valid pair is answered with an explicit 501
-  (`controlnet_unsupported`) rather than silently ignored. The vendor's
-  C++ engine supports ControlNet; the gap is the Rust generation path and
-  the `sd-core` seam, not the weights on disk.
+  /v1/images/generations` accepts a honkbox extension triple — `controlnet`
+  (catalog slug/alias) + `control_image` (base64 PNG) + optional
+  `controlnet_strength` in `(0, 1]` (default 0.9; out-of-range is a 400,
+  never clamped) — and validates it (half-specified pairs, undecodable
+  base64 / non-PNG bytes, and unknown slugs are 400s). A valid pair is
+  applied by the sd-cpp pipeline: the weights load with the model context
+  and the conditioning image (sent preprocessed, e.g. a depth or edge map;
+  the engine resizes it) steers the render. A backend that cannot apply
+  control (the stub) is answered with an explicit 501
+  (`controlnet_unsupported`) rather than silently ignored.
 - Vision chat (mmproj, REQ-8): an LLM weights file with a sibling mmproj
   projector (`mmproj*.gguf` in the same directory, the HF multimodal-repo
   convention) is discovered automatically at catalog time — such entries

@@ -990,6 +990,20 @@ pub struct ImagesGenerationRequest {
     /// Output encoding; only `"b64_json"` is supported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
+    /// Output container for the returned image bytes: `"png"` (default),
+    /// `"jpeg"`, or `"webp"` (lossless). Unknown names are rejected with a
+    /// 400 listing the accepted values. The `response_format` transport
+    /// encoding stays `"b64_json"` either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+    /// JPEG quality in `[0, 100]` (the `OpenAI` `output_compression`
+    /// precedent). Only meaningful with `output_format: "jpeg"` — PNG is
+    /// lossless and WebP is encoded lossless-only today, so the value is
+    /// documented-and-ignored there. Non-integer or out-of-range values are
+    /// rejected with a 400 (`invalid_output_compression`), never clamped.
+    /// Omitted = JPEG quality 90.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_compression: Option<serde_json::Value>,
     /// Sampler override (sd.cpp name, e.g. `"euler"`, `"dpm++2m"`);
     /// unknown names are rejected with a 400 listing the accepted values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1031,17 +1045,27 @@ pub struct ImagesGenerationRequest {
     /// `ControlNet` slug or alias of a `controlnet`-kind catalog entry
     /// (honkbox extension, not part of the `OpenAI` image shape). Accepted
     /// and validated (unknown slug = 400) together with
-    /// [`ImagesGenerationRequest::control_image`]; applying it is NOT
-    /// possible today — the sd pipeline seam carries no control inputs —
-    /// so a fully valid pair is answered with an explicit 501
-    /// (`controlnet_unsupported`), never silently ignored.
+    /// [`ImagesGenerationRequest::control_image`]; a fully valid pair is
+    /// applied by the sd-cpp pipeline (weights load with the model
+    /// context, the conditioning image steers the render). A pipeline that
+    /// cannot apply control inputs (the stub backend) is answered with an
+    /// explicit 501 (`controlnet_unsupported`), never silently ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controlnet: Option<String>,
     /// Conditioning image for [`ImagesGenerationRequest::controlnet`]:
     /// base64-encoded PNG. Validated (bad base64 / not a PNG = 400) and
-    /// then subject to the same honest 501 as the slug.
+    /// applied as-is by the sd-cpp pipeline — pass a preprocessed
+    /// conditioning map (depth, edges, pose); the engine resizes it to the
+    /// generation size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_image: Option<String>,
+    /// `ControlNet` guidance strength in `(0, 1]` (how hard the conditioning
+    /// image steers the render); values outside the range are rejected with
+    /// a 400 (`invalid_controlnet_strength`), never clamped. Omitted = the
+    /// vendor default 0.9 (stable-diffusion.cpp `--control-strength`).
+    /// Only meaningful with `controlnet` + `control_image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controlnet_strength: Option<f32>,
 }
 
 /// One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].
@@ -1079,7 +1103,8 @@ pub struct ImagesHiresFix {
 /// One generated image in the `POST /v1/images/generations` response.
 #[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ImageB64 {
-    /// The PNG bytes, base64-encoded (`response_format: "b64_json"`).
+    /// The generated image bytes (in the requested `output_format`),
+    /// base64-encoded (`response_format: "b64_json"`).
     pub b64_json: String,
 }
 

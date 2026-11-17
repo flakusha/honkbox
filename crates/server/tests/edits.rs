@@ -523,3 +523,85 @@ async fn recipe_and_steps_parity() {
         assert_eq!(body["error"]["code"], code, "{field}={value}: {body}");
     }
 }
+/// Decode one `b64_json` entry to raw bytes.
+fn decode_entry(entry: &Value) -> Vec<u8> {
+    use base64::Engine as _;
+    let b64 = entry["b64_json"].as_str().expect("b64_json string");
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("valid base64")
+}
+
+/// `output_format=jpeg` returns JPEG bytes and lands a `final_00.jpg`
+/// bundle whose request/sidecar `format` say `jpeg`.
+#[tokio::test]
+async fn jpeg_output_format_and_bundle_agree() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-edit-fmt-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let (status, body) = edits(
+        app_with(
+            catalog_with(&[sd_entry("comfy:f.safetensors")]),
+            Some(data_dir.clone()),
+        ),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            part("output_format", "jpeg"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(&decode_entry(&body["data"][0])[..3], &[0xFF, 0xD8, 0xFF]);
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let art = std::fs::read(dir.join("final_00.jpg")).expect("bundle artifact with jpg extension");
+    assert_eq!(&art[..3], &[0xFF, 0xD8, 0xFF]);
+    for name in ["request.json", "final_00.json"] {
+        let record: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap();
+        assert_eq!(record["format"], "jpeg", "{name}");
+    }
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Multipart parity of the format/compression validation: an unknown
+/// `output_format` and a non-numeric / out-of-range `output_compression`
+/// are the same named 400s as on `/v1/images/generations`; a valid
+/// compression value renders.
+#[tokio::test]
+async fn output_format_and_compression_parity() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    let (status, body) = edits(
+        app.clone(),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            part("output_format", "jpeg"),
+            part("output_compression", "50"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(&decode_entry(&body["data"][0])[..3], &[0xFF, 0xD8, 0xFF]);
+    for (field, value, code) in [
+        ("output_format", "gif", "unsupported_output_format"),
+        ("output_format", "JPEG", "unsupported_output_format"),
+        ("output_compression", "abc", "invalid_output_compression"),
+        ("output_compression", "101", "invalid_output_compression"),
+        ("output_compression", "-1", "invalid_output_compression"),
+    ] {
+        let (status, body) = edits(
+            app.clone(),
+            &[
+                png_part("image", png_bytes(4, 4)),
+                part("prompt", "redo this"),
+                part(field, value),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}={value}: {body}");
+        assert_eq!(body["error"]["code"], code, "{field}={value}: {body}");
+    }
+}

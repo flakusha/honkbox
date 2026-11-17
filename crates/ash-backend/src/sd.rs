@@ -101,6 +101,9 @@ mod tests {
             mask_image: None,
             strength: None,
             hires: None,
+            control_net: None,
+            control_image: None,
+            controlnet_strength: None,
         };
         let err = pipeline
             .generate(&req)
