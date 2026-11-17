@@ -98,7 +98,7 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `ReviewedExpansion-RemoteVisionURLs.md` | `epic-llm-expansion` + URL fetch ticket |
 | `ReviewedExpansion-SpeculativeDecoding.md` | `epic-llm-expansion` + decoding spike |
 | `ReviewedExpansion-VoiceIdentity.md` | `epic-voice-identity` + 2 tickets |
-| `ReviewedMesh-*.md` (5 docs) | `epic-mesh-integration` + 7 tickets |
+| `ReviewedMesh-*.md` (5 docs), `ReviewedCreative-MeshRemoteAPI.md` | `epic-mesh-integration` + 7 tickets |
 | `ReviewedCreative-Index.md`, `ReviewedCreative-SVG.md`, `ReviewedCreative-TexturesMaterials.md` | `epic-vector-materials` + 5 tickets |
 | `ReviewedCreative-BakingModels.md`, `ReviewedCreative-FeedbackLoop.md` | `epic-model-feedback` + 5 tickets |
 | `ReviewedImageEdit-*.md` (4 docs) | `epic-editor-integration` + 7 tickets |
