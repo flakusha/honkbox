@@ -238,6 +238,43 @@ pub struct LoraRef {
     pub strength: f32,
 }
 
+/// Hires-fix second pass: the vendor's native two-pass upscale (generate at
+/// the base size, interpolate the latent up to the target, re-denoise at
+/// [`HiresFix::denoising_strength`]; stable-diffusion.cpp `sd_hires_params_t`
+/// with the latent upscaler). An explicit `target` wins over `scale`.
+/// Only the real [`SdCppPipeline`] honors it; [`StubPipeline`] ignores it
+/// like the other backend-only fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HiresFix {
+    /// Upscale factor over the base size when `target` is `None`.
+    pub scale: f32,
+    /// Explicit target `(width, height)` in pixels; `None` = base * scale.
+    pub target: Option<(u32, u32)>,
+    /// Second-pass denoising strength in `(0, 1]`.
+    pub denoising_strength: f32,
+}
+
+/// Final hires-fix output `(width, height)`: the explicit target when set,
+/// otherwise the base size scaled and rounded to nearest (minimum 1 px;
+/// an absurd scale clamps to `u32::MAX` per edge — the HTTP surface caps
+/// targets at [`MAX_EDGE`] long before that).
+pub fn hires_target(base: (u32, u32), fix: &HiresFix) -> (u32, u32) {
+    if let Some(target) = fix.target {
+        target
+    } else {
+        let edge = |v: u32| {
+            let scaled = (f64::from(v) * f64::from(fix.scale)).round().max(1.0);
+            // Upstream validates the scale into [1.0, 4.0], so the rounded
+            // product is a small positive integer; the >= 1 floor keeps the
+            // cast sign-safe.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pixels = scaled as u32;
+            pixels
+        };
+        (edge(base.0), edge(base.1))
+    }
+}
+
 /// Minimal txt2img request crossing the `server` → `sd-core` seam. The same
 /// struct carries img2img/inpaint inputs: `init_image` present switches the
 /// real backend to img2img (mask optional); the stub honestly ignores all
@@ -282,6 +319,9 @@ pub struct Txt2ImgRequest {
     /// img2img denoise strength in `(0, 1]`; `None` = the vendor default
     /// [`IMG2IMG_STRENGTH`]. Only meaningful with [`Txt2ImgRequest::init_image`].
     pub strength: Option<f32>,
+    /// Optional hires-fix second pass (see [`HiresFix`]); `None` = single-pass
+    /// generation. Only [`SdCppPipeline`] honors it; the stub ignores it.
+    pub hires: Option<HiresFix>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -333,8 +373,9 @@ pub trait SdPipeline: Send + Sync {
 
 /// Deterministic stub: pixels are a pure function of the seed
 /// (SAME seed = byte-identical PNG); honors `width`/`height`. Recipe
-/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`) and the
-/// image inputs (`loras`/`init_image`/`mask_image`/`strength`) are honestly
+/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`), the
+/// hires-fix pass, and the image inputs
+/// (`loras`/`init_image`/`mask_image`/`strength`) are honestly
 /// ignored: the stub has no sampler and no img2img branch — they only
 /// affect the real `SdCppPipeline` backend.
 #[derive(Debug, Default, Clone, Copy)]
@@ -378,7 +419,7 @@ pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-cpu";
 ///
 /// Recipe: euler sampler, discrete (`normal`) scheduler, CFG 7.0 by default;
 /// a [`Txt2ImgRequest`] may override sampler/scheduler/CFG/negative prompt
-/// per request. VAE tiling stays forced ON (required: the 1024² fp16 VAE decode otherwise exceeds the per-allocation limit). `gen_img` writes one PNG to a
+/// per request and run an optional hires-fix second pass ([`HiresFix`]). VAE tiling stays forced ON (required: the 1024² fp16 VAE decode otherwise exceeds the per-allocation limit). `gen_img` writes one PNG to a
 /// temp path; this impl reads it back and decodes to RGBA so the seam stays
 /// container-free. `Send + Sync` holds: all `gen_img` state is function-local.
 #[derive(Debug, Clone)]
@@ -515,6 +556,28 @@ fn scheduler_vendor(scheduler: Scheduler) -> diffusion_rs::api::Scheduler {
     }
 }
 
+/// Build the vendor hires-fix bundle for `req`: latent-interpolation
+/// upscaler plus target size (explicit target, else base * scale rounded)
+/// and second-pass denoise. `None` = single-pass generation.
+fn hires_vendor_params(
+    req: &Txt2ImgRequest,
+) -> Result<Option<(diffusion_rs::api::Upscaler, diffusion_rs::api::HiresParams)>, SdError> {
+    let Some(hires) = &req.hires else {
+        return Ok(None);
+    };
+    let (target_width, target_height) = hires_target((req.width, req.height), hires);
+    let params = diffusion_rs::api::HiresParamsBuilder::default()
+        .width(target_width.cast_signed())
+        .height(target_height.cast_signed())
+        .denoising_strength(hires.denoising_strength)
+        .build()
+        .map_err(|e| SdError::Backend(e.to_string()))?;
+    Ok(Some((
+        diffusion_rs::api::Upscaler::SD_HIRES_UPSCALER_LATENT,
+        params,
+    )))
+}
+
 impl SdPipeline for SdCppPipeline {
     fn backend_id(&self) -> &'static str {
         SD_CPP_BACKEND_ID
@@ -618,6 +681,13 @@ impl SdPipeline for SdCppPipeline {
                 })
                 .collect();
             model.lora_models(dir, specs);
+        }
+        // Hires-fix second pass (vendor-native): the latent is interpolated
+        // up to the target after the base pass, then re-denoised at
+        // `denoising_strength`. The interpolation-only upscaler needs no
+        // extra weights (the ESRGAN-backed variant is not wired).
+        if let Some((upscaler, params)) = hires_vendor_params(req)? {
+            model.hires_params(upscaler, params, None::<&std::path::Path>);
         }
         #[cfg(feature = "vulkan")]
         model.backend(std::collections::HashMap::from([(
@@ -743,6 +813,7 @@ mod tests {
             init_image: None,
             mask_image: None,
             strength: None,
+            hires: None,
         }
     }
 
@@ -827,11 +898,49 @@ mod tests {
             init_image: Some(PathBuf::from("/tmp/in.png")),
             mask_image: Some(PathBuf::from("/tmp/mask.png")),
             strength: Some(0.5),
+            hires: Some(HiresFix {
+                scale: 2.0,
+                target: None,
+                denoising_strength: 0.7,
+            }),
             ..req(9, 16, 16)
         };
         let a = StubPipeline.generate(&plain).expect("gen");
         let b = StubPipeline.generate(&with).expect("gen");
         assert_eq!(a.rgba, b.rgba);
+        // The stub ignores the hires pass, so the output stays at the base
+        // size (the real backend would land at the hires target).
+        assert_eq!((b.width, b.height), (16, 16));
+    }
+
+    /// Hires-fix target resolution: explicit target wins; scaling rounds to
+    /// nearest and never collapses to zero.
+    #[test]
+    fn hires_target_resolution() {
+        let scaled = HiresFix {
+            scale: 2.0,
+            target: None,
+            denoising_strength: 0.7,
+        };
+        assert_eq!(hires_target((1024, 512), &scaled), (2048, 1024));
+        let frac = HiresFix {
+            scale: 1.25,
+            target: None,
+            denoising_strength: 0.7,
+        };
+        assert_eq!(hires_target((1024, 640), &frac), (1280, 800));
+        let explicit = HiresFix {
+            scale: 2.0,
+            target: Some((640, 1536)),
+            denoising_strength: 0.7,
+        };
+        assert_eq!(hires_target((1024, 1024), &explicit), (640, 1536));
+        let tiny = HiresFix {
+            scale: 0.001,
+            target: None,
+            denoising_strength: 0.7,
+        };
+        assert_eq!(hires_target((16, 16), &tiny), (1, 1));
     }
 
     /// Minimal safetensors prelude: 8 B LE header len plus a JSON header.

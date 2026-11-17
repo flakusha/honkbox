@@ -1,6 +1,8 @@
 //! HTTP surface: `/health`, `/api/version`, `/v1/models`(+`/refresh`),
 //! `/metrics`, `/v1/openapi.json`, chat/transcribe/synthesize, image
-//! generations (REQ-10), UI fallback.
+//! generations (REQ-10, incl. the `ControlNet` validate-then-501 pair),
+//! `/v1/jobs` (+`DELETE /v1/jobs/{id}`, `POST …/cancel`) and the
+//! `/v1/events` SSE lifecycle feed, UI fallback.
 //!
 //! The `OpenAPI` document is served as plain JSON via `Json` — no
 //! `utoipa-axum` router glue.
@@ -22,7 +24,7 @@ use axum::{
     middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{delete, get, post},
 };
@@ -33,13 +35,13 @@ use honkbox_api_types::{
     DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
     FunctionDefinition, GgufMetadata, Health, ImageB64, ImagesGenerationRequest,
-    ImagesGenerationResponse, ImagesLora, JobCancelResult, JobInfo, JobList, JsonSchemaSpec,
-    MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
-    ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
-    OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
-    OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType, RunningList,
-    RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType,
-    ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
+    ImagesGenerationResponse, ImagesHiresFix, ImagesLora, JobCancelResult, JobEvent, JobEventType,
+    JobInfo, JobList, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
+    ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction,
+    OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice,
+    OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType,
+    RunningList, RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall,
+    ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
     TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, Voice, VoiceList,
 };
 
@@ -53,13 +55,17 @@ use honkbox_audio_worker::{
     TranscriptSegment as WorkerTranscriptSegment, TtsPipeline, decode_wav, encode_wav,
 };
 use honkbox_llm_worker::{
-    ChatMessage as WorkerChatMessage, ChatRequest as WorkerChatRequest, LlmError, LlmPipeline,
-    Role, SamplerParams, ToolCallOut, ToolCallSpec,
+    ChatImage as WorkerChatImage, ChatMessage as WorkerChatMessage,
+    ChatRequest as WorkerChatRequest, LlmError, LlmPipeline, Role, SamplerParams, ToolCallOut,
+    ToolCallSpec,
 };
 use rust_embed::Embed;
 use serde::Deserialize;
 use tokio::sync::{Notify, mpsc};
-use tokio_stream::{Stream, wrappers::UnboundedReceiverStream};
+use tokio_stream::{
+    Stream, StreamExt as _,
+    wrappers::{BroadcastStream, UnboundedReceiverStream, errors::BroadcastStreamRecvError},
+};
 use utoipa::OpenApi;
 
 /// Compile-time UI bundle (release always embeds; dev serves from disk instead).
@@ -92,6 +98,8 @@ struct EmbeddedUi;
         get_audio_voices,
         get_jobs,
         post_job_cancel,
+        delete_job,
+        get_events,
         delete_model,
         post_download,
         list_downloads,
@@ -162,11 +170,14 @@ struct EmbeddedUi;
         EmbeddingsResponse,
         ImagesGenerationRequest,
         ImagesLora,
+        ImagesHiresFix,
         ImageB64,
         ImagesGenerationResponse,
         JobInfo,
         JobList,
         JobCancelResult,
+        JobEventType,
+        JobEvent,
         DownloadKind,
         DownloadStatus,
         DownloadRequest,
@@ -309,6 +320,8 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/audio/speech", post(post_audio_speech))
         .route("/v1/jobs", get(get_jobs))
         .route("/v1/jobs/{id}/cancel", post(post_job_cancel))
+        .route("/v1/jobs/{id}", delete(delete_job))
+        .route("/v1/events", get(get_events))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))
         .route("/api/models/unload/{model}", post(post_unload_one))
@@ -1312,8 +1325,9 @@ fn catalog_from_entries(
 /// Registry catalog entry → response DTO (the only registry→wire mapping).
 /// The operator alias (when bound) becomes `id`; the slug always rides its
 /// own field. Capability defaults derive from the (possibly reclassified)
-/// kind, then operator declarations win; loop-lore's flat fields mirror the
-/// nested `capabilities` object.
+/// kind, then on-disk vision reality (a sibling mmproj projector; a
+/// projector file itself is not chat weights), then operator declarations
+/// win; loop-lore's flat fields mirror the nested `capabilities` object.
 fn catalog_entry(
     entry: honkbox_registry::CatalogEntry,
     bindings: &ModelBindings,
@@ -1327,6 +1341,7 @@ fn catalog_entry(
         match entry.kind {
             honkbox_registry::ModelKind::Llm => ModelKind::Llm,
             honkbox_registry::ModelKind::Sd => ModelKind::Sd,
+            honkbox_registry::ModelKind::ControlNet => ModelKind::ControlNet,
             honkbox_registry::ModelKind::Lora => ModelKind::Lora,
             honkbox_registry::ModelKind::Embedding => ModelKind::Embedding,
             honkbox_registry::ModelKind::Vae => ModelKind::Vae,
@@ -1335,6 +1350,21 @@ fn catalog_entry(
         }
     };
     let mut capabilities = ModelCapabilities::for_kind(kind);
+    // Vision chat (REQ-8): a projector file named `mmproj*.gguf` is not
+    // chat weights (loading one as a chat model would produce garbage), so
+    // its chat default flips off; a text model with a sibling mmproj
+    // projector is vision-capable — but only when this build compiles the
+    // mtmd path (`llm-vision` feature), so `/v1/models` never advertises
+    // vision the pipeline cannot serve. Operator overrides below still win.
+    if honkbox_registry::is_mmproj_file(&entry.path) {
+        capabilities.chat = false;
+    } else if kind == ModelKind::Llm
+        && honkbox_llm_worker::VISION_COMPILED
+        && honkbox_registry::sibling_mmproj(&entry.path).is_some()
+    {
+        capabilities.vision = true;
+    }
+    capabilities.completion = capabilities.chat;
     if let Some(overrides) = overrides {
         if let Some(chat) = overrides.chat {
             capabilities.chat = chat;
@@ -1589,16 +1619,71 @@ struct TranscribeQuery {
 /// `api-types` message → worker message (`REQ-3`): the tool role,
 /// `tool_call_id` and assistant `tool_calls` round-trip; missing/null
 /// content becomes the empty string (assistant-with-tool_calls shape).
-fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
+/// Media marker the projector's tokenizer splices embeddings at (the
+/// llama.cpp mtmd default, `MtmdContext::default_marker()`). The server
+/// splices it into message text at each `image_url` part's flattened-text
+/// offset before the worker call, so image embeddings land where the
+/// client put the parts.
+const MEDIA_MARKER: &str = "<__media__>";
+
+/// Decode one `image_url` payload: a `data:<mime>;base64,<payload>` URI.
+/// The bytes stay encoded (JPEG/PNG/…) — the projector's bitmap loader
+/// sniffs the container format. A non-base64 `data:` URI cannot carry
+/// image bytes; anything else is the [`image_data_rejection`] case.
+fn decode_image_url(url: &str) -> Result<Vec<u8>, String> {
+    let Some(rest) = url.strip_prefix("data:") else {
+        return Err(image_data_rejection(url).unwrap_or_else(|| "invalid image_url".to_owned()));
+    };
+    let Some((meta, payload)) = rest.split_once(',') else {
+        return Err(format!(
+            "malformed data: URI {url:?}: missing `,payload` section"
+        ));
+    };
+    if meta.rsplit(';').next().is_none_or(|flag| flag != "base64") {
+        return Err(format!(
+            "unsupported data: URI {url:?}: image payloads must be base64 (`data:<mime>;base64,...`)"
+        ));
+    }
+    // Standard with padding is the norm; tolerate the no-pad and URL-safe
+    // variants rather than teaching clients the alphabet rules.
+    for engine in [
+        &base64::engine::general_purpose::STANDARD,
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE,
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ] {
+        if let Ok(bytes) = base64::engine::Engine::decode(engine, payload.trim()) {
+            if bytes.is_empty() {
+                break;
+            }
+            return Ok(bytes);
+        }
+    }
+    Err("invalid image data URL: base64 payload does not decode (or is empty)".to_owned())
+}
+
+/// One API message → worker message. Vision messages get the media
+/// marker spliced at their part offsets and the `data:` payloads decoded
+/// to bytes; a bad payload is a client error the routes map to 400.
+fn worker_message(message: &ChatMessage) -> Result<WorkerChatMessage, String> {
     let role = match message.role {
         ChatRole::User => Role::User,
         ChatRole::Assistant => Role::Assistant,
         ChatRole::System => Role::System,
         ChatRole::Tool => Role::Tool,
     };
-    WorkerChatMessage {
+    let content = if message.content.images.is_empty() {
+        message.content.text.clone().unwrap_or_default()
+    } else {
+        message.content.text_with_media_markers(MEDIA_MARKER)
+    };
+    let mut images = Vec::with_capacity(message.content.images.len());
+    for image in &message.content.images {
+        images.push(WorkerChatImage::new(decode_image_url(&image.url)?));
+    }
+    Ok(WorkerChatMessage {
         role,
-        content: message.content.text.clone().unwrap_or_default(),
+        content,
         tool_call_id: message.tool_call_id.clone(),
         tool_calls: message
             .tool_calls
@@ -1610,20 +1695,37 @@ fn worker_message(message: &ChatMessage) -> WorkerChatMessage {
                 arguments: tc.function.arguments.clone(),
             })
             .collect(),
-    }
+        images,
+    })
+}
+
+/// All API messages → worker messages (vision decoding can fail per
+/// message).
+fn worker_messages(messages: &[ChatMessage]) -> Result<Vec<WorkerChatMessage>, String> {
+    messages.iter().map(worker_message).collect()
+}
+
+/// Chat-capability refusal message (shared by the completions envelope and
+/// the native plain-text surface).
+fn chat_unsupported_message(model: &str) -> String {
+    format!(
+        "model {model:?} is not chat-capable: its catalog entry declares capabilities.chat = false (a mmproj projector file or non-chat weights cannot serve conversation turns)"
+    )
 }
 
 /// Worker request skeleton shared by both routes: constraint fields absent
 /// (`REQ-3` fields ride only on `/v1/chat/completions`), default sampler.
+/// Message conversion (vision decoding) can fail per message — the caller
+/// maps that to its surface's 400.
 fn worker_request_base(
     slug: String,
-    messages: Vec<WorkerChatMessage>,
+    messages: Result<Vec<WorkerChatMessage>, String>,
     max_tokens: Option<u32>,
     temperature: Option<f32>,
-) -> WorkerChatRequest {
-    WorkerChatRequest {
+) -> Result<WorkerChatRequest, String> {
+    Ok(WorkerChatRequest {
         model: slug,
-        messages,
+        messages: messages?,
         max_tokens,
         temperature,
         seed: None,
@@ -1633,7 +1735,7 @@ fn worker_request_base(
         tools_json: None,
         tool_choice_none: false,
         sampler: SamplerParams::default(),
-    }
+    })
 }
 
 /// `X-Job-Id` response-header name (NEW-3): every GPU route stamps its
@@ -1651,33 +1753,90 @@ fn with_job_id(mut response: Response, job_id: &str) -> Response {
     response
 }
 
-/// REQ-8: the named vision refusal, shared by `/v1/chat/completions` and
-/// the native chat routes (honkbox ships no mmproj/vision backend).
-const VISION_UNSUPPORTED: &str = "vision not supported by backend: image_url content parts require an mmproj vision backend honkbox does not ship";
+/// REQ-8: image content on a model without a projector. Vision capability
+/// is catalog-derived: a sibling mmproj projector next to the weights, or
+/// an explicit operator `capabilities.vision = true`.
+fn vision_unsupported_message(model: &str) -> String {
+    format!(
+        "model {model:?} is not vision-capable: image_url parts need an mmproj projector next to the model weights (or an operator capabilities.vision override); see GET /v1/models modalities"
+    )
+}
+
+/// Only `data:` URI image payloads are accepted: the server decodes the
+/// base64 inline and hands the bytes to the projector's own image loader.
+/// Remote URLs would turn the server into an outbound fetcher (SSRF
+/// surface) — an explicit rejection, never a silent skip or a fetch.
+fn image_data_rejection(url: &str) -> Option<String> {
+    (!url.starts_with("data:")).then(|| {
+        format!(
+            "unsupported image_url {url:?}: only data: URIs are accepted (remote URLs are not fetched)"
+        )
+    })
+}
+
+/// Vision gate over chat requests (all three chat routes): images in the
+/// conversation need (a) a vision-capable model and (b) `data:` URI
+/// payloads. `entry` is the resolved catalog entry (`None` — e.g. the raw
+/// startup-configured model — is treated as not vision-capable). `None`
+/// passes; `Some((message, code))` is the 400 payload (`code` names the
+/// error on the `OpenAI` surface). The worker re-gates (defense in depth).
+fn vision_rejection(
+    entry: Option<&ModelCatalogEntry>,
+    messages: &[ChatMessage],
+) -> Option<(String, &'static str)> {
+    if !messages.iter().any(|message| message.content.has_image) {
+        return None;
+    }
+    let model = entry.map_or_else(|| "?".to_owned(), |entry| entry.id.clone());
+    if !entry.is_some_and(|entry| entry.capabilities.vision) {
+        return Some((vision_unsupported_message(&model), "vision_unsupported"));
+    }
+    for message in messages {
+        for image in &message.content.images {
+            if let Some(rejection) = image_data_rejection(&image.url) {
+                return Some((rejection, "image_url_unsupported"));
+            }
+        }
+    }
+    None
+}
+
+/// Chat-capability gate (completions surface): a catalog entry advertising
+/// `capabilities.chat = false` — a projector `mmproj*.gguf` file, an
+/// operator-declared embedding, or any non-chat weights — is never silently
+/// run through the chat pipeline (garbage tokens dressed up as a
+/// completion). Mirrors the REQ-4 embeddings gate; `None` entry (the raw
+/// startup-configured model) passes, the operator declared it by hand.
+fn chat_capable_gate(entry: &ModelCatalogEntry) -> Option<Response> {
+    (!entry.capabilities.chat).then(|| {
+        openai_error_response(
+            StatusCode::BAD_REQUEST,
+            chat_unsupported_message(&entry.id),
+            Some("chat_unsupported"),
+        )
+    })
+}
 
 /// Request gates before any pipeline work (`/v1/chat/completions`): REQ-4
 /// — an embeddings-capable model is never silently run through the chat
 /// pipeline (the reply would be garbage tokens dressed up as a
-/// completion); REQ-8 — an `image_url` content part is an explicit
-/// vision refusal, never a silently dropped (or silently flattened)
-/// image. `Some(response)` is the ready-made rejection.
+/// completion); chat-capability (a projector file or operator-declared
+/// non-chat weights) is refused by name for the same reason; REQ-8 — an
+/// `image_url` content part is gated on model vision capability and
+/// `data:` URI payloads, an explicit 400 `OpenAI` envelope either way.
+/// `Some(response)` is the ready-made rejection.
 fn completions_request_gates(
     entry: &ModelCatalogEntry,
     model: &str,
     messages: &[ChatMessage],
 ) -> Option<Response> {
-    embeddings_model_gate(entry, model).or_else(|| {
-        messages
-            .iter()
-            .any(|message| message.content.has_image)
-            .then(|| {
-                openai_error_response(
-                    StatusCode::BAD_REQUEST,
-                    VISION_UNSUPPORTED.to_owned(),
-                    Some("vision_unsupported"),
-                )
+    embeddings_model_gate(entry, model)
+        .or_else(|| chat_capable_gate(entry))
+        .or_else(|| {
+            vision_rejection(Some(entry), messages).map(|(message, code)| {
+                openai_error_response(StatusCode::BAD_REQUEST, message, Some(code))
             })
-    })
+        })
 }
 
 /// Clamp over-cap per-request `ttl_seconds` advice down to the configured
@@ -1748,11 +1907,23 @@ async fn post_chat(
     // startup-configured model, same as before aliases existed).
     let slug =
         resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
-    // REQ-8 parity with `/v1/chat/completions`: an `image_url` content
-    // part is an explicit refusal (plain-text 400 on the native route),
-    // never a silently flattened image.
-    if req.messages.iter().any(|message| message.content.has_image) {
-        return Err((StatusCode::BAD_REQUEST, VISION_UNSUPPORTED.to_owned()));
+    // Chat-capability parity with the completions gate: a catalog entry
+    // declaring `chat = false` (a projector `mmproj*.gguf`, a declared
+    // embedding) is refused by name; the raw startup-configured model (no
+    // catalog entry) passes — the operator declared it by hand.
+    if let Some(entry) = resolve_model_entry(&slug, &catalog)
+        && !entry.capabilities.chat
+    {
+        return Err((StatusCode::BAD_REQUEST, chat_unsupported_message(&slug)));
+    }
+    // REQ-8 parity with `/v1/chat/completions`: image content is gated on
+    // model vision capability (sibling mmproj or operator override) and
+    // `data:` URI payloads — a plain-text 400 on the native route, never a
+    // silently flattened image.
+    if let Some((message, _)) =
+        vision_rejection(resolve_model_entry(&slug, &catalog), &req.messages)
+    {
+        return Err((StatusCode::BAD_REQUEST, message));
     }
     let pipe = chat_pipeline(
         &config,
@@ -1773,10 +1944,11 @@ async fn post_chat(
     let lease = crate::admission::acquire().await?;
     let worker_req = worker_request_base(
         slug,
-        req.messages.iter().map(worker_message).collect(),
+        worker_messages(&req.messages),
         req.max_tokens,
         req.temperature,
-    );
+    )
+    .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     let reply = tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.complete(&worker_req).map_err(|err| {
@@ -1877,11 +2049,19 @@ async fn post_chat_stream(
     // Alias → owning slug (same contract as `post_chat`).
     let slug =
         resolve_model_slug(&req.model, &catalog).map_or_else(|| req.model.clone(), str::to_owned);
-    // REQ-8 parity with `/v1/chat/completions`: an `image_url` content
-    // part is an explicit refusal (plain-text 400 on the native route),
-    // never a silently flattened image.
-    if req.messages.iter().any(|message| message.content.has_image) {
-        return Err((StatusCode::BAD_REQUEST, VISION_UNSUPPORTED.to_owned()));
+    // Chat-capability parity with the completions gate (see `post_chat`).
+    if let Some(entry) = resolve_model_entry(&slug, &catalog)
+        && !entry.capabilities.chat
+    {
+        return Err((StatusCode::BAD_REQUEST, chat_unsupported_message(&slug)));
+    }
+    // REQ-8 parity with `/v1/chat/completions`: image content is gated on
+    // model vision capability and `data:` URI payloads (plain-text 400 on
+    // the native route).
+    if let Some((message, _)) =
+        vision_rejection(resolve_model_entry(&slug, &catalog), &req.messages)
+    {
+        return Err((StatusCode::BAD_REQUEST, message));
     }
     let pipe = chat_pipeline(
         &config,
@@ -1891,10 +2071,11 @@ async fn post_chat_stream(
     .await?;
     let worker_req = worker_request_base(
         slug.clone(),
-        req.messages.iter().map(worker_message).collect(),
+        worker_messages(&req.messages),
         req.max_tokens,
         req.temperature,
-    );
+    )
+    .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
     // NEW-3: the stream job is registry-visible and interruptible — its
@@ -2281,37 +2462,158 @@ fn resolve_sd_model<'a>(model: &str, catalog: &'a ModelCatalog) -> Option<&'a st
 }
 
 /// Validated image request: parsed size, clamped count, and the resolved
-/// generation recipe (sampler/scheduler/CFG/negative/seed base; `None`
-/// request fields resolve to the fixed-recipe defaults, so omitting
-/// everything is byte-identical to the pre-passthrough behavior). The only
+/// generation recipe (sampler/scheduler/CFG/steps/negative/seed base; the
+/// fields a named recipe supplied or a request overrode — omitting every
+/// one is byte-identical to the pre-passthrough behavior). The only
 /// rejection paths for `POST /v1/images/generations` before the GPU slot;
 /// `Err` is (message, error code) for a 400 `OpenAI` envelope. Unlike `n`
-/// (clamped with a warn), unknown sampler/scheduler names and out-of-range
-/// `cfg_scale` are hard 400s — silently substituting a recipe the caller
-/// did not ask for would be dishonest about what was rendered.
+/// (clamped with a warn), unknown recipe/sampler/scheduler names,
+/// out-of-range `cfg_scale`/`steps`, and invalid `hires_fix` values are
+/// hard 400s — silently substituting a recipe the caller did not ask for
+/// would be dishonest about what was rendered.
 struct ImageRecipe {
     sampler: honkbox_sd_core::Sampler,
     scheduler: honkbox_sd_core::Scheduler,
     cfg_scale: f32,
     negative_prompt: Option<String>,
     seed_base: u64,
+    /// Diffusion steps actually used (server default, recipe default, or
+    /// explicit override — see `validate_recipe`'s precedence docs).
+    steps: u32,
+    /// Named curated recipe applied, if any (`None` = field-by-field or
+    /// pure defaults). Recorded verbatim in the job bundle.
+    name: Option<&'static str>,
 }
 
 /// CFG guidance bounds for the HTTP surface (documented on the DTO).
 const IMAGE_CFG_SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=30.0;
+/// Accepted diffusion-steps range for the HTTP surface (documented on the
+/// DTO); outside it is a 400, never a clamp.
+const IMAGE_STEPS_RANGE: std::ops::RangeInclusive<u32> = 1..=100;
+/// Hires-fix scale bounds for the HTTP surface (documented on the DTO).
+const IMAGE_HIRES_SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=4.0;
+
+/// One curated generation recipe: a sampler/scheduler/cfg/steps bundle for
+/// a checkpoint family. Values mirror the vendored stable-diffusion.cpp
+/// presets/community standards, constrained to what sd-core's
+/// `Sampler`/`Scheduler` enums support — nothing here can fail to parse at
+/// generation time.
+struct ImageRecipeSpec {
+    name: &'static str,
+    sampler: honkbox_sd_core::Sampler,
+    scheduler: honkbox_sd_core::Scheduler,
+    cfg_scale: f32,
+    steps: u32,
+}
+
+/// The curated recipe set (`POST /v1/images/generations` + `/edits`):
+/// - `sd15`: SD 1.x/2.x — the vendor SD1.5/SD2.1 presets leave everything
+///   at the sd.cpp defaults (`euler_a`, discrete schedule, CFG 7, 20 steps).
+/// - `sdxl`: SDXL base + finetunes — the community-standard
+///   dpm++2m/karras combo at 25 steps.
+/// - `sd35`: SD3.5 — the vendor `stable_diffusion_3_5_large` preset
+///   (euler, CFG 4.5, 28 steps).
+/// - `turbo`: turbo-distilled (SD/SDXL turbo) — the vendor turbo presets
+///   set CFG 1.0 at 4 steps, sampler/scheduler left at defaults.
+/// - `lcm`: LCM-distilled / LCM-LoRA — the vendor `lcm_lora_sdxl` modifier
+///   (lcm sampler, CFG 2.0, 8 steps).
+/// - `flux-dev` / `flux-schnell`: FLUX.1 — the vendor flux presets (euler,
+///   CFG 1.0 — distilled guidance handles steering, 28 / 4 steps).
+const IMAGE_RECIPES: &[ImageRecipeSpec] = &[
+    ImageRecipeSpec {
+        name: "sd15",
+        sampler: honkbox_sd_core::Sampler::EulerA,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 7.0,
+        steps: 20,
+    },
+    ImageRecipeSpec {
+        name: "sdxl",
+        sampler: honkbox_sd_core::Sampler::Dpmpp2m,
+        scheduler: honkbox_sd_core::Scheduler::Karras,
+        cfg_scale: 7.0,
+        steps: 25,
+    },
+    ImageRecipeSpec {
+        name: "sd35",
+        sampler: honkbox_sd_core::Sampler::Euler,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 4.5,
+        steps: 28,
+    },
+    ImageRecipeSpec {
+        name: "turbo",
+        sampler: honkbox_sd_core::Sampler::EulerA,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 1.0,
+        steps: 4,
+    },
+    ImageRecipeSpec {
+        name: "lcm",
+        sampler: honkbox_sd_core::Sampler::Lcm,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 2.0,
+        steps: 8,
+    },
+    ImageRecipeSpec {
+        name: "flux-dev",
+        sampler: honkbox_sd_core::Sampler::Euler,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 1.0,
+        steps: 28,
+    },
+    ImageRecipeSpec {
+        name: "flux-schnell",
+        sampler: honkbox_sd_core::Sampler::Euler,
+        scheduler: honkbox_sd_core::Scheduler::Discrete,
+        cfg_scale: 1.0,
+        steps: 4,
+    },
+];
+
+/// Every accepted recipe wire name, in table order (for 400 messages).
+fn image_recipe_names() -> Vec<&'static str> {
+    IMAGE_RECIPES.iter().map(|r| r.name).collect()
+}
+
+/// Look up one curated recipe by exact wire name.
+fn resolve_recipe(name: &str) -> Option<&'static ImageRecipeSpec> {
+    IMAGE_RECIPES.iter().find(|r| r.name == name)
+}
+
 /// Shared recipe validation for both images routes: `generations` passes
 /// JSON DTO fields straight through; `edits` passes multipart-parsed
 /// strings. `Err` is (message, error code) for a 400 `OpenAI` envelope.
-/// Unknown sampler/scheduler names and out-of-range `cfg_scale` are hard
-/// 400s — silently substituting a recipe the caller did not ask for would
-/// be dishonest about what was rendered.
+/// Unknown recipe/sampler/scheduler names and out-of-range `cfg_scale`/
+/// `steps` are hard 400s — silently substituting a recipe the caller did
+/// not ask for would be dishonest about what was rendered.
+///
+/// Precedence per field: an explicit request field wins over the named
+/// recipe's default, which wins over the server default — so `recipe:
+/// "sdxl"` plus `sampler: "euler"` renders euler with the recipe's
+/// remaining (scheduler/cfg/steps) defaults.
 fn validate_recipe(
+    recipe: Option<&str>,
     sampler: Option<&str>,
     scheduler: Option<&str>,
     cfg_scale: Option<f32>,
     negative_prompt: Option<&str>,
     seed: Option<u64>,
+    steps: Option<u32>,
 ) -> Result<ImageRecipe, (String, &'static str)> {
+    let recipe_name = recipe.map(str::trim).filter(|s| !s.is_empty());
+    let spec = match recipe_name {
+        Some(name) => Some(resolve_recipe(name).ok_or_else(|| {
+            (
+                format!(
+                    "unknown recipe {name:?}: accepted values are {}",
+                    image_recipe_names().join(", ")
+                ),
+                "unknown_recipe",
+            )
+        })?),
+        None => None,
+    };
     let sampler_name = sampler.map(str::trim).filter(|s| !s.is_empty());
     let sampler = match sampler_name {
         Some(name) => honkbox_sd_core::Sampler::parse(name).ok_or_else(|| {
@@ -2323,7 +2625,7 @@ fn validate_recipe(
                 "unknown_sampler",
             )
         })?,
-        None => honkbox_sd_core::Sampler::Euler,
+        None => spec.map_or(honkbox_sd_core::Sampler::Euler, |s| s.sampler),
     };
     let scheduler_name = scheduler.map(str::trim).filter(|s| !s.is_empty());
     let scheduler = match scheduler_name {
@@ -2338,7 +2640,7 @@ fn validate_recipe(
         })?,
         // The fixed recipe's recorded `normal` name IS the vendor discrete
         // schedule; wire spellings follow sd.cpp (`discrete`).
-        None => honkbox_sd_core::Scheduler::Discrete,
+        None => spec.map_or(honkbox_sd_core::Scheduler::Discrete, |s| s.scheduler),
     };
     let cfg_scale = match cfg_scale {
         Some(v) if IMAGE_CFG_SCALE_RANGE.contains(&v) && v.is_finite() => v,
@@ -2348,7 +2650,17 @@ fn validate_recipe(
                 "invalid_cfg_scale",
             ));
         }
-        None => 7.0,
+        None => spec.map_or(7.0, |s| s.cfg_scale),
+    };
+    let steps = match steps {
+        Some(v) if IMAGE_STEPS_RANGE.contains(&v) => v,
+        Some(v) => {
+            return Err((
+                format!("steps {v} outside accepted range [1, 100]: rejected, not clamped"),
+                "invalid_steps",
+            ));
+        }
+        None => spec.map_or(IMAGE_STEPS, |s| s.steps),
     };
     let negative_prompt = negative_prompt
         .map(str::trim)
@@ -2360,12 +2672,92 @@ fn validate_recipe(
         cfg_scale,
         negative_prompt,
         seed_base: seed.unwrap_or(IMAGE_SEED_BASE),
+        steps,
+        name: spec.map(|s| s.name),
     })
 }
 
+/// Validate the optional hires-fix pass against the parsed base size:
+/// per-field range checks (`scale`, `denoise`), `target` size parsing, and
+/// the shared [`honkbox_sd_core::MAX_EDGE`] output cap (the final PNG lands
+/// at the hires target, so it must stay under the cap too).
+fn validate_hires_fix(
+    hires: Option<&ImagesHiresFix>,
+    base: (u32, u32),
+) -> Result<Option<honkbox_sd_core::HiresFix>, (String, &'static str)> {
+    let Some(hires) = hires else {
+        return Ok(None);
+    };
+    let scale = match hires.scale {
+        Some(v) if IMAGE_HIRES_SCALE_RANGE.contains(&v) && v.is_finite() => v,
+        Some(v) => {
+            return Err((
+                format!(
+                    "hires_fix.scale {v} outside accepted range [1.0, 4.0]: rejected, not clamped"
+                ),
+                "invalid_hires_scale",
+            ));
+        }
+        None => 2.0,
+    };
+    let target = match hires
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(raw) => Some(
+            crate::jobs::parse_size(raw)
+                .map_err(|err| (format!("hires_fix.target: {err}"), "invalid_hires_target"))?,
+        ),
+        None => None,
+    };
+    let denoising_strength = match hires.denoise {
+        Some(v) if v.is_finite() && v > 0.0 && v <= 1.0 => v,
+        Some(v) => {
+            return Err((
+                format!(
+                    "hires_fix.denoise {v} outside accepted range (0, 1]: rejected, not clamped"
+                ),
+                "invalid_hires_denoise",
+            ));
+        }
+        None => 0.7,
+    };
+    let fix = honkbox_sd_core::HiresFix {
+        scale,
+        target,
+        denoising_strength,
+    };
+    let (target_width, target_height) = honkbox_sd_core::hires_target(base, &fix);
+    let edge = base.0.max(base.1).max(target_width).max(target_height);
+    if edge > honkbox_sd_core::MAX_EDGE {
+        return Err((
+            format!(
+                "hires_fix output {target_width}x{target_height} exceeds the {}px output cap",
+                honkbox_sd_core::MAX_EDGE
+            ),
+            "invalid_hires_target",
+        ));
+    }
+    Ok(Some(fix))
+}
+
+/// Validated `POST /v1/images/generations` request: parsed base size,
+/// clamped count, the resolved recipe, and the optional hires-fix pass
+/// (tuple alias keeps `validate_images_request`'s signature readable — the
+/// same pattern as `ResolvedLoras`).
+type ValidatedImages = (
+    u32,
+    u32,
+    u32,
+    ImageRecipe,
+    Option<honkbox_sd_core::HiresFix>,
+);
+
 fn validate_images_request(
     req: &ImagesGenerationRequest,
-) -> Result<(u32, u32, u32, ImageRecipe), (String, &'static str)> {
+) -> Result<ValidatedImages, (String, &'static str)> {
     let (width, height) = crate::jobs::parse_size(req.size.as_deref().unwrap_or("1024x1024"))
         .map_err(|err| (err, "invalid_size"))?;
     if let Some(format) = req
@@ -2387,13 +2779,16 @@ fn validate_images_request(
         );
     }
     let recipe = validate_recipe(
+        req.recipe.as_deref(),
         req.sampler.as_deref(),
         req.scheduler.as_deref(),
         req.cfg_scale,
         req.negative_prompt.as_deref(),
         req.seed,
+        req.steps,
     )?;
-    Ok((width, height, n.clamp(1, 4), recipe))
+    let hires = validate_hires_fix(req.hires_fix.as_ref(), (width, height))?;
+    Ok((width, height, n.clamp(1, 4), recipe, hires))
 }
 
 /// Accepted `LoRA` multiplier range for the HTTP surface (documented on the
@@ -2507,6 +2902,96 @@ fn resolve_loras(
     Ok((refs, records, warnings))
 }
 
+/// `ControlNet` request handling for `POST /v1/images/generations` (honkbox
+/// extension, not part of the `OpenAI` shape): full validation, then an
+/// explicit unsupported verdict. `None` = nothing actually requested
+/// (whitespace-only fields are not a request) and plain generation proceeds.
+///
+/// Rejections, in order: `controlnet` without `control_image` or vice versa
+/// (400 `controlnet_pair`), undecodable base64 or non-PNG bytes (400
+/// `invalid_control_image`), and a `controlnet` slug/alias that is not a
+/// `controlnet`-kind catalog entry (400 `unknown_controlnet` — the same
+/// alias-or-slug rule as SD models and `LoRA`s). Valid inputs get 501
+/// `controlnet_unsupported`, never a silent ignore: the vendor's C++ engine
+/// supports `ControlNet` (`control_net_path` ctx param, `control_image` in
+/// the generation params, hot-swap load/unload), but the Rust `gen_img`
+/// path honkbox builds on hardcodes an EMPTY control image and
+/// `control_type: NONE`, and the `sd-core` seam (`Txt2ImgRequest`) carries
+/// no control fields — so today there is no honest way to apply the
+/// inputs. Rendering without them and saying nothing would misrepresent
+/// the output; this response is the swap point for the day the plumbing
+/// lands.
+fn controlnet_response(req: &ImagesGenerationRequest, catalog: &ModelCatalog) -> Option<Response> {
+    let slug = req
+        .controlnet
+        .as_deref()
+        .map(str::trim)
+        .filter(|slug| !slug.is_empty());
+    let image = req
+        .control_image
+        .as_deref()
+        .map(str::trim)
+        .filter(|image| !image.is_empty());
+    let (slug, image) = match (slug, image) {
+        (None, None) => return None,
+        (Some(slug), Some(image)) => (slug, image),
+        (Some(_), None) => {
+            return Some(openai_error_response(
+                StatusCode::BAD_REQUEST,
+                "controlnet and control_image must be supplied together: control_image is missing (the base64 PNG conditioning image for the controlnet slug)".to_owned(),
+                Some("controlnet_pair"),
+            ));
+        }
+        (None, Some(_)) => {
+            return Some(openai_error_response(
+                StatusCode::BAD_REQUEST,
+                "controlnet and control_image must be supplied together: controlnet is missing (the catalog slug the conditioning image pairs with)".to_owned(),
+                Some("controlnet_pair"),
+            ));
+        }
+    };
+    // Conditioning image: strict standard base64, then the PNG magic (the
+    // sd path consumes the control image exactly like every other PNG
+    // input; anything else cannot be honestly accepted).
+    let decoded = match base64::engine::general_purpose::STANDARD.decode(image) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Some(openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("control_image is not usable: invalid base64 ({err})"),
+                Some("invalid_control_image"),
+            ));
+        }
+    };
+    if decoded.len() < PNG_MAGIC.len() || decoded[..PNG_MAGIC.len()] != *PNG_MAGIC {
+        return Some(openai_error_response(
+            StatusCode::BAD_REQUEST,
+            "control_image is not usable: decoded bytes are not a PNG".to_owned(),
+            Some("invalid_control_image"),
+        ));
+    }
+    // Slug: alias-or-slug against the catalog, `controlnet` kind only.
+    if resolve_model_entry(slug, catalog)
+        .as_ref()
+        .is_none_or(|entry| entry.kind != ModelKind::ControlNet)
+    {
+        return Some(openai_error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "unknown controlnet {slug:?}: not a ControlNet catalog slug or alias (see GET /v1/models)"
+            ),
+            Some("unknown_controlnet"),
+        ));
+    }
+    Some(openai_error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        format!(
+            "controlnet {slug:?} is accepted and validated but not applied: the sd pipeline does not carry control images yet — the request is refused rather than rendered without its conditioning image"
+        ),
+        Some("controlnet_unsupported"),
+    ))
+}
+
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
 /// failure never fails an otherwise successful generation).
 fn write_generation_bundle(
@@ -2527,9 +3012,12 @@ fn write_generation_bundle(
 /// `honkbox generate` (seed 42 base, 20 steps, euler/normal, CFG 7.0),
 /// recorded in the bundle sidecars. Per-image seed = base + index; a
 /// request may override the recipe (`sampler`/`scheduler`/`cfg_scale`/
-/// `negative_prompt`/`seed`) — omitted fields fall back to these.
+/// `negative_prompt`/`seed`) or name a curated `recipe` — explicit fields
+/// win over recipe defaults, and omitted fields fall back to these server
+/// defaults.
 const IMAGE_SEED_BASE: u64 = 42;
-/// Fixed diffusion steps for the HTTP surface (CLI default).
+/// Server-default diffusion steps for the HTTP surface (CLI default): used
+/// when the request names no recipe and passes no `steps` override.
 const IMAGE_STEPS: u32 = 20;
 
 /// One PNG generation under `spawn_blocking` (GPU work off the async
@@ -2571,12 +3059,16 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
 /// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
 /// recordkeeping cover HTTP generations too. Errors are `OpenAI`
 /// envelopes: 400 bad `size`/`response_format`/recipe params (unknown
-/// sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `LoRA` slug /
-/// strength / count violations), 404 unknown model, 429 busy, 500 backend
-/// failure. `n` clamps to `[1, 4]` (warn, never reject). Per-request
-/// `loras` resolve against `ModelKind::Lora` catalog entries; their
-/// license notes surface as response `warnings` (weights are never
-/// bundled; ReviewedLicense-AGPL §2b/§2c).
+/// recipe/sampler/scheduler name, `cfg_scale` outside [1.0, 30.0], `steps`
+/// outside [1, 100], invalid `hires_fix` scale/target/denoise, `LoRA` slug
+/// / strength / count violations), 404 unknown model, 429 busy, 500
+/// backend failure. `n` clamps to `[1, 4]` (warn, never reject).
+/// Per-request `loras` resolve against `ModelKind::Lora` catalog entries;
+/// their license notes surface as response `warnings` (weights are never
+/// bundled; ReviewedLicense-AGPL §2b/§2c). `recipe` selects a curated
+/// sampler/scheduler/cfg/steps bundle (per-field overrides win, then
+/// server defaults); `hires_fix` runs the vendor-native second-pass
+/// upscale and is recorded in the bundle sidecar.
 // Route handlers read long but stay linear: parse → validate → resolve →
 // generate → bundle. `completions_stream` carries the same allow.
 #[allow(clippy::too_many_lines)]
@@ -2586,17 +3078,18 @@ fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
     request_body = ImagesGenerationRequest,
     responses(
         (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
-        (status = 400, description = "Bad size, response_format, sampler, scheduler, cfg_scale, or loras", body = OpenAiError),
+        (status = 400, description = "Bad size, response_format, recipe, sampler, scheduler, cfg_scale, steps, hires_fix, loras, or controlnet params (pair, image, or slug)", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
-        (status = 500, description = "Generation failed", body = OpenAiError)
+        (status = 500, description = "Generation failed", body = OpenAiError),
+        (status = 501, description = "Valid controlnet params accepted but not applicable by the sd pipeline (controlnet_unsupported)", body = OpenAiError)
     )
 )]
 async fn post_images_generations(
     State(config): State<AppConfig>,
     Json(req): Json<ImagesGenerationRequest>,
 ) -> Response {
-    let (width, height, n, recipe) = match validate_images_request(&req) {
+    let (width, height, n, recipe, hires) = match validate_images_request(&req) {
         Ok(valid) => valid,
         Err((message, code)) => {
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
@@ -2610,6 +3103,16 @@ async fn post_images_generations(
                 return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
             }
         };
+    // ControlNet (honkbox extension): slug + conditioning image are
+    // validated here, but the pipeline seam cannot apply control inputs
+    // (see [`controlnet_response`]), so a fully valid pair is answered
+    // with an explicit 501 — never a silent ignore that would render
+    // something else than what was asked for.
+    if (req.controlnet.is_some() || req.control_image.is_some())
+        && let Some(response) = controlnet_response(&req, &catalog)
+    {
+        return response;
+    }
     let slug: String = match req
         .model
         .as_deref()
@@ -2676,7 +3179,7 @@ async fn post_images_generations(
             Arc::clone(&pipeline),
             honkbox_sd_core::Txt2ImgRequest {
                 seed,
-                steps: IMAGE_STEPS,
+                steps: recipe.steps,
                 prompt: prompt.clone(),
                 width,
                 height,
@@ -2691,6 +3194,7 @@ async fn post_images_generations(
                 init_image: None,
                 mask_image: None,
                 strength: None,
+                hires: hires.clone(),
             },
         )
         .await
@@ -2710,7 +3214,7 @@ async fn post_images_generations(
                 model_slug: slug.clone(),
                 prompt: prompt.clone(),
                 seed,
-                steps: IMAGE_STEPS,
+                steps: recipe.steps,
                 width,
                 height,
                 format: honkbox_sd_core::OutputFormat::Png,
@@ -2721,6 +3225,16 @@ async fn post_images_generations(
                 negative_prompt: recipe.negative_prompt.clone(),
                 loras: lora_records.clone(),
                 strength: None,
+                recipe: recipe.name.map(str::to_owned),
+                hires: hires.as_ref().map(|fix| crate::jobs::HiresRecord {
+                    upscaler: "latent",
+                    target: {
+                        let (tw, th) = honkbox_sd_core::hires_target((width, height), fix);
+                        format!("{tw}x{th}")
+                    },
+                    scale: fix.scale,
+                    denoising_strength: fix.denoising_strength,
+                }),
             },
             &bytes,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -2771,12 +3285,16 @@ struct ImageEditUpload {
     strength: Option<f32>,
     /// Output size `WxH`; default = the source image's dimensions.
     size: Option<String>,
-    /// Recipe overrides, validated exactly like `generations`.
+    /// Recipe overrides, validated exactly like `generations` (a named
+    /// recipe plus per-field overrides; explicit fields win).
+    recipe: Option<String>,
     sampler: Option<String>,
     scheduler: Option<String>,
     cfg_scale: Option<f32>,
     negative_prompt: Option<String>,
     seed: Option<u64>,
+    /// Diffusion steps override; validated like `generations`.
+    steps: Option<u32>,
 }
 
 /// Collect the multipart fields. Unknown fields are ignored (client SDKs
@@ -2791,11 +3309,13 @@ async fn parse_image_edit_upload(
         model: None,
         strength: None,
         size: None,
+        recipe: None,
         sampler: None,
         scheduler: None,
         cfg_scale: None,
         negative_prompt: None,
         seed: None,
+        steps: None,
     };
     while let Some(field) = multipart
         .next_field()
@@ -2816,8 +3336,8 @@ async fn parse_image_edit_upload(
                     edit.mask = Some((content_type, bytes));
                 }
             }
-            "prompt" | "model" | "size" | "sampler" | "scheduler" | "negative_prompt"
-            | "strength" | "cfg_scale" | "seed" => {
+            "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler"
+            | "negative_prompt" | "strength" | "cfg_scale" | "seed" | "steps" => {
                 let text = field
                     .text()
                     .await
@@ -2835,12 +3355,13 @@ async fn parse_image_edit_upload(
 fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<(), Box<Response>> {
     let value = text.trim().to_owned();
     match name {
-        "prompt" | "model" | "size" | "sampler" | "scheduler" | "negative_prompt" => {
+        "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler" | "negative_prompt" => {
             let value = (!value.is_empty()).then_some(value);
             match name {
                 "prompt" => edit.prompt = value,
                 "model" => edit.model = value,
                 "size" => edit.size = value,
+                "recipe" => edit.recipe = value,
                 "sampler" => edit.sampler = value,
                 "scheduler" => edit.scheduler = value,
                 _ => edit.negative_prompt = value,
@@ -2863,6 +3384,12 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
                     bad_multipart("seed must be a non-negative integer".to_owned())
                 })?);
         }
+        "steps" => {
+            edit.steps =
+                Some(value.parse().map_err(|_| {
+                    bad_multipart("steps must be an integer in [1, 100]".to_owned())
+                })?);
+        }
         _ => {}
     }
     Ok(())
@@ -2875,7 +3402,11 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 /// turns the run into inpainting; `prompt` is required; `strength` (the
 /// denoise amount, `(0, 1]`, default 0.75) applies to the init image;
 /// `size` defaults to the source image's dimensions; the remaining recipe
-/// fields validate exactly like `generations`. Inputs are staged as temp
+/// fields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/
+/// `negative_prompt`/`seed`) validate exactly like `generations` — a named
+/// recipe plus per-field overrides, explicit fields winning. No
+/// `hires_fix` on this route: the output stays at the source image's
+/// dimensions. Inputs are staged as temp
 /// PNG paths (the vendor reads images from the filesystem) and removed
 /// after the generation, including on failure. `LoRA` adapters are not
 /// accepted on this route yet — use `/v1/images/generations`. The stub
@@ -2888,7 +3419,7 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 #[utoipa::path(
     post,
     path = "/v1/images/edits",
-    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, sampler?, scheduler?, cfg_scale?, negative_prompt?, seed?"),
+    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?"),
     responses(
         (status = 200, description = "Edited image (base64 PNG)", body = ImagesGenerationResponse),
         (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, or recipe fields", body = OpenAiError),
@@ -2958,11 +3489,13 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         None => dims.expect("PNG dimensions verified above"),
     };
     let recipe = match validate_recipe(
+        edit.recipe.as_deref(),
         edit.sampler.as_deref(),
         edit.scheduler.as_deref(),
         edit.cfg_scale,
         edit.negative_prompt.as_deref(),
         edit.seed,
+        edit.steps,
     ) {
         Ok(recipe) => recipe,
         Err((message, code)) => {
@@ -3034,7 +3567,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         honkbox_sd_core::Txt2ImgRequest {
             prompt: prompt.clone(),
             seed: recipe.seed_base,
-            steps: IMAGE_STEPS,
+            steps: recipe.steps,
             width,
             height,
             model_slug: slug.clone(),
@@ -3048,6 +3581,10 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             init_image: Some(init_path.clone()),
             mask_image: staged_mask.then(|| mask_path.clone()),
             strength: Some(strength),
+            // No hires pass on img2img: the vendor applies hires to the
+            // txt2img branch only, and the route fixes the output at the
+            // source image's dimensions.
+            hires: None,
         },
     )
     .await;
@@ -3071,7 +3608,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             model_slug: slug,
             prompt,
             seed: recipe.seed_base,
-            steps: IMAGE_STEPS,
+            steps: recipe.steps,
             width,
             height,
             format: honkbox_sd_core::OutputFormat::Png,
@@ -3082,6 +3619,8 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             negative_prompt: recipe.negative_prompt,
             loras: Vec::new(),
             strength: Some(strength),
+            recipe: recipe.name.map(str::to_owned),
+            hires: None,
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -3210,9 +3749,19 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
         }
     };
+    let worker_messages = match worker_messages(&req.messages) {
+        Ok(messages) => messages,
+        Err(message) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                message,
+                Some("invalid_image_data"),
+            );
+        }
+    };
     let worker_req = WorkerChatRequest {
         model: slug.clone(),
-        messages: req.messages.iter().map(worker_message).collect(),
+        messages: worker_messages,
         max_tokens: req.max_tokens,
         temperature: req.temperature,
         seed: req.seed,
@@ -3298,26 +3847,37 @@ async fn completions_json(
         let _lease = lease;
         pipe.complete(&worker_req).map_err(|err| {
             // `REQ-3`: unusable constraints (unparseable grammar, non-
-            // convertible schema) are client errors, not server ones.
-            let status = match &err {
-                LlmError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, format!("chat failed: {err}"))
+            // convertible schema) and `REQ-8`: image content the loaded
+            // pipeline cannot serve (worker-side vision gate, defense in
+            // depth behind the route gate) are client errors, not server
+            // ones; the envelope code names the class.
+            match &err {
+                LlmError::InvalidRequest(_) => (
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    format!("chat failed: {err}"),
+                ),
+                LlmError::Vision(_) => (
+                    StatusCode::BAD_REQUEST,
+                    "vision_unsupported",
+                    format!("chat failed: {err}"),
+                ),
+                _ => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    format!("chat failed: {err}"),
+                ),
+            }
         })
     })
     .await
     .map_err(|err| format!("chat task failed: {err}"));
     let reply = match reply {
         Ok(Ok(reply)) => reply,
-        Ok(Err((StatusCode::BAD_REQUEST, message))) => {
-            return openai_error_response(
-                StatusCode::BAD_REQUEST,
-                message,
-                Some("invalid_request"),
-            );
+        Ok(Err((StatusCode::BAD_REQUEST, code, message))) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
         }
-        Ok(Err((_, message))) | Err(message) => {
+        Ok(Err((_, _, message))) | Err(message) => {
             return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
         }
     };
@@ -4349,15 +4909,29 @@ async fn get_jobs() -> Json<JobList> {
     })
 }
 
+/// Shared cancel machinery for `POST /v1/jobs/{id}/cancel` and
+/// `DELETE /v1/jobs/{id}` (same semantics, two spellings — the REST-shaped
+/// verb and the explicit action): mark the job's cooperative-stop token
+/// and answer honestly. 200 `{cancelled: bool}` — `true` only for jobs
+/// that check the token between work units (multi-image generations
+/// between images, streaming chat at the next token boundary); `false` =
+/// the job was found but its single blocking FFI call cannot be
+/// interrupted mid-flight and runs to completion (engine-level
+/// cancellation needs a per-backend spike, per the design record). 404:
+/// unknown id (never registered, or the request already ended — the
+/// registry holds live work only).
+fn cancel_job_response(id: &str) -> Response {
+    match crate::jobs_registry::global().cancel(id) {
+        Some(interruptible) => Json(JobCancelResult {
+            cancelled: interruptible,
+        })
+        .into_response(),
+        None => (StatusCode::NOT_FOUND, format!("unknown job id {id:?}")).into_response(),
+    }
+}
+
 /// `POST /v1/jobs/{id}/cancel` (NEW-3): mark the job's cooperative-stop
-/// token. 200 `{cancelled: bool}` — honest about what a cancel achieves:
-/// `true` only for jobs that check the token between work units
-/// (multi-image generations between images, streaming chat at the next
-/// token boundary); `false` = the job was found but its single blocking
-/// FFI call cannot be interrupted mid-flight and runs to completion
-/// (engine-level cancellation needs a per-backend spike, per the design
-/// record). 404: unknown id (never registered, or the request already
-/// ended — the registry holds live work only).
+/// token. See [`cancel_job_response`] for the honest response contract.
 #[utoipa::path(
     post,
     path = "/v1/jobs/{id}/cancel",
@@ -4367,13 +4941,79 @@ async fn get_jobs() -> Json<JobList> {
     )
 )]
 async fn post_job_cancel(AxumPath(id): AxumPath<String>) -> Response {
-    match crate::jobs_registry::global().cancel(&id) {
-        Some(interruptible) => Json(JobCancelResult {
-            cancelled: interruptible,
-        })
-        .into_response(),
-        None => (StatusCode::NOT_FOUND, format!("unknown job id {id:?}")).into_response(),
-    }
+    cancel_job_response(&id)
+}
+
+/// `DELETE /v1/jobs/{id}`: the REST-shaped spelling of
+/// `POST /v1/jobs/{id}/cancel` — deleting an in-flight job means requesting
+/// its cooperative cancel, nothing more. Same token machinery, same honest
+/// 200 `{cancelled}` / 404 contract (see [`cancel_job_response`]); the
+/// DELETE does not wait for the job to end and never removes finished-work
+/// records (job bundles under `<data_dir>/jobs/` are a separate concern).
+#[utoipa::path(
+    delete,
+    path = "/v1/jobs/{id}",
+    responses(
+        (status = 200, description = "Cancel requested (same contract as POST /v1/jobs/{id}/cancel)", body = JobCancelResult),
+        (status = 404, description = "Unknown job id"),
+    )
+)]
+async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
+    cancel_job_response(&id)
+}
+
+/// `GET /v1/events`: the registry-wide job lifecycle feed as a
+/// Server-Sent-Events stream (observability only — it registers no job and
+/// touches no GPU slot). Every in-flight GPU job of every kind emits:
+///
+/// - `event: job_registered` — the job entered the registry (route
+///   admitted the request; it may still be waiting in the admission
+///   queue);
+/// - `event: job_cancelled` — a cancel was REQUESTED for the job (POST
+///   `.../cancel` or DELETE `/v1/jobs/{id}`); not a completion event;
+/// - `event: job_finished` — the job left the registry (its request ended,
+///   any outcome).
+///
+/// Each frame's JSON `data` mirrors the SSE `event` line in its `event`
+/// field (`JobEvent`): `id`, `kind`, `model` (when known),
+/// `started_at_ms`, `interruptible`, and `cancelled` (= a cancel had been
+/// requested at that point; on `job_finished` it is `true` for a
+/// token-marked job, which for a non-interruptible job still ran to
+/// completion). Frames are transition-only: a subscriber that falls more
+/// than 256 events behind gets an `events_dropped` frame naming the skipped
+/// count (honest gap marker, never silent skipping), and (re)connecting
+/// replays nothing — `GET /v1/jobs` is the current-state snapshot.
+#[utoipa::path(
+    get,
+    path = "/v1/events",
+    responses(
+        (status = 200, description = "SSE stream of job lifecycle events (job_registered / job_cancelled / job_finished; catalogue above)", content_type = "text/event-stream"),
+    )
+)]
+async fn get_events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let receiver = crate::jobs_registry::global().subscribe();
+    let stream = BroadcastStream::new(receiver).filter_map(|item| match item {
+        Ok(event) => Some(Ok::<_, Infallible>(job_event_frame(&event))),
+        // This consumer fell behind: surface the gap instead of quietly
+        // skipping the missed events. (A closed channel has no error
+        // variant here — the stream simply ends, and the registry's sender
+        // never closes anyway.)
+        Err(BroadcastStreamRecvError::Lagged(skipped)) => {
+            let frame = Event::default().event("events_dropped").data(format!(
+                "{{\"event\":\"events_dropped\",\"skipped\":{skipped}}}"
+            ));
+            Some(Ok(frame))
+        }
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// One SSE frame for a registry lifecycle event: the `event:` line mirrors
+/// the JSON `event` field, so JSON-only consumers can ignore the envelope.
+fn job_event_frame(event: &JobEvent) -> Event {
+    Event::default()
+        .event(event.event.label())
+        .data(serde_json::to_string(&event).unwrap_or_default())
 }
 
 /// Query carried over from the native route: `audio/pcm-s16le` uploads

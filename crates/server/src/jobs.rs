@@ -51,6 +51,14 @@ pub struct BundleInputs {
     pub loras: Vec<LoraRecord>,
     /// img2img/inpaint denoise strength actually used; `None` = txt2img.
     pub strength: Option<f32>,
+    /// Named generation recipe actually applied, verbatim from the request
+    /// (explicit per-field overrides may have replaced individual recipe
+    /// values — the sampler/scheduler/cfg/steps fields above are what ran).
+    /// `None` = no recipe named.
+    pub recipe: Option<String>,
+    /// Hires-fix second pass actually applied (HTTP generations only;
+    /// `None` = single-pass).
+    pub hires: Option<HiresRecord>,
 }
 
 /// One `LoRA` adapter actually applied to a generation (sidecar record).
@@ -60,6 +68,20 @@ pub struct LoraRecord {
     pub slug: String,
     /// Multiplier actually used.
     pub strength: f32,
+}
+
+/// Hires-fix second pass actually applied (sidecar record).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HiresRecord {
+    /// Upscaler used: always `"latent"` today (the vendor interpolation
+    /// pass; the model-backed ESRGAN variant is not wired).
+    pub upscaler: &'static str,
+    /// Final output size `WxH` (base * scale, rounded).
+    pub target: String,
+    /// Upscale factor over the base size.
+    pub scale: f32,
+    /// Second-pass denoising strength actually used.
+    pub denoising_strength: f32,
 }
 
 /// Parse `WxH` (e.g. `1024x1024`) into `(width, height)`; zero dims rejected.
@@ -110,6 +132,8 @@ pub fn write_bundle_into(
         "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
         "loras": inputs.loras,
         "strength": inputs.strength,
+        "recipe": inputs.recipe,
+        "hires": inputs.hires,
     });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
@@ -125,6 +149,8 @@ pub fn write_bundle_into(
         "backend_id": inputs.backend_id,
         "loras": inputs.loras,
         "strength": inputs.strength,
+        "recipe": inputs.recipe,
+        "hires": inputs.hires,
     });
     let metrics = serde_json::json!({
         "event": "done",
@@ -339,6 +365,8 @@ mod tests {
             negative_prompt: None,
             loras: Vec::new(),
             strength: None,
+            recipe: None,
+            hires: None,
         }
     }
 
@@ -454,6 +482,44 @@ mod tests {
                 .expect("sidecar json");
         assert_eq!(side["loras"], serde_json::json!([]));
         assert!(side["strength"].is_null());
+        assert!(side["recipe"].is_null());
+        assert!(side["hires"].is_null());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The named recipe and the hires-fix pass land verbatim in the sidecar
+    /// when set (the recipe name + the pass actually applied).
+    #[test]
+    fn sidecar_records_recipe_and_hires() {
+        let dir =
+            std::env::temp_dir().join(format!("honkbox-jobs-recipe-hires-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+
+        let mut bundle = inputs();
+        bundle.recipe = Some("sdxl".to_string());
+        bundle.hires = Some(HiresRecord {
+            upscaler: "latent",
+            target: "2048x1024".to_string(),
+            scale: 2.0,
+            denoising_strength: 0.55,
+        });
+        write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert_eq!(side["recipe"], "sdxl");
+        assert_eq!(side["hires"]["upscaler"], "latent");
+        assert_eq!(side["hires"]["target"], "2048x1024");
+        assert!((side["hires"]["scale"].as_f64().unwrap() - 2.0).abs() < 1e-6);
+        assert!((side["hires"]["denoising_strength"].as_f64().unwrap() - 0.55).abs() < 1e-6);
+
+        write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("plain bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert!(side["recipe"].is_null());
+        assert!(side["hires"].is_null());
         fs::remove_dir_all(&dir).ok();
     }
 

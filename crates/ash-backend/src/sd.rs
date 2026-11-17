@@ -96,6 +96,11 @@ mod tests {
             scheduler: None,
             cfg_scale: None,
             negative_prompt: None,
+            loras: None,
+            init_image: None,
+            mask_image: None,
+            strength: None,
+            hires: None,
         };
         let err = pipeline
             .generate(&req)

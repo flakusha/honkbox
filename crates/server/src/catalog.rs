@@ -72,7 +72,7 @@ pub fn est_vram_bytes(kind: ModelKind, bytes: u64) -> u64 {
             .map_or(u64::MAX, |scaled| scaled / 100),
         // Non-download modalities never appear in the manifest; a 1:1
         // estimate is the honest neutral for anything that slips in.
-        ModelKind::Lora | ModelKind::Embedding | ModelKind::Vae => bytes,
+        ModelKind::ControlNet | ModelKind::Lora | ModelKind::Embedding | ModelKind::Vae => bytes,
     }
 }
 

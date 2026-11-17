@@ -85,7 +85,8 @@ export function mountPlayground(host: HTMLElement): void {
   temperature.max = "2";
   temperature.step = "0.1";
   // Image generation (REQ-10): POST /v1/images/generations, render the
-  // returned base64 PNG inline. Optional recipe knobs: sampler/scheduler
+  // returned base64 PNG inline. Optional recipe knobs: named recipe
+  // (curated sampler/scheduler/cfg/steps bundle), sampler/scheduler
   // (sd.cpp names), CFG scale, negative prompt, seed — empty = server
   // default recipe.
   const imagePrompt = el("input");
@@ -93,6 +94,8 @@ export function mountPlayground(host: HTMLElement): void {
   const imageSize = el("input");
   imageSize.placeholder = "size";
   imageSize.value = "1024x1024";
+  const imageRecipe = el("input");
+  imageRecipe.placeholder = "recipe (sd15, sdxl, sd35, turbo, lcm, flux-dev, flux-schnell)";
   const imageSampler = el("input");
   imageSampler.placeholder = "sampler (euler, dpm++2m, …)";
   const imageScheduler = el("input");
@@ -131,6 +134,7 @@ export function mountPlayground(host: HTMLElement): void {
         sampler: imageSampler.value.trim() || undefined,
         scheduler: imageScheduler.value.trim() || undefined,
         cfg_scale: cfg ?? undefined,
+        recipe: imageRecipe.value.trim() || undefined,
         negative_prompt: imageNegative.value.trim() || undefined,
         seed: seed === null ? undefined : seed,
       }),
@@ -168,6 +172,7 @@ export function mountPlayground(host: HTMLElement): void {
     temperature,
     imagePrompt,
     imageSize,
+    imageRecipe,
     imageSampler,
     imageScheduler,
     imageCfg,

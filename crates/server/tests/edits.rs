@@ -486,3 +486,40 @@ async fn recipe_fields_parity() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "unknown_sampler", "{body}");
 }
+
+/// Multipart parity of the named-recipe and steps validation: a valid
+/// `recipe` + `steps` pair renders; an unknown recipe and an out-of-range
+/// steps value are the same 400s as on `/v1/images/generations`.
+#[tokio::test]
+async fn recipe_and_steps_parity() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    let (status, body) = edits(
+        app.clone(),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            part("recipe", "turbo"),
+            part("steps", "6"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for (field, value, code) in [
+        ("recipe", "dreamweaver", "unknown_recipe"),
+        ("steps", "0", "invalid_steps"),
+        ("steps", "101", "invalid_steps"),
+    ] {
+        let (status, body) = edits(
+            app.clone(),
+            &[
+                png_part("image", png_bytes(4, 4)),
+                part("prompt", "redo this"),
+                part(field, value),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}={value}: {body}");
+        assert_eq!(body["error"]["code"], code, "{field}={value}: {body}");
+    }
+}

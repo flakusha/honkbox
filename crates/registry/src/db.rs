@@ -402,6 +402,7 @@ fn kind_str(kind: crate::ModelKind) -> &'static str {
     match kind {
         crate::ModelKind::Llm => "llm",
         crate::ModelKind::Sd => "sd",
+        crate::ModelKind::ControlNet => "controlnet",
         crate::ModelKind::Lora => "lora",
         crate::ModelKind::Embedding => "embedding",
         crate::ModelKind::Vae => "vae",
@@ -415,6 +416,7 @@ fn kind_str(kind: crate::ModelKind) -> &'static str {
 fn parse_kind(s: &str) -> crate::ModelKind {
     match s {
         "llm" => crate::ModelKind::Llm,
+        "controlnet" => crate::ModelKind::ControlNet,
         "lora" => crate::ModelKind::Lora,
         "embedding" => crate::ModelKind::Embedding,
         "vae" => crate::ModelKind::Vae,

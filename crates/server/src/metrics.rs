@@ -80,9 +80,18 @@ const CODE_SLOTS: usize = CODES.len() + 1;
 const BUCKETS: usize = BUCKET_EDGES_NS.len();
 
 /// Kind labels, matching `api-types::ModelKind` serde names one for one
-/// (`KIND_LABELS[kind_slot(k)]`). The closed 7-kind enum is the cardinality
+/// (`KIND_LABELS[kind_slot(k)]`). The closed 8-kind enum is the cardinality
 /// bound; the grids below never grow with the catalog.
-const KIND_LABELS: [&str; 7] = ["llm", "sd", "lora", "embedding", "vae", "stt", "tts"];
+const KIND_LABELS: [&str; 8] = [
+    "llm",
+    "sd",
+    "controlnet",
+    "lora",
+    "embedding",
+    "vae",
+    "stt",
+    "tts",
+];
 /// Load reasons (`request` = load-on-demand, `preload` = startup seed,
 /// `manual` = reserved for a future explicit load endpoint).
 const LOAD_REASONS: [&str; 3] = ["request", "preload", "manual"];
@@ -121,11 +130,12 @@ fn kind_slot(kind: ModelKind) -> usize {
     match kind {
         ModelKind::Llm => 0,
         ModelKind::Sd => 1,
-        ModelKind::Lora => 2,
-        ModelKind::Embedding => 3,
-        ModelKind::Vae => 4,
-        ModelKind::Stt => 5,
-        ModelKind::Tts => 6,
+        ModelKind::ControlNet => 2,
+        ModelKind::Lora => 3,
+        ModelKind::Embedding => 4,
+        ModelKind::Vae => 5,
+        ModelKind::Stt => 6,
+        ModelKind::Tts => 7,
     }
 }
 

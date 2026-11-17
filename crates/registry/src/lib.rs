@@ -82,6 +82,8 @@ pub enum ModelKind {
     /// Stable-Diffusion weights: `ComfyUI` `checkpoints`/`diffusion_models`
     /// categories and unclassified root-level files.
     Sd,
+    /// `ControlNet` conditioning weights (`controlnet` category).
+    ControlNet,
     /// `LoRA` adapter (`loras` category).
     Lora,
     /// Embedding / textual-inversion weights (`embeddings` category).
@@ -99,6 +101,7 @@ impl serde::Serialize for ModelKind {
         s.serialize_str(match self {
             ModelKind::Llm => "llm",
             ModelKind::Sd => "sd",
+            ModelKind::ControlNet => "controlnet",
             ModelKind::Lora => "lora",
             ModelKind::Embedding => "embedding",
             ModelKind::Vae => "vae",
@@ -149,6 +152,7 @@ fn model_kind(root: RootKind, category: &str) -> ModelKind {
         RootKind::Llm => ModelKind::Llm,
         RootKind::Comfy => match category {
             "loras" => ModelKind::Lora,
+            "controlnet" => ModelKind::ControlNet,
             "embeddings" => ModelKind::Embedding,
             "vae" => ModelKind::Vae,
             _ => ModelKind::Sd,
@@ -191,6 +195,42 @@ fn comfy_allowed(category: &str, ext: &str) -> bool {
         "embeddings" => ext == "bin",
         _ => false,
     }
+}
+
+/// `true` for a `mmproj` projector file: a `.gguf` whose file name carries
+/// `mmproj` (case-insensitive, the HF multimodal-repo convention, e.g.
+/// `mmproj-model-f16.gguf`). These files are vision projectors for a
+/// sibling text model — never standalone chat weights (see
+/// [`sibling_mmproj`]).
+#[must_use]
+pub fn is_mmproj_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    ext_of(path).as_deref() == Some("gguf") && name.to_ascii_lowercase().contains("mmproj")
+}
+
+/// Sibling mmproj projector for a chat model file (vision chat): an
+/// [`is_mmproj_file`] `.gguf` in the same directory as `model_path`.
+/// Deterministic when several match (lexicographically smallest file name
+/// wins); `None` when the model has no parent dir, is itself an mmproj
+/// file, or no sibling matches. A missing/unreadable directory is a quiet
+/// `None` — a root gone between walk and lookup must not fail a catalog
+/// build.
+#[must_use]
+pub fn sibling_mmproj(model_path: &Path) -> Option<PathBuf> {
+    if is_mmproj_file(model_path) {
+        return None;
+    }
+    let dir = model_path.parent()?;
+    let mut matches: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| candidate.as_path() != model_path && is_mmproj_file(candidate))
+        .collect();
+    matches.sort();
+    matches.into_iter().next()
 }
 
 fn is_dot(name: &std::ffi::OsStr) -> bool {
@@ -419,11 +459,13 @@ mod tests {
         let comfy = base.join("comfy");
         std::fs::create_dir_all(llm.join("qwen")).unwrap();
         std::fs::create_dir_all(comfy.join("checkpoints")).unwrap();
+        std::fs::create_dir_all(comfy.join("controlnet")).unwrap();
         std::fs::create_dir_all(comfy.join("loras")).unwrap();
         std::fs::create_dir_all(comfy.join("embeddings")).unwrap();
         std::fs::create_dir_all(comfy.join("vae")).unwrap();
         std::fs::write(llm.join("qwen/q.gguf"), b"x").unwrap();
         std::fs::write(comfy.join("checkpoints/sd.safetensors"), b"yy").unwrap();
+        std::fs::write(comfy.join("controlnet/c.safetensors"), b"cn").unwrap();
         std::fs::write(comfy.join("loras/a.ckpt"), b"z").unwrap();
         std::fs::write(comfy.join("embeddings/e.bin"), b"w").unwrap();
         std::fs::write(comfy.join("vae/v.safetensors"), b"v").unwrap();
@@ -441,6 +483,10 @@ mod tests {
             kinds,
             [
                 ("comfy:checkpoints/sd.safetensors".to_owned(), ModelKind::Sd),
+                (
+                    "comfy:controlnet/c.safetensors".to_owned(),
+                    ModelKind::ControlNet
+                ),
                 ("comfy:embeddings/e.bin".to_owned(), ModelKind::Embedding),
                 ("comfy:loras/a.ckpt".to_owned(), ModelKind::Lora),
                 ("comfy:vae/v.safetensors".to_owned(), ModelKind::Vae),
@@ -509,5 +555,45 @@ mod tests {
                 "comfy:loras/y.safetensors"
             ]
         );
+    }
+
+    #[test]
+    fn mmproj_detection_and_sibling_lookup() {
+        let base = std::env::temp_dir().join(format!("honkbox-mmproj-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("qwen-vl");
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("model.gguf");
+        std::fs::write(&model, b"m").unwrap();
+        // No sibling yet.
+        assert_eq!(sibling_mmproj(&model), None);
+        // Not an mmproj file: wrong extension, wrong name.
+        std::fs::write(dir.join("notes.txt"), b"n").unwrap();
+        std::fs::write(dir.join("vision.gguf"), b"v").unwrap();
+        assert_eq!(sibling_mmproj(&model), None);
+        assert!(!is_mmproj_file(&dir.join("vision.gguf")));
+        // The convention match: `mmproj` in the file name, `.gguf` ext.
+        std::fs::write(dir.join("mmproj-model-f16.gguf"), b"p").unwrap();
+        assert_eq!(
+            sibling_mmproj(&model),
+            Some(dir.join("mmproj-model-f16.gguf"))
+        );
+        // Detection is case-insensitive on the name (and pure — no disk IO).
+        assert!(is_mmproj_file(Path::new("/any/MMProj-F16.GGUF")));
+        assert!(!is_mmproj_file(Path::new("/any/model.gguf")));
+        assert!(!is_mmproj_file(Path::new("/any/mmproj.txt")));
+        // Case-insensitive match also associates (deterministic: sorted).
+        std::fs::write(dir.join("MMProj-small.gguf"), b"q").unwrap();
+        // Lexicographic order is byte-order: "MMProj-small.gguf" < "mmproj-model-f16.gguf".
+        assert_eq!(sibling_mmproj(&model), Some(dir.join("MMProj-small.gguf")));
+        // The projector itself never gets a sibling (no nesting).
+        assert_eq!(sibling_mmproj(&dir.join("mmproj-model-f16.gguf")), None);
+        // Missing dir / bare file name: quiet None.
+        assert_eq!(
+            sibling_mmproj(Path::new("/nonexistent/dir/model.gguf")),
+            None
+        );
+        assert_eq!(sibling_mmproj(Path::new("model.gguf")), None);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

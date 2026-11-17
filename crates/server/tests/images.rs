@@ -2,8 +2,9 @@
 //! startup-configured SD pipeline (stub in tests). Covers the binding
 //! checklist: base64 decodes to a PNG whose dimensions match `size`, `n`
 //! defaults to 1 / honors 2 / clamps above 4, 400 bad `size` and
-//! `response_format`, 404 unknown-model envelope, and the per-generation
-//! job bundle landing under `<data_dir>/jobs/`.
+//! `response_format`, 404 unknown-model envelope, the per-generation
+//! job bundle landing under `<data_dir>/jobs/`, and the named-recipe /
+//! steps / hires-fix validation and bundle recording.
 
 #[allow(dead_code)]
 #[path = "../src/admission.rs"]
@@ -600,4 +601,192 @@ async fn warnings_absent_without_loras() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.get("warnings").is_none(), "{body}");
+}
+
+/// An unknown recipe name is an explicit 400 (`unknown_recipe`) naming it
+/// and listing every accepted value, never a silent substitution.
+#[tokio::test]
+async fn unknown_recipe_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "recipe": "dreamweaver"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unknown_recipe", "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("dreamweaver"), "{message}");
+    assert!(message.contains("sdxl"), "lists accepted: {message}");
+    assert!(
+        message.contains("flux-schnell"),
+        "lists accepted: {message}"
+    );
+}
+
+/// A named recipe resolves to its curated bundle: the sdxl recipe renders
+/// and the sidecar records the recipe name plus the exact values it
+/// supplied (dpm++2m/karras, CFG 7.0, 25 steps).
+#[tokio::test]
+async fn recipe_resolves_and_records() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-img-recipe-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let (status, body) = images(
+        app_with(
+            catalog_with(&[sd_entry("comfy:f.safetensors")]),
+            Some(data_dir.clone()),
+        ),
+        json!({"prompt": "curated", "size": "8x8", "recipe": "sdxl"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let side: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(side["recipe"], "sdxl", "{side}");
+    assert_eq!(side["sampler"], "dpm++2m", "{side}");
+    assert_eq!(side["scheduler"], "karras", "{side}");
+    assert_eq!(side["cfg_scale"], 7.0, "{side}");
+    assert_eq!(side["steps"], 25, "{side}");
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Explicit per-field overrides win over the named recipe's defaults: the
+/// recipe keeps filling the untouched fields (scheduler stays karras) and
+/// the sidecar records the recipe name alongside the values that ran.
+#[tokio::test]
+async fn recipe_fields_overridden_by_explicit_request() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-img-override-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let (status, body) = images(
+        app_with(
+            catalog_with(&[sd_entry("comfy:f.safetensors")]),
+            Some(data_dir.clone()),
+        ),
+        json!({
+            "prompt": "mixed",
+            "size": "8x8",
+            "recipe": "sdxl",
+            "sampler": "euler",
+            "steps": 10,
+            "cfg_scale": 30.0
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let side: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(side["recipe"], "sdxl", "{side}");
+    assert_eq!(side["sampler"], "euler", "{side}");
+    assert_eq!(side["scheduler"], "karras", "{side}");
+    assert_eq!(side["steps"], 10, "{side}");
+    assert_eq!(side["cfg_scale"], 30.0, "{side}");
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// `steps` outside `[1, 100]` is a 400 (`invalid_steps`), never clamped —
+/// the same reject-not-clamp policy as `cfg_scale`.
+#[tokio::test]
+async fn steps_out_of_range_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    for steps in [0u32, 101] {
+        let (status, body) = images(app.clone(), json!({"prompt": "hi", "steps": steps})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "steps {steps}: {body}");
+        assert_eq!(body["error"]["code"], "invalid_steps", "{body}");
+    }
+}
+
+/// Hires-fix range violations are explicit 400s: scale outside `[1.0,
+/// 4.0]`, denoise outside `(0, 1]`, an unparseable target, and a target
+/// exceeding the shared 2048 px output cap.
+#[tokio::test]
+async fn hires_fix_rejections_are_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    let cases = [
+        (json!({"scale": 5.0}), "invalid_hires_scale"),
+        (json!({"scale": 0.5}), "invalid_hires_scale"),
+        (json!({"denoise": 1.5}), "invalid_hires_denoise"),
+        (json!({"target": "bogus"}), "invalid_hires_target"),
+        (json!({"target": "2049x2049"}), "invalid_hires_target"),
+    ];
+    for (hires_fix, code) in cases {
+        let (status, body) = images(
+            app.clone(),
+            json!({"prompt": "hi", "size": "1024x1024", "hires_fix": hires_fix}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{hires_fix}: {body}");
+        assert_eq!(body["error"]["code"], code, "{hires_fix}: {body}");
+    }
+}
+
+/// An accepted hires-fix pass renders and lands in the bundle sidecar with
+/// the target it will produce. The stub backend ignores the pass (its
+/// pixels are a pure seed function), so the returned PNG stays at the base
+/// size — only the real sd-cpp backend lands at the hires target.
+#[tokio::test]
+async fn hires_fix_accepted_and_recorded() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-img-hires-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let app = app_with(
+        catalog_with(&[sd_entry("comfy:f.safetensors")]),
+        Some(data_dir.clone()),
+    );
+    let (status, body) = images(
+        app.clone(),
+        json!({
+            "prompt": "sharper",
+            "size": "8x8",
+            "hires_fix": {"scale": 2.0, "denoise": 0.5}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Stub honesty: base-size output despite the recorded 2x pass.
+    assert_png(&body["data"][0], 8, 8);
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let side: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(side["hires"]["upscaler"], "latent", "{side}");
+    assert_eq!(side["hires"]["target"], "16x16", "{side}");
+    assert!(
+        (side["hires"]["scale"].as_f64().unwrap() - 2.0).abs() < 1e-6,
+        "{side}"
+    );
+    assert!(
+        (side["hires"]["denoising_strength"].as_f64().unwrap() - 0.5).abs() < 1e-6,
+        "{side}"
+    );
+
+    // An explicit target wins over scale and is recorded verbatim.
+    let (status, body) = images(
+        app,
+        json!({
+            "prompt": "sharper",
+            "size": "8x8",
+            "hires_fix": {"target": "16x8"}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let mut recorded = Vec::new();
+    for dir in jobs.filter_map(Result::ok) {
+        let side: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("final_00.json")).unwrap(),
+        )
+        .unwrap();
+        recorded.push(side["hires"]["target"].clone());
+    }
+    assert!(recorded.contains(&json!("16x8")), "{recorded:?}");
+    std::fs::remove_dir_all(&data_dir).ok();
 }

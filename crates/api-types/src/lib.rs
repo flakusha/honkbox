@@ -104,19 +104,39 @@ pub struct ImageUrl {
 /// Widened `ChatMessage.content` (REQ-8). Deserializes from a plain
 /// string, `null`, a missing field, or the `OpenAI` content-parts array:
 /// `text` parts concatenate into `text` (order preserved, no separator —
-/// the `OpenAI` flattening), `image_url` parts set `has_image`, any other
-/// part type is a deserialization error naming the type. Serializes
-/// **always** as the plain string or `null` — the flattened text — so the
-/// response wire shape (`string | null`), the TS bindings and every
-/// existing consumer stay byte-for-byte identical. An `image_url` message
-/// is rejected upstream (`vision not supported by backend` → 400 `OpenAI`
-/// envelope); the flag exists so the drop is explicit, never silent.
+/// the `OpenAI` flattening), `image_url` parts set `has_image` and are
+/// retained (with their text offset) for the vision path, any other part
+/// type is a deserialization error naming the type. Serializes **always**
+/// as the plain string or `null` — the flattened text — so the response
+/// wire shape (`string | null`), the TS bindings and every existing
+/// consumer stay byte-for-byte identical, and image payloads never echo
+/// back. A vision-capable model (an mmproj projector discovered next to
+/// the weights, or an operator override) accepts the images; without one
+/// the chat routes reject the request explicitly (400), never a silent
+/// drop.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatContent {
     /// Flattened text of the message (`None` = absent/`null`).
     pub text: Option<String>,
     /// At least one `image_url` part was present in the request.
     pub has_image: bool,
+    /// `image_url` parts in request order, with their flattened-text
+    /// offsets; empty when the message carried none. Request-side only —
+    /// never serialized (the wire form stays the flattened text, so image
+    /// payloads never echo back).
+    pub images: Vec<ChatImageRef>,
+}
+
+/// One `image_url` part as received (vision chat): the raw `url` string
+/// plus the byte offset it occupied in the flattened message text — the
+/// splice point for the media marker the worker tokenizes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatImageRef {
+    /// `image_url.url` verbatim (a `data:` URI, or whatever else the
+    /// request carried).
+    pub url: String,
+    /// Byte offset into the flattened `text` where this part sat.
+    pub text_offset: usize,
 }
 
 impl ChatContent {
@@ -126,7 +146,24 @@ impl ChatContent {
         Self {
             text: Some(text.into()),
             has_image: false,
+            images: Vec::new(),
         }
+    }
+
+    /// Flattened text with `marker` spliced in at each `image_url` part's
+    /// offset (vision chat): the string the worker tokenizes so media
+    /// embeddings land where the client put the parts. A `None` text with
+    /// images renders as one marker per image (image-only message).
+    #[must_use]
+    pub fn text_with_media_markers(&self, marker: &str) -> String {
+        let mut out = self.text.clone().unwrap_or_default();
+        // Offsets index the pre-splice text; inserting from the end keeps
+        // every not-yet-inserted offset valid.
+        for image in self.images.iter().rev() {
+            let at = image.text_offset.min(out.len());
+            out.insert_str(at, marker);
+        }
+        out
     }
 
     /// Parse the wire form: string | null | array of parts.
@@ -135,8 +172,8 @@ impl ChatContent {
             serde_json::Value::Null => Ok(Self::default()),
             serde_json::Value::String(text) => Ok(Self::text(text.clone())),
             serde_json::Value::Array(parts) => {
-                let mut text_parts: Vec<String> = Vec::new();
-                let mut has_image = false;
+                let mut flat = String::new();
+                let mut images = Vec::new();
                 for part in parts {
                     let Some(object) = part.as_object() else {
                         return Err(format!(
@@ -149,9 +186,19 @@ impl ChatContent {
                                 .get("text")
                                 .and_then(serde_json::Value::as_str)
                                 .ok_or("text part requires a string `text` field")?;
-                            text_parts.push(text.to_owned());
+                            flat.push_str(text);
                         }
-                        Some("image_url") => has_image = true,
+                        Some("image_url") => {
+                            let url = object
+                                .get("image_url")
+                                .and_then(|image| image.get("url"))
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or("image_url part requires a string `image_url.url` field")?;
+                            images.push(ChatImageRef {
+                                url: url.to_owned(),
+                                text_offset: flat.len(),
+                            });
+                        }
                         Some(other) => {
                             return Err(format!(
                                 "unsupported content part type {other:?}: supported types are `text` and `image_url`"
@@ -162,8 +209,13 @@ impl ChatContent {
                         }
                     }
                 }
-                let text = (!text_parts.is_empty()).then(|| text_parts.join(""));
-                Ok(Self { text, has_image })
+                let text = (!flat.is_empty()).then_some(flat);
+                let has_image = !images.is_empty();
+                Ok(Self {
+                    text,
+                    has_image,
+                    images,
+                })
             }
             other => Err(format!(
                 "content must be a string, null, or an array of content parts, got {other}"
@@ -251,10 +303,83 @@ mod chat_content_tests {
         );
         assert!(message.content.has_image);
         // Serialization stays the flattened string: the response wire shape
-        // is unchanged.
+        // is unchanged, and the image payloads never echo back.
         assert_eq!(
             serde_json::to_string(&message.content).unwrap(),
             "\"What is in this image?\""
+        );
+        // The image ref records the offset its part occupied in the
+        // flattened text (vision chat splice point).
+        assert_eq!(message.content.images.len(), 1);
+        assert_eq!(message.content.images[0].url, "data:image/png;base64,x");
+        assert_eq!(message.content.images[0].text_offset, "What is in ".len());
+    }
+
+    #[test]
+    fn media_markers_splice_at_part_offsets() {
+        let content = ChatContent {
+            text: Some("What is in this image?".to_owned()),
+            has_image: true,
+            images: vec![ChatImageRef {
+                url: "data:image/png;base64,x".to_owned(),
+                text_offset: "What is in ".len(),
+            }],
+        };
+        assert_eq!(
+            content.text_with_media_markers("<__media__>"),
+            "What is in <__media__>this image?"
+        );
+        // Image-only message (no text): one marker per image.
+        let images_only = ChatContent {
+            text: None,
+            has_image: true,
+            images: vec![
+                ChatImageRef {
+                    url: "a".to_owned(),
+                    text_offset: 0,
+                },
+                ChatImageRef {
+                    url: "b".to_owned(),
+                    text_offset: 0,
+                },
+            ],
+        };
+        assert_eq!(images_only.text_with_media_markers("M"), "MM");
+        // Multiple images keep each marker at its own part's offset
+        // (parts ["A", img, " ", img, "B"] → offsets 1 and 2).
+        let two = ChatContent {
+            text: Some("A B".to_owned()),
+            has_image: true,
+            images: vec![
+                ChatImageRef {
+                    url: "a".to_owned(),
+                    text_offset: 1,
+                },
+                ChatImageRef {
+                    url: "b".to_owned(),
+                    text_offset: 2,
+                },
+            ],
+        };
+        assert_eq!(two.text_with_media_markers("-"), "A- -B");
+        // Text shape without images is untouched.
+        assert_eq!(
+            ChatContent::text("plain").text_with_media_markers("M"),
+            "plain"
+        );
+    }
+
+    #[test]
+    fn missing_image_url_field_is_a_named_error() {
+        let error = serde_json::from_str::<ChatMessage>(
+            r#"{"role":"user","content":[{"type":"image_url"}]}"#,
+        )
+        .expect_err("image_url without url");
+        assert!(
+            error
+                .to_string()
+                .contains("image_url part requires a string `image_url.url` field"),
+            "{error}"
         );
     }
 
@@ -834,6 +959,18 @@ pub struct EmbeddingsResponse {
 ///   exposed; requests always apply adapters as standard `LoRA`s. Base-model
 ///   mismatch cannot be detected today (no base tags are recorded on scan
 ///   entries or `LoRA` files), so it is neither warned about nor rejected.
+///
+/// **Named recipes and precedence**: `recipe` selects a curated bundle
+/// (sampler/scheduler/cfg/steps for a checkpoint family; names come from
+/// sd-core's supported enums and mirror the vendored stable-diffusion.cpp
+/// presets — e.g. `sd15`, `sdxl`, `sd35`, `turbo`, `lcm`, `flux-dev`,
+/// `flux-schnell`; an unknown name is a 400 listing every accepted value).
+/// Explicit per-field overrides ALWAYS win over the recipe defaults, which
+/// in turn win over the server defaults: request field > recipe > server
+/// default. Omitting `recipe` and every override field reproduces the
+/// pre-recipe fixed recipe exactly (euler, discrete, CFG 7.0, 20 steps).
+/// The applied recipe name — and which fields a recipe actually supplied —
+/// land verbatim in the job bundle sidecar.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesGenerationRequest {
     /// Model id (alias or registry slug) from the SD catalog; omitted →
@@ -876,6 +1013,35 @@ pub struct ImagesGenerationRequest {
     /// licensing and validation rules); omit = plain checkpoint render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loras: Option<Vec<ImagesLora>>,
+    /// Named generation recipe (curated sampler/scheduler/cfg/steps bundle
+    /// per checkpoint family); unknown names are rejected with a 400 listing
+    /// every accepted value. Explicit per-field overrides win over recipe
+    /// defaults (see the struct-level precedence docs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<String>,
+    /// Diffusion steps override; accepted range `[1, 100]`, outside it is a
+    /// 400 (rejected, never clamped). Omitted = the recipe default, else the
+    /// server default of 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
+    /// Optional hires-fix second pass: generate at `size`, interpolate the
+    /// latent up to the target, re-denoise (see [`ImagesHiresFix`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hires_fix: Option<ImagesHiresFix>,
+    /// `ControlNet` slug or alias of a `controlnet`-kind catalog entry
+    /// (honkbox extension, not part of the `OpenAI` image shape). Accepted
+    /// and validated (unknown slug = 400) together with
+    /// [`ImagesGenerationRequest::control_image`]; applying it is NOT
+    /// possible today — the sd pipeline seam carries no control inputs —
+    /// so a fully valid pair is answered with an explicit 501
+    /// (`controlnet_unsupported`), never silently ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controlnet: Option<String>,
+    /// Conditioning image for [`ImagesGenerationRequest::controlnet`]:
+    /// base64-encoded PNG. Validated (bad base64 / not a PNG = 400) and
+    /// then subject to the same honest 501 as the slug.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_image: Option<String>,
 }
 
 /// One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].
@@ -887,6 +1053,27 @@ pub struct ImagesLora {
     /// Adapter multiplier; default 1.0, accepted range `[-2.0, 2.0]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
+}
+
+/// Optional hires-fix second pass on [`ImagesGenerationRequest::hires_fix`].
+/// Vendor-native two-pass upscale (stable-diffusion.cpp `sd_hires_params_t`,
+/// latent upscaler): the image is generated at the requested `size`, the
+/// latent is interpolated up to the target, and a second pass re-denoises at
+/// `denoise`. `target` wins over `scale`. The final edge stays under the
+/// same 2048 px cap as plain generation; violations are a 400.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
+pub struct ImagesHiresFix {
+    /// Upscale factor over the requested `size`; accepted range
+    /// `[1.0, 4.0]`, default 2.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    /// Explicit target size `"WxH"` (e.g. `"2048x1152"`); overrides
+    /// `scale` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Second-pass denoising strength `(0, 1]`; default 0.7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denoise: Option<f32>,
 }
 
 /// One generated image in the `POST /v1/images/generations` response.
@@ -1030,6 +1217,8 @@ pub enum ModelKind {
     Llm,
     /// Stable-Diffusion checkpoint / diffusion-model weights.
     Sd,
+    /// `ControlNet` conditioning weights (`controlnet` category).
+    ControlNet,
     /// `LoRA` adapter.
     Lora,
     /// Embedding / textual-inversion weights.
@@ -1451,6 +1640,65 @@ pub struct JobCancelResult {
     pub cancelled: bool,
 }
 
+/// Which lifecycle transition a [`JobEvent`] carries (`GET /v1/events`
+/// SSE frames; the wire labels double as the SSE `event:` line).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub enum JobEventType {
+    /// The job entered the registry (route admitted the request).
+    #[serde(rename = "job_registered")]
+    Registered,
+    /// A cancel was REQUESTED for the job (`POST /v1/jobs/{id}/cancel` or
+    /// `DELETE /v1/jobs/{id}`). Not a completion event: whether the job
+    /// actually stops is the `interruptible` contract.
+    #[serde(rename = "job_cancelled")]
+    Cancelled,
+    /// The job left the registry (its request ended, any outcome).
+    #[serde(rename = "job_finished")]
+    Finished,
+}
+
+impl JobEventType {
+    /// SSE `event:` line label (mirrored in the JSON `event` field).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Registered => "job_registered",
+            Self::Cancelled => "job_cancelled",
+            Self::Finished => "job_finished",
+        }
+    }
+}
+
+/// One job lifecycle event streamed by `GET /v1/events`. The registry is a
+/// liveness view, so events are transitional: no history is replayed on
+/// (re)connect — a fresh stream only sees jobs registered after it opened.
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
+pub struct JobEvent {
+    /// Lifecycle transition (also carried as the SSE `event:` line so
+    /// JSON-only consumers do not need the envelope).
+    pub event: JobEventType,
+    /// Registry id (`job_<ulid>`); matches `GET /v1/jobs` and `X-Job-Id`.
+    pub id: String,
+    /// Modality label (`chat`, `embeddings`, `images`, `transcribe`,
+    /// `synthesize`, `translations`).
+    pub kind: String,
+    /// Model slug the job runs against, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Registration time, Unix milliseconds (same value `GET /v1/jobs`
+    /// reports for the live entry).
+    pub started_at_ms: u64,
+    /// Whether the job checks its cancel token between work units (same
+    /// contract as [`JobInfo::interruptible`]).
+    pub interruptible: bool,
+    /// Whether a cancel had been requested for the job at the event's
+    /// point in time: always `true` on `job_cancelled`, `false` on
+    /// `job_registered`, and on `job_finished` `true` means the token was
+    /// marked before the job ended — for a non-interruptible job that
+    /// still means the work ran to completion.
+    pub cancelled: bool,
+}
+
 /// Fit-pill verdict for a curated catalog entry against the configured
 /// `[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind
 /// overhead factors over weight bytes), never a measurement.
@@ -1582,6 +1830,7 @@ mod tests {
             EmbeddingsResponse::decl(&config),
             ImagesGenerationRequest::decl(&config),
             ImagesLora::decl(&config),
+            ImagesHiresFix::decl(&config),
             ImageB64::decl(&config),
             ImagesGenerationResponse::decl(&config),
             TranscriptionText::decl(&config),
@@ -1617,6 +1866,8 @@ mod tests {
             JobInfo::decl(&config),
             JobList::decl(&config),
             JobCancelResult::decl(&config),
+            JobEventType::decl(&config),
+            JobEvent::decl(&config),
             Pill::decl(&config),
             CatalogLocal::decl(&config),
             CatalogEntry::decl(&config),
@@ -1642,6 +1893,7 @@ mod tests {
 
         for kind in [
             ModelKind::Sd,
+            ModelKind::ControlNet,
             ModelKind::Lora,
             ModelKind::Vae,
             ModelKind::Stt,

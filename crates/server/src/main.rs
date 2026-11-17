@@ -648,6 +648,7 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         init_image: None,
         mask_image: None,
         strength: None,
+        hires: None,
     }));
     let format = match format {
         Format::Png => honkbox_sd_core::OutputFormat::Png,
@@ -678,6 +679,8 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
             negative_prompt: None,
             loras: Vec::new(),
             strength: None,
+            recipe: None,
+            hires: None,
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -722,8 +725,7 @@ fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
         messages: vec![honkbox_llm_worker::ChatMessage {
             role: honkbox_llm_worker::Role::User,
             content: prompt,
-            tool_call_id: None,
-            tool_calls: Vec::new(),
+            ..honkbox_llm_worker::ChatMessage::default()
         }],
         max_tokens,
         temperature,
