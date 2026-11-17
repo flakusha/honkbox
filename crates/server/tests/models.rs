@@ -433,3 +433,158 @@ async fn refresh_is_idempotent_on_missing_roots() {
         assert_eq!(body.as_ref(), br#"{"object":"list","data":[]}"#);
     }
 }
+
+/// A delete-test app: empty roots (the file being deleted is synthetic),
+/// optional swap manager for the residency guard.
+fn delete_app(catalog: ModelCatalog, swap: Option<Arc<swap::SwapManager>>) -> Router {
+    app(AppConfig {
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        llm: Arc::new(StubLlm::default()),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap,
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: std::time::Duration::from_hours(24),
+        data_dir: None,
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
+    })
+}
+
+/// `DELETE /v1/models/{slug}` against `app`; returns status + body text.
+async fn delete_model(app: Router, slug: &str) -> (StatusCode, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/v1/models/{slug}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 16_384).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// One resident-only swap manager (seeded with a stub pipeline, loader
+/// never invoked) for the 409 guardrail test.
+fn seeded_swap(slug: &str) -> Arc<swap::SwapManager> {
+    let manager = swap::SwapManager::new(
+        swap::SwapSettings {
+            llm_ttl: std::time::Duration::from_secs(60),
+            llm_max_loaded: 1,
+            max_ttl: std::time::Duration::from_secs(3600),
+            pinned: std::collections::HashSet::new(),
+        },
+        Arc::new(
+            |_: &str| -> Result<Arc<dyn honkbox_llm_worker::LlmPipeline>, swap::SwapError> {
+                Err(swap::SwapError::Load("loader unused in test".to_owned()))
+            },
+        ),
+    );
+    manager.seed(slug, Arc::new(StubLlm::default()));
+    Arc::new(manager)
+}
+
+/// Deletion success: the weight file is gone from disk, the response names
+/// what was removed, and the catalog no longer carries the entry
+/// (permanent — no trash, no undo).
+#[tokio::test]
+async fn delete_removes_file_and_catalog_entry() {
+    let dir = std::env::temp_dir().join(format!("honkbox-delete-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join("gone.gguf");
+    std::fs::write(&file, b"weights").expect("write weight file");
+
+    let mut catalog = catalog_with(&["llm:gone.gguf", "llm:keep.gguf"]);
+    catalog.data[0].path = file.display().to_string();
+    let app = delete_app(catalog, None);
+
+    let (status, body) = delete_model(app.clone(), "llm:gone.gguf").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!file.exists(), "weight file must be gone");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("delete body");
+    assert_eq!(parsed["deleted"], true);
+    assert_eq!(parsed["slug"], "llm:gone.gguf");
+    assert_eq!(
+        parsed["removed"][0].as_str().map(str::to_owned),
+        Some(file.display().to_string()),
+    );
+    std::fs::remove_dir_all(&dir).ok();
+
+    // Catalog entry dropped: the post-delete rescan over the empty roots
+    // swapped the snapshot, so GET /v1/models no longer lists the slug.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 16_384).await.unwrap();
+    let list: serde_json::Value = serde_json::from_slice(&bytes).expect("catalog list");
+    assert_eq!(list["data"].as_array().map(Vec::len), Some(0), "{list}");
+}
+
+/// Deleting an unknown slug is a 404 `OpenAI` envelope.
+#[tokio::test]
+async fn delete_unknown_slug_is_404() {
+    let (status, body) = delete_model(
+        delete_app(catalog_with(&["llm:a.gguf"]), None),
+        "llm:nope.gguf",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("envelope");
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("unknown model")),
+        "{parsed}"
+    );
+}
+
+/// Deleting a resident model is refused with 409: unload first.
+#[tokio::test]
+async fn delete_resident_model_is_409() {
+    let slug = "llm:resident.gguf";
+    let dir = std::env::temp_dir().join(format!("honkbox-delete-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join("resident.gguf");
+    std::fs::write(&file, b"weights").expect("write weight file");
+
+    let mut catalog = catalog_with(&[slug]);
+    catalog.data[0].path = file.display().to_string();
+    let (status, body) = delete_model(delete_app(catalog, Some(seeded_swap(slug))), slug).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(file.exists(), "resident model's file must survive");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("envelope");
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("resident")),
+        "{parsed}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

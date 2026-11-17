@@ -4,6 +4,72 @@ use super::{SynthesizeRequest, SynthesizedAudio, TtsError, TtsPipeline, resample
 use std::f32::consts::PI;
 use std::path::Path;
 
+/// The supported Kokoro voice set (Kokoro-82M v1.0, the documented
+/// shipping voice list). any-tts cannot enumerate a model's voices at
+/// runtime, so this static list **is** the supported set: `/v1/audio/voices`
+/// serves it verbatim, and a `voice` outside it is passed through to the
+/// backend unchanged (backend-defined failure, not silently accepted).
+/// A future any-tts enumeration surface should replace this list.
+pub const KOKORO_VOICES: &[&str] = &[
+    "af_heart",
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_jsabel",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    "ef_dora",
+    "em_alex",
+    "em_santa",
+    "ff_siwis",
+    "hf_alpha",
+    "hf_beta",
+    "hf_eva",
+    "hf_xiaobei",
+    "hf_xiaoni",
+    "hf_xiaoxiao",
+    "hf_xiaoyi",
+    "hm_omega",
+    "hm_psi",
+    "if_sara",
+    "im_nicola",
+    "jf_alpha",
+    "jf_gongitsune",
+    "jf_nezumi",
+    "jf_ono",
+    "jm_kumo",
+    "pf_dora",
+    "pm_alex",
+    "pm_santa",
+    "zf_xiaobei",
+    "zf_xiaoni",
+    "zf_xiaoxiao",
+    "zf_xiaoyi",
+    "zm_omega",
+    "zm_psi",
+];
+
 /// Deterministic hermetic TTS: 1 s 440 Hz sine at half amplitude.
 #[derive(Debug, Default)]
 pub struct StubTts;

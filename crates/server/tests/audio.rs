@@ -587,3 +587,89 @@ async fn speech_rejections_are_envelopes() {
         "{parsed}"
     );
 }
+
+/// Speech `response_format: "pcm"`: raw little-endian s16 mono samples —
+/// the exact bytes the wav path wraps, minus the 44-byte RIFF header (`OpenAI`
+/// pcm semantics). The stub output is deterministic, so both requests here
+/// synthesize identical samples.
+#[tokio::test]
+async fn speech_pcm_is_raw_s16le() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, ct, pcm) = post_json(
+        test_app(),
+        "/v1/audio/speech",
+        json!({"input": "hi", "response_format": "pcm"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "audio/pcm-s16le");
+    assert!(pcm.len() % 2 == 0, "s16le payload must be even");
+
+    let (status, ct, wav) = post_json(test_app(), "/v1/audio/speech", json!({"input": "hi"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "audio/wav");
+    assert!(wav.starts_with(b"RIFF"), "wav path keeps the container");
+    assert_eq!(pcm.len() + 44, wav.len(), "44-byte header difference");
+    assert_eq!(&wav[44..], &pcm[..], "same samples, container omitted");
+}
+
+/// `GET /v1/audio/voices`: the statically documented supported Kokoro set,
+/// served as an OpenAI-style list without any model loaded.
+#[tokio::test]
+async fn voices_lists_supported_kokoro_set() {
+    let (status, ct, bytes) = send(
+        test_app(),
+        Request::builder()
+            .method("GET")
+            .uri("/v1/audio/voices")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(ct.starts_with("application/json"), "{ct}");
+    let parsed: Value = serde_json::from_slice(&bytes).expect("list envelope");
+    assert_eq!(parsed["object"], "list");
+    let data = parsed["data"].as_array().expect("data array");
+    assert!(!data.is_empty(), "supported set is non-empty");
+    assert!(data.iter().all(|v| v["object"] == "voice"), "{parsed}");
+    let heart = data
+        .iter()
+        .find(|v| v["id"] == "af_heart")
+        .expect("af_heart in the supported set");
+    assert_eq!(heart["language"], "en-US");
+    assert_eq!(heart["gender"], "female");
+}
+
+/// H3 (ReviewedAudio): the served `OpenAPI` document must carry the REQ-9
+/// audio routes, the voices route, and the model deletion route — clients
+/// codegen from this document, so unlisted endpoints are undiscoverable.
+#[tokio::test]
+async fn openapi_documents_audio_and_delete_routes() {
+    let (status, _, bytes) = send(
+        test_app(),
+        Request::builder()
+            .method("GET")
+            .uri("/v1/openapi.json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let doc: Value = serde_json::from_slice(&bytes).expect("openapi json");
+    let paths = doc["paths"].as_object().expect("paths");
+    for path in [
+        "/v1/audio/voices",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/models/{slug}",
+    ] {
+        assert!(paths.contains_key(path), "missing {path} in {paths:?}");
+    }
+    assert!(
+        paths["/v1/models/{slug}"]
+            .as_object()
+            .is_some_and(|ops| ops.contains_key("delete")),
+        "DELETE /v1/models/{{slug}} not documented"
+    );
+}

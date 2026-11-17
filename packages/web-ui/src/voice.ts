@@ -92,12 +92,25 @@ export function mountVoice(host: HTMLElement): void {
   slug.addEventListener("change", () => localStorage.setItem(MODEL_KEY, slug.value));
   const lang = document.createElement("input");
   lang.placeholder = "language (optional)";
+  // TTS voice picker: populated from GET /v1/audio/voices (the server's
+  // statically documented supported Kokoro set). Left empty = backend
+  // default voice.
+  const voice = document.createElement("select");
+  voice.append(new Option("voice (default)", ""));
+  fetch("/v1/audio/voices")
+    .then((res) => (res.ok ? res.json() : { data: [] }))
+    .then((list: { data?: { id: string; language: string; gender: string; }[]; }) => {
+      for (const v of list.data ?? []) {
+        voice.append(new Option(`${v.id} (${v.language}/${v.gender})`, v.id));
+      }
+    })
+    .catch(() => {}); // dropdown stays on "default" without the route
   const btn = document.createElement("button");
   btn.textContent = "Record";
   const status = document.createElement("p");
   const player = document.createElement("audio");
   player.controls = true;
-  host.append(slug, lang, btn, status, player);
+  host.append(slug, lang, voice, btn, status, player);
 
   let stopFn: (() => void) | null = null;
   btn.addEventListener("click", () => {
@@ -144,7 +157,11 @@ export function mountVoice(host: HTMLElement): void {
         const sres = await fetch("/v1/synthesize", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: slug.value, text: c.text }),
+          body: JSON.stringify({
+            model: slug.value,
+            text: c.text,
+            voice: voice.value || undefined,
+          }),
         });
         if (!sres.ok) throw new Error(`synthesize ${sres.status}`);
         const wav = new Blob([await sres.arrayBuffer()], { type: "audio/wav" });

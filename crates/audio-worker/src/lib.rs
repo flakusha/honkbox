@@ -10,7 +10,7 @@ mod tts;
 mod vad;
 
 pub use stt::{StubStt, WhisperStt};
-pub use tts::{KokoroTts, StubTts};
+pub use tts::{KOKORO_VOICES, KokoroTts, StubTts};
 #[cfg(feature = "vad")]
 pub use vad::{SileroVad, VadSpan};
 
