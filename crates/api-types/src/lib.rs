@@ -810,6 +810,18 @@ pub struct EmbeddingsResponse {
 /// `"WxH"` pixels (default `1024x1024`, longest edge capped by sd-core);
 /// `n` defaults to 1 and is clamped (never rejected) to 4;
 /// `response_format` currently only accepts `"b64_json"`.
+///
+/// Recipe overrides (all optional; omitting every one is byte-identical to
+/// the pre-passthrough fixed recipe: euler sampler, `normal`/discrete
+/// scheduler, CFG 7.0, server-chosen seed base):
+/// - `sampler`: one of the sd.cpp sampler names; an unknown name is a 400
+///   naming it (accepted list comes from sd-core `SAMPLER_NAMES`).
+/// - `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.
+/// - `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside
+///   the range is a 400 (rejected, never silently clamped).
+/// - `negative_prompt`: text steered away from in CFG models.
+/// - `seed`: RNG base; per-image seed = `seed + i`. Omitted = the
+///   server-chosen fixed base (deterministic, like today).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesGenerationRequest {
     /// Model id (alias or registry slug) from the SD catalog; omitted →
@@ -829,6 +841,25 @@ pub struct ImagesGenerationRequest {
     /// Output encoding; only `"b64_json"` is supported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
+    /// Sampler override (sd.cpp name, e.g. `"euler"`, `"dpm++2m"`);
+    /// unknown names are rejected with a 400 listing the accepted values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampler: Option<String>,
+    /// Scheduler override (sd.cpp name, e.g. `"discrete"`, `"karras"`);
+    /// unknown names are rejected with a 400 listing the accepted values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler: Option<String>,
+    /// Classifier-free guidance scale; accepted range `[1.0, 30.0]`, values
+    /// outside it are rejected with a 400 (never silently clamped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cfg_scale: Option<f32>,
+    /// Negative prompt (empty/omitted = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negative_prompt: Option<String>,
+    /// RNG seed base; per-image seed = `seed + i`. Omitted = the fixed
+    /// server-chosen base (deterministic across identical requests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 /// One generated image in the `POST /v1/images/generations` response.
@@ -869,8 +900,10 @@ pub struct TranscriptionVerbose {
 }
 
 /// `POST /v1/audio/speech` request (REQ-9). `model` is optional (server
-/// default TTS); `response_format` currently only accepts `"wav"` (the
-/// only format honkbox produces; anything else is an explicit 400).
+/// default TTS); `response_format` accepts `wav` (default, RIFF/WAVE
+/// container) or `pcm` (raw little-endian signed 16-bit mono samples,
+/// matching the `OpenAI` pcm semantics — no container, no header); anything
+/// else is an explicit 400.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct SpeechRequest {
     /// Model id (alias or registry slug); omitted → server default TTS.
@@ -882,9 +915,35 @@ pub struct SpeechRequest {
     /// backend default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
-    /// Output format; only `"wav"` is supported.
+    /// Output format: `wav` (default) or `pcm` (raw s16le, no container).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
+}
+
+/// One TTS voice entry of `GET /v1/audio/voices` (`data[]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct Voice {
+    /// Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`).
+    pub id: String,
+    /// Always `"voice"` (OpenAI-style entry tag).
+    pub object: String,
+    /// Language/locale tag derived from the Kokoro voice prefix
+    /// (e.g. `en-US`).
+    pub language: String,
+    /// `female` or `male`, from the Kokoro prefix.
+    pub gender: String,
+}
+
+/// `GET /v1/audio/voices` response: OpenAI-style list envelope over the
+/// statically documented Kokoro voice set (the backend cannot enumerate
+/// voices at runtime, so this is the *supported* set — served without any
+/// model loaded).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct VoiceList {
+    /// Always `"list"`.
+    pub object: String,
+    /// The supported voices.
+    pub data: Vec<Voice>,
 }
 
 /// One transcript segment.
@@ -1094,6 +1153,19 @@ pub struct UnloadResult {
     pub slug: String,
     /// `"explicit"` or `"not_loaded"`.
     pub reason: String,
+}
+
+/// Explicit model deletion result (`DELETE /v1/models/{slug}`). Deletion
+/// is **permanent**: the weight file(s) are removed from disk and the
+/// catalog entry is dropped; recovery means downloading again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ModelDeleteResult {
+    /// Always `true` on the 200 path.
+    pub deleted: bool,
+    /// Registry slug the request resolved to.
+    pub slug: String,
+    /// On-disk paths that were removed.
+    pub removed: Vec<String>,
 }
 
 /// Bulk unload result (`POST /api/models/unload`): every non-pinned
@@ -1440,6 +1512,9 @@ mod tests {
             TranscriptSegment::decl(&config),
             Transcript::decl(&config),
             SynthesizeRequest::decl(&config),
+            Voice::decl(&config),
+            VoiceList::decl(&config),
+            ModelDeleteResult::decl(&config),
             ModelKind::decl(&config),
             ModelCapabilities::decl(&config),
             GgufMetadata::decl(&config),

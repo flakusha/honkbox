@@ -12,10 +12,215 @@ use std::path::PathBuf;
 /// Longest image edge in pixels accepted by the stub backend.
 pub const MAX_EDGE: u32 = 2048;
 
-/// Fixed sampler recorded in bundle sidecars for the minimal slice.
+/// Default sampler recorded in bundle sidecars when a request omits one.
 pub const SAMPLER: &str = "euler";
-/// Fixed scheduler recorded in bundle sidecars for the minimal slice.
+/// Default scheduler recorded in bundle sidecars when a request omits one.
 pub const SCHEDULER: &str = "normal";
+
+/// Sampler selection, mirroring the vendor `SampleMethod` C enum exactly
+/// (wire names are the sd.cpp CLI spellings, e.g. `dpm++2m`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sampler {
+    /// `euler` — Euler.
+    Euler,
+    /// `euler_a` — Euler ancestral.
+    EulerA,
+    /// `heun` — Heun 2nd-order.
+    Heun,
+    /// `dpm2` — DPM-Solver 2nd-order.
+    Dpm2,
+    /// `dpm++2s_a` — DPM++ 2S ancestral.
+    Dpmpp2sA,
+    /// `dpm++2m` — DPM++ 2M.
+    Dpmpp2m,
+    /// `dpm++2mv2` — DPM++ 2M v2.
+    Dpmpp2mV2,
+    /// `ipndm` — Improved pseudo-numerical DPM.
+    Ipndm,
+    /// `ipndm_v` — Improved pseudo-numerical DPM v-series.
+    IpndmV,
+    /// `lcm` — Latent consistency model sampling.
+    Lcm,
+    /// `ddim_trailing` — DDIM with trailing timesteps.
+    DdimTrailing,
+    /// `tcd` — Trajectory consistency distillation.
+    Tcd,
+    /// `res_multistep` — Residual multistep.
+    ResMultistep,
+    /// `res_2s` — Residual multistep 2S ancestral.
+    Res2s,
+    /// `er_sde` — Extended reverse-time SDE.
+    ErSde,
+    /// `euler_cfg_pp` — Euler with CFG++ rescaling.
+    EulerCfgPp,
+    /// `euler_a_cfg_pp` — Euler ancestral with CFG++ rescaling.
+    EulerACfgPp,
+    /// `euler_ge` — Euler with gradient estimation.
+    EulerGe,
+    /// `dpm++2m_sde` — DPM++ 2M SDE.
+    Dpmpp2mSde,
+    /// `dpm++2m_sde_bt` — DPM++ 2M SDE with Brownian tree.
+    Dpmpp2mSdeBt,
+    /// `lms` — Linear multistep.
+    Lms,
+}
+
+/// Every accepted sampler wire name, in enum order (sd.cpp CLI spellings).
+pub const SAMPLER_NAMES: &[&str] = &[
+    "euler",
+    "euler_a",
+    "heun",
+    "dpm2",
+    "dpm++2s_a",
+    "dpm++2m",
+    "dpm++2mv2",
+    "ipndm",
+    "ipndm_v",
+    "lcm",
+    "ddim_trailing",
+    "tcd",
+    "res_multistep",
+    "res_2s",
+    "er_sde",
+    "euler_cfg_pp",
+    "euler_a_cfg_pp",
+    "euler_ge",
+    "dpm++2m_sde",
+    "dpm++2m_sde_bt",
+    "lms",
+];
+
+impl Sampler {
+    /// Parse a wire name ([`SAMPLER_NAMES`]); `None` = unknown name (the
+    /// HTTP surface turns this into a 400 naming the culprit and listing
+    /// the accepted values).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "euler" => Self::Euler,
+            "euler_a" => Self::EulerA,
+            "heun" => Self::Heun,
+            "dpm2" => Self::Dpm2,
+            "dpm++2s_a" => Self::Dpmpp2sA,
+            "dpm++2m" => Self::Dpmpp2m,
+            "dpm++2mv2" => Self::Dpmpp2mV2,
+            "ipndm" => Self::Ipndm,
+            "ipndm_v" => Self::IpndmV,
+            "lcm" => Self::Lcm,
+            "ddim_trailing" => Self::DdimTrailing,
+            "tcd" => Self::Tcd,
+            "res_multistep" => Self::ResMultistep,
+            "res_2s" => Self::Res2s,
+            "er_sde" => Self::ErSde,
+            "euler_cfg_pp" => Self::EulerCfgPp,
+            "euler_a_cfg_pp" => Self::EulerACfgPp,
+            "euler_ge" => Self::EulerGe,
+            "dpm++2m_sde" => Self::Dpmpp2mSde,
+            "dpm++2m_sde_bt" => Self::Dpmpp2mSdeBt,
+            "lms" => Self::Lms,
+            _ => return None,
+        })
+    }
+
+    /// Wire name ([`SAMPLER_NAMES`] spelling) for sidecar recording.
+    pub fn name(self) -> &'static str {
+        SAMPLER_NAMES[self as usize]
+    }
+}
+
+/// Scheduler (denoiser sigma schedule) selection, mirroring the vendor
+/// `Scheduler` C enum exactly (sd.cpp CLI spellings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheduler {
+    /// `discrete` — discrete sigma schedule (the fixed recipe's `normal`).
+    Discrete,
+    /// `karras` — Karras sigma schedule.
+    Karras,
+    /// `exponential` — exponential sigma schedule.
+    Exponential,
+    /// `ays` — align your steps schedule.
+    Ays,
+    /// `gits` — gradient estimation noise schedule.
+    Gits,
+    /// `sgm_uniform` — SGM uniform schedule.
+    SgmUniform,
+    /// `simple` — simple linear schedule.
+    Simple,
+    /// `smoothstep` — smoothstep schedule.
+    Smoothstep,
+    /// `kl_optimal` — KL-optimal schedule.
+    KlOptimal,
+    /// `lcm` — latent-consistency-model schedule.
+    Lcm,
+    /// `bong_tangent` — Bong tangent schedule.
+    BongTangent,
+    /// `ltx2` — LTX-2 schedule.
+    Ltx2,
+    /// `logit_normal` — logit-normal schedule.
+    LogitNormal,
+    /// `flux2` — Flux 2 schedule.
+    Flux2,
+    /// `flux` — Flux schedule.
+    Flux,
+    /// `beta` — beta-distribution schedule.
+    Beta,
+    /// `llada_image` — LLaDA-image schedule.
+    LladaImage,
+}
+
+/// Every accepted scheduler wire name, in enum order. Note: the fixed
+/// recipe's recorded name `normal` ([`SCHEDULER`]) IS the vendor's
+/// `DISCRETE` schedule — wire spellings follow sd.cpp, where `discrete`
+/// is the default denoiser schedule for txt2img.
+pub const SCHEDULER_NAMES: &[&str] = &[
+    "discrete",
+    "karras",
+    "exponential",
+    "ays",
+    "gits",
+    "sgm_uniform",
+    "simple",
+    "smoothstep",
+    "kl_optimal",
+    "lcm",
+    "bong_tangent",
+    "ltx2",
+    "logit_normal",
+    "flux2",
+    "flux",
+    "beta",
+    "llada_image",
+];
+
+impl Scheduler {
+    /// Parse a wire name ([`SCHEDULER_NAMES`]); `None` = unknown name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "discrete" => Self::Discrete,
+            "karras" => Self::Karras,
+            "exponential" => Self::Exponential,
+            "ays" => Self::Ays,
+            "gits" => Self::Gits,
+            "sgm_uniform" => Self::SgmUniform,
+            "simple" => Self::Simple,
+            "smoothstep" => Self::Smoothstep,
+            "kl_optimal" => Self::KlOptimal,
+            "lcm" => Self::Lcm,
+            "bong_tangent" => Self::BongTangent,
+            "ltx2" => Self::Ltx2,
+            "logit_normal" => Self::LogitNormal,
+            "flux2" => Self::Flux2,
+            "flux" => Self::Flux,
+            "beta" => Self::Beta,
+            "llada_image" => Self::LladaImage,
+            _ => return None,
+        })
+    }
+
+    /// Wire name for sidecar recording.
+    pub fn name(self) -> &'static str {
+        SCHEDULER_NAMES[self as usize]
+    }
+}
 
 /// Minimal txt2img request crossing the `server` → `sd-core` seam.
 #[derive(Debug, Clone)]
@@ -39,6 +244,14 @@ pub struct Txt2ImgRequest {
     /// Optional standalone VAE slug (resolved by `server`); `None` = VAE
     /// bundled in (or converted from) the diffusion checkpoint.
     pub vae: Option<PathBuf>,
+    /// Sampler override; `None` = the fixed recipe ([`SAMPLER`], euler).
+    pub sampler: Option<Sampler>,
+    /// Scheduler override; `None` = the fixed recipe (`normal`/discrete).
+    pub scheduler: Option<Scheduler>,
+    /// CFG guidance override; `None` = the fixed recipe default (7.0).
+    pub cfg_scale: Option<f32>,
+    /// Negative prompt; `None`/empty = none (vendor default `""`).
+    pub negative_prompt: Option<String>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -89,7 +302,10 @@ pub trait SdPipeline: Send + Sync {
 }
 
 /// Deterministic stub: pixels are a pure function of the seed
-/// (SAME seed = byte-identical PNG); honors `width`/`height`.
+/// (SAME seed = byte-identical PNG); honors `width`/`height`. Recipe
+/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`) are
+/// honestly ignored: the stub has no sampler — they only affect the
+/// real `SdCppPipeline` backend.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StubPipeline;
 
@@ -129,7 +345,9 @@ pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-cpu";
 /// Real txt2img via `diffusion-rs` (stable-diffusion.cpp) on a caller-provided
 /// single-file checkpoint (e.g. an SDXL finetune `.safetensors`).
 ///
-/// Fixed slice recipe: euler sampler, discrete (`normal`) scheduler, CFG 7.0, VAE tiling ON (required: the 1024² fp16 VAE decode otherwise exceeds the per-allocation limit). `gen_img` writes one PNG to a
+/// Recipe: euler sampler, discrete (`normal`) scheduler, CFG 7.0 by default;
+/// a [`Txt2ImgRequest`] may override sampler/scheduler/CFG/negative prompt
+/// per request. VAE tiling stays forced ON (required: the 1024² fp16 VAE decode otherwise exceeds the per-allocation limit). `gen_img` writes one PNG to a
 /// temp path; this impl reads it back and decodes to RGBA so the seam stays
 /// container-free. `Send + Sync` holds: all `gen_img` state is function-local.
 #[derive(Debug, Clone)]
@@ -212,6 +430,60 @@ fn checkpoint_needs_diffusion_slot(path: &std::path::Path) -> bool {
     safetensors_header_is_prefixless(&header)
 }
 
+/// Map a [`Sampler`] onto the vendor `SampleMethod` C enum (variants and
+/// order mirror [`SAMPLER_NAMES`] / the sd.cpp headers; exhaustiveness is
+/// compile-checked by the match).
+fn sampler_vendor(sampler: Sampler) -> diffusion_rs::api::SampleMethod {
+    use diffusion_rs::api::SampleMethod as V;
+    match sampler {
+        Sampler::Euler => V::EULER_SAMPLE_METHOD,
+        Sampler::EulerA => V::EULER_A_SAMPLE_METHOD,
+        Sampler::Heun => V::HEUN_SAMPLE_METHOD,
+        Sampler::Dpm2 => V::DPM2_SAMPLE_METHOD,
+        Sampler::Dpmpp2sA => V::DPMPP2S_A_SAMPLE_METHOD,
+        Sampler::Dpmpp2m => V::DPMPP2M_SAMPLE_METHOD,
+        Sampler::Dpmpp2mV2 => V::DPMPP2Mv2_SAMPLE_METHOD,
+        Sampler::Ipndm => V::IPNDM_SAMPLE_METHOD,
+        Sampler::IpndmV => V::IPNDM_V_SAMPLE_METHOD,
+        Sampler::Lcm => V::LCM_SAMPLE_METHOD,
+        Sampler::DdimTrailing => V::DDIM_TRAILING_SAMPLE_METHOD,
+        Sampler::Tcd => V::TCD_SAMPLE_METHOD,
+        Sampler::ResMultistep => V::RES_MULTISTEP_SAMPLE_METHOD,
+        Sampler::Res2s => V::RES_2S_SAMPLE_METHOD,
+        Sampler::ErSde => V::ER_SDE_SAMPLE_METHOD,
+        Sampler::EulerCfgPp => V::EULER_CFG_PP_SAMPLE_METHOD,
+        Sampler::EulerACfgPp => V::EULER_A_CFG_PP_SAMPLE_METHOD,
+        Sampler::EulerGe => V::EULER_GE_SAMPLE_METHOD,
+        Sampler::Dpmpp2mSde => V::DPMPP2M_SDE_SAMPLE_METHOD,
+        Sampler::Dpmpp2mSdeBt => V::DPMPP2M_SDE_BT_SAMPLE_METHOD,
+        Sampler::Lms => V::LMS_SAMPLE_METHOD,
+    }
+}
+
+/// Map a [`Scheduler`] onto the vendor `Scheduler` C enum.
+fn scheduler_vendor(scheduler: Scheduler) -> diffusion_rs::api::Scheduler {
+    use diffusion_rs::api::Scheduler as V;
+    match scheduler {
+        Scheduler::Discrete => V::DISCRETE_SCHEDULER,
+        Scheduler::Karras => V::KARRAS_SCHEDULER,
+        Scheduler::Exponential => V::EXPONENTIAL_SCHEDULER,
+        Scheduler::Ays => V::AYS_SCHEDULER,
+        Scheduler::Gits => V::GITS_SCHEDULER,
+        Scheduler::SgmUniform => V::SGM_UNIFORM_SCHEDULER,
+        Scheduler::Simple => V::SIMPLE_SCHEDULER,
+        Scheduler::Smoothstep => V::SMOOTHSTEP_SCHEDULER,
+        Scheduler::KlOptimal => V::KL_OPTIMAL_SCHEDULER,
+        Scheduler::Lcm => V::LCM_SCHEDULER,
+        Scheduler::BongTangent => V::BONG_TANGENT_SCHEDULER,
+        Scheduler::Ltx2 => V::LTX2_SCHEDULER,
+        Scheduler::LogitNormal => V::LOGIT_NORMAL_SCHEDULER,
+        Scheduler::Flux2 => V::FLUX2_SCHEDULER,
+        Scheduler::Flux => V::FLUX_SCHEDULER,
+        Scheduler::Beta => V::BETA_SCHEDULER,
+        Scheduler::LladaImage => V::LLADA_IMAGE_SCHEDULER,
+    }
+}
+
 impl SdPipeline for SdCppPipeline {
     fn backend_id(&self) -> &'static str {
         SD_CPP_BACKEND_ID
@@ -220,7 +492,9 @@ impl SdPipeline for SdCppPipeline {
     fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
         #[cfg(feature = "vulkan")]
         use diffusion_rs::api::{BackendDevice, Module};
-        use diffusion_rs::api::{ConfigBuilder, ModelConfigBuilder, SampleMethod};
+        use diffusion_rs::api::{
+            ConfigBuilder, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
+        };
 
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
@@ -237,11 +511,18 @@ impl SdPipeline for SdCppPipeline {
         ));
         let config = ConfigBuilder::default()
             .prompt(req.prompt.clone())
+            .negative_prompt(req.negative_prompt.clone().unwrap_or_default())
+            // Recipe defaults (euler, CFG 7.0) match the pre-passthrough
+            // fixed slice exactly; `None` fields are byte-identical behavior.
+            .cfg_scale(req.cfg_scale.unwrap_or(7.0))
             .seed(req.seed.cast_signed())
             .steps(req.steps.cast_signed())
             .width(req.width.cast_signed())
             .height(req.height.cast_signed())
-            .sampling_method(SampleMethod::EULER_SAMPLE_METHOD)
+            .sampling_method(match req.sampler {
+                Some(sampler) => sampler_vendor(sampler),
+                None => SampleMethod::EULER_SAMPLE_METHOD,
+            })
             .output(out.clone())
             .build()
             .map_err(|e| SdError::Backend(e.to_string()))?;
@@ -258,6 +539,12 @@ impl SdPipeline for SdCppPipeline {
             model.model(self.model_path.clone());
         }
         model.n_threads(0).vae_tiling(true);
+        // Scheduler lives on the model config (vendor design); default is the
+        // fixed recipe's discrete (`normal`) schedule.
+        model.scheduler(match req.scheduler {
+            Some(scheduler) => scheduler_vendor(scheduler),
+            None => VendorScheduler::DISCRETE_SCHEDULER,
+        });
         // Split encoder/VAE files (new archs ship them separately): `--clip`
         // feeds the llm (Qwen-VL-class) slot, `--vae` the standalone VAE.
         if let Some(clip) = req.clip.clone() {
@@ -382,7 +669,47 @@ mod tests {
             model_slug: "comfy:checkpoints/x.safetensors".to_string(),
             clip: None,
             vae: None,
+            sampler: None,
+            scheduler: None,
+            cfg_scale: None,
+            negative_prompt: None,
         }
+    }
+
+    #[test]
+    fn sampler_names_roundtrip_and_reject_unknown() {
+        for (i, name) in SAMPLER_NAMES.iter().enumerate() {
+            let parsed = Sampler::parse(name).expect("parse");
+            assert_eq!(parsed.name(), *name);
+            assert_eq!(parsed as usize, i);
+        }
+        assert!(Sampler::parse("eulers").is_none());
+        assert!(Sampler::parse("EULER").is_none());
+        assert!(Sampler::parse("").is_none());
+    }
+
+    #[test]
+    fn scheduler_names_roundtrip_and_reject_unknown() {
+        for (i, name) in SCHEDULER_NAMES.iter().enumerate() {
+            let parsed = Scheduler::parse(name).expect("parse");
+            assert_eq!(parsed.name(), *name);
+            assert_eq!(parsed as usize, i);
+        }
+        assert!(Scheduler::parse("normal").is_none());
+        assert!(Scheduler::parse("Karras").is_none());
+    }
+
+    #[test]
+    fn defaults_are_the_fixed_recipe() {
+        // `None` overrides mean today's recipe: euler + `normal` (discrete)
+        // + CFG 7.0, no negative prompt — recorded names stay stable.
+        assert_eq!(SAMPLER, "euler");
+        assert_eq!(SCHEDULER, "normal");
+        assert_eq!(Sampler::parse(SAMPLER), Some(Sampler::Euler));
+        assert_eq!(Scheduler::parse("discrete"), Some(Scheduler::Discrete));
+        let r = req(1, 8, 8);
+        assert!(r.sampler.is_none() && r.scheduler.is_none());
+        assert!(r.cfg_scale.is_none() && r.negative_prompt.is_none());
     }
 
     #[test]

@@ -74,6 +74,10 @@ fn request(width: u32, height: u32, seed: u64) -> Txt2ImgRequest {
         model_slug: "parity:test/model.safetensors".to_owned(),
         clip: None,
         vae: None,
+        sampler: None,
+        scheduler: None,
+        cfg_scale: None,
+        negative_prompt: None,
     }
 }
 

@@ -567,6 +567,30 @@ export type ImagesGenerationRequest = {
    * Output encoding; only `"b64_json"` is supported.
    */
   response_format?: string | null;
+  /**
+   * Sampler override (sd.cpp name, e.g. `"euler"`, `"dpm++2m"`);
+   * unknown names are rejected with a 400 listing the accepted values.
+   */
+  sampler?: string | null;
+  /**
+   * Scheduler override (sd.cpp name, e.g. `"discrete"`, `"karras"`);
+   * unknown names are rejected with a 400 listing the accepted values.
+   */
+  scheduler?: string | null;
+  /**
+   * Classifier-free guidance scale; accepted range `[1.0, 30.0]`, values
+   * outside it are rejected with a 400 (never silently clamped).
+   */
+  cfg_scale?: number | null;
+  /**
+   * Negative prompt (empty/omitted = none).
+   */
+  negative_prompt?: string | null;
+  /**
+   * RNG seed base; per-image seed = `seed + i`. Omitted = the fixed
+   * server-chosen base (deterministic across identical requests).
+   */
+  seed?: bigint | null;
 };
 export type ImageB64 = {
   /**
@@ -615,7 +639,7 @@ export type SpeechRequest = {
    */
   voice?: string | null;
   /**
-   * Output format; only `"wav"` is supported.
+   * Output format: `wav` (default) or `pcm` (raw s16le, no container).
    */
   response_format?: string | null;
 };
@@ -675,6 +699,49 @@ export type SynthesizeRequest = {
    * today, so the advice takes effect once per-kind swap lands.
    */
   ttl_seconds?: bigint | null;
+};
+export type Voice = {
+  /**
+   * Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`).
+   */
+  id: string;
+  /**
+   * Always `"voice"` (OpenAI-style entry tag).
+   */
+  object: string;
+  /**
+   * Language/locale tag derived from the Kokoro voice prefix
+   * (e.g. `en-US`).
+   */
+  language: string;
+  /**
+   * `female` or `male`, from the Kokoro prefix.
+   */
+  gender: string;
+};
+export type VoiceList = {
+  /**
+   * Always `"list"`.
+   */
+  object: string;
+  /**
+   * The supported voices.
+   */
+  data: Array<Voice>;
+};
+export type ModelDeleteResult = {
+  /**
+   * Always `true` on the 200 path.
+   */
+  deleted: boolean;
+  /**
+   * Registry slug the request resolved to.
+   */
+  slug: string;
+  /**
+   * On-disk paths that were removed.
+   */
+  removed: Array<string>;
 };
 export type ModelKind = "llm" | "sd" | "lora" | "embedding" | "vae" | "stt" | "tts";
 export type ModelCapabilities = {

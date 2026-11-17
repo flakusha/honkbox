@@ -17,14 +17,14 @@ use std::time::{Duration, Instant};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Multipart, Path as AxumPath, Query, Request, State},
+    extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, Sse},
     },
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use base64::Engine as _;
 use honkbox_api_types::{
@@ -34,12 +34,13 @@ use honkbox_api_types::{
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
     FunctionDefinition, GgufMetadata, Health, ImageB64, ImagesGenerationRequest,
     ImagesGenerationResponse, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo,
-    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata, NamedFunction,
-    OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice,
-    OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType,
-    RunningList, RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall,
-    ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
-    TranscriptionVerbose, UnloadAllResult, UnloadResult, Version,
+    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind,
+    ModelMetadata, NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice,
+    OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel,
+    ResponseFormat, ResponseFormatType, RunningList, RunningModel, SafetensorsMetadata,
+    SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript,
+    TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult,
+    Version, Voice, VoiceList,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -83,6 +84,10 @@ struct EmbeddedUi;
         post_chat_completions,
         post_transcribe,
         post_synthesize,
+        post_audio_transcriptions,
+        post_audio_speech,
+        get_audio_voices,
+        delete_model,
         post_download,
         list_downloads,
         get_download,
@@ -114,6 +119,9 @@ struct EmbeddedUi;
         ModelCatalog,
         UnloadResult,
         UnloadAllResult,
+        ModelDeleteResult,
+        Voice,
+        VoiceList,
         ResidentModel,
         MemoryCapacity,
         MemoryGpu,
@@ -255,6 +263,17 @@ impl AppConfig {
     }
 }
 
+/// Deliberate request-body ceiling for the whole router (H1, ReviewedAudio):
+/// axum's default 2 MiB caps audio uploads at ~65 s of 16 kHz mono s16
+/// (48000 Hz mono s16 would be ~22 s), which breaks any real recording.
+/// 64 MiB = 10 minutes of 48 kHz mono s16le (`48_000 * 2 * 600 = 57.6 MB`)
+/// with headroom for multipart framing and the octet-stream RIFF sniff —
+/// sized for the largest transcription input the whisper path plausibly
+/// serves, still far below any memory concern for a local server. Applies
+/// to every route; JSON DTOs are tiny, so the limit is only load-bearing
+/// on `/v1/audio/transcriptions` and `/v1/transcribe`.
+const AUDIO_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
     Router::new()
@@ -263,6 +282,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/models", get(get_models))
         .route("/v1/models/refresh", post(refresh_models))
         .route("/v1/models/{slug}/unload", post(post_model_unload))
+        .route("/v1/models/{slug}", delete(delete_model))
         .route("/v1/catalog", get(get_catalog))
         .route("/v1/memory", get(get_memory))
         .route("/v1/openapi.json", get(openapi_json))
@@ -273,6 +293,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/images/generations", post(post_images_generations))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
+        .route("/v1/audio/voices", get(get_audio_voices))
         .route("/v1/audio/transcriptions", post(post_audio_transcriptions))
         .route("/v1/audio/speech", post(post_audio_speech))
         .route("/running", get(get_running))
@@ -289,6 +310,9 @@ pub fn app(config: AppConfig) -> Router {
             require_bearer,
         ))
         .fallback(fallback)
+        // H1 (ReviewedAudio): lift the silent 2 MiB default; see
+        // [`AUDIO_BODY_LIMIT_BYTES`] for the byte math.
+        .layer(DefaultBodyLimit::max(AUDIO_BODY_LIMIT_BYTES))
         .layer(middleware::from_fn(track_metrics))
         .with_state(config)
 }
@@ -618,6 +642,112 @@ async fn post_model_unload(
         None => crate::swap::EvictOutcome::NotLoaded,
     };
     unload_response(outcome, slug)
+}
+
+/// `DELETE /v1/models/{slug}` (`NewItems` §1): explicit, **permanent** model
+/// deletion — the weight file (or directory) is removed from disk and the
+/// catalog entry is dropped; there is no trash and no undo, recovery means
+/// downloading the model again. Guardrails: an unknown slug (alias or
+/// registry slug) is a 404; a resident or busy model (chat warm-set
+/// residency: resident, pinned, or in-flight) is refused with 409 — unload
+/// it first (`POST /v1/models/{slug}/unload`). Success removes the file(s),
+/// re-scans the registry roots (best-effort SQLite cache sync) and drops
+/// the entry from the shared catalog snapshot, then returns 200 naming
+/// exactly what was removed.
+#[utoipa::path(
+    delete,
+    path = "/v1/models/{slug}",
+    params(("slug" = String, Path, description = "Operator alias or registry slug")),
+    responses(
+        (status = 200, description = "Model deleted permanently", body = ModelDeleteResult),
+        (status = 404, description = "Unknown slug or alias", body = OpenAiError),
+        (status = 409, description = "Model is resident, pinned, or busy; unload it first", body = OpenAiError),
+        (status = 500, description = "File removal failed", body = OpenAiError)
+    )
+)]
+async fn delete_model(
+    State(config): State<AppConfig>,
+    AxumPath(model): AxumPath<String>,
+) -> Response {
+    let catalog = config.catalog_snapshot();
+    let Some(entry) = catalog
+        .data
+        .iter()
+        .find(|e| e.slug == model || e.id == model)
+    else {
+        return openai_error_response(
+            StatusCode::NOT_FOUND,
+            format!("unknown model {model:?}: not a catalog slug or alias (see GET /v1/models)"),
+            None,
+        );
+    };
+    let slug = entry.slug.clone();
+    let path = PathBuf::from(&entry.path);
+    // Resident/busy guard: the swap manager is the chat warm set; any entry
+    // it holds is either pinned, idle-resident, or in flight — all three
+    // refuse (audio pipelines are startup-loaded and own no residency slot,
+    // so they are never "resident" here).
+    if let Some(swap) = &config.swap
+        && let Some(resident) = swap.residency().iter().find(|r| r.slug == slug)
+    {
+        let why = if resident.pinned {
+            "pinned via [swap].pin"
+        } else if resident.in_use {
+            "busy (in-flight request holds the pipeline)"
+        } else {
+            "resident"
+        };
+        tracing::warn!(slug, "model deletion refused: {why}");
+        return openai_error_response(
+            StatusCode::CONFLICT,
+            format!("model {slug:?} is {why}; unload it before deleting"),
+            None,
+        );
+    }
+    let removed = match delete_model_path(&path).await {
+        Ok(removed) => removed,
+        Err(err) => {
+            return openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("delete of {} failed: {err}", path.display()),
+                None,
+            );
+        }
+    };
+    // Catalog rows: the file walk is the source of truth, so a rescan is
+    // the honest row drop (it also syncs/prunes the registry SQLite cache).
+    // Best-effort: if the rescan falls back to the cache (empty roots), the
+    // snapshot filter below still drops the deleted entry deterministically.
+    if let Err(err) = rescan_catalog(&config).await {
+        tracing::warn!(%err, slug, "post-delete rescan failed; dropping the entry from the snapshot anyway");
+    }
+    let mut fresh = (*config.catalog_snapshot()).clone();
+    fresh.data.retain(|e| e.slug != slug);
+    *config
+        .catalog
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(fresh);
+    tracing::info!(slug, removed = removed.len(), "model deleted permanently");
+    Json(ModelDeleteResult {
+        deleted: true,
+        slug,
+        removed,
+    })
+    .into_response()
+}
+
+/// Remove one catalog weight file (or directory) from disk. A path that is
+/// already gone is fine — the catalog is a snapshot and may be stale.
+async fn delete_model_path(path: &Path) -> std::io::Result<Vec<String>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    if path.is_dir() {
+        tokio::fs::remove_dir_all(path).await?;
+    } else {
+        tokio::fs::remove_file(path).await?;
+    }
+    Ok(vec![path.display().to_string()])
 }
 
 /// `GET /v1/memory`: residency readout (REQ-5) - exactly the models the
@@ -2077,12 +2207,29 @@ fn resolve_sd_model<'a>(model: &str, catalog: &'a ModelCatalog) -> Option<&'a st
         .map(|e| e.slug.as_str())
 }
 
-/// Validated image request: parsed size, clamped count. The only rejection
-/// paths for `POST /v1/images/generations` before the GPU slot; `Err` is
-/// (message, error code) for a 400 `OpenAI` envelope.
+/// Validated image request: parsed size, clamped count, and the resolved
+/// generation recipe (sampler/scheduler/CFG/negative/seed base; `None`
+/// request fields resolve to the fixed-recipe defaults, so omitting
+/// everything is byte-identical to the pre-passthrough behavior). The only
+/// rejection paths for `POST /v1/images/generations` before the GPU slot;
+/// `Err` is (message, error code) for a 400 `OpenAI` envelope. Unlike `n`
+/// (clamped with a warn), unknown sampler/scheduler names and out-of-range
+/// `cfg_scale` are hard 400s — silently substituting a recipe the caller
+/// did not ask for would be dishonest about what was rendered.
+struct ImageRecipe {
+    sampler: honkbox_sd_core::Sampler,
+    scheduler: honkbox_sd_core::Scheduler,
+    cfg_scale: f32,
+    negative_prompt: Option<String>,
+    seed_base: u64,
+}
+
+/// CFG guidance bounds for the HTTP surface (documented on the DTO).
+const IMAGE_CFG_SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=30.0;
+
 fn validate_images_request(
     req: &ImagesGenerationRequest,
-) -> Result<(u32, u32, u32), (String, &'static str)> {
+) -> Result<(u32, u32, u32, ImageRecipe), (String, &'static str)> {
     let (width, height) = crate::jobs::parse_size(req.size.as_deref().unwrap_or("1024x1024"))
         .map_err(|err| (err, "invalid_size"))?;
     if let Some(format) = req
@@ -2103,7 +2250,66 @@ fn validate_images_request(
             "images n outside [1, 4]; clamping (never rejected)"
         );
     }
-    Ok((width, height, n.clamp(1, 4)))
+    let sampler_name = req
+        .sampler
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let sampler = match sampler_name {
+        Some(name) => honkbox_sd_core::Sampler::parse(name).ok_or_else(|| {
+            (
+                format!(
+                    "unknown sampler {name:?}: accepted values are {}",
+                    honkbox_sd_core::SAMPLER_NAMES.join(", ")
+                ),
+                "unknown_sampler",
+            )
+        })?,
+        None => honkbox_sd_core::Sampler::Euler,
+    };
+    let scheduler_name = req
+        .scheduler
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let scheduler = match scheduler_name {
+        Some(name) => honkbox_sd_core::Scheduler::parse(name).ok_or_else(|| {
+            (
+                format!(
+                    "unknown scheduler {name:?}: accepted values are {}",
+                    honkbox_sd_core::SCHEDULER_NAMES.join(", ")
+                ),
+                "unknown_scheduler",
+            )
+        })?,
+        // The fixed recipe's recorded `normal` name IS the vendor discrete
+        // schedule; wire spellings follow sd.cpp (`discrete`).
+        None => honkbox_sd_core::Scheduler::Discrete,
+    };
+    let cfg_scale = match req.cfg_scale {
+        Some(v) if IMAGE_CFG_SCALE_RANGE.contains(&v) && v.is_finite() => v,
+        Some(v) => {
+            return Err((
+                format!("cfg_scale {v} outside accepted range [1.0, 30.0]: rejected, not clamped"),
+                "invalid_cfg_scale",
+            ));
+        }
+        None => 7.0,
+    };
+    let negative_prompt = req
+        .negative_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let recipe = ImageRecipe {
+        sampler,
+        scheduler,
+        cfg_scale,
+        negative_prompt,
+        seed_base: req.seed.unwrap_or(IMAGE_SEED_BASE),
+    };
+    Ok((width, height, n.clamp(1, 4), recipe))
 }
 
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
@@ -2122,9 +2328,11 @@ fn write_generation_bundle(
     }
 }
 
-/// Fixed generation recipe for the HTTP surface: the same defaults as
-/// `honkbox generate` (seed 42 base, 20 steps, euler/normal), recorded in
-/// the bundle sidecars. Per-image seed = base + index.
+/// Default generation recipe for the HTTP surface: the same defaults as
+/// `honkbox generate` (seed 42 base, 20 steps, euler/normal, CFG 7.0),
+/// recorded in the bundle sidecars. Per-image seed = base + index; a
+/// request may override the recipe (`sampler`/`scheduler`/`cfg_scale`/
+/// `negative_prompt`/`seed`) — omitted fields fall back to these.
 const IMAGE_SEED_BASE: u64 = 42;
 /// Fixed diffusion steps for the HTTP surface (CLI default).
 const IMAGE_STEPS: u32 = 20;
@@ -2140,25 +2348,54 @@ const IMAGE_STEPS: u32 = 20;
 /// (`spawn_blocking`, like every other GPU route) and written to the
 /// existing job bundle store (`<data_dir>/jobs/`), so CLI GC and
 /// recordkeeping cover HTTP generations too. Errors are `OpenAI`
-/// envelopes: 400 bad `size`/`response_format`, 404 unknown model, 429
-/// busy, 500 backend failure. `n` clamps to `[1, 4]` (warn, never reject).
+/// envelopes: 400 bad `size`/`response_format`/recipe params (unknown
+/// sampler/scheduler name, `cfg_scale` outside [1.0, 30.0]), 404 unknown
+/// model, 429 busy, 500 backend failure. `n` clamps to `[1, 4]` (warn,
+/// never reject).
 #[utoipa::path(
     post,
     path = "/v1/images/generations",
     request_body = ImagesGenerationRequest,
     responses(
         (status = 200, description = "Generated images (base64 PNG)", body = ImagesGenerationResponse),
-        (status = 400, description = "Bad size or response_format", body = OpenAiError),
+        (status = 400, description = "Bad size, response_format, sampler, scheduler, or cfg_scale", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Generation failed", body = OpenAiError)
     )
 )]
+/// One PNG generation under `spawn_blocking` (GPU work off the async
+/// runtime, like every other GPU route). Returns the encoded container
+/// bytes or the backend failure.
+async fn generate_image_bytes(
+    pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
+    txt2img: honkbox_sd_core::Txt2ImgRequest,
+) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || {
+        let img = pipeline.generate(&txt2img)?;
+        honkbox_sd_core::encode_image(img, honkbox_sd_core::OutputFormat::Png)
+    })
+    .await
+    .map_err(|err| format!("generation task failed: {err}"))?
+    .map_err(|err| err.to_string())
+}
+
+/// Sidecar `scheduler` name for a resolved recipe: the fixed recipe's
+/// discrete schedule keeps the historical `normal` recording name;
+/// explicit requests record the sd.cpp wire spelling.
+fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> String {
+    if scheduler == honkbox_sd_core::Scheduler::Discrete {
+        honkbox_sd_core::SCHEDULER.to_string()
+    } else {
+        scheduler.name().to_string()
+    }
+}
+
 async fn post_images_generations(
     State(config): State<AppConfig>,
     Json(req): Json<ImagesGenerationRequest>,
 ) -> Response {
-    let (width, height, n) = match validate_images_request(&req) {
+    let (width, height, n, recipe) = match validate_images_request(&req) {
         Ok(valid) => valid,
         Err((message, code)) => {
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
@@ -2196,39 +2433,33 @@ async fn post_images_generations(
     let mut images = Vec::with_capacity(n as usize);
     let backend_id = pipeline.backend_id();
     for i in 0..u64::from(n) {
-        let pipeline = Arc::clone(&pipeline);
-        let gen_prompt = prompt.clone();
-        let gen_slug = slug.clone();
-        let outcome =
-            tokio::task::spawn_blocking(move || -> Result<Vec<u8>, honkbox_sd_core::SdError> {
-                let img = pipeline.generate(&honkbox_sd_core::Txt2ImgRequest {
-                    // Per-image seeds keep n>1 outputs distinct while staying
-                    // deterministic per request.
-                    seed: IMAGE_SEED_BASE.wrapping_add(i),
-                    steps: IMAGE_STEPS,
-                    prompt: gen_prompt,
-                    width,
-                    height,
-                    model_slug: gen_slug,
-                    clip: None,
-                    vae: None,
-                })?;
-                honkbox_sd_core::encode_image(img, honkbox_sd_core::OutputFormat::Png)
-            })
-            .await;
-        let bytes = match outcome {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(err)) => {
+        // Per-image seeds keep n>1 outputs distinct while staying
+        // deterministic per request (explicit seed base when given).
+        let seed = recipe.seed_base.wrapping_add(i);
+        let bytes = match generate_image_bytes(
+            Arc::clone(&pipeline),
+            honkbox_sd_core::Txt2ImgRequest {
+                seed,
+                steps: IMAGE_STEPS,
+                prompt: prompt.clone(),
+                width,
+                height,
+                model_slug: slug.clone(),
+                clip: None,
+                vae: None,
+                sampler: Some(recipe.sampler),
+                scheduler: Some(recipe.scheduler),
+                cfg_scale: Some(recipe.cfg_scale),
+                negative_prompt: recipe.negative_prompt.clone(),
+            },
+        )
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(message) => {
                 return openai_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    err.to_string(),
-                    Some("generation_failed"),
-                );
-            }
-            Err(err) => {
-                return openai_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("generation task failed: {err}"),
+                    message,
                     Some("generation_failed"),
                 );
             }
@@ -2238,12 +2469,16 @@ async fn post_images_generations(
             &crate::jobs::BundleInputs {
                 model_slug: slug.clone(),
                 prompt: prompt.clone(),
-                seed: IMAGE_SEED_BASE.wrapping_add(i),
+                seed,
                 steps: IMAGE_STEPS,
                 width,
                 height,
                 format: honkbox_sd_core::OutputFormat::Png,
                 backend_id,
+                sampler: recipe.sampler.name().to_string(),
+                scheduler: image_scheduler_name(recipe.scheduler),
+                cfg_scale: recipe.cfg_scale,
+                negative_prompt: recipe.negative_prompt.clone(),
             },
             &bytes,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -3253,15 +3488,77 @@ struct AudioSampleRateQuery {
     sample_rate: Option<u32>,
 }
 
+/// Map a Kokoro voice-id prefix to `(language, gender)` metadata.
+/// Kokoro ids are `<lang><gender>_<name>`: `a`/`b` US/GB English, `e` es,
+/// `f` fr, `h`/`z` zh, `i` it, `j` ja, `p` pt-BR; `f` female, `m` male.
+fn kokoro_voice_meta(id: &str) -> (&'static str, &'static str) {
+    let mut chars = id.chars();
+    let lang = chars.next();
+    let gender = chars.next();
+    let language = match lang {
+        Some('a') => "en-US",
+        Some('b') => "en-GB",
+        Some('e') => "es-ES",
+        Some('f') => "fr-FR",
+        Some('h' | 'z') => "zh-CN",
+        Some('i') => "it-IT",
+        Some('j') => "ja-JP",
+        Some('p') => "pt-BR",
+        _ => "unknown",
+    };
+    let gender = match gender {
+        Some('f') => "female",
+        Some('m') => "male",
+        _ => "unknown",
+    };
+    (language, gender)
+}
+
+/// `GET /v1/audio/voices`: the supported TTS voice set as an OpenAI-style
+/// list (`{object: "list", data: [{object: "voice", …}]}`). The Kokoro
+/// backend cannot enumerate voices at runtime, so this serves the
+/// statically documented `KOKORO_VOICES` set — honest, no model loaded,
+/// no state. `data[].id` values are exactly what `/v1/audio/speech`
+/// accepts as `voice`.
+#[utoipa::path(
+    get,
+    path = "/v1/audio/voices",
+    responses((status = 200, description = "Supported TTS voices", body = VoiceList))
+)]
+async fn get_audio_voices() -> Response {
+    let data = honkbox_audio_worker::KOKORO_VOICES
+        .iter()
+        .map(|id| {
+            let (language, gender) = kokoro_voice_meta(id);
+            Voice {
+                id: (*id).to_owned(),
+                object: "voice".to_owned(),
+                language: language.to_owned(),
+                gender: gender.to_owned(),
+            }
+        })
+        .collect();
+    Json(VoiceList {
+        object: "list".to_owned(),
+        data,
+    })
+    .into_response()
+}
+
 /// `POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as
-/// `/v1/synthesize`; returns `audio/wav` bytes. `model` optional (server
-/// default TTS), `voice` passed through, `response_format` only `"wav"`.
+/// `/v1/synthesize`. `model` optional (server default TTS), `voice` passed
+/// through; `response_format` is `"wav"` (default, RIFF/WAVE container) or
+/// `"pcm"` — raw little-endian signed 16-bit mono samples with **no**
+/// container: the worker already returns mono PCM16, so the pcm path
+/// serializes the exact same samples minus the 44-byte RIFF header (`OpenAI`
+/// pcm semantics). `response_format` accepts `wav` (default) or `pcm`.
 #[utoipa::path(
     post,
     path = "/v1/audio/speech",
     request_body = SpeechRequest,
     responses(
-        (status = 200, description = "WAV audio", content_type = "audio/wav"),
+        (status = 200, description = "WAV audio (RIFF container)", content_type = "audio/wav"),
+        (status = 200, description = "Raw s16le mono PCM (pcm response_format; no container)", content_type = "audio/pcm-s16le"),
         (status = 400, description = "Empty input, unknown model, or unsupported response_format", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Synthesis failed", body = OpenAiError)
@@ -3271,16 +3568,19 @@ async fn post_audio_speech(
     State(config): State<AppConfig>,
     Json(req): Json<SpeechRequest>,
 ) -> Response {
-    match req.response_format.as_deref() {
-        None | Some("wav") => {}
+    let pcm_out = match req.response_format.as_deref() {
+        None | Some("wav") => false,
+        Some("pcm") => true,
         Some(other) => {
             return openai_error_response(
                 StatusCode::BAD_REQUEST,
-                format!("unsupported response_format {other:?}: only \"wav\" is produced"),
+                format!(
+                    "unsupported response_format {other:?}: only \"wav\" and \"pcm\" are produced"
+                ),
                 None,
             );
         }
-    }
+    };
     if req.input.trim().is_empty() {
         return openai_error_response(
             StatusCode::BAD_REQUEST,
@@ -3311,6 +3611,14 @@ async fn post_audio_speech(
         }
         Err((code, message)) => return openai_error_response(code, message, None),
     };
+    if pcm_out {
+        // Raw s16le: the exact samples the wav path wraps, header omitted.
+        let mut raw = Vec::with_capacity(audio.pcm16.len() * 2);
+        for sample in &audio.pcm16 {
+            raw.extend_from_slice(&sample.to_le_bytes());
+        }
+        return ([(header::CONTENT_TYPE, "audio/pcm-s16le")], raw).into_response();
+    }
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
     ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response()
 }

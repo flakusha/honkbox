@@ -137,6 +137,150 @@
         }
       }
     },
+    "/v1/audio/speech": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as\n`/v1/synthesize`. `model` optional (server default TTS), `voice` passed\nthrough; `response_format` is `\"wav\"` (default, RIFF/WAVE container) or\n`\"pcm\"` — raw little-endian signed 16-bit mono samples with **no**\ncontainer: the worker already returns mono PCM16, so the pcm path\nserializes the exact same samples minus the 44-byte RIFF header\n(OpenAI pcm semantics).",
+        "operationId": "post_audio_speech",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Raw s16le mono PCM (pcm response_format; no container)",
+            "content": {
+              "audio/pcm-s16le": {}
+            }
+          },
+          "400": {
+            "description": "Empty input, unknown model, or unsupported response_format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Synthesis failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart\nwrapper over the same STT worker as `/v1/transcribe`. `file` is\nrequired (`audio/wav`, RIFF-sniffed `application/octet-stream`, or\n`audio/pcm-s16le` + `sample_rate` form field / query); `model` is\noptional (server default STT); `language` optional; `response_format`\n`json` (default) or `verbose_json` (adds the worker's timestamped\nsegments). Errors are `OpenAI` envelopes; only a request that is not\nmultipart at all gets axum's transport-level 400 before the handler\nruns. The native route is unchanged.",
+        "operationId": "post_audio_transcriptions",
+        "requestBody": {
+          "description": "multipart/form-data: file, model?, language?, response_format?, sample_rate?",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptionText"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing file, bad audio, unknown model, or missing sample_rate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported audio content type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Transcription failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/voices": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/audio/voices`: the supported TTS voice set as an OpenAI-style\nlist (`{object: \"list\", data: [{object: \"voice\", …}]}`). The Kokoro\nbackend cannot enumerate voices at runtime, so this serves the\nstatically documented `KOKORO_VOICES` set — honest, no model loaded,\nno state. `data[].id` values are exactly what `/v1/audio/speech`\naccepts as `voice`.",
+        "operationId": "get_audio_voices",
+        "responses": {
+          "200": {
+            "description": "Supported TTS voices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/catalog": {
       "get": {
         "tags": [],
@@ -458,6 +602,66 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ModelCatalog"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models/{slug}": {
+      "delete": {
+        "tags": [],
+        "summary": "`DELETE /v1/models/{slug}` (NewItems §1): explicit, **permanent** model\ndeletion — the weight file (or directory) is removed from disk and the\ncatalog entry is dropped; there is no trash and no undo, recovery means\ndownloading the model again. Guardrails: an unknown slug (alias or\nregistry slug) is a 404; a resident or busy model (chat warm-set\nresidency: resident, pinned, or in-flight) is refused with 409 — unload\nit first (`POST /v1/models/{slug}/unload`). Success removes the file(s),\nre-scans the registry roots (best-effort SQLite cache sync) and drops\nthe entry from the shared catalog snapshot, then returns 200 naming\nexactly what was removed.",
+        "operationId": "delete_model",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "description": "Operator alias or registry slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model deleted permanently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDeleteResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown slug or alias",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Model is resident, pinned, or busy; unload it first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "File removal failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
                 }
               }
             }
@@ -1285,11 +1489,19 @@
       },
       "ImagesGenerationRequest": {
         "type": "object",
-        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.",
+        "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).",
         "required": [
           "prompt"
         ],
         "properties": {
+          "cfg_scale": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Classifier-free guidance scale; accepted range `[1.0, 30.0]`, values\noutside it are rejected with a 400 (never silently clamped)."
+          },
           "model": {
             "type": [
               "string",
@@ -1306,6 +1518,13 @@
             "description": "Number of images (1-4; above 4 is clamped down with a warn, never a\n400 — the same clamp-not-reject policy as `ttl_seconds`).",
             "minimum": 0
           },
+          "negative_prompt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Negative prompt (empty/omitted = none)."
+          },
           "prompt": {
             "type": "string",
             "description": "Text prompt (required)."
@@ -1316,6 +1535,29 @@
               "null"
             ],
             "description": "Output encoding; only `\"b64_json\"` is supported."
+          },
+          "sampler": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sampler override (sd.cpp name, e.g. `\"euler\"`, `\"dpm++2m\"`);\nunknown names are rejected with a 400 listing the accepted values."
+          },
+          "scheduler": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Scheduler override (sd.cpp name, e.g. `\"discrete\"`, `\"karras\"`);\nunknown names are rejected with a 400 listing the accepted values."
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "RNG seed base; per-image seed = `seed + i`. Omitted = the fixed\nserver-chosen base (deterministic across identical requests).",
+            "minimum": 0
           },
           "size": {
             "type": [
@@ -1592,6 +1834,32 @@
           "tool_calling": {
             "type": "boolean",
             "description": "OpenAI-style tool calling; `capabilities.tool_calling` mirrored flat."
+          }
+        }
+      },
+      "ModelDeleteResult": {
+        "type": "object",
+        "description": "Explicit model deletion result (`DELETE /v1/models/{slug}`). Deletion\nis **permanent**: the weight file(s) are removed from disk and the\ncatalog entry is dropped; recovery means downloading again.",
+        "required": [
+          "deleted",
+          "slug",
+          "removed"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "description": "Always `true` on the 200 path."
+          },
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "On-disk paths that were removed."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Registry slug the request resolved to."
           }
         }
       },
@@ -2295,7 +2563,7 @@
       },
       "SpeechRequest": {
         "type": "object",
-        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` currently only accepts `\"wav\"` (the\nonly format honkbox produces; anything else is an explicit 400).",
+        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` accepts `\"wav\"` (default, RIFF/WAVE\ncontainer) or `\"pcm\"` (raw little-endian signed 16-bit mono samples,\nOpenAI pcm semantics — no container, no header); anything else is an\nexplicit 400.",
         "required": [
           "input"
         ],
@@ -2316,7 +2584,7 @@
               "string",
               "null"
             ],
-            "description": "Output format; only `\"wav\"` is supported."
+            "description": "Output format: `\"wav\"` (default) or `\"pcm\"` (raw s16le, no\ncontainer)."
           },
           "voice": {
             "type": [
@@ -2580,6 +2848,55 @@
           "version": {
             "type": "string",
             "description": "Crate version, from `CARGO_PKG_VERSION`."
+          }
+        }
+      },
+      "Voice": {
+        "type": "object",
+        "description": "One TTS voice entry of `GET /v1/audio/voices` (`data[]`).",
+        "required": [
+          "id",
+          "object",
+          "language",
+          "gender"
+        ],
+        "properties": {
+          "gender": {
+            "type": "string",
+            "description": "`female` or `male`, from the Kokoro prefix."
+          },
+          "id": {
+            "type": "string",
+            "description": "Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`)."
+          },
+          "language": {
+            "type": "string",
+            "description": "Language/locale tag derived from the Kokoro voice prefix\n(e.g. `en-US`)."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"voice\"` (OpenAI-style entry tag)."
+          }
+        }
+      },
+      "VoiceList": {
+        "type": "object",
+        "description": "`GET /v1/audio/voices` response: OpenAI-style list envelope over the\nstatically documented Kokoro voice set (the backend cannot enumerate\nvoices at runtime, so this is the *supported* set — served without any\nmodel loaded).",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Voice"
+            },
+            "description": "The supported voices."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"`."
           }
         }
       }

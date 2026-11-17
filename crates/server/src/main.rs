@@ -618,6 +618,11 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         model_slug: model.clone(),
         clip,
         vae,
+        // CLI keeps the fixed recipe (no recipe flags on `generate`).
+        sampler: None,
+        scheduler: None,
+        cfg_scale: None,
+        negative_prompt: None,
     }));
     let format = match format {
         Format::Png => honkbox_sd_core::OutputFormat::Png,
@@ -642,6 +647,10 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
             height,
             format,
             backend_id: pipeline.backend_id(),
+            sampler: honkbox_sd_core::SAMPLER.to_string(),
+            scheduler: honkbox_sd_core::SCHEDULER.to_string(),
+            cfg_scale: 7.0,
+            negative_prompt: None,
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

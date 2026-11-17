@@ -290,3 +290,133 @@ async fn job_bundle_written_per_generation() {
     }
     std::fs::remove_dir_all(&data_dir).ok();
 }
+
+/// An unknown sampler name is an explicit 400 naming it (with the accepted
+/// list), never a silent substitution of the default recipe.
+#[tokio::test]
+async fn unknown_sampler_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "sampler": "snooze"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unknown_sampler", "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("snooze"), "{message}");
+    assert!(message.contains("euler"), "lists accepted: {message}");
+}
+
+/// An unknown scheduler name is an explicit 400 naming it.
+#[tokio::test]
+async fn unknown_scheduler_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = images(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        json!({"prompt": "hi", "scheduler": "sundial"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unknown_scheduler", "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("sundial"), "{message}");
+    assert!(message.contains("karras"), "lists accepted: {message}");
+}
+
+/// `cfg_scale` outside `[1.0, 30.0]` is rejected with a 400 (never
+/// silently clamped — the opposite policy of `n`, documented on the DTO).
+#[tokio::test]
+async fn cfg_scale_out_of_range_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    for value in [0.9, 30.5] {
+        let (status, body) = images(app.clone(), json!({"prompt": "hi", "cfg_scale": value})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "cfg {value}: {body}");
+        assert_eq!(body["error"]["code"], "invalid_cfg_scale", "{body}");
+    }
+    // The accepted bounds themselves pass.
+    for value in [1.0, 30.0] {
+        let (status, _) = images(
+            app.clone(),
+            json!({"prompt": "hi", "cfg_scale": value, "size": "16x16"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "cfg {value}");
+    }
+}
+
+/// Omitting every recipe field is byte-identical to passing the documented
+/// defaults explicitly (euler + discrete + CFG 7.0 + seed base 42).
+#[tokio::test]
+async fn defaults_match_explicit_recipe() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    let (s1, b1) = images(app.clone(), json!({"prompt": "hi", "size": "16x16"})).await;
+    let (s2, b2) = images(
+        app,
+        json!({
+            "prompt": "hi",
+            "size": "16x16",
+            "sampler": "euler",
+            "scheduler": "discrete",
+            "cfg_scale": 7.0,
+            "seed": 42
+        }),
+    )
+    .await;
+    assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK));
+    assert_eq!(b1["data"][0]["b64_json"], b2["data"][0]["b64_json"]);
+}
+
+/// Same explicit seed = byte-identical stub output; a different seed
+/// differs (seed determinism through the new passthrough field).
+#[tokio::test]
+async fn seed_determinism() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None);
+    let body_for = |app: Router, seed: Value| async move {
+        images(app, json!({"prompt": "hi", "size": "16x16", "seed": seed})).await
+    };
+    let (_, a) = body_for(app.clone(), json!(7)).await;
+    let (_, b) = body_for(app.clone(), json!(7)).await;
+    let (_, c) = body_for(app, json!(8)).await;
+    assert_eq!(a["data"][0]["b64_json"], b["data"][0]["b64_json"]);
+    assert_ne!(a["data"][0]["b64_json"], c["data"][0]["b64_json"]);
+}
+
+/// Recipe overrides land in the job bundle sidecar: the actual recipe used
+/// is recorded (sampler, scheduler, CFG, negative prompt, explicit seed).
+#[tokio::test]
+async fn bundle_records_requested_recipe() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-img-recipe-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let (status, _) = images(
+        app_with(
+            catalog_with(&[sd_entry("comfy:f.safetensors")]),
+            Some(data_dir.clone()),
+        ),
+        json!({
+            "prompt": "recipe me",
+            "size": "16x16",
+            "sampler": "dpm++2m",
+            "scheduler": "karras",
+            "cfg_scale": 12.0,
+            "negative_prompt": "blurry",
+            "seed": 9
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.find_map(Result::ok).expect("one bundle").path();
+    let side: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(side["sampler"], "dpm++2m");
+    assert_eq!(side["scheduler"], "karras");
+    assert_eq!(side["cfg_scale"], 12.0);
+    assert_eq!(side["negative_prompt"], "blurry");
+    assert_eq!(side["seed"], 9);
+    std::fs::remove_dir_all(&data_dir).ok();
+}

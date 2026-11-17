@@ -38,6 +38,14 @@ pub struct BundleInputs {
     pub format: honkbox_sd_core::OutputFormat,
     /// `SdPipeline::backend_id` (currently `"stub"`).
     pub backend_id: &'static str,
+    /// Sampler wire name actually used (e.g. `"euler"`).
+    pub sampler: String,
+    /// Scheduler wire name actually used (`"normal"` = vendor discrete).
+    pub scheduler: String,
+    /// CFG guidance scale actually used (default 7.0).
+    pub cfg_scale: f32,
+    /// Negative prompt actually used; `None`/empty = none.
+    pub negative_prompt: Option<String>,
 }
 
 /// Parse `WxH` (e.g. `1024x1024`) into `(width, height)`; zero dims rejected.
@@ -82,13 +90,19 @@ pub fn write_bundle_into(
         "steps": inputs.steps,
         "size": size,
         "format": inputs.format.name(),
+        "sampler": inputs.sampler,
+        "scheduler": inputs.scheduler,
+        "cfg_scale": inputs.cfg_scale,
+        "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
     });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
         "seed": inputs.seed,
         "steps": inputs.steps,
-        "sampler": "euler",
-        "scheduler": "normal",
+        "sampler": inputs.sampler,
+        "scheduler": inputs.scheduler,
+        "cfg_scale": inputs.cfg_scale,
+        "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
         "size": size,
         "model_slug": inputs.model_slug,
         "format": inputs.format.name(),
@@ -301,6 +315,10 @@ mod tests {
             height: 16,
             format: honkbox_sd_core::OutputFormat::Png,
             backend_id: "stub",
+            sampler: "euler".to_string(),
+            scheduler: "normal".to_string(),
+            cfg_scale: 7.0,
+            negative_prompt: None,
         }
     }
 
@@ -366,6 +384,27 @@ mod tests {
     }
 
     #[test]
+    fn sidecar_records_requested_recipe() {
+        let dir = std::env::temp_dir().join(format!("honkbox-jobs-recipe-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+        let mut bundle = inputs();
+        bundle.sampler = "dpm++2m".to_string();
+        bundle.scheduler = "karras".to_string();
+        bundle.cfg_scale = 4.5;
+        bundle.negative_prompt = Some("blurry".to_string());
+        write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert_eq!(side["sampler"], "dpm++2m");
+        assert_eq!(side["scheduler"], "karras");
+        assert_eq!(side["cfg_scale"], 4.5);
+        assert_eq!(side["negative_prompt"], "blurry");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn bundle_layout_exact() {
         let dir = std::env::temp_dir().join(format!("honkbox-jobs-test-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("test dir");
@@ -385,6 +424,8 @@ mod tests {
                 .expect("sidecar json");
         assert_eq!(side["sampler"], "euler");
         assert_eq!(side["scheduler"], "normal");
+        assert_eq!(side["cfg_scale"], 7.0);
+        assert_eq!(side["negative_prompt"], "");
         assert_eq!(side["backend_id"], "stub");
         assert_eq!(side["format"], "png");
         assert_eq!(side["model_slug"], "comfy:checkpoints/x.safetensors");

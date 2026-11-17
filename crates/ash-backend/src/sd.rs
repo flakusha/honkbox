@@ -92,6 +92,10 @@ mod tests {
             model_slug: "comfy:checkpoints/sdxl.safetensors".to_owned(),
             clip: None,
             vae: None,
+            sampler: None,
+            scheduler: None,
+            cfg_scale: None,
+            negative_prompt: None,
         };
         let err = pipeline
             .generate(&req)

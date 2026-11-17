@@ -85,12 +85,31 @@ export function mountPlayground(host: HTMLElement): void {
   temperature.max = "2";
   temperature.step = "0.1";
   // Image generation (REQ-10): POST /v1/images/generations, render the
-  // returned base64 PNG inline.
+  // returned base64 PNG inline. Optional recipe knobs: sampler/scheduler
+  // (sd.cpp names), CFG scale, negative prompt, seed — empty = server
+  // default recipe.
   const imagePrompt = el("input");
   imagePrompt.placeholder = "image prompt";
   const imageSize = el("input");
   imageSize.placeholder = "size";
   imageSize.value = "1024x1024";
+  const imageSampler = el("input");
+  imageSampler.placeholder = "sampler (euler, dpm++2m, …)";
+  const imageScheduler = el("input");
+  imageScheduler.placeholder = "scheduler (discrete, karras, …)";
+  const imageCfg = el("input");
+  imageCfg.placeholder = "cfg_scale (1–30)";
+  imageCfg.type = "number";
+  imageCfg.min = "1";
+  imageCfg.max = "30";
+  imageCfg.step = "0.5";
+  const imageNegative = el("input");
+  imageNegative.placeholder = "negative prompt";
+  const imageSeed = el("input");
+  imageSeed.placeholder = "seed";
+  imageSeed.type = "number";
+  imageSeed.min = "0";
+  imageSeed.step = "1";
   const image = el("button", "Generate image");
   const imageOut = el("div");
   image.addEventListener("click", () => {
@@ -98,6 +117,8 @@ export function mountPlayground(host: HTMLElement): void {
     if (!prompt || image.disabled) return;
     image.disabled = true;
     image.textContent = "generating…";
+    const cfg = parseKnob(imageCfg.value);
+    const seed = parseKnob(imageSeed.value);
     fetch("/v1/images/generations", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -107,6 +128,11 @@ export function mountPlayground(host: HTMLElement): void {
         size: imageSize.value.trim() || "1024x1024",
         n: 1,
         response_format: "b64_json",
+        sampler: imageSampler.value.trim() || undefined,
+        scheduler: imageScheduler.value.trim() || undefined,
+        cfg_scale: cfg ?? undefined,
+        negative_prompt: imageNegative.value.trim() || undefined,
+        seed: seed === null ? undefined : seed,
       }),
     })
       .then(async (res) => {
@@ -137,7 +163,19 @@ export function mountPlayground(host: HTMLElement): void {
         image.textContent = "Generate image";
       });
   });
-  knobs.append(maxTokens, temperature, imagePrompt, imageSize, image, imageOut);
+  knobs.append(
+    maxTokens,
+    temperature,
+    imagePrompt,
+    imageSize,
+    imageSampler,
+    imageScheduler,
+    imageCfg,
+    imageNegative,
+    imageSeed,
+    image,
+    imageOut,
+  );
 
   // Route toggle: native /v1/chat* by default; checked sends the same chat
   // surface through POST /v1/chat/completions (OpenAI shape, stream:true).
