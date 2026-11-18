@@ -16,6 +16,9 @@ mod catalog;
 #[path = "../src/config.rs"]
 mod config;
 #[allow(dead_code)]
+#[path = "../src/container.rs"]
+mod container;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[allow(dead_code)]
@@ -27,10 +30,20 @@ mod jobs;
 #[allow(dead_code)]
 #[path = "../src/jobs_registry.rs"]
 mod jobs_registry;
+#[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
+#[allow(dead_code)]
+#[path = "../src/ora.rs"]
+mod ora;
+#[allow(dead_code)]
+#[path = "../src/raster.rs"]
+mod raster;
 #[path = "../src/routes.rs"]
 mod routes;
+#[allow(dead_code)]
+#[path = "../src/svg.rs"]
+mod svg;
 #[path = "../src/swap.rs"]
 mod swap;
 
