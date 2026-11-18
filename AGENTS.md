@@ -71,7 +71,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 - **Bun ≥1.4.4 only** for JS (no Node/npm/yarn); `bun install --frozen-lockfile` in CI.
 - Rust via `rust-toolchain.toml` (rustup-managed); all cargo invocations use `--locked`.
-- Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), generated-file tripwire (`packages/web-ui/src/gen/`), hook self-check. Markdown is intentionally NOT dprint-gated.
+- Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
 - Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
 
 ## Testing & QA

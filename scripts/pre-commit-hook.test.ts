@@ -86,6 +86,8 @@ type Harness = {
   hook: () => Result;
   stage: (rel: string, content: string) => Promise<void>;
   commit: () => Result;
+  modify: (rel: string, content: string) => Promise<void>;
+  remove: (rel: string) => Promise<void>;
   calls: () => Promise<string>;
   bunx: (dprint: DprintMode, oxlint: LintMode) => Promise<void>;
   cargo: (mode: CargoMode) => Promise<void>;
@@ -142,7 +144,6 @@ async function setup(): Promise<Harness> {
         "shift",
         "for f in \"$@\"; do",
         "  [ \"$f\" = fmt ] && continue",
-        "  [ \"$f\" = --allow-no-files ] && continue",
         "  [ \"$f\" = -- ] && continue",
         "  printf '%s\\n' '// formatted by hook test' > \"$f\"",
         "done",
@@ -178,6 +179,14 @@ async function setup(): Promise<Harness> {
     expect(run(["git", "add", "--", rel]).code).toBe(0);
   }
 
+  async function modify(rel: string, content: string): Promise<void> {
+    await fs.writeFile(path.join(dir, rel), content);
+  }
+
+  async function remove(rel: string): Promise<void> {
+    await fs.unlink(path.join(dir, rel));
+  }
+
   async function calls(): Promise<string> {
     try {
       return await fs.readFile(log, "utf8");
@@ -196,6 +205,8 @@ async function setup(): Promise<Harness> {
     hook: () => run(["sh", HOOK_PATH]),
     stage,
     commit: () => run(["git", "commit", "-q", "-m", "base"]),
+    modify,
+    remove,
     calls,
     bunx,
     cargo,
@@ -327,27 +338,15 @@ test("rename with an edit is still gated by the cargo fmt check", async () => {
   expect((await h.calls()).split("\n")).toContain("cargo fmt --all -- --check");
 });
 
-test("staged generated files are rejected", async () => {
+test("staged generated files pass pre-commit; drift is gated by pre-push", async () => {
   const h = await setup();
   await h.bunx("pass", "pass");
-  await h.stage("packages/web-ui/src/gen/api-types.ts", "// hand edit\n");
+  await h.stage("packages/web-ui/src/gen/api-types.ts", "// generated\n");
+  await h.stage("packages/web-ui/src/gen/openapi.json", "{}\n");
 
   const result = h.hook();
-  expect(result.code).toBe(1);
-  expect(result.out).toContain(
-    "FAIL: generated files staged under packages/web-ui/src/gen/ - run codegen, never hand-edit",
-  );
-});
-
-test("staged generated non-code file blocks despite skip branch", async () => {
-  const h = await setup();
-  await h.bunx("pass", "pass");
-  await h.stage("packages/web-ui/src/gen/blob.bin", "binary-ish\n");
-
-  const result = h.hook();
-  expect(result.code).toBe(1);
-  expect(result.out).toContain("FAIL: generated files staged under packages/web-ui/src/gen/");
-  expect(result.out).toContain("1 check(s) failed - commit blocked");
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("PASS: dprint fmt (restaged)");
 });
 
 test("dprint shim receives operands after the -- separator", async () => {
@@ -359,6 +358,7 @@ test("dprint shim receives operands after the -- separator", async () => {
   expect(result.code).toBe(0);
   expect(result.out).toContain("PASS: dprint fmt (restaged)");
   expect(await h.calls()).toContain("-- -weird.ts");
+  expect(await h.calls()).not.toContain("--allow-no-files");
 });
 
 test("staged deletion of a non-generated .rs file passes", async () => {
@@ -374,7 +374,7 @@ test("staged deletion of a non-generated .rs file passes", async () => {
   expect(result.out).toContain("No staged files for file gates - skipping");
 });
 
-test("staged deletion of a generated .ts file blocks", async () => {
+test("staged deletion of a generated file passes pre-commit; drift is gated by pre-push", async () => {
   const h = await setup();
   await h.bunx("pass", "pass");
   await h.stage("packages/web-ui/src/gen/api.ts", "// generated\n");
@@ -384,11 +384,8 @@ test("staged deletion of a generated .ts file blocks", async () => {
   ).toBe(0);
 
   const result = h.hook();
-  expect(result.code).toBe(1);
-  expect(result.out).toContain(
-    "FAIL: staged deletion of generated file under packages/web-ui/src/gen/",
-  );
-  expect(result.out).toContain("1 check(s) failed - commit blocked");
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("No staged files for file gates - skipping");
 });
 
 test("independent failures are counted separately", async () => {
@@ -403,4 +400,28 @@ test("independent failures are counted separately", async () => {
   expect(result.out).toContain("FAIL: dprint fmt - report:");
   expect(result.out).toContain("FAIL: sh -n syntax error in broken.sh");
   expect(result.out).toContain("2 check(s) failed - commit blocked");
+});
+
+test("partially staged file is rejected before tools read the worktree", async () => {
+  const h = await setup();
+  await h.bunx("rewrite", "pass");
+  await h.stage("a.ts", "export const value = 1;\n");
+  await h.modify("a.ts", "export const value = 2;\n");
+
+  const result = h.hook();
+  expect(result.code).toBe(1);
+  expect(result.out).toContain("FAIL: staged path has unstaged changes: a.ts");
+  expect(await h.calls()).not.toContain("dprint");
+});
+
+test("staged file missing from the worktree is rejected", async () => {
+  const h = await setup();
+  await h.bunx("rewrite", "pass");
+  await h.stage("a.ts", "export const value = 1;\n");
+  await h.remove("a.ts");
+
+  const result = h.hook();
+  expect(result.code).toBe(1);
+  expect(result.out).toContain("FAIL: staged path missing from worktree: a.ts");
+  expect(await h.calls()).not.toContain("dprint");
 });

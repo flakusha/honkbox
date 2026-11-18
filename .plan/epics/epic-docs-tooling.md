@@ -18,8 +18,8 @@ being built in this round.
   Markdown, decided only when there is content to publish.
 - `TASK-markdown-gate-decision.md` — dprint Markdown plugin + link check + CI gate.
 - `TASK-precommit-gates.md` — hardened pre-commit gates ported from the audited
-  loop-lore hook (tool guards, generated-file tripwire, captured reports,
-  restage verification).
+  loop-lore hook (tool guards, partial-staging guard, captured reports,
+  restage verification); generated drift stays in pre-push/CI.
 
 ## Acceptance
 

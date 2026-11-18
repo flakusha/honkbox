@@ -19,14 +19,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # Staged paths (renames and type changes included), newline-delimited.
 STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACMRT || true)
 
-# Generated-file tripwire: never allow hand edits under gen/.
-if printf '%s\n' "$STAGED_ALL" | grep -q '^packages/web-ui/src/gen/'; then
-  echo "FAIL: generated files staged under packages/web-ui/src/gen/ - run codegen, never hand-edit"
-  failures=$((failures + 1))
-fi
 
 # Bucket the staged files into per-type lists, one path per line
-# (paths may contain spaces; never expanded unquoted).
+# (paths may contain spaces; never expanded unquoted). The tools below read
+# the worktree, so a partially staged path is rejected: restaging it would
+# commit edits the user did not stage.
 : >"$TMPDIR/fmt.list"
 : >"$TMPDIR/ts.list"
 : >"$TMPDIR/sh.list"
@@ -34,6 +31,16 @@ RS=0
 HOOK_SELF=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
+  if ! [ -e "$f" ] && ! [ -L "$f" ]; then
+    echo "FAIL: staged path missing from worktree: $f - restore it before committing"
+    failures=$((failures + 1))
+    continue
+  fi
+  if ! git diff --quiet -- "$f"; then
+    echo "FAIL: staged path has unstaged changes: $f - stage or restore them before committing"
+    failures=$((failures + 1))
+    continue
+  fi
   case "$f" in
     *.ts|*.tsx)
       printf '%s\n' "$f" >>"$TMPDIR/fmt.list"
@@ -58,15 +65,6 @@ if [ "$HOOK_SELF" -eq 0 ]; then
   fi
 fi
 
-# Generated-file deletions: staged deletions are not in the bucket loop (they
-# would trigger tool gates with no workable path); scan them separately.
-# Rename-source coverage remains a documented limitation. Run this BEFORE the
-# all-empty skip below so a deletion-only commit still increments the failure
-# count and cannot short-circuit.
-if git diff --cached --name-only --diff-filter=D | grep -q -E '^packages/web-ui/src/gen/.*\.(ts|tsx|rs)$'; then
-  echo "FAIL: staged deletion of generated file under packages/web-ui/src/gen/ - restore it or delete via codegen"
-  failures=$((failures + 1))
-fi
 
 if ! [ -s "$TMPDIR/fmt.list" ] && ! [ -s "$TMPDIR/ts.list" ] && [ "$RS" -eq 0 ] \
    && ! [ -s "$TMPDIR/sh.list" ] && [ "$HOOK_SELF" -eq 0 ] && [ "$failures" -eq 0 ]; then
@@ -85,7 +83,7 @@ if [ -s "$TMPDIR/fmt.list" ]; then
       while IFS= read -r f; do
         [ -n "$f" ] && set -- "$@" "$f"
       done < "$TMPDIR/fmt.list"
-      if bunx dprint fmt --allow-no-files -- "$@" >"$TMPDIR/dprint.log" 2>&1; then
+      if bunx dprint fmt -- "$@" >"$TMPDIR/dprint.log" 2>&1; then
         git add -- "$@" || exit 2
       else
         exit 1
