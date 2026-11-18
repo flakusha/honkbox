@@ -142,3 +142,16 @@ pub fn make_tts(
         }
     }
 }
+
+/// Recognition pipeline (recognition tickets): the rxing barcode backend
+/// when this build compiles it (`barcode` feature — default-on, pure-Rust
+/// CPU decode), otherwise the stub. No CLI selection in stage 1: barcode
+/// decode needs no model, and OCR engines land with their own tickets.
+#[must_use]
+pub fn make_recognition() -> Arc<dyn honkbox_recognition_worker::RecognitionPipeline> {
+    if honkbox_recognition_worker::BARCODE_COMPILED {
+        Arc::new(honkbox_recognition_worker::BarcodeRecognition)
+    } else {
+        Arc::new(honkbox_recognition_worker::StubRecognition)
+    }
+}
