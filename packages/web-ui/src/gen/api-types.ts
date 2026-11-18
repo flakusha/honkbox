@@ -251,12 +251,15 @@ export type OpenAiChatRequest = {
   tools?: Array<ChatTool> | null;
   /**
    * `"auto"` / `"none"` / `"required"` / named. Only `"none"` changes
-   * behavior; everything else is clamped to `auto`.
+   * behavior; everything else is clamped to `auto` (accepted, never a
+   * 400 — see `capabilities.tools` on `GET /v1/capabilities` for the
+   * machine-readable honored/clamped vocabulary).
    */
   tool_choice?: ToolChoiceSpec | null;
   /**
-   * Accepted and ignored: honkbox produces at most one tool call per
-   * turn. Present so parallel-`true` clients are not rejected.
+   * Accepted and ignored (disclosed: `capabilities.tools.
+   * parallel_tool_calls` is `false`): honkbox produces at most one tool
+   * call per turn. Present so parallel-`true` clients are not rejected.
    */
   parallel_tool_calls?: boolean | null;
   /**
@@ -1503,6 +1506,14 @@ export type Capabilities = {
    */
   image_ops: ImageOpsCapability | null;
   /**
+   * Chat tool-calling fidelity of the `OpenAI` chat surface (REQ-3):
+   * which `tool_choice` values are honored vs clamped, and whether
+   * `parallel_tool_calls` is honored. Present whenever the chat routes
+   * are mounted (always today) — additive optional field per the
+   * version policy above.
+   */
+  tools: ToolCallingCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1687,4 +1698,29 @@ export type QueueKindCapacity = {
    * evicted); `0` = never expires.
    */
   ttl_secs: bigint;
+};
+export type ToolCallingCapability = {
+  /**
+   * `tool_choice` string modes honored verbatim
+   * ([`ToolChoiceSpec::HONORED_MODES`]).
+   */
+  tool_choice_honored: Array<string>;
+  /**
+   * `tool_choice` string modes accepted but clamped to `"auto"`
+   * behavior ([`ToolChoiceSpec::CLAMPED_MODES`]); never a 400. Not
+   * exhaustive: any unrecognized value is accepted and behaves as
+   * `"auto"` too. The named-function form clamps the same way.
+   */
+  tool_choice_clamped: Array<string>;
+  /**
+   * The named-function form (`{"type":"function","function":{"name":…}}`)
+   * is accepted too — and likewise clamped to `"auto"` behavior.
+   */
+  tool_choice_named_function_clamped: boolean;
+  /**
+   * `true` when `parallel_tool_calls` is honored. `false` today: at most
+   * one tool call is produced per turn; the field is still accepted so
+   * parallel-`true` clients are not rejected.
+   */
+  parallel_tool_calls: boolean;
 };

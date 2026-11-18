@@ -5,6 +5,7 @@ mod backends;
 mod catalog;
 mod config;
 mod downloads;
+mod formats;
 mod jobs;
 mod jobs_registry;
 mod logging;

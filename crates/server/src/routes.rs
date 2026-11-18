@@ -45,9 +45,9 @@ use honkbox_api_types::{
     OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, OutputFormatCapability,
     Pill, QueueCapabilities, QueueKindCapacity, ResidentModel, ResponseFormat, ResponseFormatType,
     RunningList, RunningModel, SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest,
-    ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
-    TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
-    Voice, VoiceList,
+    ToolCall, ToolCallType, ToolCallingCapability, ToolChoiceSpec, ToolType, Transcript,
+    TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult,
+    Version, VisionFeature, Voice, VoiceList,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -172,6 +172,7 @@ struct EmbeddedUi;
         ToolType,
         FunctionDefinition,
         ToolChoiceSpec,
+        ToolCallingCapability,
         NamedFunction,
         ResponseFormat,
         ResponseFormatType,
@@ -610,10 +611,15 @@ async fn get_version() -> Json<Version> {
 /// ledger's actual admission knobs — never a prose hard-code, so the
 /// document is always true of the process answering and `/v1/models/refresh`
 /// or a download commit are reflected with no cache to invalidate.
+///
+/// Includes `tools`, the chat tool-choice fidelity note (REQ-3): which
+/// `tool_choice` values `/v1/chat/completions` honors verbatim vs clamps
+/// to `auto`, and that `parallel_tool_calls` is accepted but ignored —
+/// disclosed here instead of silently downgraded at request time.
 #[utoipa::path(
     get,
     path = "/v1/capabilities",
-    responses((status = 200, description = "Server capability contract", body = Capabilities))
+    responses((status = 200, description = "Server capability contract (feature flags, formats, queue knobs, and the chat tool-choice fidelity note)", body = Capabilities))
 )]
 async fn get_capabilities(State(config): State<AppConfig>) -> Json<Capabilities> {
     Json(capabilities_document(&config))
@@ -685,16 +691,21 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
             experimental_ash_sd: cfg!(feature = "experimental-ash-sd"),
         },
         formats: Formats {
-            // Server-VALIDATED ingest: image edits' `image`/`mask` and the
-            // ControlNet `control_image` are PNG magic-sniffed
-            // (`png_dimensions`); vision chat bytes pass through to the
+            // The registry (`crate::formats`) is the single source of truth:
+            // `read` = rows the SD ingest validators accept (edits `image`/
+            // `mask`, ControlNet `control_image` — magic-sniffed through
+            // `identify_png`); vision chat bytes pass through to the
             // projector's own loader and are deliberately not listed.
-            read: vec!["png".to_owned()],
-            write: honkbox_sd_core::OutputFormat::ALL
-                .iter()
-                .map(|format| OutputFormatCapability {
-                    format: format.name().to_owned(),
-                    compression: format.compression_applies(),
+            read: crate::formats::sd_ingest_names()
+                .map(str::to_owned)
+                .collect(),
+            // `write` = the registry's compiled-encoder rows (locked to
+            // sd-core `OutputFormat::ALL` by a routes-level unit test) — a
+            // missing encoder never appears as writable.
+            write: crate::formats::output_rows()
+                .map(|row| OutputFormatCapability {
+                    format: row.name.to_owned(),
+                    compression: row.output_compression,
                 })
                 .collect(),
             limits: FormatLimits {
@@ -736,6 +747,11 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
                 .map(|op| op.label().to_owned())
                 .collect(),
         }),
+        // Tool-choice fidelity (TASK-llm-tool-choice-contract): derived
+        // from the `ToolChoiceSpec` vocabulary consts — the same type the
+        // `resolve_constraints` clamp is defined against — so the document
+        // cannot drift from what `/v1/chat/completions` actually does.
+        tools: Some(ToolCallingCapability::chat_routes()),
     }
 }
 
@@ -2372,7 +2388,8 @@ struct ChatConstraints {
     /// `OpenAI` tools array JSON; `None` = no tools offered.
     tools_json: Option<String>,
     /// `tool_choice` clamped: only `"none"` survives (everything else
-    /// behaves as `auto`).
+    /// behaves as `auto`). The clamp is disclosed machine-readably on
+    /// `GET /v1/capabilities` (`tools`) — never a silent downgrade.
     tool_choice_none: bool,
     /// Extended sampler knobs, wired when present.
     sampler: SamplerParams,
@@ -2387,6 +2404,14 @@ struct ChatConstraints {
 /// An empty conversation is rejected here too: the llama backend refuses
 /// it (`InvalidRequest`), so the route answers 400 up front rather than
 /// surfacing a backend-specific 500 later.
+///
+/// Accepted `tool_choice` vocabulary (`ToolChoiceSpec::HONORED_MODES` /
+/// `CLAMPED_MODES`): `"none"` and `"auto"` are honored verbatim;
+/// `"required"`, `"any"`, and the named-function form are accepted and
+/// clamped to `"auto"` — disclosed on `GET /v1/capabilities` (`tools`),
+/// never a 400. The vendored `llama-cpp-4` binding also exposes a
+/// grammar-enforced `ToolChoice::Required`; it stays clamped here pending
+/// an exact-choice consumer (TASK-llm-tool-choice-contract follow-up).
 fn resolve_constraints(req: &OpenAiChatRequest) -> Result<ChatConstraints, (&'static str, String)> {
     if req.messages.is_empty() {
         return Err((
@@ -2960,18 +2985,21 @@ type ValidatedImages = (
     Option<u8>,
 );
 
-/// Parse the requested output container (omitted = PNG). Unknown names are a
-/// named 400 listing the accepted values (same reject-don't-guess policy as
-/// `response_format`).
-fn parse_output_format(
-    req: &ImagesGenerationRequest,
-) -> Result<honkbox_sd_core::OutputFormat, (String, &'static str)> {
-    let raw = req.output_format.as_deref().unwrap_or("png").trim();
+/// Parse the requested output container against the registry's compiled
+/// encoder rows (omitted = PNG). Unknown names are a named 400 listing the
+/// registry-derived accepted values (same reject-don't-guess policy as
+/// `response_format`). The wire name → enum mapping stays in THIS module
+/// (the pre-registry call surface — the `#[path]`-included registry module
+/// must not link the native backends); alignment with the registry rows is
+/// locked by `format_registry_matches_the_compiled_encoders` below.
+fn parse_output_format(raw: &str) -> Result<honkbox_sd_core::OutputFormat, (String, &'static str)> {
+    let accepted = crate::formats::output_rows()
+        .map(|row| format!("{:?}", row.name))
+        .collect::<Vec<_>>()
+        .join(", ");
     honkbox_sd_core::OutputFormat::from_name(raw).ok_or_else(|| {
         (
-            format!(
-                "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
-            ),
+            format!("unsupported output_format {raw:?}: accepted values are {accepted}"),
             "unsupported_output_format",
         )
     })
@@ -3032,7 +3060,10 @@ fn validate_images_request(
         req.steps,
     )?;
     let hires = validate_hires_fix(req.hires_fix.as_ref(), (width, height))?;
-    let format = parse_output_format(req)?;
+    // Output container: the registry is the source of truth (omitted =
+    // PNG); unknown names are a named 400 listing the registry-derived
+    // accepted values (same reject-don't-guess policy as `response_format`).
+    let format = parse_output_format(req.output_format.as_deref().unwrap_or("png").trim())?;
     let compression = parse_output_compression(req.output_compression.as_ref())?;
     Ok((
         width,
@@ -3227,12 +3258,15 @@ fn controlnet_pair(req: &ImagesGenerationRequest) -> Option<ControlNetPair> {
             ));
         }
     };
-    if decoded.len() < PNG_MAGIC.len() || decoded[..PNG_MAGIC.len()] != *PNG_MAGIC {
+    if let Err(reject) = crate::formats::identify_png(&decoded) {
         return Some((
             (String::new(), Vec::new()),
             Some(openai_error_response(
                 StatusCode::BAD_REQUEST,
-                "control_image is not usable: decoded bytes are not a PNG".to_owned(),
+                format!(
+                    "control_image is not usable: decoded bytes are not a PNG ({})",
+                    reject.detail()
+                ),
                 Some("invalid_control_image"),
             )),
         ));
@@ -3608,19 +3642,34 @@ async fn post_images_generations(
     )
 }
 
-/// PNG magic bytes: every PNG stream opens with these 8 bytes.
-const PNG_MAGIC: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-
 /// Output dimensions from a PNG's IHDR (big-endian `u32` at offsets 16/20).
-/// Only called on magic-verified bytes; `None` for truncated/foreign data.
+/// Only called on registry-verified bytes (`require_png_bytes` /
+/// `crate::formats::identify_png` own the magic check); `None` for
+/// truncated data.
 fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() < 24 || bytes[..8] != *PNG_MAGIC {
+    if bytes.len() < 24 {
         return None;
     }
     Some((
         u32::from_be_bytes(bytes[16..20].try_into().ok()?),
         u32::from_be_bytes(bytes[20..24].try_into().ok()?),
     ))
+}
+
+/// Validate PNG-required bytes (edits `mask`; `ControlNet` `control_image`):
+/// the registry identifies by magic, and `need_ihdr` additionally demands a
+/// parseable IHDR. `Err` is the message reason — it names the sniffed
+/// format, never an extension. (`image` runs the same sniff inline because
+/// it also consumes the IHDR dimensions.)
+fn require_png_bytes(bytes: &[u8], need_ihdr: bool) -> Result<(), String> {
+    let sniffed = crate::formats::identify_png(bytes);
+    if sniffed.is_err() || (need_ihdr && png_dimensions(bytes).is_none()) {
+        return Err(match sniffed {
+            Err(reject) => reject.detail(),
+            Ok(_) => "IHDR dimensions missing".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// Collected multipart fields for `/v1/images/edits`.
@@ -3833,22 +3882,33 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             Some("image_required"),
         );
     };
-    let dims = png_dimensions(&image_bytes).filter(|(w, h)| *w > 0 && *h > 0);
+    // Registry authority: identify by magic — never the declared content
+    // type or the multipart filename — then require a real canvas (IHDR
+    // parses to non-zero dimensions; it doubles as the `size` default).
+    let sniffed = crate::formats::identify_png(&image_bytes);
+    let dims = sniffed
+        .as_ref()
+        .ok()
+        .and_then(|_| png_dimensions(&image_bytes))
+        .filter(|(w, h)| *w > 0 && *h > 0);
     if dims.is_none() {
+        let reason = sniffed
+            .err()
+            .map_or("IHDR dimensions missing or zero".to_owned(), |reject| {
+                reject.detail()
+            });
         return openai_error_response(
             StatusCode::BAD_REQUEST,
-            "image must be PNG bytes (magic sniff failed)".to_owned(),
+            format!("image must be PNG bytes ({reason})"),
             Some("invalid_image"),
         );
     }
-    if edit
-        .mask
-        .as_ref()
-        .is_some_and(|(_, bytes)| png_dimensions(bytes).is_none())
+    if let Some((_, mask_bytes)) = edit.mask.as_ref()
+        && let Err(reason) = require_png_bytes(mask_bytes, true)
     {
         return openai_error_response(
             StatusCode::BAD_REQUEST,
-            "mask must be PNG bytes (magic sniff failed)".to_owned(),
+            format!("mask must be PNG bytes ({reason})"),
             Some("invalid_mask"),
         );
     }
@@ -3895,17 +3955,11 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
         }
     };
-    let Some(format) = honkbox_sd_core::OutputFormat::from_name(
-        edit.output_format.as_deref().unwrap_or("png").trim(),
-    ) else {
-        let raw = edit.output_format.as_deref().unwrap_or_default().trim();
-        return openai_error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
-            ),
-            Some("unsupported_output_format"),
-        );
+    let format = match parse_output_format(edit.output_format.as_deref().unwrap_or("png").trim()) {
+        Ok(format) => format,
+        Err((message, code)) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        }
     };
     let compression = match edit.output_compression.as_deref().map(str::trim) {
         None | Some("") => None,
@@ -5544,26 +5598,23 @@ async fn get_audio_voices() -> Response {
 
 /// The image-ops batch cap: inputs (and thus outputs) per request.
 const IMAGE_OP_MAX_INPUTS: usize = 8;
-/// `resize` edge cap (px). With [`IMAGE_OP_MAX_PIXELS`] this bounds both
-/// allocation and encode time on the blocking pool.
+/// `resize` edge cap (px). With the registry pixel budget
+/// ([`crate::formats::MAX_DECODED_PIXELS`]) this bounds both allocation
+/// and encode time on the blocking pool.
 const IMAGE_OP_MAX_EDGE: u32 = 8192;
-/// Pixel cap for resize targets AND decoded inputs (`16_777_216` px, e.g.
-/// 4096×4096): the decoder-level strict caps stop decompression-bomb
-/// allocations before they happen, and this line rejects every input or
-/// result above it. Reject-not-clamp.
-const IMAGE_OP_MAX_PIXELS: u64 = 16_777_216;
 /// Decoder-level strict caps (`image::Limits`): no decoded edge above this,
 /// and no more than this much decoder allocation at once — a small PNG can
-/// decode to gigabytes without these.
+/// decode to gigabytes without these. Both caps come from the format
+/// registry (the same budget table the pixel check below enforces).
 fn image_decode_limits() -> image::Limits {
     // `Limits` is `#[non_exhaustive]`: start from `default()` (512 MiB
     // allocation allowance) and tighten the strict caps.
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(16384);
+    limits.max_image_width = Some(crate::formats::MAX_DECODED_EDGE);
+    limits.max_image_height = Some(crate::formats::MAX_DECODED_EDGE);
     // RGBA of the pixel cap is ~67 MB; intermediates stay well under
     // this allowance.
-    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_alloc = Some(crate::formats::MAX_DECODED_ALLOC_BYTES);
     limits
 }
 /// `request_id` / `client` string cap, characters.
@@ -5726,11 +5777,15 @@ fn validate_image_op_params(command: &ImageOpCommand) -> Result<(), (String, &'s
                     "invalid_image_op_params",
                 ));
             }
-            if u64::from(resize.width) * u64::from(resize.height) > IMAGE_OP_MAX_PIXELS {
+            if u64::from(resize.width) * u64::from(resize.height)
+                > crate::formats::MAX_DECODED_PIXELS
+            {
                 return Err((
                     format!(
-                        "resize target {}x{} exceeds the {IMAGE_OP_MAX_PIXELS}-pixel cap — rejected, not clamped",
-                        resize.width, resize.height
+                        "resize target {}x{} exceeds the {}-pixel cap — rejected, not clamped",
+                        resize.width,
+                        resize.height,
+                        crate::formats::MAX_DECODED_PIXELS
                     ),
                     "invalid_image_op_params",
                 ));
@@ -5760,10 +5815,13 @@ fn validate_image_op_params(command: &ImageOpCommand) -> Result<(), (String, &'s
     Ok(())
 }
 
-/// Decode a `data:image/(png|jpeg|webp);base64,…` URI. The declared MIME
-/// must be one of the accepted containers (the caller additionally sniffs
-/// the real bytes, so declared/actual mismatches are caught there).
-fn decode_data_uri(uri: &str) -> Result<Vec<u8>, ImageOpWorkError> {
+/// Decode a `data:image/…;base64,…` URI. The declared MIME must be one of
+/// the registry's accepted input containers (the caller additionally sniffs
+/// the real bytes, so declared/actual mismatches are caught there); the
+/// declared row is returned alongside the bytes for that comparison.
+fn decode_data_uri(
+    uri: &str,
+) -> Result<(&'static crate::formats::FormatInfo, Vec<u8>), ImageOpWorkError> {
     let bad = |message: String| ImageOpWorkError::Bad {
         message,
         code: "invalid_image_op_inputs",
@@ -5782,16 +5840,21 @@ fn decode_data_uri(uri: &str) -> Result<Vec<u8>, ImageOpWorkError> {
     let Some(mime) = header.strip_suffix(";base64") else {
         return Err(bad("input data URI must declare `;base64`".to_owned()));
     };
-    if !matches!(mime, "image/png" | "image/jpeg" | "image/webp") {
+    let Some(declared) = crate::formats::image_ops_by_mime(mime) else {
         return Err(bad(format!(
-            "unsupported input container {mime:?}: accepted data URIs are image/png, image/jpeg, image/webp"
+            "unsupported input container {mime:?}: accepted data URIs are {}",
+            crate::formats::image_ops_inputs()
+                .map(|row| row.mime)
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
-    }
-    base64::engine::general_purpose::STANDARD
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload.trim())
         // Tolerate padding-stripped payloads (some encoders trim `=`).
         .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(payload.trim()))
-        .map_err(|e| bad(format!("input data URI is not valid base64: {e}")))
+        .map_err(|e| bad(format!("input data URI is not valid base64: {e}")))?;
+    Ok((declared, bytes))
 }
 
 /// Resolve an artifact input against the bundle store:
@@ -5816,15 +5879,16 @@ fn read_artifact(data_dir: &Path, artifact: &ImageOpArtifact) -> Result<Vec<u8>,
         )));
     }
     let dir = data_dir.join("jobs").join(id.to_string());
-    let names = ["png", "jpg", "jpeg", "webp"]
-        .iter()
+    // Candidate artifact names derive from the registry's accepted input
+    // extensions (the same rows the magic sniff admits below).
+    let names: Vec<String> = crate::formats::image_ops_extensions()
         .flat_map(|ext| {
             [
                 format!("op_{:02}.{ext}", artifact.index),
                 format!("final_{:02}.{ext}", artifact.index),
             ]
         })
-        .collect::<Vec<_>>();
+        .collect();
     let entries = std::fs::read_dir(&dir).map_err(|_| {
         bad(format!(
             "artifact bundle {:?} not found (expired by GC, or never written by this server)",
@@ -5918,6 +5982,50 @@ fn apply_image_op(
     })
 }
 
+/// Admit one image-op input: the registry identifies the container by
+/// magic for BOTH input forms — the data URI's declared MIME was resolved
+/// at parse and must agree with the bytes (a disagreement is the named
+/// `format_mismatch`), artifacts declare nothing, and bytes matching a
+/// non-accepted row (e.g. a video-frame or 3D format) name that row in the
+/// rejection. Returns the admitted row for its decode budget.
+fn admit_op_input(
+    raw: &[u8],
+    declared: Option<&'static crate::formats::FormatInfo>,
+) -> Result<&'static crate::formats::FormatInfo, ImageOpWorkError> {
+    let accepted = crate::formats::image_ops_inputs()
+        .map(|row| row.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let Some(row) = crate::formats::sniff(raw) else {
+        return Err(ImageOpWorkError::Bad {
+            message: format!("input is not a recognizable image (accepted containers: {accepted})"),
+            code: "invalid_image_op_inputs",
+        });
+    };
+    if let Some(expected) = declared
+        && expected.name != row.name
+    {
+        return Err(ImageOpWorkError::Bad {
+            message: format!(
+                "input declares {} but the bytes are {} (magic sniff)",
+                expected.mime, row.name
+            ),
+            code: "format_mismatch",
+        });
+    }
+    if !row.image_ops_input {
+        return Err(ImageOpWorkError::Bad {
+            message: format!(
+                "unsupported input container {} ({}): accepted containers are {accepted}",
+                row.name,
+                row.kind.label()
+            ),
+            code: "invalid_image_op_inputs",
+        });
+    }
+    Ok(row)
+}
+
 /// Run the op units (blocking pool): per input — cancel check, decode (data
 /// URI or artifact), apply, encode. Fails fast on the first bad input.
 fn run_image_op_units(
@@ -5936,8 +6044,11 @@ fn run_image_op_units(
         if token.is_cancelled() {
             return Err(ImageOpWorkError::Cancelled { completed: i });
         }
-        let (source, raw) = match input {
-            ImageOpInput::DataUri(uri) => (String::from("data_uri"), decode_data_uri(uri)?),
+        let (source, declared, raw) = match input {
+            ImageOpInput::DataUri(uri) => {
+                let (declared, bytes) = decode_data_uri(uri)?;
+                (String::from("data_uri"), Some(declared), bytes)
+            }
             ImageOpInput::Artifact(artifact) => {
                 let Some(dir) = data_dir else {
                     return Err(ImageOpWorkError::Bad {
@@ -5948,34 +6059,19 @@ fn run_image_op_units(
                 };
                 (
                     format!("artifact:{}/{}", artifact.bundle, artifact.index),
+                    None,
                     read_artifact(dir, artifact)?,
                 )
             }
         };
         let input_sha256 = sha256_hex(&raw);
-        // Container authority is the MAGIC, for both input forms: the data
-        // URI's declared MIME was checked at parse, artifacts declare
-        // nothing, and a mismatch between declaration and bytes surfaces
-        // here as an unrecognizable/unsupported container.
-        let container = image::guess_format(&raw).map_err(|_| ImageOpWorkError::Bad {
-            message: "input is not a recognizable image (accepted containers: png, jpeg, webp)"
-                .to_owned(),
-            code: "invalid_image_op_inputs",
-        })?;
-        if !matches!(
-            container,
-            image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP
-        ) {
-            return Err(ImageOpWorkError::Bad {
-                message: format!(
-                    "unsupported input container {container:?}: accepted containers are png, jpeg, webp"
-                ),
-                code: "invalid_image_op_inputs",
-            });
-        }
+        // Container authority is the registry magic (see `admit_op_input`):
+        // the sniffed format wins, declarations must agree with it.
+        let row = admit_op_input(&raw, declared)?;
         // Bounded decode: the reader-level strict caps stop
         // decompression-bomb allocations before they happen; the pixel cap
-        // is the honest reject line for oversized-but-bounded inputs.
+        // (the sniffed row's registry budget) is the honest reject line for
+        // oversized-but-bounded inputs.
         let mut reader = image::ImageReader::new(std::io::Cursor::new(&raw));
         reader.limits(image_decode_limits());
         let decoded = reader
@@ -5990,10 +6086,11 @@ fn run_image_op_units(
                 code: "invalid_image_op_inputs",
             })?;
         let pixels = u64::from(decoded.width()) * u64::from(decoded.height());
-        if pixels > IMAGE_OP_MAX_PIXELS {
+        let pixel_cap = row.budget.decoded_pixels.unwrap_or(u64::MAX);
+        if pixels > pixel_cap {
             return Err(ImageOpWorkError::Bad {
                 message: format!(
-                    "input is {}x{} ({pixels} pixels); the cap is {IMAGE_OP_MAX_PIXELS} pixels — rejected, not downscaled",
+                    "input is {}x{} ({pixels} pixels); the cap is {pixel_cap} pixels — rejected, not downscaled",
                     decoded.width(),
                     decoded.height()
                 ),
@@ -6229,20 +6326,13 @@ fn validate_image_op_request(
             Some("invalid_image_op_inputs"),
         ));
     }
+    // Output container: the registry is the source of truth (omitted =
+    // PNG); unknown names are a named 400 listing the registry-derived
+    // accepted values.
     let format = match req.output_format.as_deref().map(str::trim) {
         None => honkbox_sd_core::OutputFormat::Png,
-        Some(raw) => match honkbox_sd_core::OutputFormat::from_name(raw) {
-            Some(format) => format,
-            None => {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
-                    ),
-                    Some("unsupported_output_format"),
-                ));
-            }
-        },
+        Some(raw) => parse_output_format(raw)
+            .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?,
     };
     let jpeg_quality = parse_output_compression(req.output_compression.as_ref())
         .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?;
@@ -6485,6 +6575,43 @@ async fn post_audio_speech(
 mod tests {
     use super::*;
     use crate::config::{ModelCapabilitiesOverride, ModelEntryConfig};
+
+    /// The registry's write rows are EXACTLY the compiled encoders — set
+    /// and order on both directions. This is the lock that makes
+    /// `formats.write` (derived through the registry) byte-compat with the
+    /// pre-registry `OutputFormat::ALL` derivation, and it lives HERE (the
+    /// routes layer owns the wire-name → enum mapping, so a `#[path]`
+    /// -included formats module never links the native backends).
+    #[test]
+    fn format_registry_matches_the_compiled_encoders() {
+        for format in honkbox_sd_core::OutputFormat::ALL {
+            assert!(
+                crate::formats::output_rows().any(|row| row.output && row.name == format.name()),
+                "{} encoder missing from the registry write column",
+                format.name()
+            );
+            assert!(
+                parse_output_format(format.name()).is_ok(),
+                "{} must parse",
+                format.name()
+            );
+        }
+        for row in crate::formats::output_rows() {
+            assert!(
+                honkbox_sd_core::OutputFormat::from_name(row.name).is_some(),
+                "registry write row {:?} has no compiled encoder",
+                row.name
+            );
+        }
+        // Unknown names (and wrong-case spellings) stay rejected, naming
+        // the registry-derived accepted values.
+        for raw in ["gif", "JPEG", "Png", "", "svg", "ora"] {
+            let (message, code) = parse_output_format(raw).expect_err(raw);
+            assert_eq!(code, "unsupported_output_format");
+            assert!(message.contains(raw), "{raw}: {message}");
+            assert!(message.contains("\"png\""), "{raw}: {message}");
+        }
+    }
 
     /// SRT timestamps use the `SubRip` comma separator; hours pad to two
     /// digits and roll over correctly at minute/second/hour boundaries.

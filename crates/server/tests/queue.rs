@@ -21,6 +21,9 @@ mod config;
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[allow(dead_code)]
+#[path = "../src/formats.rs"]
+mod formats;
+#[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
 #[allow(dead_code)]

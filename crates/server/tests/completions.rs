@@ -21,6 +21,9 @@ mod config;
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[allow(dead_code)]
+#[path = "../src/formats.rs"]
+mod formats;
+#[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
 #[allow(dead_code)]
@@ -760,6 +763,61 @@ async fn parallel_tool_calls_ignored() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// GET helper for `/v1/capabilities` (the tool-choice fidelity note lives
+/// on the server contract, not on a completion response).
+async fn capabilities_get(app: Router) -> Value {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    serde_json::from_str(core::str::from_utf8(&bytes).unwrap()).expect("JSON body")
+}
+
+/// TASK-llm-tool-choice-contract: the clamp and the ignored
+/// `parallel_tool_calls` are machine-readable on `GET /v1/capabilities`
+/// (`tools`) instead of silent — and the disclosed vocabulary agrees with
+/// the wire: a clamped mode (`"any"` here; named + `"required"` in
+/// `tool_choice_none_and_clamps`) is accepted, never a 400, and the stub
+/// is still free to call.
+#[tokio::test]
+async fn capabilities_disclose_tool_choice_fidelity() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app(catalog_with(&["llm:fake.gguf"]));
+    let doc = capabilities_get(app.clone()).await;
+    assert_eq!(doc["tools"]["tool_choice_honored"], json!(["auto", "none"]));
+    assert_eq!(
+        doc["tools"]["tool_choice_clamped"],
+        json!(["required", "any"])
+    );
+    assert_eq!(
+        doc["tools"]["tool_choice_named_function_clamped"],
+        json!(true)
+    );
+    assert_eq!(doc["tools"]["parallel_tool_calls"], json!(false));
+
+    let (status, _, body) = completions(
+        app,
+        completion_body(
+            "llm:fake.gguf",
+            &json!({"tools": tools_json(), "tool_choice": "any"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let parsed: Value = serde_json::from_str(&body).expect("JSON body");
+    assert!(
+        parsed["choices"][0]["finish_reason"] == "tool_calls",
+        "clamped to auto ⇒ the stub still calls: {parsed}"
+    );
 }
 
 /// REQ-3: `tools` combined with `grammar`/`response_format` is an honest

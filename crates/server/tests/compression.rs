@@ -12,8 +12,14 @@
 //! backends, `data_dir: None` → bundle writes are skipped, so NO disk
 //! writes anywhere in this binary); SSE frames are matched by event name
 //! AND job `kind` because the lifecycle registry is process-global and
-//! the gated-generation + chat-stream tests run concurrently; no
-//! `SLOT_LOCK` is needed since no two tests share a backend instance.
+//! the gated-generation + chat-stream tests run concurrently.
+//!
+//! `SLOT_LOCK` IS needed: the ledger's GPU slot is ONE process-global
+//! counter shared by every kind (`residency::Ledger::committed` is
+//! process-wide, `capacities.gpu_slots = 1`), so the parked SD generation
+//! and the LLM chat test contend for the same slot — the chat test lost
+//! the race and got a 429 `gpu slot busy`. The two job-running tests
+//! serialize on the lock; the plain JSON-route tests never take a slot.
 
 // No lib target on this binary crate, so include the modules directly.
 #[allow(dead_code)]
@@ -28,6 +34,9 @@ mod config;
 #[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
+#[allow(dead_code)]
+#[path = "../src/formats.rs"]
+mod formats;
 #[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
@@ -45,7 +54,7 @@ mod swap;
 
 use std::io::Read as _;
 use std::sync::Arc;
-use std::sync::{Condvar, Mutex, RwLock};
+use std::sync::{Condvar, LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
 use axum::{
@@ -61,6 +70,10 @@ use tokio_stream::StreamExt as _;
 use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, app};
+
+/// Serializes the process-global GPU slot across this binary's job-running
+/// tests (the ledger counts every kind against one shared slot).
+static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// Park/notify pair the "generation" waits on until the test says go (the
 /// same double as `jobs.rs`).
@@ -285,6 +298,7 @@ async fn unsupported_encoding_passthrough() {
 /// buffer the stream.
 #[tokio::test]
 async fn events_stream_excluded_and_unbuffered() {
+    let _slot = SLOT_LOCK.lock().await;
     let gate = Arc::new(Gate::new());
     let app = app_with(
         catalog_with(&[]),
@@ -394,6 +408,7 @@ async fn frame_for_id(stream: &mut axum::body::BodyDataStream, event: &str, kind
 /// arm; the unbuffered transport proof is the `/v1/events` test above).
 #[tokio::test]
 async fn chat_stream_excluded_from_compression() {
+    let _slot = SLOT_LOCK.lock().await;
     let (status, headers, body) = raw_post(
         plain_app(),
         "/v1/chat/completions",

@@ -72,6 +72,13 @@ pub struct Capabilities {
     /// today) — additive optional field per the version policy above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_ops: Option<ImageOpsCapability>,
+    /// Chat tool-calling fidelity of the `OpenAI` chat surface (REQ-3):
+    /// which `tool_choice` values are honored vs clamped, and whether
+    /// `parallel_tool_calls` is honored. Present whenever the chat routes
+    /// are mounted (always today) — additive optional field per the
+    /// version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolCallingCapability>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
@@ -663,8 +670,10 @@ pub struct FunctionDefinition {
 }
 
 /// `OpenAI` `tool_choice` (`REQ-3`): a mode string or a named function.
-/// Everything except `"none"` is clamped to `auto` behaviour (tools are
-/// offered; the model decides) — no rejection.
+/// Everything except `"none"` is clamped to `auto` behavior (tools are
+/// offered; the model decides) — no rejection. The clamp is disclosed, not
+/// silent: [`Capabilities::tools`] publishes the exact honored/clamped
+/// vocabulary machine-readably before the client sends.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[serde(untagged)]
 pub enum ToolChoiceSpec {
@@ -685,12 +694,72 @@ pub struct NamedFunction {
 }
 
 impl ToolChoiceSpec {
+    /// `tool_choice` string modes the chat routes honor verbatim: `"auto"`
+    /// (tools offered, the model decides — the default behavior) and
+    /// `"none"` (tools rendered for context but never called). Vocabulary
+    /// note: the vendored llama.cpp binding (`llama-cpp-4` 0.11.0,
+    /// `ToolChoice`) additionally exposes a grammar-enforced `required`;
+    /// honkbox keeps `"required"` clamped to `"auto"` pending an exact-
+    /// choice consumer (TASK-llm-tool-choice-contract optional follow-up).
+    pub const HONORED_MODES: [&str; 2] = ["auto", "none"];
+    /// `tool_choice` string modes accepted but clamped to `"auto"`
+    /// behavior — never a 400; disclosed in [`Capabilities::tools`].
+    pub const CLAMPED_MODES: [&str; 2] = ["required", "any"];
+
     /// True when tool calls must not be offered (`"none"`). Any other
     /// value — `auto`, `required`, `any`, named — samples with tools
     /// available (clamped to `auto`).
     #[must_use]
     pub fn suppresses_tools(&self) -> bool {
         matches!(self, Self::Mode(mode) if mode == "none")
+    }
+}
+
+/// Chat tool-calling fidelity (`Capabilities::tools`; REQ-3): the exact
+/// `tool_choice` / `parallel_tool_calls` contract of the `OpenAI` chat
+/// routes, published machine-readably so no request is silently downgraded
+/// — a client can read the clamp and the ignored flag before it sends.
+/// `tool_choice_honored` is exhaustive (`"none"` is the only mode that
+/// changes generation); `tool_choice_clamped` lists the standard `OpenAI`
+/// modes and is NOT exhaustive: this is an untagged string field, so any
+/// other unrecognized value is accepted and behaves as `"auto"` too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ToolCallingCapability {
+    /// `tool_choice` string modes honored verbatim
+    /// ([`ToolChoiceSpec::HONORED_MODES`]).
+    pub tool_choice_honored: Vec<String>,
+    /// `tool_choice` string modes accepted but clamped to `"auto"`
+    /// behavior ([`ToolChoiceSpec::CLAMPED_MODES`]); never a 400. Not
+    /// exhaustive: any unrecognized value is accepted and behaves as
+    /// `"auto"` too. The named-function form clamps the same way.
+    pub tool_choice_clamped: Vec<String>,
+    /// The named-function form (`{"type":"function","function":{"name":…}}`)
+    /// is accepted too — and likewise clamped to `"auto"` behavior.
+    pub tool_choice_named_function_clamped: bool,
+    /// `true` when `parallel_tool_calls` is honored. `false` today: at most
+    /// one tool call is produced per turn; the field is still accepted so
+    /// parallel-`true` clients are not rejected.
+    pub parallel_tool_calls: bool,
+}
+
+impl ToolCallingCapability {
+    /// The fidelity contract of the current chat routes. Built from the
+    /// [`ToolChoiceSpec`] vocabulary so the capability document cannot
+    /// drift from the wire behavior it describes.
+    #[must_use]
+    pub fn chat_routes() -> Self {
+        Self {
+            tool_choice_honored: ToolChoiceSpec::HONORED_MODES
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            tool_choice_clamped: ToolChoiceSpec::CLAMPED_MODES
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            tool_choice_named_function_clamped: true,
+            parallel_tool_calls: false,
+        }
     }
 }
 
@@ -793,11 +862,15 @@ pub struct ChatResponse {
 ///   `grammar` (llama.cpp GBNF, honored verbatim), `tool_choice: "none"`.
 ///   `tools` combined with `grammar`/`response_format` is a 400 (mutually
 ///   exclusive constraint), matching llama.cpp's own hard error.
-/// - **Clamped**: `tool_choice` `"required"`/`"any"`/named function all
-///   behave as `"auto"` (tools offered, model decides).
-/// - **Accepted and ignored**: `parallel_tool_calls` — one tool call is
-///   produced per turn regardless; the field exists so clients that always
-///   send it are not rejected.
+/// - **Clamped, disclosed**: `tool_choice` `"required"`/`"any"`/named
+///   function all behave as `"auto"` (tools offered, model decides) —
+///   accepted, never a 400; the clamp is published machine-readably on
+///   `GET /v1/capabilities` (`tools`), so the contract is visible before
+///   the client sends.
+/// - **Accepted and ignored, disclosed**: `parallel_tool_calls` — one tool
+///   call is produced per turn regardless; the field exists so clients
+///   that always send it are not rejected. `capabilities.tools.
+///   parallel_tool_calls = false` says so up front.
 /// - **Extended sampler params, wired into the sampler chain**: `top_k`,
 ///   `min_p`, `typical_p`, `repeat_penalty`, `xtc_probability`,
 ///   `dry_multiplier`/`dry_base`/`dry_allowed_length`,
@@ -839,11 +912,14 @@ pub struct OpenAiChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ChatTool>>,
     /// `"auto"` / `"none"` / `"required"` / named. Only `"none"` changes
-    /// behavior; everything else is clamped to `auto`.
+    /// behavior; everything else is clamped to `auto` (accepted, never a
+    /// 400 — see `capabilities.tools` on `GET /v1/capabilities` for the
+    /// machine-readable honored/clamped vocabulary).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoiceSpec>,
-    /// Accepted and ignored: honkbox produces at most one tool call per
-    /// turn. Present so parallel-`true` clients are not rejected.
+    /// Accepted and ignored (disclosed: `capabilities.tools.
+    /// parallel_tool_calls` is `false`): honkbox produces at most one tool
+    /// call per turn. Present so parallel-`true` clients are not rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
     /// Structured output (`REQ-3`): `json_object` → any-JSON grammar,
@@ -2348,6 +2424,7 @@ mod tests {
             AuthCapabilities::decl(&config),
             QueueCapabilities::decl(&config),
             QueueKindCapacity::decl(&config),
+            ToolCallingCapability::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');

@@ -355,10 +355,11 @@
       "get": {
         "tags": [],
         "summary": "`GET /v1/capabilities`: the machine-readable server contract (FEAT-\ncapabilities-api). Everything is DERIVED at request time — compiled\nfeatures, runtime config, the live catalog snapshot, and the resource\nledger's actual admission knobs — never a prose hard-code, so the\ndocument is always true of the process answering and `/v1/models/refresh`\nor a download commit are reflected with no cache to invalidate.",
+        "description": "Includes `tools`, the chat tool-choice fidelity note (REQ-3): which\n`tool_choice` values `/v1/chat/completions` honors verbatim vs clamps\nto `auto`, and that `parallel_tool_calls` is accepted but ignored —\ndisclosed here instead of silently downgraded at request time.",
         "operationId": "get_capabilities",
         "responses": {
           "200": {
-            "description": "Server capability contract",
+            "description": "Server capability contract (feature flags, formats, queue knobs, and the chat tool-choice fidelity note)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1235,6 +1236,17 @@
           "server": {
             "$ref": "#/components/schemas/ServerInfo",
             "description": "Server identity (name + crate version)."
+          },
+          "tools": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolCallingCapability",
+                "description": "Chat tool-calling fidelity of the `OpenAI` chat surface (REQ-3):\nwhich `tool_choice` values are honored vs clamped, and whether\n`parallel_tool_calls` is honored. Present whenever the chat routes\nare mounted (always today) — additive optional field per the\nversion policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -3175,7 +3187,7 @@
       },
       "OpenAiChatRequest": {
         "type": "object",
-        "description": "OpenAI-compatible chat completion request (`POST /v1/chat/completions`;\nREQ-1). A translation surface over honkbox's native chat pipeline — the\nrequest is served by the same pipeline, GPU lease, and swap decision as\n`POST /v1/chat`.\n\nUndeclared keys (`top_p`, `stop`, `reasoning_budget`, `cache_prompt`, …)\nare accepted and silently ignored (serde's default unknown-key behavior);\nonly the fields below have honkbox-side meaning.\n\nREQ-3 additions and their fidelity:\n- **Enforced** (never silently ignored): `tools` + `tool_calls`,\n  `response_format` (`json_object`/`json_schema` → GBNF grammar), raw\n  `grammar` (llama.cpp GBNF, honored verbatim), `tool_choice: \"none\"`.\n  `tools` combined with `grammar`/`response_format` is a 400 (mutually\n  exclusive constraint), matching llama.cpp's own hard error.\n- **Clamped**: `tool_choice` `\"required\"`/`\"any\"`/named function all\n  behave as `\"auto\"` (tools offered, model decides).\n- **Accepted and ignored**: `parallel_tool_calls` — one tool call is\n  produced per turn regardless; the field exists so clients that always\n  send it are not rejected.\n- **Extended sampler params, wired into the sampler chain**: `top_k`,\n  `min_p`, `typical_p`, `repeat_penalty`, `xtc_probability`,\n  `dry_multiplier`/`dry_base`/`dry_allowed_length`,\n  `dynatemp_range`/`dynatemp_exponent`. All are supported by the\n  llama-cpp-4 binding; each is applied only when present.",
+        "description": "OpenAI-compatible chat completion request (`POST /v1/chat/completions`;\nREQ-1). A translation surface over honkbox's native chat pipeline — the\nrequest is served by the same pipeline, GPU lease, and swap decision as\n`POST /v1/chat`.\n\nUndeclared keys (`top_p`, `stop`, `reasoning_budget`, `cache_prompt`, …)\nare accepted and silently ignored (serde's default unknown-key behavior);\nonly the fields below have honkbox-side meaning.\n\nREQ-3 additions and their fidelity:\n- **Enforced** (never silently ignored): `tools` + `tool_calls`,\n  `response_format` (`json_object`/`json_schema` → GBNF grammar), raw\n  `grammar` (llama.cpp GBNF, honored verbatim), `tool_choice: \"none\"`.\n  `tools` combined with `grammar`/`response_format` is a 400 (mutually\n  exclusive constraint), matching llama.cpp's own hard error.\n- **Clamped, disclosed**: `tool_choice` `\"required\"`/`\"any\"`/named\n  function all behave as `\"auto\"` (tools offered, model decides) —\n  accepted, never a 400; the clamp is published machine-readably on\n  `GET /v1/capabilities` (`tools`), so the contract is visible before\n  the client sends.\n- **Accepted and ignored, disclosed**: `parallel_tool_calls` — one tool\n  call is produced per turn regardless; the field exists so clients\n  that always send it are not rejected. `capabilities.tools.\n  parallel_tool_calls = false` says so up front.\n- **Extended sampler params, wired into the sampler chain**: `top_k`,\n  `min_p`, `typical_p`, `repeat_penalty`, `xtc_probability`,\n  `dry_multiplier`/`dry_base`/`dry_allowed_length`,\n  `dynatemp_range`/`dynatemp_exponent`. All are supported by the\n  llama-cpp-4 binding; each is applied only when present.",
         "required": [
           "messages"
         ],
@@ -3264,7 +3276,7 @@
               "boolean",
               "null"
             ],
-            "description": "Accepted and ignored: honkbox produces at most one tool call per\nturn. Present so parallel-`true` clients are not rejected."
+            "description": "Accepted and ignored (disclosed: `capabilities.tools.\nparallel_tool_calls` is `false`): honkbox produces at most one tool\ncall per turn. Present so parallel-`true` clients are not rejected."
           },
           "repeat_penalty": {
             "type": [
@@ -3313,7 +3325,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ToolChoiceSpec",
-                "description": "`\"auto\"` / `\"none\"` / `\"required\"` / named. Only `\"none\"` changes\nbehavior; everything else is clamped to `auto`."
+                "description": "`\"auto\"` / `\"none\"` / `\"required\"` / named. Only `\"none\"` changes\nbehavior; everything else is clamped to `auto` (accepted, never a\n400 — see `capabilities.tools` on `GET /v1/capabilities` for the\nmachine-readable honored/clamped vocabulary)."
               },
               {
                 "type": "null"
@@ -3957,6 +3969,40 @@
           "function"
         ]
       },
+      "ToolCallingCapability": {
+        "type": "object",
+        "description": "Chat tool-calling fidelity (`Capabilities::tools`; REQ-3): the exact\n`tool_choice` / `parallel_tool_calls` contract of the `OpenAI` chat\nroutes, published machine-readably so no request is silently downgraded\n— a client can read the clamp and the ignored flag before it sends.\n`tool_choice_honored` is exhaustive (`\"none\"` is the only mode that\nchanges generation); `tool_choice_clamped` lists the standard `OpenAI`\nmodes and is NOT exhaustive: this is an untagged string field, so any\nother unrecognized value is accepted and behaves as `\"auto\"` too.",
+        "required": [
+          "tool_choice_honored",
+          "tool_choice_clamped",
+          "tool_choice_named_function_clamped",
+          "parallel_tool_calls"
+        ],
+        "properties": {
+          "parallel_tool_calls": {
+            "type": "boolean",
+            "description": "`true` when `parallel_tool_calls` is honored. `false` today: at most\none tool call is produced per turn; the field is still accepted so\nparallel-`true` clients are not rejected."
+          },
+          "tool_choice_clamped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`tool_choice` string modes accepted but clamped to `\"auto\"`\nbehavior ([`ToolChoiceSpec::CLAMPED_MODES`]); never a 400. Not\nexhaustive: any unrecognized value is accepted and behaves as\n`\"auto\"` too. The named-function form clamps the same way."
+          },
+          "tool_choice_honored": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`tool_choice` string modes honored verbatim\n([`ToolChoiceSpec::HONORED_MODES`])."
+          },
+          "tool_choice_named_function_clamped": {
+            "type": "boolean",
+            "description": "The named-function form (`{\"type\":\"function\",\"function\":{\"name\":…}}`)\nis accepted too — and likewise clamped to `\"auto\"` behavior."
+          }
+        }
+      },
       "ToolChoiceSpec": {
         "oneOf": [
           {
@@ -3977,7 +4023,7 @@
             }
           }
         ],
-        "description": "`OpenAI` `tool_choice` (`REQ-3`): a mode string or a named function.\nEverything except `\"none\"` is clamped to `auto` behaviour (tools are\noffered; the model decides) — no rejection."
+        "description": "`OpenAI` `tool_choice` (`REQ-3`): a mode string or a named function.\nEverything except `\"none\"` is clamped to `auto` behavior (tools are\noffered; the model decides) — no rejection. The clamp is disclosed, not\nsilent: [`Capabilities::tools`] publishes the exact honored/clamped\nvocabulary machine-readably before the client sends."
       },
       "ToolType": {
         "type": "string",
