@@ -3,6 +3,12 @@ export {};
 // Regenerates packages/web-ui/src/gen/openapi.json from the server's
 // OpenAPI export. Drift is gated by the `git diff --exit-code` step in
 // the `codegen:check` script — this file always writes.
+//
+// This script REWRITES the generated files on every run (even when the
+// content is unchanged), so it must not run concurrently with the checks
+// that READ them: `format` (dprint check) and `typecheck` (tsc) would see a
+// half-written file. That is why the `check` chain in package.json is
+// sequential and ends with this step.
 const out = "packages/web-ui/src/gen/openapi.json";
 const proc = Bun.spawn(
   ["cargo", "run", "-q", "--locked", "-p", "honkbox-server", "--", "openapi"],

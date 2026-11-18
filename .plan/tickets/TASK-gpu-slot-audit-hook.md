@@ -60,6 +60,19 @@ violation.
 
 ## Verification
 
+
+## Why the `check` chain stays sequential
+
+The chain in `package.json` looks like it could run its steps concurrently
+(`format` 0.02s, `lint` 0.04s, `typecheck` 0.72s, `lint:rs` 0.21s,
+`audit:gpu-slot` 0.33s, `codegen:check` 0.54s — measured warm). It must not:
+`codegen:check` REWRITES `packages/web-ui/src/gen/{api-types.ts,openapi.json}`
+on every run (verified: the mtimes move even when the bytes do not), and
+`format` (dprint check) and `typecheck` (tsc) read exactly those files. Run
+concurrently, they would read a half-written file and fail intermittently.
+`lint:rs` and `codegen:check` both drive cargo, which serializes them on the
+target-directory lock anyway. The chain is therefore sequential by data
+dependency, not by habit — noted in `scripts/codegen-openapi-check.ts` too.
 - `bun run audit:gpu-slot` → `OK: every GPU-requesting test is serialized by
   a lock` (11 GPU-contending routes derived).
 - Negative controls (`.tmp/intercom/scripts/audit-gpu-slot-control.sh`):

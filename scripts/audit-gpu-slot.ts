@@ -31,7 +31,7 @@
 //
 // Exit code 0 = no findings, 1 = findings.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 
 const ROUTES_SRC = "crates/server/src/routes.rs";
 const TESTS_DIR = "crates/server/tests";
@@ -247,8 +247,8 @@ function gpuRoutes(routesSrc: string): { uris: string[]; handlers: string[]; } {
 }
 
 /** Findings for one test file. */
-function auditFile(path: string, uris: readonly string[]): string[] {
-  const src = readFileSync(path, "utf8");
+async function auditFile(path: string, uris: readonly string[]): Promise<string[]> {
+  const src = await Bun.file(path).text();
   const fns = fnItems(src);
   const findings: string[] = [];
 
@@ -286,7 +286,7 @@ function auditFile(path: string, uris: readonly string[]): string[] {
   return findings;
 }
 
-const routesSrc = readFileSync(ROUTES_SRC, "utf8");
+const routesSrc = await Bun.file(ROUTES_SRC).text();
 const { uris, handlers } = gpuRoutes(routesSrc);
 if (uris.length === 0) {
   console.error("honkbox gpu-slot audit: no GPU-contending route derived — the parser is broken");
@@ -295,11 +295,11 @@ if (uris.length === 0) {
 console.log(`GPU-contending routes derived from ${ROUTES_SRC}:`);
 uris.forEach((uri, i) => console.log(`  ${uri} (${handlers[i] ?? "?"})`));
 
-const findings: string[] = [];
-for (const file of readdirSync(TESTS_DIR).sort()) {
-  if (!file.endsWith(".rs")) continue;
-  findings.push(...auditFile(`${TESTS_DIR}/${file}`, uris));
-}
+// The per-file audits are independent and read-only: their reads run
+// concurrently, and the (fast, CPU-bound) parsing stays on this thread.
+const files = readdirSync(TESTS_DIR).sort().filter((file) => file.endsWith(".rs"));
+const findings = (await Promise.all(files.map((file) => auditFile(`${TESTS_DIR}/${file}`, uris))))
+  .flat();
 
 if (findings.length > 0) {
   console.error("\nGPU-SLOT SERIALIZATION FINDINGS:");
