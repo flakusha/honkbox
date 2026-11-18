@@ -13,6 +13,12 @@
 //! contends — with itself or with the GPU slot other binaries serialize.
 //! `request_id`s are unique per test because the idempotency ledger is a
 //! process-global shared by this binary's parallel tests.
+//!
+//! `OP_LOCK` IS needed: the JOB registry is process-global too, and every
+//! image-op request registers a job there (`GET /v1/jobs` lists them all).
+//! Two image-op tests in parallel see each other's jobs — the cancel test
+//! would even cancel a FOREIGN job. One image-op request at a time keeps
+//! the registry view unambiguous.
 
 // No lib target on this binary crate, so include the modules directly.
 #[allow(dead_code)]
@@ -126,8 +132,21 @@ fn png_data_uri(width: u32, height: u32) -> String {
     )
 }
 
+/// Serializes the image-op requests of this binary: the job registry is
+/// PROCESS-GLOBAL, so two concurrent image-op requests would list each
+/// other's jobs on `GET /v1/jobs` (and the cancel test would cancel a
+/// foreign job). One request at a time keeps the registry unambiguous.
+static OP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Submit one image-op request; returns (status, headers, parsed JSON).
+/// Takes `OP_LOCK`; a caller that already holds it uses `post_image_ops`.
 async fn image_ops(app: Router, body: Value) -> (StatusCode, axum::http::HeaderMap, Value) {
+    let _op = OP_LOCK.lock().await;
+    post_image_ops(app, body).await
+}
+
+/// The raw image-op request; the caller owns `OP_LOCK`.
+async fn post_image_ops(app: Router, body: Value) -> (StatusCode, axum::http::HeaderMap, Value) {
     let response = app
         .oneshot(
             Request::builder()
@@ -725,6 +744,10 @@ async fn artifact_round_trip_and_unknown_bundle() {
 /// test never flakes. A cancelled batch writes no bundle.
 #[tokio::test]
 async fn cancel_between_units_is_honored() {
+    // Hold `OP_LOCK` for the whole test: the registry below is
+    // let _op = OP_LOCK.lock().await; // TEMP repro: lock removed
+    // request below runs lock-free because this test owns the lock.
+    let _op = OP_LOCK.lock().await;
     let data_dir = fresh_data_dir("cancel");
     let app = app_with(Some(data_dir.clone()));
     // 8 × 512² resizes: a real processing window, still fast in CI.
@@ -738,9 +761,10 @@ async fn cancel_between_units_is_honored() {
                 .collect::<Vec<_>>()
         ),
     );
-    let work = tokio::spawn(image_ops(app.clone(), request));
+    let work = tokio::spawn(post_image_ops(app.clone(), request));
     // Poll the registry for the live job; the batch is either caught
-    // mid-flight or already completed — both accepted.
+    // mid-flight or already completed — both accepted. The only
+    // `image_ops` job that can be live is this test's own.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut cancelled_id: Option<String> = None;
     while Instant::now() < deadline {
