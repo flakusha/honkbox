@@ -15,6 +15,9 @@ mod catalog;
 #[path = "../src/config.rs"]
 mod config;
 #[allow(dead_code)]
+#[path = "../src/container.rs"]
+mod container;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[allow(dead_code)]
@@ -28,8 +31,17 @@ mod jobs;
 mod jobs_registry;
 #[path = "../src/metrics.rs"]
 mod metrics;
+#[allow(dead_code)]
+#[path = "../src/ora.rs"]
+mod ora;
+#[allow(dead_code)]
+#[path = "../src/raster.rs"]
+mod raster;
 #[path = "../src/routes.rs"]
 mod routes;
+#[allow(dead_code)]
+#[path = "../src/svg.rs"]
+mod svg;
 // Included only so `routes.rs`'s `crate::swap` paths resolve in this test
 // binary; the swap module itself is not exercised here.
 #[allow(dead_code)]

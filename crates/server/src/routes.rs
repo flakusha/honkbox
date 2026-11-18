@@ -5671,6 +5671,64 @@ fn image_decode_limits() -> image::Limits {
     limits.max_alloc = Some(crate::formats::MAX_DECODED_ALLOC_BYTES);
     limits
 }
+/// Fallback ceiling for the SVG source size, used only when the sniffed
+/// registry row carries no byte budget (named, never `u64::MAX`).
+const SVG_FALLBACK_MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+/// Fallback ceiling for the SVG element count, used only when the sniffed
+/// registry row carries no element budget.
+const SVG_FALLBACK_MAX_ELEMENTS: u64 = 100_000;
+/// Fallback ceiling for the ORA archive entry count, used only when the
+/// sniffed registry row carries no entry budget.
+const ORA_FALLBACK_MAX_ENTRIES: u64 = 4096;
+/// Fallback ceiling for ONE ORA archive entry, used only when the sniffed
+/// registry row carries no per-entry budget.
+const ORA_FALLBACK_MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+/// Fallback ceiling for the ORA archive's total uncompressed size, used
+/// only when the sniffed registry row carries no size budget.
+const ORA_FALLBACK_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+/// Fallback pixel ceiling for a rasterized vector or a flattened layered
+/// document, used only when the sniffed registry row carries no pixel
+/// budget.
+const RASTER_FALLBACK_MAX_PIXELS: u64 = crate::formats::MAX_DECODED_PIXELS;
+
+/// The SVG read limits, built from the sniffed registry row: the registry
+/// stays the only source of truth for limits, and the fallbacks apply only
+/// to a row that carries no budget for that field.
+fn svg_read_limits(row: &crate::formats::FormatInfo) -> crate::svg::SvgLimits {
+    crate::svg::SvgLimits {
+        max_source_bytes: row
+            .budget
+            .uncompressed_bytes
+            .unwrap_or(SVG_FALLBACK_MAX_SOURCE_BYTES),
+        max_elements: row.budget.elements.unwrap_or(SVG_FALLBACK_MAX_ELEMENTS),
+        max_pixels: row
+            .budget
+            .decoded_pixels
+            .unwrap_or(RASTER_FALLBACK_MAX_PIXELS),
+    }
+}
+
+/// The ORA read limits, built from the sniffed registry row. The
+/// registry's container-entry ceiling is also the layer ceiling: a stack's
+/// layers are archive entries.
+fn ora_read_limits(row: &crate::formats::FormatInfo) -> crate::ora::OraLimits {
+    crate::ora::OraLimits {
+        max_entries: row.budget.entries.unwrap_or(ORA_FALLBACK_MAX_ENTRIES),
+        max_entry_bytes: row
+            .budget
+            .entry_bytes
+            .unwrap_or(ORA_FALLBACK_MAX_ENTRY_BYTES),
+        max_total_bytes: row
+            .budget
+            .uncompressed_bytes
+            .unwrap_or(ORA_FALLBACK_MAX_TOTAL_BYTES),
+        max_layers: row.budget.entries.unwrap_or(ORA_FALLBACK_MAX_ENTRIES),
+        max_pixels: row
+            .budget
+            .decoded_pixels
+            .unwrap_or(RASTER_FALLBACK_MAX_PIXELS),
+    }
+}
 /// `request_id` / `client` string cap, characters.
 const IMAGE_OP_ID_MAX_CHARS: usize = 128;
 /// Idempotency memory bounds (TASK-image-ops-command-dto): at most this
@@ -6080,24 +6138,35 @@ fn admit_op_input(
     Ok(row)
 }
 
-/// Run the op units (blocking pool): per input — cancel check, decode (data
-/// URI or artifact), apply, encode. Fails fast on the first bad input.
-fn run_image_op_units(
-    command: &ImageOpCommand,
+/// Run the op units (blocking pool): per input — cancel check, decode,
+/// apply, encode. Fails fast on the first bad input. The inputs are
+/// resolved and safety-checked BEFORE the job is admitted.
+/// One admitted image-op input: the resolved bytes, the registry row that
+/// identified them, and the bookkeeping the sidecar records.
+struct AdmittedOpInput {
+    /// Where the input came from (`data_uri` / `artifact:<bundle>/<index>`).
+    source: String,
+    /// The raw container bytes.
+    raw: Vec<u8>,
+    /// The registry row that identified the container; its budget drives
+    /// the read limits.
+    row: &'static crate::formats::FormatInfo,
+    /// The SHA-256 of the raw bytes (the sidecar input record).
+    sha256: String,
+}
+
+/// Resolve and safety-check every image-op input BEFORE a job is admitted.
+///
+/// Resolution (data-URI decode / artifact read) and the registry sniff
+/// happen here, and so does the format-specific safety check with the
+/// sniffed row's budgets: a hostile vector or layered document is a named
+/// 400 and NO job is registered at all.
+fn admit_op_inputs(
     inputs: &[ImageOpInput],
     data_dir: Option<&Path>,
-    format: honkbox_sd_core::OutputFormat,
-    jpeg_quality: Option<u8>,
-    token: &tokio_util::sync::CancellationToken,
-) -> Result<(Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>), ImageOpWorkError> {
-    let mut outputs = Vec::with_capacity(inputs.len());
-    let mut records = Vec::with_capacity(inputs.len());
-    for (i, input) in inputs.iter().enumerate() {
-        // Cooperative cancellation (NEW-3 contract): honored BETWEEN units;
-        // the unit in flight always completes.
-        if token.is_cancelled() {
-            return Err(ImageOpWorkError::Cancelled { completed: i });
-        }
+) -> Result<Vec<AdmittedOpInput>, ImageOpWorkError> {
+    let mut admitted = Vec::with_capacity(inputs.len());
+    for input in inputs {
         let (source, declared, raw) = match input {
             ImageOpInput::DataUri(uri) => {
                 let (declared, bytes) = decode_data_uri(uri)?;
@@ -6118,29 +6187,103 @@ fn run_image_op_units(
                 )
             }
         };
-        let input_sha256 = sha256_hex(&raw);
         // Container authority is the registry magic (see `admit_op_input`):
         // the sniffed format wins, declarations must agree with it.
         let row = admit_op_input(&raw, declared)?;
-        // Bounded decode: the reader-level strict caps stop
-        // decompression-bomb allocations before they happen; the pixel cap
-        // (the sniffed row's registry budget) is the honest reject line for
-        // oversized-but-bounded inputs.
-        let mut reader = image::ImageReader::new(std::io::Cursor::new(&raw));
-        reader.limits(image_decode_limits());
-        let decoded = reader
-            .with_guessed_format()
-            .map_err(|e| ImageOpWorkError::Bad {
-                message: format!("cannot read image container: {e}"),
-                code: "invalid_image_op_inputs",
-            })?
-            .decode()
-            .map_err(|e| ImageOpWorkError::Bad {
-                message: format!("cannot decode image: {e}"),
-                code: "invalid_image_op_inputs",
-            })?;
+        let sha256 = sha256_hex(&raw);
+        check_admitted_container(row, &raw)?;
+        admitted.push(AdmittedOpInput {
+            source,
+            raw,
+            row,
+            sha256,
+        });
+    }
+    Ok(admitted)
+}
+
+/// The format-specific safety check of an admitted input: the SVG
+/// validator and the ORA reader run with the sniffed row's budgets, so a
+/// hostile container is rejected before any job is admitted.
+fn check_admitted_container(
+    row: &crate::formats::FormatInfo,
+    raw: &[u8],
+) -> Result<(), ImageOpWorkError> {
+    let bad = |message: String| ImageOpWorkError::Bad {
+        message,
+        code: "invalid_image_op_inputs",
+    };
+    match row.kind {
+        crate::formats::FormatKind::Svg => crate::svg::validate_svg(raw, &svg_read_limits(row))
+            .map(|_| ())
+            .map_err(|e| bad(format!("cannot read svg container: {e}")))?,
+        crate::formats::FormatKind::Ora => crate::ora::read_ora(raw, &ora_read_limits(row))
+            .map(|_| ())
+            .map_err(|e| bad(format!("cannot read ora container: {e}")))?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Decode one admitted input into pixels: the SVG rasterizer and the ORA
+/// flattener for the vector and layered rows, the `image` crate reader for
+/// the flat raster rows. The limits come from the sniffed registry row.
+fn decode_admitted_input(
+    admitted: &AdmittedOpInput,
+) -> Result<image::DynamicImage, ImageOpWorkError> {
+    let bad = |message: String| ImageOpWorkError::Bad {
+        message,
+        code: "invalid_image_op_inputs",
+    };
+    match admitted.row.kind {
+        crate::formats::FormatKind::Svg => {
+            crate::svg::rasterize_svg(&admitted.raw, &svg_read_limits(admitted.row))
+                .map(crate::raster::RasterImage::into_dynamic_image)
+                .map_err(|e| bad(format!("cannot rasterize svg: {e}")))
+        }
+        crate::formats::FormatKind::Ora => {
+            crate::ora::flatten_ora(&admitted.raw, &ora_read_limits(admitted.row))
+                .map(crate::raster::RasterImage::into_dynamic_image)
+                .map_err(|e| bad(format!("cannot flatten ora: {e}")))
+        }
+        _ => {
+            // Bounded decode: the reader-level strict caps stop
+            // decompression-bomb allocations before they happen; the pixel
+            // cap (the sniffed row's registry budget) is the honest reject
+            // line for oversized-but-bounded inputs.
+            let mut reader = image::ImageReader::new(std::io::Cursor::new(&admitted.raw));
+            reader.limits(image_decode_limits());
+            reader
+                .with_guessed_format()
+                .map_err(|e| bad(format!("cannot read image container: {e}")))?
+                .decode()
+                .map_err(|e| bad(format!("cannot decode image: {e}")))
+        }
+    }
+}
+
+fn run_image_op_units(
+    command: &ImageOpCommand,
+    inputs: &[AdmittedOpInput],
+    format: honkbox_sd_core::OutputFormat,
+    jpeg_quality: Option<u8>,
+    token: &tokio_util::sync::CancellationToken,
+) -> Result<(Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>), ImageOpWorkError> {
+    let mut outputs = Vec::with_capacity(inputs.len());
+    let mut records = Vec::with_capacity(inputs.len());
+    for (i, admitted) in inputs.iter().enumerate() {
+        // Cooperative cancellation (NEW-3 contract): honored BETWEEN units;
+        // the unit in flight always completes.
+        if token.is_cancelled() {
+            return Err(ImageOpWorkError::Cancelled { completed: i });
+        }
+        let decoded = decode_admitted_input(admitted)?;
         let pixels = u64::from(decoded.width()) * u64::from(decoded.height());
-        let pixel_cap = row.budget.decoded_pixels.unwrap_or(u64::MAX);
+        let pixel_cap = admitted
+            .row
+            .budget
+            .decoded_pixels
+            .unwrap_or(RASTER_FALLBACK_MAX_PIXELS);
         if pixels > pixel_cap {
             return Err(ImageOpWorkError::Bad {
                 message: format!(
@@ -6165,8 +6308,8 @@ fn run_image_op_units(
         )
         .map_err(|e| ImageOpWorkError::Failed(format!("output encode failed: {e}")))?;
         records.push(crate::jobs::OpsInputRecord {
-            source,
-            sha256: input_sha256,
+            source: admitted.source.clone(),
+            sha256: admitted.sha256.clone(),
         });
         outputs.push(ImageOpUnitOutput {
             sha256: sha256_hex(&bytes),
@@ -6178,6 +6321,29 @@ fn run_image_op_units(
 
 /// The blocking-pool work result (units + sidecar input records).
 type ImageOpWork = (Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>);
+
+/// A pre-admission rejection: the named 400 with NO job (the job is
+/// registered only after every input passed the safety checks).
+fn settled_without_job(error: ImageOpWorkError) -> ImageOpSettled {
+    match error {
+        ImageOpWorkError::Bad { message, code } => ImageOpSettled {
+            response: Err((StatusCode::BAD_REQUEST, message, Some(code.to_owned()))),
+            job_id: None,
+        },
+        ImageOpWorkError::Failed(message) => ImageOpSettled {
+            response: Err((StatusCode::INTERNAL_SERVER_ERROR, message, None)),
+            job_id: None,
+        },
+        ImageOpWorkError::Cancelled { completed } => ImageOpSettled {
+            response: Err((
+                StatusCode::CONFLICT,
+                format!("image-op cancelled before completion ({completed} input(s) processed)"),
+                Some("job_cancelled".to_owned()),
+            )),
+            job_id: None,
+        },
+    }
+}
 
 /// Map the blocking-pool work outcome onto units or a settleable failure:
 /// cancel → 409 between units, bad input → named 400, work/join failure →
@@ -6232,6 +6398,28 @@ async fn execute_image_op(
     jpeg_quality: Option<u8>,
 ) -> ImageOpSettled {
     let started = Instant::now();
+    // Pre-admission: every input is resolved and safety-checked BEFORE a
+    // job is registered, so a hostile container is a named 400 and the job
+    // registry never sees it.
+    let inputs = req.inputs.clone();
+    let data_dir = config.data_dir.clone();
+    let admitted =
+        match tokio::task::spawn_blocking(move || admit_op_inputs(&inputs, data_dir.as_deref()))
+            .await
+        {
+            Ok(Ok(admitted)) => admitted,
+            Ok(Err(err)) => return settled_without_job(err),
+            Err(join) => {
+                return ImageOpSettled {
+                    response: Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("image-op worker failed: {join}"),
+                        None,
+                    )),
+                    job_id: None,
+                };
+            }
+        };
     let job = crate::jobs_registry::global().register(
         crate::jobs_registry::JobKind::ImageOps,
         None,
@@ -6252,18 +6440,9 @@ async fn execute_image_op(
         }
     };
     let command = req.command.clone();
-    let inputs = req.inputs.clone();
-    let data_dir = config.data_dir.clone();
     let token = job.token().clone();
     let work = tokio::task::spawn_blocking(move || {
-        run_image_op_units(
-            &command,
-            &inputs,
-            data_dir.as_deref(),
-            format,
-            jpeg_quality,
-            &token,
-        )
+        run_image_op_units(&command, &admitted, format, jpeg_quality, &token)
     })
     .await;
     drop(lease);

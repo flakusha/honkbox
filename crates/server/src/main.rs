@@ -4,13 +4,17 @@ mod admission;
 mod backends;
 mod catalog;
 mod config;
+mod container;
 mod downloads;
 mod formats;
 mod jobs;
 mod jobs_registry;
 mod logging;
 mod metrics;
+mod ora;
+mod raster;
 mod routes;
+mod svg;
 mod swap;
 
 use std::net::{IpAddr, SocketAddr};

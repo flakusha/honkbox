@@ -40,6 +40,14 @@ tower-http = { workspace = true }
 # Pixel ops (`POST /v1/image-ops`): the same workspace-pinned `image` the
 # sd-core encoders use (png/jpeg/webp features, no new codecs).
 image = { workspace = true }
+# Container safety (TASK-container-safety): the bounded zip reader behind
+# the ORA path, and the vector/layered read path (TASK-svg-ora-support):
+# XML parsing without entity expansion + a deterministic SVG rasterizer
+# (no `text` feature -> no system fonts -> machine-independent output).
+zip = { workspace = true }
+quick-xml = { workspace = true }
+resvg = { workspace = true }
+tiny-skia = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }

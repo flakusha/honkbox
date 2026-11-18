@@ -59,6 +59,20 @@ honkbox-ash-backend = { path = "crates/ash-backend" }
 # libvulkan at runtime, so loader-less machines build and tests skip
 # gracefully; `debug` derives Debug on the vk types we expose.
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
+# Container safety (TASK-container-safety) + the vector/layered read path
+# (TASK-svg-ora-support): a bounded zip reader (deflate only — no other
+# codecs are enabled, so the attack surface stays small), a streaming XML
+# parser with no entity expansion, and a deterministic SVG rasterizer.
+# resvg is compiled WITHOUT its `text` feature on purpose: no system font
+# is ever loaded, so a rasterized SVG is byte-identical on every machine
+# (<text> is not rasterized).
+# quick-xml is pinned to the PATCHED 0.41 line (RUSTSEC-2026-0194/0195):
+# the SVG/ORA read path parses untrusted XML, so the 0.37 DoS advisories
+# would apply to it (little_exif's transitive 0.37 stays ignored).
+zip = { version = "7.4.0", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"
+resvg = { version = "0.45.1", default-features = false }
+tiny-skia = "0.11.4"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

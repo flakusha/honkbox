@@ -35,18 +35,25 @@
 //! this module references no sd-core symbols at all, so including it in a
 //! test binary never links the native backends.
 //!
-//! # Extension points (deliberately NOT implemented here)
+//! # Enforcement (where each budget is applied)
 //!
-//! - **TASK-container-safety** owns enforcement of [`FormatBudget`]: the
-//!   budgets (decoded pixels / container entries / uncompressed bytes) are
-//!   registry DATA today; the only enforced consumer is the image-ops
-//!   pixel cap (`decoded_pixels` on the accepted raster rows, the same
-//!   `16_777_216` line the route enforced inline before this registry).
-//!   Wiring the remaining budgets into decoders/admission is that ticket.
-//! - **TASK-svg-ora-support** owns codecs for `svg` and `ora` (and the
-//!   video/3D rows are placeholders for their epics). Integration =
-//!   flipping the capability columns on the existing row and teaching the
-//!   relevant validator to accept it — no new source of truth is added.
+//! - The image-ops pixel cap (`decoded_pixels` on the accepted rows, the
+//!   same `16_777_216` line the route enforced inline before this
+//!   registry) is checked after decode, so it also covers a rasterized
+//!   vector or a flattened layered document.
+//! - **TASK-container-safety** landed the bounded archive reader
+//!   ([`crate::container`]): the `entries` / `uncompressed_bytes` /
+//!   `entry_bytes` budgets are the limits its reader enforces, and the
+//!   `ora` row is the one that feeds them.
+//! - **TASK-svg-ora-support** landed the vector reader ([`crate::svg`],
+//!   [`crate::ora`]): the `svg` row's `elements` / `uncompressed_bytes`
+//!   budgets are the limits the SVG validator enforces, and the `ora`
+//!   row's budgets are the limits the ORA reader enforces over the
+//!   bounded container.
+//! - The `image_ops_input` column IS the admission rule for
+//!   `/v1/image-ops`: flipping it on for `svg`/`ora` is what makes the
+//!   route accept those containers (the magic sniff still has the last
+//!   word, so a mismatched declaration stays `format_mismatch`).
 //!   Rows with no capability (`false`/`None` everywhere) are inert: they
 //!   appear in no advertisement and no validator accepts them.
 //!
@@ -109,24 +116,27 @@ impl FormatKind {
 }
 
 /// Byte/size budget for one format (decoded pixels, container entries,
-/// uncompressed bytes). Values marked "reserved" are registry data for
-/// TASK-container-safety to enforce; today only the pixel cap of the
-/// accepted raster rows is enforced (image-ops decode path).
+/// uncompressed bytes, per-entry bytes, vector elements). Every budget
+/// here is ENFORCED by the read path that owns the format: the raster
+/// rows by the image-ops pixel cap and the decoder limits, the `svg` row
+/// by [`crate::svg`], the `ora` row by [`crate::ora`] over the bounded
+/// [`crate::container`] reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FormatBudget {
     /// Ceiling on decoded pixels (`width * height`) once the container
-    /// decompresses. `None` = not applicable (vector) or reserved.
+    /// decompresses. `None` = not applicable (a format with no raster
+    /// canvas).
     pub decoded_pixels: Option<u64>,
     /// Ceiling on container elements (zip entries for `ora`, scene nodes
-    /// for `glb`, vertices for splats). Reserved for
-    /// TASK-container-safety.
-    #[allow(dead_code)] // reserved: consumed when container-safety lands
+    /// for `glb`, vertices for splats).
     pub entries: Option<u64>,
-    /// Ceiling on uncompressed/decompressed bytes. Reserved for
-    /// TASK-container-safety except where the decoder caps already bind
-    /// (the raster rows' allowance matches `image::Limits::max_alloc`).
-    #[allow(dead_code)] // reserved: consumed when container-safety lands
+    /// Ceiling on uncompressed/decompressed bytes (the whole source for a
+    /// flat container, the summed entry bytes for a zip).
     pub uncompressed_bytes: Option<u64>,
+    /// Ceiling on ONE entry's uncompressed bytes (container reads). `None` = not applicable.
+    pub entry_bytes: Option<u64>,
+    /// Ceiling on the element count of a vector document (SVG). `None` = not applicable.
+    pub elements: Option<u64>,
 }
 
 /// One leading-byte signature: a list of `(offset, bytes)` pairs that must
@@ -193,6 +203,8 @@ const RASTER_BUDGET: FormatBudget = FormatBudget {
     decoded_pixels: Some(MAX_DECODED_PIXELS),
     entries: None,
     uncompressed_bytes: Some(MAX_DECODED_ALLOC_BYTES),
+    entry_bytes: None,
+    elements: None,
 };
 
 /// PNG: every stream opens with the 8-byte signature; the IHDR chunk
@@ -295,14 +307,18 @@ static FORMATS: [FormatInfo; 11] = [
         extensions: &["svg"],
         magic: SVG_SIGS,
         budget: FormatBudget {
-            // Vector: no pixel budget until a rasterizer exists.
-            decoded_pixels: None,
+            // A vector document has a raster budget too: the rasterizer
+            // produces pixels, so the same pixel cap binds.
+            decoded_pixels: Some(MAX_DECODED_PIXELS),
             entries: None,
-            // Source-text ceiling, reserved for TASK-svg-ora-support.
+            // Source-text ceiling (the SVG source, not a decoded canvas).
             uncompressed_bytes: Some(16 * 1024 * 1024),
+            entry_bytes: None,
+            // Element-count ceiling for the XML tree.
+            elements: Some(100_000),
         },
         sd_image_ingest: false,
-        image_ops_input: false,
+        image_ops_input: true,
         output: false,
         output_compression: false,
     },
@@ -313,13 +329,19 @@ static FORMATS: [FormatInfo; 11] = [
         extensions: &["ora"],
         magic: &[ORA_SIG],
         budget: FormatBudget {
-            // Layered canvas budget, reserved for TASK-svg-ora-support.
+            // Layered canvas budget: the flattened canvas is a raster.
             decoded_pixels: Some(MAX_DECODED_PIXELS),
+            // The archive's entry ceiling (also the layer ceiling: the
+            // stack's layers are archive entries).
             entries: Some(4096),
+            // Total uncompressed bytes across the archive.
             uncompressed_bytes: Some(512 * 1024 * 1024),
+            // Ceiling on ONE archive entry (a layer PNG).
+            entry_bytes: Some(64 * 1024 * 1024),
+            elements: None,
         },
         sd_image_ingest: false,
-        image_ops_input: false,
+        image_ops_input: true,
         output: false,
         output_compression: false,
     },
@@ -333,6 +355,8 @@ static FORMATS: [FormatInfo; 11] = [
             decoded_pixels: None,
             entries: Some(65_536),
             uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
         },
         sd_image_ingest: false,
         image_ops_input: false,
@@ -350,6 +374,8 @@ static FORMATS: [FormatInfo; 11] = [
             // Vertex ceiling, reserved for the splats epic.
             entries: Some(16_777_216),
             uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
         },
         sd_image_ingest: false,
         image_ops_input: false,
@@ -368,6 +394,8 @@ static FORMATS: [FormatInfo; 11] = [
             decoded_pixels: None,
             entries: Some(16_777_216),
             uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
         },
         sd_image_ingest: false,
         image_ops_input: false,
@@ -387,6 +415,8 @@ static FORMATS: [FormatInfo; 11] = [
             decoded_pixels: None,
             entries: None,
             uncompressed_bytes: None,
+            entry_bytes: None,
+            elements: None,
         },
         sd_image_ingest: false,
         image_ops_input: false,
@@ -472,7 +502,7 @@ pub(crate) fn image_ops_inputs() -> impl Iterator<Item = &'static FormatInfo> {
 }
 
 /// The image-ops input row declaring `mime` (unique among the accepted
-/// raster rows). `None` = the declaration is not an accepted container.
+/// rows). `None` = the declaration is not an accepted container.
 pub(crate) fn image_ops_by_mime(mime: &str) -> Option<&'static FormatInfo> {
     image_ops_inputs().find(|row| row.mime == mime)
 }
@@ -622,11 +652,11 @@ mod tests {
     /// extension the artifact lookup needs, and all carry the enforced
     /// pixel budget.
     #[test]
-    fn image_ops_contract_is_the_accepted_rasters() {
+    fn image_ops_contract_is_the_accepted_rows() {
         let rows: Vec<&FormatInfo> = image_ops_inputs().collect();
         assert_eq!(
             rows.iter().map(|row| row.name).collect::<Vec<_>>(),
-            ["png", "jpeg", "webp"]
+            ["png", "jpeg", "webp", "svg", "ora"]
         );
         let mut mimes: Vec<&str> = rows.iter().map(|row| row.mime).collect();
         mimes.sort_unstable();
@@ -650,7 +680,7 @@ mod tests {
         // accepted data-URI declaration.
         assert_eq!(image_ops_by_mime("application/octet-stream"), None);
         let exts: Vec<&str> = image_ops_extensions().collect();
-        assert_eq!(exts, ["png", "jpeg", "jpg", "webp"]);
+        assert_eq!(exts, ["png", "jpeg", "jpg", "webp", "svg", "ora"]);
     }
 
     /// Signature matching honors offsets and lengths: partial signatures

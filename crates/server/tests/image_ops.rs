@@ -31,6 +31,9 @@ mod catalog;
 #[path = "../src/config.rs"]
 mod config;
 #[allow(dead_code)]
+#[path = "../src/container.rs"]
+mod container;
+#[allow(dead_code)]
 #[path = "../src/downloads.rs"]
 mod downloads;
 #[allow(dead_code)]
@@ -45,12 +48,22 @@ mod jobs_registry;
 #[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
+#[allow(dead_code)]
+#[path = "../src/ora.rs"]
+mod ora;
+#[allow(dead_code)]
+#[path = "../src/raster.rs"]
+mod raster;
 #[path = "../src/routes.rs"]
 mod routes;
+#[allow(dead_code)]
+#[path = "../src/svg.rs"]
+mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
 
+use std::io::Write as _;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -936,6 +949,175 @@ async fn capabilities_list_supported_ops() {
         json!(["resize", "crop", "rotate", "grayscale", "format"]),
         "{doc}"
     );
+}
+
+/// An SVG source and its data URI (the container the registry sniffs).
+fn svg_data_uri(source: &str) -> String {
+    format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(source.as_bytes())
+    )
+}
+
+/// A valid ORA archive: the two ORA conventions, a `stack.xml` and one
+/// layer PNG.
+fn ora_bytes(canvas: (u32, u32), layer: (u32, u32)) -> Vec<u8> {
+    let png = honkbox_sd_core::encode_image(
+        honkbox_sd_core::GeneratedImage {
+            width: layer.0,
+            height: layer.1,
+            rgba: vec![255; (layer.0 * layer.1 * 4) as usize],
+        },
+        honkbox_sd_core::OutputFormat::Png,
+    )
+    .expect("the layer png encodes");
+    let stack = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<image version=\"0.0.3\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\">\n<stack>\n<layer name=\"Layer 1\" src=\"data/layer1.png\" x=\"0\" y=\"0\" opacity=\"1.0\"/>\n</stack>\n</image>\n",
+        canvas.0, canvas.1
+    );
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    writer
+        .start_file("mimetype", stored)
+        .expect("the mimetype entry is accepted");
+    writer
+        .write_all(b"image/openraster")
+        .expect("the mimetype entry is written");
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    writer
+        .start_file("stack.xml", deflated)
+        .expect("the stack entry is accepted");
+    writer
+        .write_all(stack.as_bytes())
+        .expect("the stack entry is written");
+    writer
+        .start_file("data/layer1.png", deflated)
+        .expect("the layer entry is accepted");
+    writer.write_all(&png).expect("the layer entry is written");
+    writer
+        .finish()
+        .expect("the archive is finished")
+        .into_inner()
+}
+
+/// An ORA archive and its data URI.
+fn ora_data_uri(bytes: &[u8]) -> String {
+    format!(
+        "data:image/openraster;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// An SVG input is rasterized and the output is deterministic (the same
+/// bytes always produce the same pixels).
+#[tokio::test]
+async fn svg_input_is_rasterized_deterministically() {
+    let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"3\"><rect width=\"4\" height=\"3\" fill=\"#ff0000\"/></svg>";
+    let inputs = json!([{ "data_uri": svg_data_uri(source) }]);
+    let app = app_with(None);
+    let (status, _, first) =
+        image_ops(app.clone(), resize_request("svg-ops-a", 8, 8, &inputs)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (_, width, height) = decoded_png(&first["outputs"][0]);
+    assert_eq!(
+        (width, height),
+        (8, 8),
+        "the SVG is rasterized, then resized"
+    );
+
+    let (_, _, second) = image_ops(app, resize_request("svg-ops-b", 8, 8, &inputs)).await;
+    assert_eq!(
+        first["outputs"][0]["sha256"], second["outputs"][0]["sha256"],
+        "the same SVG always produces the same bytes"
+    );
+}
+
+/// An ORA input is flattened onto its canvas and the output is
+/// deterministic.
+#[tokio::test]
+async fn ora_input_is_flattened_deterministically() {
+    let inputs = json!([{ "data_uri": ora_data_uri(&ora_bytes((4, 3), (4, 3))) }]);
+    let app = app_with(None);
+    let (status, _, first) =
+        image_ops(app.clone(), resize_request("ora-ops-a", 8, 8, &inputs)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (_, width, height) = decoded_png(&first["outputs"][0]);
+    assert_eq!(
+        (width, height),
+        (8, 8),
+        "the ORA is flattened, then resized"
+    );
+
+    let (_, _, second) = image_ops(app, resize_request("ora-ops-b", 8, 8, &inputs)).await;
+    assert_eq!(
+        first["outputs"][0]["sha256"], second["outputs"][0]["sha256"],
+        "the same ORA always produces the same bytes"
+    );
+}
+
+/// A malicious SVG is rejected BEFORE any job is admitted: the request
+/// fails with a named 400 and no job is registered.
+#[tokio::test]
+async fn malicious_svg_is_rejected_before_a_job_is_admitted() {
+    let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"3\"><script>alert(1)</script></svg>";
+    let inputs = json!([{ "data_uri": svg_data_uri(source) }]);
+    let data_dir = fresh_data_dir("svg-bad");
+    let (status, headers, body) = image_ops(
+        app_with(Some(data_dir.clone())),
+        resize_request("svg-bad-1", 8, 8, &inputs),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_image_op_inputs", "{body}");
+    assert!(
+        headers.get("x-job-id").is_none(),
+        "no job is registered for a rejected input: {headers:?}"
+    );
+    assert!(
+        !data_dir.join("jobs").exists(),
+        "no bundle is written for a rejected input"
+    );
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// A malicious ORA (a layer that escapes the archive root) is rejected
+/// BEFORE any job is admitted.
+#[tokio::test]
+async fn malicious_ora_is_rejected_before_a_job_is_admitted() {
+    // The same archive as the valid one, but the stack points at a file
+    // OUTSIDE the archive root.
+    let stack = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<image version=\"0.0.3\" x=\"0\" y=\"0\" width=\"4\" height=\"3\">\n<stack>\n<layer name=\"Layer 1\" src=\"../evil.png\" x=\"0\" y=\"0\" opacity=\"1.0\"/>\n</stack>\n</image>\n";
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    writer.start_file("mimetype", stored).expect("mimetype");
+    writer.write_all(b"image/openraster").expect("mimetype");
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    writer.start_file("stack.xml", deflated).expect("stack");
+    writer.write_all(stack.as_bytes()).expect("stack");
+    let bytes = writer.finish().expect("finished").into_inner();
+
+    let inputs = json!([{ "data_uri": ora_data_uri(&bytes) }]);
+    let data_dir = fresh_data_dir("ora-bad");
+    let (status, headers, body) = image_ops(
+        app_with(Some(data_dir.clone())),
+        resize_request("ora-bad-1", 8, 8, &inputs),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_image_op_inputs", "{body}");
+    assert!(
+        headers.get("x-job-id").is_none(),
+        "no job is registered for a rejected input: {headers:?}"
+    );
+    assert!(
+        !data_dir.join("jobs").exists(),
+        "no bundle is written for a rejected input"
+    );
+    std::fs::remove_dir_all(&data_dir).ok();
 }
 
 /// Lowercase-hex helper (mirrors the server's digest spelling).
