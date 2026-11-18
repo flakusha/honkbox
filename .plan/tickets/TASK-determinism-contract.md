@@ -1,6 +1,6 @@
 # TASK: Determinism contract
 
-Status: in-progress — determinism core LANDED 2026-11-18 (see Landed/Pending below); provenance wiring pending
+Status: done (core + provenance wiring landed: 67da8d6, 3a86ae0, 02a49f4); deferred: non-image-kind bundle records
 Priority: P0
 Epic: epic-full-ai-cycle
 Owner: honkbox-determinism (agent), 2026-11-18
@@ -64,31 +64,43 @@ Gates observed: `cargo test --locked -p honkbox-server --test
 
 ## Pending
 
-- Provenance wiring: `model_sha256` + `engine_version` are reserved
-  (null) keys in `bundle_record`; wire them at the BundleInputs
-  construction sites — routes.rs txt2img (~:3653), routes.rs img2img
-  (~:4152), main.rs (~:708) — from the download records (HF LFS publishes
-  sha256; `downloads.rs` stores it in the `.part.meta.json` sidecar) and
-  the vendor engine version. The record schema is fixed; wiring only
-  fills the nulls.
 - Bundle records for non-image kinds (LLM/audio streams, embeddings) on
   the same `bundle_record` shape.
-- Workspace gate state at landing: `bun run test:server` GREEN (all
-  suites pass) after this lane declared the missing `svg`/`ora`/`raster`/
-  `container` mods in the two route-harnesses the svg-ora wave missed
-  (tests/validator_properties.rs, tests/swap.rs — mechanical, additive).
-  `bun run lint:rs` still fails on 15 pedantic lints, ALL in sibling
-  files: container.rs (unreadable_literal x2, struct_field_names,
-  too_many_lines, needless_pass_by_value, collapsible_if), ora.rs
-  (unnested_or_patterns, doc_markdown, struct_field_names,
-  too_many_lines, cast_sign_loss), svg.rs (struct_field_names,
-  redundant_closure_for_method_calls, chunks_exact_to_as_chunks),
-  routes.rs (too_many_lines). Zero lint errors in determinism.rs,
-  jobs.rs, tests/determinism.rs (scoped clippy -D warnings clean).
-  Those fixes belong to the container-safety / svg-ora lanes.
-- `bun run codegen:check` not run: this lane touched no api-types or
-  codegen surface (a dirty packages/web-ui/src/gen/api-types.ts in the
-  tree predates/postdates sibling work — not this lane's artifact).
+
+## Provenance wiring — LANDED (2026-11-18, commit 02a49f4)
+
+- `downloads.rs`: completed checksum-verified downloads persist
+  `<target>.sha256.json` (`ArtifactMeta`, verified streamed digest only —
+  never an unverified value); `artifact_sha256()` reads+validates (64
+  lowercase hex or None); `remove_artifact_meta()` keeps the sidecar from
+  outliving its file (delete_model_path). The in-progress
+  `.part.meta.json` keeps its resume role and is still dropped at commit.
+- `sd-core`: `SD_CPP_ENGINE_VERSION` names the exact vendored revs
+  (stable-diffusion.cpp 5dcfa798… / ggml eeda9ec… / diffusion-rs 89dcf93…
+  — mirroring `vendor.manifest.toml`, the source of truth);
+  `engine_version_for(backend_id)` maps the sd-cpp backends to it and the
+  stub to `None` (no separate engine — `code_version` covers it; null is
+  honest absence, never a fabricated version).
+- `jobs.rs`: `BundleInputs.model_sha256` / `.engine_version` (documented
+  honest-absence semantics); both recorded in `request.json` and
+  `final_00.json`; `sidecar_records_provenance` test (set → recorded;
+  plain → explicit nulls).
+- Wiring sites: routes.rs txt2img + img2img resolve the digest via the
+  catalog entry's weight `path` (catalog-verified download or null) and
+  the engine version via `backend_id`; main.rs CLI wires engine version
+  and records a null digest (no catalog/scan on the CLI path).
+- Tests: `known_provenance_lands_in_the_record` (published keys + key
+  change) and the null-path assertions in the pins test.
+
+Gates observed at landing: `cargo test --locked -p honkbox-server --test
+  determinism` 20/20 GREEN; `bun run test:server` GREEN (all suites incl.
+  the new provenance tests). `bun run lint:rs` and `cargo test -p
+  honkbox-sd-core --lib` were deferred at commit time by the sibling
+  vendor/ rev-move in flight (`vendor_patches/0006-sd-cancel-
+generation.patch` mid-application: vendored api.rs E0252/E0277); the
+  earlier 15 sibling pedantic lints are gone (their clippy fixes landed)
+  and my sd-core code compiled green inside test:server's build window.
+  `bun run codegen:check` n/a — no api-types/codegen surface touched.
 
 Note: the linked research doc
 `.tmp/research/ReviewedFullCycle-Determinism.md` is absent from the tree
