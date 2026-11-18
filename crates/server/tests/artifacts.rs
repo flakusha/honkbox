@@ -53,6 +53,7 @@ mod svg;
 #[path = "../src/swap.rs"]
 mod swap;
 
+use std::fmt::Write as _;
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
