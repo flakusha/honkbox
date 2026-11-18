@@ -31,6 +31,7 @@ honkbox-sd-core = { workspace = true }
 ulid = { workspace = true }
 honkbox-llm-worker = { path = "../llm-worker" }
 honkbox-audio-worker = { path = "../audio-worker" }
+honkbox-recognition-worker = { path = "../recognition-worker" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
 reqwest = { workspace = true }
@@ -57,6 +58,21 @@ proptest = "1"
 # Decompress the gzip path in the compression tests (byte-identity proof).
 # Rust backend = the lock-resident miniz_oxide/zlib-rs, no system zlib.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# Recognition contract tests (tests/recognition.rs): QR fixture ENCODE +
+# rasterization, dev-only (the runtime decode path lives in the worker).
+# Both MIT/Apache-2.0-class; rxing without its `image` feature (workspace
+# Cargo.toml note — the image pin stays the lock's shared 0.25.10).
+rxing = { version = "0.9", default-features = false, features = [
+    "decoders",
+    "encoders",
+    "qrcode",
+    "datamatrix",
+    "oned",
+    "aztec",
+    "pdf417",
+    "encoding_rs",
+] }
+image = { workspace = true }
 
 [features]
 # Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
@@ -75,4 +91,8 @@ vulkan = ["honkbox-sd-core/vulkan"]
 # image parts get the named `vision_unsupported` 400 and a configured
 # mmproj is a loud load error (backend.rs) — never a silent drop.
 llm-vision = ["honkbox-llm-worker/vision"]
-default = ["vulkan", "llm-vision"]
+# Barcode/QR recognition (TASK-barcode-decode): compiles the worker's rxing
+# backend and flips `capabilities.recognition.barcode`. Default-on:
+# pure-Rust CPU decode, sub-millisecond, no foreign builds.
+barcode = ["honkbox-recognition-worker/barcode"]
+default = ["vulkan", "llm-vision", "barcode"]

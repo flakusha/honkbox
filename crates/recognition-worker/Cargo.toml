@@ -1,0 +1,49 @@
+[package]
+name = "honkbox-recognition-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["barcode"]
+# rxing barcode/QR decode (pure Rust; see workspace Cargo.toml license note).
+barcode = ["dep:rxing"]
+
+[dependencies]
+# Container decode (PNG/JPEG/WebP — the same workspace image the sd-core
+# encoders and /v1/image-ops use; workspace pin 0.25.x, codec set locked by
+# the formats registry test).
+image = { workspace = true }
+# Barcode/QR decode (TASK-barcode-decode): pure-Rust zxing port, Apache-2.0
+# (verified crates.io 0.9.4 + GitHub). Dep tree re-verified at adoption:
+# chrono/num/once_cell/regex/thiserror/unicode-segmentation + (oned)
+# rxing-one-d-proc-derive + (encoding_rs) encoding_rs/codepage-437 — all
+# MIT/Apache-2.0 class. Compiled WITHOUT its `image`/`image_formats` features
+# ON PURPOSE: rxing hard-pins image =0.25.8 which conflicts with the
+# workspace lock's image 0.25.10 (vendored diffusion-rs requires =0.25.10);
+# this backend decodes containers with the workspace `image` and feeds rxing
+# luma buffers (`detect_in_luma_slice`) instead — same symbology coverage
+# (QR, DataMatrix, 1D, Aztec, PDF417), zero new image tree.
+rxing = { version = "0.9", default-features = false, features = [
+    # `decoders` gates the reader plumbing incl. `helpers::detect_in_luma*`
+    # (verified in rxing-0.9.4/src/helpers.rs cfgs) — required even with the
+    # symbology features on.
+    "decoders",
+    # Test-only encode path (qr_png fixture); the runtime backend never
+    # encodes. Writer tree is `encoders`-gated (rxing lib.rs).
+    "encoders",
+    "qrcode",
+    "datamatrix",
+    "oned",
+    "aztec",
+    "pdf417",
+    # Charset decision is mandatory (rxing refuses to compile without one,
+    # and `no_character_set_support` panics inside the DECODER at
+    # character_set.rs:485 — verified). `encoding_rs` is the supported path
+    # (encoding_rs + codepage-437, both MIT/Apache-2.0).
+    "encoding_rs",
+], optional = true }
+
+[lints]
+workspace = true
