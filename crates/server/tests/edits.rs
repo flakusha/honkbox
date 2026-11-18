@@ -748,8 +748,7 @@ async fn edits_mixed_lora_dirs_is_400() {
 #[tokio::test]
 async fn edits_loras_warn_and_record() {
     let _slot = SLOT_LOCK.lock().await;
-    let data_dir =
-        std::env::temp_dir().join(format!("honkbox-edit-lora-{}", ulid::Ulid::new()));
+    let data_dir = std::env::temp_dir().join(format!("honkbox-edit-lora-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&data_dir).unwrap();
     let catalog = catalog_with(&[
         sd_entry("comfy:f.safetensors"),
@@ -782,8 +781,7 @@ async fn edits_loras_warn_and_record() {
     let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     let dir = jobs.next().expect("one bundle").unwrap().path();
     let request: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
     assert_eq!(
         request["loras"][0]["slug"],
         "comfy:loras/detail.safetensors"
@@ -801,7 +799,10 @@ async fn edits_warnings_absent_without_loras() {
     let _slot = SLOT_LOCK.lock().await;
     let (status, body) = edits(
         app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
-        &[png_part("image", png_bytes(4, 4)), part("prompt", "redo this")],
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+        ],
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
