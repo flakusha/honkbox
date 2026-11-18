@@ -5,6 +5,22 @@
 //! explicit error, never garbage vectors); the operator
 //! `capabilities.embeddings` override; and the reverse gate (an embeddings
 //! model refused by `/v1/chat/completions`).
+//!
+//! Resource contract: the ledger's GPU slot is ONE process-global counter
+//! (every kind counts against it, `capacities.gpu_slots = 1`), so the
+//! `/v1/embeddings` requests in this binary are serialized on `SLOT_LOCK`
+//! (taken by the `embed` helper) — a parallel test must not race the one
+//! slot into a spurious 429.
+//!
+//! The chat-refusal test is the one request that takes NO lock: the route
+//! gates it BEFORE it registers a job or calls `admission::acquire`, so it
+//! never reaches the ledger. The test pins that invariant (a gated 400
+//! carries no `X-Job-Id`), and that pin is what makes the missing lock
+//! safe — if the route ever moved the gate after the acquire, the
+//! assertion fails instead of the test racing the slot.
+//!
+//! No data dirs (`data_dir: None` → no bundle writes in this binary) and a
+//! per-test catalog (`test_app`), so no model state is shared between tests.
 
 // No lib target on this binary crate, so include the modules directly.
 #[allow(dead_code)]
