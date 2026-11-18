@@ -12,6 +12,15 @@ use std::time::{Duration, SystemTime};
 
 use tracing::{debug, warn};
 
+// Determinism machinery (TASK-determinism-contract) is registered here —
+// not in `main.rs` — because main.rs is owned by the in-flight
+// binary-formats wave (see .tmp/intercom/WHO-DOES-WHAT.md). Promoting it
+// to a top-level module later moves this one `mod` line and re-points the
+// `determinism::` call site below (and determinism.rs's `super::` use)
+// to `crate::`.
+#[path = "determinism.rs"]
+pub mod determinism;
+
 /// How long a job bundle or stray temp file survives before `gc_jobs` removes
 /// it (default 7 days, override via `[jobs] gc_ttl` / `HONKBOX_GC_TTL`).
 pub const DEFAULT_GC_TTL: Duration = Duration::from_hours(7 * 24);
@@ -119,6 +128,11 @@ pub fn write_bundle_into(
 ) -> Result<(), String> {
     let size = format!("{}x{}", inputs.width, inputs.height);
     let art = format!("final_00.{}", inputs.format.extension());
+    // Canonical input key (TASK-determinism-contract): the L0
+    // reproducibility handle over everything recorded below. Two runs of
+    // the same request carry the same value; volatile per-run state (ULID
+    // dir name, elapsed_ms) is excluded by the canonical form.
+    let inputs_sha256 = determinism::bundle_record_hash(inputs);
     let request = serde_json::json!({
         "model": inputs.model_slug,
         "prompt": inputs.prompt,
@@ -134,6 +148,7 @@ pub fn write_bundle_into(
         "strength": inputs.strength,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
+        "inputs_sha256": inputs_sha256,
     });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
@@ -151,6 +166,7 @@ pub fn write_bundle_into(
         "strength": inputs.strength,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
+        "inputs_sha256": inputs_sha256,
     });
     let metrics = serde_json::json!({
         "event": "done",
