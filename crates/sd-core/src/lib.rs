@@ -847,6 +847,19 @@ impl OutputFormat {
             _ => None,
         }
     }
+
+    /// Every encoder compiled into this crate (the authoritative source for
+    /// capability advertisement — `GET /v1/capabilities` `formats.write`
+    /// lists exactly these).
+    pub const ALL: [OutputFormat; 3] = [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp];
+
+    /// `true` when `output_compression` affects this container: JPEG quality
+    /// only (PNG is deterministic; the WebP encoder is lossless-only in
+    /// `image` 0.25).
+    #[must_use]
+    pub const fn compression_applies(self) -> bool {
+        matches!(self, OutputFormat::Jpeg)
+    }
 }
 
 /// JPEG quality used when the caller does not override it.

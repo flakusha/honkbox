@@ -34,7 +34,7 @@
 use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use tokio::sync::Notify;
 
 use crate::metrics::{self, BusyReason};
@@ -61,6 +61,24 @@ fn queue_wait() -> Duration {
     *QUEUE_WAIT
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The configured wait bound in whole seconds — the single source the
+/// capability advertisement reports (`GET /v1/capabilities`
+/// `queue.queue_wait_secs`); no duplicated constant.
+pub(crate) fn queue_wait_secs() -> u64 {
+    queue_wait().as_secs()
+}
+
+/// The `Retry-After` hint (seconds) the server's 429 responses carry — the
+/// shared middleware and the capability advertisement both read THIS, so
+/// the header and the document can never disagree.
+pub(crate) const RETRY_AFTER_HINT_SECS: u64 = 1;
+
+/// The header value built from [`RETRY_AFTER_HINT_SECS`].
+pub(crate) fn retry_after_header_value() -> HeaderValue {
+    HeaderValue::from_str(&RETRY_AFTER_HINT_SECS.to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("1"))
 }
 
 /// Reserve capacity for `kind` through the ledger's admission queue. An

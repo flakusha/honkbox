@@ -14,6 +14,11 @@ pub use tts::{KOKORO_VOICES, KokoroTts, StubTts};
 #[cfg(feature = "vad")]
 pub use vad::{SileroVad, VadSpan};
 
+/// `true` when THIS build compiles Silero VAD (`vad` feature) — the same
+/// compile probe the capability advertisement reports as `features.vad`, so
+/// the document cannot drift from the binary.
+pub const VAD_COMPILED: bool = cfg!(feature = "vad");
+
 use std::fmt;
 
 macro_rules! audio_error {

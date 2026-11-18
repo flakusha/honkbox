@@ -30,19 +30,22 @@ use axum::{
 };
 use base64::Engine as _;
 use honkbox_api_types::{
-    CatalogEntry, CatalogList, CatalogLocal, ChatContent, ChatMessage, ChatRequest, ChatResponse,
-    ChatRole, ChatTool, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
+    AuthCapabilities, Capabilities, CatalogEntry, CatalogList, CatalogLocal, ChatContent,
+    ChatMessage, ChatRequest, ChatResponse, ChatRole, ChatTool, CompressionRange,
+    ControlNetFeature, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
     DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
-    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FinishReason, FunctionCall,
-    FunctionDefinition, GgufMetadata, Health, ImageB64, ImagesGenerationRequest,
-    ImagesGenerationResponse, ImagesHiresFix, ImagesLora, JobCancelResult, JobEvent, JobEventType,
-    JobInfo, JobList, JsonSchemaSpec, MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities,
-    ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction,
-    OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice,
-    OpenAiDelta, OpenAiError, OpenAiUsage, Pill, ResidentModel, ResponseFormat, ResponseFormatType,
-    RunningList, RunningModel, SafetensorsMetadata, SpeechRequest, SynthesizeRequest, ToolCall,
-    ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment, TranscriptionText,
-    TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, Voice, VoiceList,
+    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FeatureFlags, FinishReason,
+    FormatLimits, Formats, FunctionCall, FunctionDefinition, GgufMetadata, Health, ImageB64,
+    ImagesGenerationRequest, ImagesGenerationResponse, ImagesHiresFix, ImagesLora, JobCancelResult,
+    JobEvent, JobEventType, JobInfo, JobList, JsonSchemaSpec, MemoryCapacity, MemoryGpu,
+    MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind,
+    ModelMetadata, NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice,
+    OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, OutputFormatCapability,
+    Pill, QueueCapabilities, QueueKindCapacity, ResidentModel, ResponseFormat, ResponseFormatType,
+    RunningList, RunningModel, SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest,
+    ToolCall, ToolCallType, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
+    TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
+    Voice, VoiceList,
 };
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
@@ -52,7 +55,8 @@ pub use crate::config::{AuthConfig, AuthMode};
 use honkbox_audio_worker::{
     SttPipeline, SynthesizeRequest as WorkerSynthRequest, SynthesizedAudio,
     TranscribeRequest as WorkerTranscribeRequest, Transcript as WorkerTranscript,
-    TranscriptSegment as WorkerTranscriptSegment, TtsPipeline, decode_wav, encode_wav,
+    TranscriptSegment as WorkerTranscriptSegment, TtsPipeline, VAD_COMPILED, decode_wav,
+    encode_wav,
 };
 use honkbox_llm_worker::{
     ChatImage as WorkerChatImage, ChatMessage as WorkerChatMessage,
@@ -79,6 +83,7 @@ struct EmbeddedUi;
     paths(
         health,
         get_version,
+        get_capabilities,
         get_models,
         refresh_models,
         post_model_unload,
@@ -113,6 +118,18 @@ struct EmbeddedUi;
     components(schemas(
         Health,
         Version,
+        Capabilities,
+        ServerInfo,
+        FeatureFlags,
+        VisionFeature,
+        ControlNetFeature,
+        Formats,
+        OutputFormatCapability,
+        FormatLimits,
+        CompressionRange,
+        AuthCapabilities,
+        QueueCapabilities,
+        QueueKindCapacity,
         ChatMessage,
         ChatRequest,
         ChatResponse,
@@ -291,14 +308,17 @@ impl AppConfig {
 /// sized for the largest transcription input the whisper path plausibly
 /// serves, still far below any memory concern for a local server. Applies
 /// to every route; JSON DTOs are tiny, so the limit is only load-bearing
-/// on `/v1/audio/transcriptions` and `/v1/transcribe`.
-const AUDIO_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
+/// on `/v1/audio/transcriptions` and `/v1/transcribe`. `pub(crate)`: the
+/// capability advertisement reports it (`formats.limits.body_bytes`) and
+/// the contract test cross-checks the two against each other.
+pub(crate) const AUDIO_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/version", get(get_version))
+        .route("/v1/capabilities", get(get_capabilities))
         .route("/v1/models", get(get_models))
         .route("/v1/models/refresh", post(refresh_models))
         .route("/v1/models/{slug}/unload", post(post_model_unload))
@@ -472,9 +492,10 @@ async fn track_metrics(req: Request, next: Next) -> Response {
     if response.status() == StatusCode::TOO_MANY_REQUESTS
         && !response.headers().contains_key(header::RETRY_AFTER)
     {
-        response
-            .headers_mut()
-            .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            crate::admission::retry_after_header_value(),
+        );
     }
     crate::metrics::record_request(route, response.status().as_u16(), started.elapsed());
     response
@@ -537,6 +558,133 @@ async fn get_version() -> Json<Version> {
         name: "honkbox".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
     })
+}
+
+/// `GET /v1/capabilities`: the machine-readable server contract (FEAT-
+/// capabilities-api). Everything is DERIVED at request time — compiled
+/// features, runtime config, the live catalog snapshot, and the resource
+/// ledger's actual admission knobs — never a prose hard-code, so the
+/// document is always true of the process answering and `/v1/models/refresh`
+/// or a download commit are reflected with no cache to invalidate.
+#[utoipa::path(
+    get,
+    path = "/v1/capabilities",
+    responses((status = 200, description = "Server capability contract", body = Capabilities))
+)]
+async fn get_capabilities(State(config): State<AppConfig>) -> Json<Capabilities> {
+    Json(capabilities_document(&config))
+}
+
+/// Build the capability document (see [`get_capabilities`]). `pub(crate)`
+/// so the contract tests can assert on the exact structure the route
+/// serves.
+pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
+    // The LIVE catalog snapshot: vision/controlnet model counts refresh
+    // with `/v1/models/refresh` and download commits for free.
+    let catalog = config.catalog_snapshot();
+    let vision_models = u64::try_from(
+        catalog
+            .data
+            .iter()
+            .filter(|entry| entry.capabilities.vision)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let controlnet_models = u64::try_from(
+        catalog
+            .data
+            .iter()
+            .filter(|entry| entry.kind == ModelKind::ControlNet)
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    // ControlNet is honest about the 501: the flag is `true` only when the
+    // configured SD pipeline actually applies control images (the sd-cpp
+    // backend; `resolve_controlnet` answers `controlnet_unsupported` for
+    // everything else) AND conditioning targets exist in the catalog.
+    let controlnet_available =
+        controlnet_models > 0 && config.sd.backend_id() == honkbox_sd_core::SD_CPP_BACKEND_ID;
+    let ledger = honkbox_residency::global().admission_info();
+    let auth_mode = match config.auth.mode {
+        AuthMode::None => "none",
+        AuthMode::Bearer => "bearer",
+    };
+    Capabilities {
+        api_version: honkbox_api_types::API_VERSION.to_owned(),
+        server: ServerInfo {
+            name: "honkbox".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        },
+        features: FeatureFlags {
+            // Same compile probe the catalog's `capabilities.vision` uses
+            // (routes' vision gate) and the named `vision_unsupported` 400
+            // backs — a text-only build reports `false` here.
+            vision: VisionFeature {
+                built: honkbox_llm_worker::VISION_COMPILED,
+                models: vision_models,
+            },
+            controlnet: ControlNetFeature {
+                available: controlnet_available,
+                models: controlnet_models,
+            },
+            // Per-request LoRA stacks: accepted and validated on BOTH image
+            // routes (`resolve_loras`); the contract test cross-checks the
+            // flag against the generated OpenAPI paths.
+            lora: true,
+            // No video job class exists; the FEAT ticket pins this `false`.
+            video: false,
+            // Unconditional routes (`GET /v1/jobs`, `GET /v1/events`); the
+            // contract test cross-checks both against the OpenAPI paths.
+            jobs: true,
+            events: true,
+            vad: VAD_COMPILED,
+            experimental_ash_sd: cfg!(feature = "experimental-ash-sd"),
+        },
+        formats: Formats {
+            // Server-VALIDATED ingest: image edits' `image`/`mask` and the
+            // ControlNet `control_image` are PNG magic-sniffed
+            // (`png_dimensions`); vision chat bytes pass through to the
+            // projector's own loader and are deliberately not listed.
+            read: vec!["png".to_owned()],
+            write: honkbox_sd_core::OutputFormat::ALL
+                .iter()
+                .map(|format| OutputFormatCapability {
+                    format: format.name().to_owned(),
+                    compression: format.compression_applies(),
+                })
+                .collect(),
+            limits: FormatLimits {
+                output_compression: CompressionRange {
+                    min: 0,
+                    max: 100,
+                    applies_to: "jpeg".to_owned(),
+                },
+                // The router-wide body ceiling (`AUDIO_BODY_LIMIT_BYTES`,
+                // H1) — the largest upload any route accepts.
+                body_bytes: u64::try_from(AUDIO_BODY_LIMIT_BYTES).unwrap_or(u64::MAX),
+            },
+        },
+        auth: AuthCapabilities {
+            mode: auth_mode.to_owned(),
+        },
+        queue: QueueCapabilities {
+            gpu_slots: ledger.gpu_slots,
+            // The LIVE admission bound — 0 = queueing disabled.
+            queue_wait_secs: crate::admission::queue_wait_secs(),
+            retry_after_secs: crate::admission::RETRY_AFTER_HINT_SECS,
+            kinds: ledger
+                .queue_caps
+                .into_iter()
+                .map(|(kind, cap)| QueueKindCapacity {
+                    kind: kind.label().to_owned(),
+                    queue_cap: u64::try_from(cap).unwrap_or(u64::MAX),
+                    ttl_secs: ledger.queue_ttl.as_secs(),
+                })
+                .collect(),
+        },
+        openapi: "/v1/openapi.json".to_owned(),
+        models: "/v1/models".to_owned(),
+    }
 }
 
 /// `OpenAPI` 3.1 document as JSON.

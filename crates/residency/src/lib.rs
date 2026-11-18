@@ -558,6 +558,19 @@ struct Inner {
     counters: Counters,
 }
 
+/// Snapshot of the ledger's admission-facing configuration (the values a
+/// capability document needs to report: shared slots, the queue TTL, and
+/// one row per kind's bounded queue length).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerAdmission {
+    /// Shared GPU slots.
+    pub gpu_slots: u32,
+    /// Queue TTL installed per kind (`Duration::ZERO` = never expires).
+    pub queue_ttl: Duration,
+    /// `(kind, queue_cap)` per kind, in [`ResourceKind::ALL`] order.
+    pub queue_caps: Vec<(ResourceKind, usize)>,
+}
+
 /// Capability/VRAM-aware resource ledger with per-kind bounded admission
 /// queues. Share by reference (`global()` or a local instance).
 #[derive(Debug)]
@@ -887,6 +900,27 @@ impl Ledger {
             wait_count: c.wait_count[slot],
             hold_total: Duration::from_nanos(c.hold_ns[slot]),
             hold_count: c.hold_count[slot],
+        }
+    }
+
+    /// Read the current admission-facing configuration (`Ledger::configure`
+    /// swaps it; serve startup installs the resolved `[ledger]` settings) —
+    /// the values a capability document needs to report: shared slots, the
+    /// queue TTL, and one row per kind's bounded queue length.
+    #[must_use]
+    pub fn admission_info(&self) -> LedgerAdmission {
+        let inner = lock(&self.inner);
+        LedgerAdmission {
+            gpu_slots: inner.config.capacities.gpu_slots,
+            queue_ttl: inner
+                .config
+                .kinds
+                .first()
+                .map_or(Duration::ZERO, |settings| settings.ttl),
+            queue_caps: ResourceKind::ALL
+                .iter()
+                .map(|kind| (*kind, inner.config.kinds[kind.slot()].queue_cap))
+                .collect(),
         }
     }
 

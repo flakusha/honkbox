@@ -351,6 +351,25 @@
         }
       }
     },
+    "/v1/capabilities": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/capabilities`: the machine-readable server contract (FEAT-\ncapabilities-api). Everything is DERIVED at request time — compiled\nfeatures, runtime config, the live catalog snapshot, and the resource\nledger's actual admission knobs — never a prose hard-code, so the\ndocument is always true of the process answering and `/v1/models/refresh`\nor a download commit are reflected with no cache to invalidate.",
+        "operationId": "get_capabilities",
+        "responses": {
+          "200": {
+            "description": "Server capability contract",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/catalog": {
       "get": {
         "tags": [],
@@ -1078,6 +1097,67 @@
   },
   "components": {
     "schemas": {
+      "AuthCapabilities": {
+        "type": "object",
+        "description": "Auth mode (`Capabilities::auth`).",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "`\"none\"` (loopback-only operation) or `\"bearer\"` (key required on\nevery route except the probes). The key VALUE is never in this\ndocument."
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "description": "Machine-readable server contract (`GET /v1/capabilities`). Everything is\nDERIVED at request time from compiled features, runtime config, and the\nlive catalog snapshot — never a prose hard-code — so the document is\nalways true of the process answering.\n\nAPI version policy: `api_version` is the wire-contract version,\nindependent of the crate version. Bump it when the contract changes\nincompatibly (DTO field removal/type change, error-code change, or an\nadvertised-flag semantic change); purely additive optional fields may\nland under the existing version. Crate `version` tracks releases, not\nthe wire contract.",
+        "required": [
+          "api_version",
+          "server",
+          "features",
+          "formats",
+          "auth",
+          "queue",
+          "openapi",
+          "models"
+        ],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "description": "Wire-contract version (`\"v1\"`); see the version policy above."
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthCapabilities",
+            "description": "Auth mode in effect (`\"none\"` or `\"bearer\"`); the key VALUE is never\nexposed."
+          },
+          "features": {
+            "$ref": "#/components/schemas/FeatureFlags",
+            "description": "Feature flags derived from compile features, runtime config, and the\nlive catalog."
+          },
+          "formats": {
+            "$ref": "#/components/schemas/Formats",
+            "description": "Image containers accepted on ingest and producible on output, with\nthe size/quality limits the server actually enforces."
+          },
+          "models": {
+            "type": "string",
+            "description": "Where the model catalog lives."
+          },
+          "openapi": {
+            "type": "string",
+            "description": "Where the generated `OpenAPI` document lives."
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueCapabilities",
+            "description": "Resource-ledger admission knobs a client needs to plan retries:\nper-kind queue caps, the queue wait bound, and the `Retry-After`\nhint the server's 429s carry."
+          },
+          "server": {
+            "$ref": "#/components/schemas/ServerInfo",
+            "description": "Server identity (name + crate version)."
+          }
+        }
+      },
       "CatalogEntry": {
         "type": "object",
         "description": "One curated catalog offering (`GET /v1/catalog`). The manifest is a\nchecked-in JSON list — review-by-PR is the signature; entries carry a\n`verified_date` and rot without it (12 months ⇒ drop at release).",
@@ -1339,6 +1419,53 @@
           "type": {
             "$ref": "#/components/schemas/ToolType",
             "description": "Always `\"function\"`."
+          }
+        }
+      },
+      "CompressionRange": {
+        "type": "object",
+        "description": "Inclusive integer range (`FormatLimits::output_compression`).",
+        "required": [
+          "min",
+          "max",
+          "applies_to"
+        ],
+        "properties": {
+          "applies_to": {
+            "type": "string",
+            "description": "The container the knob applies to (`\"jpeg\"`)."
+          },
+          "max": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest accepted value (inclusive).",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Smallest accepted value (inclusive).",
+            "minimum": 0
+          }
+        }
+      },
+      "ControlNetFeature": {
+        "type": "object",
+        "description": "`ControlNet` capability (`FeatureFlags::controlnet`).",
+        "required": [
+          "available",
+          "models"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`true` only when the configured SD pipeline applies control images\n(the sd-cpp backend) AND the catalog holds at least one\n`controlnet`-kind entry; otherwise valid pairs get the named 501\n(`controlnet_unsupported`) and this flag is `false`."
+          },
+          "models": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`controlnet`-kind entries in the live catalog (conditioning inputs\nresolve by slug/alias against exactly these).",
+            "minimum": 0
           }
         }
       },
@@ -1674,6 +1801,54 @@
           }
         }
       },
+      "FeatureFlags": {
+        "type": "object",
+        "description": "Feature flags (`Capabilities::features`). Every `true` here is backed by\na working route (contract-tested); `video` stays `false` until a real\nvideo job class lands.",
+        "required": [
+          "vision",
+          "controlnet",
+          "lora",
+          "video",
+          "jobs",
+          "events",
+          "vad",
+          "experimental_ash_sd"
+        ],
+        "properties": {
+          "controlnet": {
+            "$ref": "#/components/schemas/ControlNetFeature",
+            "description": "ControlNet-conditioned renders on `POST /v1/images/generations`."
+          },
+          "events": {
+            "type": "boolean",
+            "description": "Server-sent event stream (`GET /v1/events`)."
+          },
+          "experimental_ash_sd": {
+            "type": "boolean",
+            "description": "Experimental ash SD backend (compile feature\n`experimental-ash-sd`); empty until that backend's first code lands."
+          },
+          "jobs": {
+            "type": "boolean",
+            "description": "Job registry (`GET /v1/jobs`, cancel/delete routes)."
+          },
+          "lora": {
+            "type": "boolean",
+            "description": "Per-request `LoRA` stacks on image generations AND edits."
+          },
+          "vad": {
+            "type": "boolean",
+            "description": "Silero VAD in the audio worker (compile feature `vad`)."
+          },
+          "video": {
+            "type": "boolean",
+            "description": "Video generation. Always `false` today — there is no video job\nclass; a client must not probe for video routes."
+          },
+          "vision": {
+            "$ref": "#/components/schemas/VisionFeature",
+            "description": "Vision chat (mtmd/mmproj image parts)."
+          }
+        }
+      },
       "FinishReason": {
         "type": "string",
         "description": "Why generation stopped (`choices[].finish_reason`).",
@@ -1682,6 +1857,55 @@
           "length",
           "tool_calls"
         ]
+      },
+      "FormatLimits": {
+        "type": "object",
+        "description": "Size/quality limits (`Formats::limits`), read from the validation code\nthat enforces them.",
+        "required": [
+          "output_compression",
+          "body_bytes"
+        ],
+        "properties": {
+          "body_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Request-body ceiling applied by the router (largest upload the\nserver accepts, multipart framing included).",
+            "minimum": 0
+          },
+          "output_compression": {
+            "$ref": "#/components/schemas/CompressionRange",
+            "description": "`output_compression` accepted range (JPEG quality, rejected not\nclamped outside it)."
+          }
+        }
+      },
+      "Formats": {
+        "type": "object",
+        "description": "Image container support (`Capabilities::formats`), derived from the\ncompiled encoders/validators — a missing decoder never appears.",
+        "required": [
+          "read",
+          "write",
+          "limits"
+        ],
+        "properties": {
+          "limits": {
+            "$ref": "#/components/schemas/FormatLimits",
+            "description": "Size/quality limits the server enforces."
+          },
+          "read": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Containers the server validates on ingest (image edits' `image`/\n`mask` and `ControlNet` `control_image` are PNG magic-sniffed)."
+          },
+          "write": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputFormatCapability"
+            },
+            "description": "Containers producible on output (`output_format` on both image\nroutes); one entry per compiled encoder."
+          }
+        }
       },
       "FunctionCall": {
         "type": "object",
@@ -2944,6 +3168,24 @@
           }
         }
       },
+      "OutputFormatCapability": {
+        "type": "object",
+        "description": "One writable container (`Formats::write`).",
+        "required": [
+          "format",
+          "compression"
+        ],
+        "properties": {
+          "compression": {
+            "type": "boolean",
+            "description": "`true` when `output_compression` affects this container (JPEG\nquality only; PNG is deterministic and WebP encodes lossless-only)."
+          },
+          "format": {
+            "type": "string",
+            "description": "`output_format` wire value (`png` | `jpeg` | `webp`)."
+          }
+        }
+      },
       "Pill": {
         "type": "string",
         "description": "Fit-pill verdict for a curated catalog entry against the configured\n`[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind\noverhead factors over weight bytes), never a measurement.",
@@ -2952,6 +3194,70 @@
           "slow",
           "fail"
         ]
+      },
+      "QueueCapabilities": {
+        "type": "object",
+        "description": "Resource-ledger admission knobs (`Capabilities::queue`), read live from\nthe ledger + admission config — the same values the 429 contract uses.",
+        "required": [
+          "gpu_slots",
+          "queue_wait_secs",
+          "retry_after_secs",
+          "kinds"
+        ],
+        "properties": {
+          "gpu_slots": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Shared GPU slots the ledger admits against.",
+            "minimum": 0
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueKindCapacity"
+            },
+            "description": "One row per admission kind (fixed vocabulary), with its bounded\nqueue length and TTL — a client can size its own retry cadence."
+          },
+          "queue_wait_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Admission-queue wait bound in seconds (`[server] queue_wait_secs`);\n`0` = queueing disabled (busy requests 429 immediately). Doubles as\nthe queued-waiter TTL.",
+            "minimum": 0
+          },
+          "retry_after_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `Retry-After` hint (seconds) the server's 429 responses carry.",
+            "minimum": 0
+          }
+        }
+      },
+      "QueueKindCapacity": {
+        "type": "object",
+        "description": "Per-kind admission queue row (`QueueCapabilities::kinds`).",
+        "required": [
+          "kind",
+          "queue_cap",
+          "ttl_secs"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,\n`blender`, `3d`) — never user data."
+          },
+          "queue_cap": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bounded queue length for the kind.",
+            "minimum": 0
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queue TTL in seconds (a waiter un-admitted after this long is\nevicted); `0` = never expires.",
+            "minimum": 0
+          }
+        }
       },
       "ResidentModel": {
         "type": "object",
@@ -3114,6 +3420,24 @@
             "format": "int64",
             "description": "Tensor entries in the JSON header (`__metadata__` excluded).",
             "minimum": 0
+          }
+        }
+      },
+      "ServerInfo": {
+        "type": "object",
+        "description": "Server identity (`Capabilities::server`).",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Binary name, always `\"honkbox\"` (mirrors `GET /api/version`)."
+          },
+          "version": {
+            "type": "string",
+            "description": "Crate version, from `CARGO_PKG_VERSION` (release version, NOT the\nwire-contract version)."
           }
         }
       },
@@ -3404,6 +3728,26 @@
           "version": {
             "type": "string",
             "description": "Crate version, from `CARGO_PKG_VERSION`."
+          }
+        }
+      },
+      "VisionFeature": {
+        "type": "object",
+        "description": "Vision chat capability (`FeatureFlags::vision`).",
+        "required": [
+          "built",
+          "models"
+        ],
+        "properties": {
+          "built": {
+            "type": "boolean",
+            "description": "`true` when THIS build compiles the mtmd path (`llm-vision`). A\ntext-only build reports `false`; scan-derived entries then never\nadvertise vision, and image parts on any entry whose\n`capabilities.vision` is `false` get the named `vision_unsupported`\n400 — the gate and `/v1/models` key on the same catalog flag, so\n`models` counts exactly the entries the routes accept as\nvision-capable. Operator-declared vision overrides still win over\nthe build probe (a real pipeline fails loudly at model load)."
+          },
+          "models": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Catalog entries currently advertising `capabilities.vision` (what\n`/v1/models` serves and the web UI's model picker consumes).",
+            "minimum": 0
           }
         }
       },

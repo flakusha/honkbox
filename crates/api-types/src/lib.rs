@@ -23,6 +23,208 @@ pub struct Version {
     pub version: String,
 }
 
+/// Wire-contract version of the HTTP API (surfaced as `api_version` on
+/// `GET /v1/capabilities`). This is the CONTRACT version, deliberately
+/// independent of the crate version: crate `version` tracks releases, not
+/// the wire shape.
+///
+/// API version policy (also embedded in the [`Capabilities`] schema
+/// description, so clients discover it from the generated OpenAPI):
+/// bump `api_version` when the wire contract changes incompatibly — a DTO
+/// field removal or type change, an error-code change, or a semantic change
+/// to an advertised capability flag. Purely ADDITIVE optional fields may
+/// land under the existing `api_version` (the `codegen:check` idempotence
+/// gate keeps the generated schema honest).
+pub const API_VERSION: &str = "v1";
+
+/// Machine-readable server contract (`GET /v1/capabilities`). Everything is
+/// DERIVED at request time from compiled features, runtime config, and the
+/// live catalog snapshot — never a prose hard-code — so the document is
+/// always true of the process answering.
+///
+/// API version policy: `api_version` is the wire-contract version,
+/// independent of the crate version. Bump it when the contract changes
+/// incompatibly (DTO field removal/type change, error-code change, or an
+/// advertised-flag semantic change); purely additive optional fields may
+/// land under the existing version. Crate `version` tracks releases, not
+/// the wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct Capabilities {
+    /// Wire-contract version (`"v1"`); see the version policy above.
+    pub api_version: String,
+    /// Server identity (name + crate version).
+    pub server: ServerInfo,
+    /// Feature flags derived from compile features, runtime config, and the
+    /// live catalog.
+    pub features: FeatureFlags,
+    /// Image containers accepted on ingest and producible on output, with
+    /// the size/quality limits the server actually enforces.
+    pub formats: Formats,
+    /// Auth mode in effect (`"none"` or `"bearer"`); the key VALUE is never
+    /// exposed.
+    pub auth: AuthCapabilities,
+    /// Resource-ledger admission knobs a client needs to plan retries:
+    /// per-kind queue caps, the queue wait bound, and the `Retry-After`
+    /// hint the server's 429s carry.
+    pub queue: QueueCapabilities,
+    /// Where the generated `OpenAPI` document lives.
+    pub openapi: String,
+    /// Where the model catalog lives.
+    pub models: String,
+}
+
+/// Server identity (`Capabilities::server`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ServerInfo {
+    /// Binary name, always `"honkbox"` (mirrors `GET /api/version`).
+    pub name: String,
+    /// Crate version, from `CARGO_PKG_VERSION` (release version, NOT the
+    /// wire-contract version).
+    pub version: String,
+}
+
+/// Feature flags (`Capabilities::features`). Every `true` here is backed by
+/// a working route (contract-tested); `video` stays `false` until a real
+/// video job class lands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+#[allow(clippy::struct_excessive_bools)] // the wire contract IS a flag map (llama-swap shape)
+pub struct FeatureFlags {
+    /// Vision chat (mtmd/mmproj image parts).
+    pub vision: VisionFeature,
+    /// ControlNet-conditioned renders on `POST /v1/images/generations`.
+    pub controlnet: ControlNetFeature,
+    /// Per-request `LoRA` stacks on image generations AND edits.
+    pub lora: bool,
+    /// Video generation. Always `false` today — there is no video job
+    /// class; a client must not probe for video routes.
+    pub video: bool,
+    /// Job registry (`GET /v1/jobs`, cancel/delete routes).
+    pub jobs: bool,
+    /// Server-sent event stream (`GET /v1/events`).
+    pub events: bool,
+    /// Silero VAD in the audio worker (compile feature `vad`).
+    pub vad: bool,
+    /// Experimental ash SD backend (compile feature
+    /// `experimental-ash-sd`); empty until that backend's first code lands.
+    pub experimental_ash_sd: bool,
+}
+
+/// Vision chat capability (`FeatureFlags::vision`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct VisionFeature {
+    /// `true` when THIS build compiles the mtmd path (`llm-vision`). A
+    /// text-only build reports `false`; scan-derived entries then never
+    /// advertise vision, and image parts on any entry whose
+    /// `capabilities.vision` is `false` get the named `vision_unsupported`
+    /// 400 — the gate and `/v1/models` key on the same catalog flag, so
+    /// `models` counts exactly the entries the routes accept as
+    /// vision-capable. Operator-declared vision overrides still win over
+    /// the build probe (a real pipeline fails loudly at model load).
+    pub built: bool,
+    /// Catalog entries currently advertising `capabilities.vision` (what
+    /// `/v1/models` serves and the web UI's model picker consumes).
+    pub models: u64,
+}
+
+/// `ControlNet` capability (`FeatureFlags::controlnet`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ControlNetFeature {
+    /// `true` only when the configured SD pipeline applies control images
+    /// (the sd-cpp backend) AND the catalog holds at least one
+    /// `controlnet`-kind entry; otherwise valid pairs get the named 501
+    /// (`controlnet_unsupported`) and this flag is `false`.
+    pub available: bool,
+    /// `controlnet`-kind entries in the live catalog (conditioning inputs
+    /// resolve by slug/alias against exactly these).
+    pub models: u64,
+}
+
+/// Image container support (`Capabilities::formats`), derived from the
+/// compiled encoders/validators — a missing decoder never appears.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct Formats {
+    /// Containers the server validates on ingest (image edits' `image`/
+    /// `mask` and `ControlNet` `control_image` are PNG magic-sniffed).
+    pub read: Vec<String>,
+    /// Containers producible on output (`output_format` on both image
+    /// routes); one entry per compiled encoder.
+    pub write: Vec<OutputFormatCapability>,
+    /// Size/quality limits the server enforces.
+    pub limits: FormatLimits,
+}
+
+/// One writable container (`Formats::write`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct OutputFormatCapability {
+    /// `output_format` wire value (`png` | `jpeg` | `webp`).
+    pub format: String,
+    /// `true` when `output_compression` affects this container (JPEG
+    /// quality only; PNG is deterministic and WebP encodes lossless-only).
+    pub compression: bool,
+}
+
+/// Size/quality limits (`Formats::limits`), read from the validation code
+/// that enforces them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct FormatLimits {
+    /// `output_compression` accepted range (JPEG quality, rejected not
+    /// clamped outside it).
+    pub output_compression: CompressionRange,
+    /// Request-body ceiling applied by the router (largest upload the
+    /// server accepts, multipart framing included).
+    pub body_bytes: u64,
+}
+
+/// Inclusive integer range (`FormatLimits::output_compression`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct CompressionRange {
+    /// Smallest accepted value (inclusive).
+    pub min: u32,
+    /// Largest accepted value (inclusive).
+    pub max: u32,
+    /// The container the knob applies to (`"jpeg"`).
+    pub applies_to: String,
+}
+
+/// Auth mode (`Capabilities::auth`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct AuthCapabilities {
+    /// `"none"` (loopback-only operation) or `"bearer"` (key required on
+    /// every route except the probes). The key VALUE is never in this
+    /// document.
+    pub mode: String,
+}
+
+/// Resource-ledger admission knobs (`Capabilities::queue`), read live from
+/// the ledger + admission config — the same values the 429 contract uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct QueueCapabilities {
+    /// Shared GPU slots the ledger admits against.
+    pub gpu_slots: u32,
+    /// Admission-queue wait bound in seconds (`[server] queue_wait_secs`);
+    /// `0` = queueing disabled (busy requests 429 immediately). Doubles as
+    /// the queued-waiter TTL.
+    pub queue_wait_secs: u64,
+    /// The `Retry-After` hint (seconds) the server's 429 responses carry.
+    pub retry_after_secs: u64,
+    /// One row per admission kind (fixed vocabulary), with its bounded
+    /// queue length and TTL — a client can size its own retry cadence.
+    pub kinds: Vec<QueueKindCapacity>,
+}
+
+/// Per-kind admission queue row (`QueueCapabilities::kinds`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct QueueKindCapacity {
+    /// Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,
+    /// `blender`, `3d`) — never user data.
+    pub kind: String,
+    /// Bounded queue length for the kind.
+    pub queue_cap: u64,
+    /// Queue TTL in seconds (a waiter un-admitted after this long is
+    /// evicted); `0` = never expires.
+    pub ttl_secs: u64,
+}
+
 /// Chat role.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -1800,7 +2002,11 @@ mod tests {
     use super::*;
 
     /// Regenerate the checked-in TS bindings (drift is gated by `git diff` in CI).
+    /// Emit every wire DTO's TS declaration (the codegen source of truth).
+    /// The declaration list grows one line per DTO by design; the length
+    /// allowance tracks that.
     #[test]
+    #[allow(clippy::too_many_lines)] // one decl line per wire DTO, by design
     fn export_ts() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../packages/web-ui/src/gen");
@@ -1899,6 +2105,18 @@ mod tests {
             CatalogLocal::decl(&config),
             CatalogEntry::decl(&config),
             CatalogList::decl(&config),
+            Capabilities::decl(&config),
+            ServerInfo::decl(&config),
+            FeatureFlags::decl(&config),
+            VisionFeature::decl(&config),
+            ControlNetFeature::decl(&config),
+            Formats::decl(&config),
+            OutputFormatCapability::decl(&config),
+            FormatLimits::decl(&config),
+            CompressionRange::decl(&config),
+            AuthCapabilities::decl(&config),
+            QueueCapabilities::decl(&config),
+            QueueKindCapacity::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');

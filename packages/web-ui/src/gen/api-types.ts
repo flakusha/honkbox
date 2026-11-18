@@ -1329,3 +1329,215 @@ export type CatalogList = {
    */
   data: Array<CatalogEntry>;
 };
+export type Capabilities = {
+  /**
+   * Wire-contract version (`"v1"`); see the version policy above.
+   */
+  api_version: string;
+  /**
+   * Server identity (name + crate version).
+   */
+  server: ServerInfo;
+  /**
+   * Feature flags derived from compile features, runtime config, and the
+   * live catalog.
+   */
+  features: FeatureFlags;
+  /**
+   * Image containers accepted on ingest and producible on output, with
+   * the size/quality limits the server actually enforces.
+   */
+  formats: Formats;
+  /**
+   * Auth mode in effect (`"none"` or `"bearer"`); the key VALUE is never
+   * exposed.
+   */
+  auth: AuthCapabilities;
+  /**
+   * Resource-ledger admission knobs a client needs to plan retries:
+   * per-kind queue caps, the queue wait bound, and the `Retry-After`
+   * hint the server's 429s carry.
+   */
+  queue: QueueCapabilities;
+  /**
+   * Where the generated `OpenAPI` document lives.
+   */
+  openapi: string;
+  /**
+   * Where the model catalog lives.
+   */
+  models: string;
+};
+export type ServerInfo = {
+  /**
+   * Binary name, always `"honkbox"` (mirrors `GET /api/version`).
+   */
+  name: string;
+  /**
+   * Crate version, from `CARGO_PKG_VERSION` (release version, NOT the
+   * wire-contract version).
+   */
+  version: string;
+};
+export type FeatureFlags = {
+  /**
+   * Vision chat (mtmd/mmproj image parts).
+   */
+  vision: VisionFeature;
+  /**
+   * ControlNet-conditioned renders on `POST /v1/images/generations`.
+   */
+  controlnet: ControlNetFeature;
+  /**
+   * Per-request `LoRA` stacks on image generations AND edits.
+   */
+  lora: boolean;
+  /**
+   * Video generation. Always `false` today — there is no video job
+   * class; a client must not probe for video routes.
+   */
+  video: boolean;
+  /**
+   * Job registry (`GET /v1/jobs`, cancel/delete routes).
+   */
+  jobs: boolean;
+  /**
+   * Server-sent event stream (`GET /v1/events`).
+   */
+  events: boolean;
+  /**
+   * Silero VAD in the audio worker (compile feature `vad`).
+   */
+  vad: boolean;
+  /**
+   * Experimental ash SD backend (compile feature
+   * `experimental-ash-sd`); empty until that backend's first code lands.
+   */
+  experimental_ash_sd: boolean;
+};
+export type VisionFeature = {
+  /**
+   * `true` when THIS build compiles the mtmd path (`llm-vision`). A
+   * text-only build reports `false` and its chat routes reject image
+   * parts with the named `vision_unsupported` 400 — the document agrees
+   * with the guard by construction (both read the same compile flag).
+   */
+  built: boolean;
+  /**
+   * Catalog entries currently advertising `capabilities.vision` (what
+   * `/v1/models` serves and the web UI's model picker consumes).
+   */
+  models: bigint;
+};
+export type ControlNetFeature = {
+  /**
+   * `true` only when the configured SD pipeline applies control images
+   * (the sd-cpp backend) AND the catalog holds at least one
+   * `controlnet`-kind entry; otherwise valid pairs get the named 501
+   * (`controlnet_unsupported`) and this flag is `false`.
+   */
+  available: boolean;
+  /**
+   * `controlnet`-kind entries in the live catalog (conditioning inputs
+   * resolve by slug/alias against exactly these).
+   */
+  models: bigint;
+};
+export type Formats = {
+  /**
+   * Containers the server validates on ingest (image edits' `image`/
+   * `mask` and `ControlNet` `control_image` are PNG magic-sniffed).
+   */
+  read: Array<string>;
+  /**
+   * Containers producible on output (`output_format` on both image
+   * routes); one entry per compiled encoder.
+   */
+  write: Array<OutputFormatCapability>;
+  /**
+   * Size/quality limits the server enforces.
+   */
+  limits: FormatLimits;
+};
+export type OutputFormatCapability = {
+  /**
+   * `output_format` wire value (`png` | `jpeg` | `webp`).
+   */
+  format: string;
+  /**
+   * `true` when `output_compression` affects this container (JPEG
+   * quality only; PNG is deterministic and WebP encodes lossless-only).
+   */
+  compression: boolean;
+};
+export type FormatLimits = {
+  /**
+   * `output_compression` accepted range (JPEG quality, rejected not
+   * clamped outside it).
+   */
+  output_compression: CompressionRange;
+  /**
+   * Request-body ceiling applied by the router (largest upload the
+   * server accepts, multipart framing included).
+   */
+  body_bytes: bigint;
+};
+export type CompressionRange = {
+  /**
+   * Smallest accepted value (inclusive).
+   */
+  min: number;
+  /**
+   * Largest accepted value (inclusive).
+   */
+  max: number;
+  /**
+   * The container the knob applies to (`"jpeg"`).
+   */
+  applies_to: string;
+};
+export type AuthCapabilities = {
+  /**
+   * `"none"` (loopback-only operation) or `"bearer"` (key required on
+   * every route except the probes). The key VALUE is never in this
+   * document.
+   */
+  mode: string;
+};
+export type QueueCapabilities = {
+  /**
+   * Shared GPU slots the ledger admits against.
+   */
+  gpu_slots: number;
+  /**
+   * Admission-queue wait bound in seconds (`[server] queue_wait_secs`);
+   * `0` = queueing disabled (busy requests 429 immediately). Doubles as
+   * the queued-waiter TTL.
+   */
+  queue_wait_secs: bigint;
+  /**
+   * The `Retry-After` hint (seconds) the server's 429 responses carry.
+   */
+  retry_after_secs: bigint;
+  /**
+   * One row per admission kind (fixed vocabulary), with its bounded
+   * queue length and TTL — a client can size its own retry cadence.
+   */
+  kinds: Array<QueueKindCapacity>;
+};
+export type QueueKindCapacity = {
+  /**
+   * Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,
+   * `blender`, `3d`) — never user data.
+   */
+  kind: string;
+  /**
+   * Bounded queue length for the kind.
+   */
+  queue_cap: bigint;
+  /**
+   * Queue TTL in seconds (a waiter un-admitted after this long is
+   * evicted); `0` = never expires.
+   */
+  ttl_secs: bigint;
+};
