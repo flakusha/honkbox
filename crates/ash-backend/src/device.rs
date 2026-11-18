@@ -124,6 +124,12 @@ fn device_name(properties: &vk::PhysicalDeviceProperties) -> String {
 /// integrated over cpu, then more device-local VRAM, then the lower device
 /// id as a deterministic tie-break. Only compute-capable devices qualify —
 /// a device without a compute queue cannot host the future kernels.
+///
+/// Caveat: `device_id` is the vendor PCI device id, so two identical GPU
+/// models (same type, VRAM, and device_id) tie completely and `max_by_key`
+/// then falls back to driver enumeration order (`max_by_key` returns the
+/// last of equal maxima). A stable tie-break needs a per-device UUID (e.g. VK_KHR deviceUUID), deferred until the instance
+/// requests extensions (P1 allocator work).
 pub fn select_device(devices: &[PhysicalDeviceInfo]) -> Result<&PhysicalDeviceInfo, VkError> {
     if devices.is_empty() {
         return Err(VkError::NoDevices);
@@ -241,6 +247,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ash::vk::Handle;
 
     /// Placeholder row for the pure selection tests (no Vulkan needed).
     fn info(device_type: DeviceType, vram: u64, id: u32, compute: bool) -> PhysicalDeviceInfo {
@@ -284,6 +291,32 @@ mod tests {
             select_device(&devices),
             Err(VkError::NoComputeQueue)
         ));
+    }
+
+    #[test]
+    fn selection_between_identical_devices_is_enumeration_order_dependent() {
+        // Two identical GPU models tie on (type, VRAM, device_id); document
+        // that `max_by_key` then resolves the tie by enumeration order.
+        // Distinct handles make the pick observable: all key fields tie, so
+        // which element wins is decided purely by iteration order.
+        // `Iterator::max_by_key` returns the LAST of equal maxima, so the
+        // second array element wins in both orders.
+        let mut order_a = [
+            info(DeviceType::Discrete, 8 << 30, 7, true),
+            info(DeviceType::Discrete, 8 << 30, 7, true),
+        ];
+        order_a[0].handle = vk::PhysicalDevice::from_raw(1);
+        order_a[1].handle = vk::PhysicalDevice::from_raw(2);
+        let mut order_b = [
+            info(DeviceType::Discrete, 8 << 30, 7, true),
+            info(DeviceType::Discrete, 8 << 30, 7, true),
+        ];
+        order_b[0].handle = vk::PhysicalDevice::from_raw(1);
+        order_b[1].handle = vk::PhysicalDevice::from_raw(2);
+        assert!(select_device(&order_a).is_ok());
+        assert!(select_device(&order_b).is_ok());
+        assert_eq!(select_device(&order_a).unwrap().handle, order_a[1].handle);
+        assert_eq!(select_device(&order_b).unwrap().handle, order_b[1].handle);
     }
 
     #[test]
