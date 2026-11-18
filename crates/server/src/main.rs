@@ -391,6 +391,29 @@ fn install_admission_queue(queue_wait: Duration) {
     }
 }
 
+/// Install the resolved `[ledger]` settings onto the process-wide resource
+/// ledger (TASK-resource-ledger-bounded-queue) and log the operator-visible
+/// state. Called at serve startup, before the router accepts traffic. The
+/// queue TTL is the SAME `[server] queue_wait_secs` knob the admission 429
+/// names, so the ledger eviction clock and the "gave up waiting" message
+/// agree; the queue caps come from `[ledger] queue_cap` (+ per-kind
+/// `[ledger.queue_caps]`).
+fn install_resource_ledger(ledger: &config::LedgerSettings, queue_wait: Duration) {
+    honkbox_residency::global().configure(config::residency_config(ledger, queue_wait));
+    if ledger.vram_budget_bytes == 0 {
+        info!(
+            "resource ledger: {} GPU slot(s), budgets unmanaged, queue cap {} per kind",
+            ledger.gpu_slots, ledger.queue_cap
+        );
+    } else {
+        info!(
+            "resource ledger: {} GPU slot(s), VRAM budget {} B (headroom {} B), \
+             queue cap {} per kind",
+            ledger.gpu_slots, ledger.vram_budget_bytes, ledger.oom_headroom_bytes, ledger.queue_cap
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 // Startup wiring reads long but stays linear: args → config → pipelines → router.
 #[allow(clippy::too_many_lines)]
@@ -425,6 +448,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // REQ-6 Option A: install the resolved admission-queue bound before any
     // route can acquire the GPU slot.
     install_admission_queue(loaded.server.queue_wait);
+    // TASK-resource-ledger-bounded-queue: install the resolved ledger
+    // capacities/bounds before any route can reserve capacity.
+    install_resource_ledger(&loaded.ledger, loaded.server.queue_wait);
     spawn_startup_gc(&cfg.jobs, data_dir.as_deref());
     let (addr, auth) = or_exit(resolve_bind(
         &host,
@@ -728,7 +754,10 @@ fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_llm(llm_backend, Some(model.as_str()), &resolve);
-    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    // Reserve BEFORE the model loads; the chat CLI is an `llm` job in the
+    // ledger's fixed kind vocabulary.
+    let _lease =
+        or_exit(honkbox_residency::global().try_acquire(honkbox_residency::ResourceKind::Llm));
     let reply = or_exit(pipe.complete(&honkbox_llm_worker::ChatRequest {
         model,
         messages: vec![honkbox_llm_worker::ChatMessage {
@@ -777,7 +806,12 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_stt(stt_backend, Some(model.as_str()), &resolve);
-    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    // Reserve BEFORE the model loads. Audio pipelines share the `llm`
+    // admission bucket (the fixed ledger vocabulary has no audio kind; see
+    // `run_transcription` in routes.rs). The CLI takes the fast path only:
+    // a busy slot exits loudly instead of queueing, as it always has.
+    let _lease =
+        or_exit(honkbox_residency::global().try_acquire(honkbox_residency::ResourceKind::Llm));
     let out_tx = or_exit(pipe.transcribe(
         &pcm,
         sample_rate,
@@ -833,7 +867,10 @@ fn synthesize(args: SynthesizeArgs, data_dir_flag: Option<PathBuf>) {
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_tts(tts_backend, Some(model.as_str()), &resolve);
     let started = std::time::Instant::now();
-    let _lease = or_exit(honkbox_residency::global().try_reserve());
+    // Audio pipelines share the `llm` admission bucket (see the transcribe
+    // CLI comment above); fast path only, a busy slot exits loudly.
+    let _lease =
+        or_exit(honkbox_residency::global().try_acquire(honkbox_residency::ResourceKind::Llm));
     let audio = or_exit(pipe.synthesize(&honkbox_audio_worker::SynthesizeRequest {
         model,
         text,

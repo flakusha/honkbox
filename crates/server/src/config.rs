@@ -4,9 +4,13 @@
 //! `HONKBOX_GC_MAX_BYTES`), `[swap]` LLM swap settings (`enabled`,
 //! `llm_ttl_secs`, `llm_max_loaded`, `max_ttl_secs`, `pin`, env
 //! `HONKBOX_SWAP_LLM_TTL` / `HONKBOX_SWAP_LLM_MAX_LOADED` /
-//! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), `[core] data_dir`, and the
+//! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), `[core] data_dir`, the
 //! `[server] queue_wait_secs` admission-queue bound (REQ-6 Option A, env
-//! `HONKBOX_QUEUE_WAIT_SECS`).
+//! `HONKBOX_QUEUE_WAIT_SECS`), and the `[ledger]` resource-ledger knobs
+//! (TASK-resource-ledger-bounded-queue: `gpu_slots`, `vram_budget_bytes`,
+//! `ram_budget_bytes`, `cpu_threads`, `oom_headroom_bytes`, `queue_cap`
+//! with `HONKBOX_LEDGER_*` env stages, plus the file-only per-kind maps
+//! `[ledger.queue_caps]` / `[ledger.vram_demand]`).
 //!
 //! The ONE data-dir knob resolves `--data-dir` CLI flag > `HONKBOX_DATA_DIR`
 //! env > `[core] data_dir` file key > `$XDG_STATE_HOME/honkbox` (empty or
@@ -50,11 +54,14 @@
 //! works without a restart) and is never logged, never in metrics, and
 //! never in any config dump — these types store the env-var name only.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tracing::warn;
+
+use honkbox_residency::ResourceKind;
 
 use crate::jobs::{DEFAULT_GC_MAX_BYTES, DEFAULT_GC_TTL};
 
@@ -488,6 +495,9 @@ pub struct LoadedConfig {
     pub auth: AuthConfig,
     /// `[server]` serving knobs (REQ-6 admission-queue bound).
     pub server: ServerConfig,
+    /// `[ledger]` resource-ledger settings (bounded per-kind admission
+    /// queues + capacity budgets, TASK-resource-ledger-bounded-queue).
+    pub ledger: LedgerSettings,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
 }
@@ -509,6 +519,186 @@ fn server_settings(file: Option<u64>, env: Option<&str>) -> ServerConfig {
         cfg.queue_wait = Duration::from_secs(secs);
     }
     cfg
+}
+
+/// Default `[ledger] queue_cap` (TASK-resource-ledger-bounded-queue): ONE
+/// waiter per kind — the REQ-6 depth-1 admission policy, per kind. `0` is
+/// clamped to `1` (a zero queue would reject every busy request as
+/// `queue_full` before the TTL ever runs).
+pub const DEFAULT_LEDGER_QUEUE_CAP: usize = 1;
+
+/// Resolved `[ledger]` knobs: the resource ledger's capacity budgets and
+/// bounded admission-queue settings. Defaults keep the single-tenant dev
+/// flow unchanged (one GPU slot, unmanaged byte/thread budgets, depth-1
+/// queues); the per-kind maps refine specific kinds only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerSettings {
+    /// GPU slot count (`gpu_slots`, env `HONKBOX_LEDGER_GPU_SLOTS`).
+    pub gpu_slots: u32,
+    /// VRAM budget in bytes (`vram_budget_bytes`, env
+    /// `HONKBOX_LEDGER_VRAM_BUDGET`); `0` = unmanaged.
+    pub vram_budget_bytes: u64,
+    /// RAM budget in bytes (`ram_budget_bytes`, env
+    /// `HONKBOX_LEDGER_RAM_BUDGET`); `0` = unmanaged.
+    pub ram_budget_bytes: u64,
+    /// CPU thread budget (`cpu_threads`, env `HONKBOX_LEDGER_CPU_THREADS`);
+    /// `0` = unmanaged.
+    pub cpu_threads: u64,
+    /// OOM near-miss pressure margin in bytes (`oom_headroom_bytes`, env
+    /// `HONKBOX_LEDGER_OOM_HEADROOM`); `0` = metric fires only at exact
+    /// budget fill.
+    pub oom_headroom_bytes: u64,
+    /// Queue length per kind (`queue_cap`, env `HONKBOX_LEDGER_QUEUE_CAP`,
+    /// clamped to >= 1); overridden per kind by `queue_caps`.
+    pub queue_cap: usize,
+    /// Per-kind queue-cap overrides (`[ledger.queue_caps]`, file-only).
+    pub queue_caps: Vec<(ResourceKind, usize)>,
+    /// Per-kind VRAM demand estimates in bytes (`[ledger.vram_demand]`,
+    /// file-only); `0` (the default) = the kind claims no VRAM.
+    pub vram_demand: Vec<(ResourceKind, u64)>,
+}
+
+impl Default for LedgerSettings {
+    fn default() -> Self {
+        Self {
+            gpu_slots: 1,
+            vram_budget_bytes: 0,
+            ram_budget_bytes: 0,
+            cpu_threads: 0,
+            oom_headroom_bytes: 0,
+            queue_cap: DEFAULT_LEDGER_QUEUE_CAP,
+            queue_caps: Vec::new(),
+            vram_demand: Vec::new(),
+        }
+    }
+}
+
+/// Resolve the `[ledger]` knobs: defaults → file keys → env overrides (the
+/// scalar knobs only; the per-kind maps are file-only per the house
+/// pattern). Invalid env values keep the previous stage, matching the
+/// GC/swap knobs; unknown kind labels in the maps are config errors (a
+/// silently ignored typo would admit far more than the operator wrote).
+/// Pure (env as args) so tests stay thread-safe.
+#[allow(clippy::too_many_arguments)]
+fn ledger_settings(
+    file: &FileLedger,
+    gpu_slots_env: Option<&str>,
+    vram_env: Option<&str>,
+    ram_env: Option<&str>,
+    cpu_env: Option<&str>,
+    headroom_env: Option<&str>,
+    queue_cap_env: Option<&str>,
+) -> Result<LedgerSettings, String> {
+    let mut cfg = LedgerSettings::default();
+    if let Some(v) = file.gpu_slots {
+        cfg.gpu_slots = v;
+    }
+    if let Some(v) = file.vram_budget_bytes {
+        cfg.vram_budget_bytes = v;
+    }
+    if let Some(v) = file.ram_budget_bytes {
+        cfg.ram_budget_bytes = v;
+    }
+    if let Some(v) = file.cpu_threads {
+        cfg.cpu_threads = v;
+    }
+    if let Some(v) = file.oom_headroom_bytes {
+        cfg.oom_headroom_bytes = v;
+    }
+    if let Some(v) = file.queue_cap {
+        cfg.queue_cap = v.max(1);
+    }
+    if let Some(v) = gpu_slots_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<u32>()
+    {
+        cfg.gpu_slots = parsed;
+    }
+    if let Some(v) = vram_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<u64>()
+    {
+        cfg.vram_budget_bytes = parsed;
+    }
+    if let Some(v) = ram_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<u64>()
+    {
+        cfg.ram_budget_bytes = parsed;
+    }
+    if let Some(v) = cpu_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<u64>()
+    {
+        cfg.cpu_threads = parsed;
+    }
+    if let Some(v) = headroom_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<u64>()
+    {
+        cfg.oom_headroom_bytes = parsed;
+    }
+    if let Some(v) = queue_cap_env
+        && !v.is_empty()
+        && let Ok(parsed) = v.parse::<usize>()
+    {
+        cfg.queue_cap = parsed.max(1);
+    }
+    cfg.queue_caps = kind_overrides(file.queue_caps.as_ref(), "queue_caps")?;
+    cfg.vram_demand = kind_overrides(file.vram_demand.as_ref(), "vram_demand")?;
+    Ok(cfg)
+}
+
+/// Parse one file-only `[ledger.<map>]` kind table into validated
+/// `(ResourceKind, value)` pairs; an unknown label is a config error.
+fn kind_overrides<T: Copy>(
+    map: Option<&BTreeMap<String, T>>,
+    section: &str,
+) -> Result<Vec<(ResourceKind, T)>, String> {
+    let Some(map) = map else {
+        return Ok(Vec::new());
+    };
+    map.iter()
+        .map(|(label, value)| {
+            let kind = ResourceKind::from_label(label).ok_or_else(|| {
+                format!(
+                    "[ledger] {section}: unknown kind {label:?} (expected one of \
+                     sd, llm, ocr, embed, rag, comfy, blender, 3d)"
+                )
+            })?;
+            Ok((kind, *value))
+        })
+        .collect()
+}
+
+/// Build the residency ledger configuration from the resolved settings plus
+/// the queue TTL (`[server] queue_wait_secs`): the ledger's eviction clock
+/// and the admission 429's "gave up waiting after Xs" share one knob, so
+/// they can never disagree.
+pub fn residency_config(
+    settings: &LedgerSettings,
+    queue_ttl: Duration,
+) -> honkbox_residency::LedgerConfig {
+    let mut config = honkbox_residency::LedgerConfig::new();
+    config.capacities.gpu_slots = settings.gpu_slots;
+    config.capacities.vram_bytes = settings.vram_budget_bytes;
+    config.capacities.ram_bytes = settings.ram_budget_bytes;
+    config.capacities.cpu_threads = settings.cpu_threads;
+    config.capacities.oom_headroom_bytes = settings.oom_headroom_bytes;
+    for kind in ResourceKind::ALL {
+        let kind_settings = config.kind_mut(kind);
+        kind_settings.ttl = queue_ttl;
+        kind_settings.queue_cap = settings
+            .queue_caps
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map_or(settings.queue_cap, |(_, cap)| *cap)
+            .max(1);
+        if let Some((_, vram)) = settings.vram_demand.iter().find(|(k, _)| *k == kind) {
+            kind_settings.demand.vram_bytes = *vram;
+        }
+    }
+    config
 }
 
 /// Resolve the REQ-7 auth knobs: defaults → `[server] auth` +
@@ -586,6 +776,9 @@ struct FileStages {
     api_key_env: Option<String>,
     /// `[server] queue_wait_secs` raw value (REQ-6), resolved in `load`.
     queue_wait: Option<u64>,
+    /// `[ledger]` keys (TASK-resource-ledger-bounded-queue), resolved in
+    /// `load`.
+    ledger: FileLedger,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -643,6 +836,7 @@ fn stage_config_file(
     out.auth = file.server.auth;
     out.api_key_env = file.auth.api_key_env;
     out.queue_wait = file.server.queue_wait_secs;
+    out.ledger = file.ledger;
     out.vram_budget = file.models.vram_budget_bytes;
     out.entries = file
         .models
@@ -746,6 +940,7 @@ pub fn load(
         auth,
         api_key_env,
         queue_wait: queue_wait_file,
+        ledger: file_ledger,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -812,10 +1007,20 @@ pub fn load(
         queue_wait_file,
         std::env::var("HONKBOX_QUEUE_WAIT_SECS").ok().as_deref(),
     );
+    let ledger = ledger_settings(
+        &file_ledger,
+        std::env::var("HONKBOX_LEDGER_GPU_SLOTS").ok().as_deref(),
+        std::env::var("HONKBOX_LEDGER_VRAM_BUDGET").ok().as_deref(),
+        std::env::var("HONKBOX_LEDGER_RAM_BUDGET").ok().as_deref(),
+        std::env::var("HONKBOX_LEDGER_CPU_THREADS").ok().as_deref(),
+        std::env::var("HONKBOX_LEDGER_OOM_HEADROOM").ok().as_deref(),
+        std::env::var("HONKBOX_LEDGER_QUEUE_CAP").ok().as_deref(),
+    )?;
     Ok(LoadedConfig {
         models,
         auth,
         server,
+        ledger,
         data_dir,
     })
 }
@@ -982,6 +1187,10 @@ struct FileConfig {
     /// `[server]` keys (REQ-7 auth mode); absent table keeps the default.
     #[serde(default)]
     server: FileServer,
+    /// `[ledger]` keys (TASK-resource-ledger-bounded-queue); absent table
+    /// keeps the default (one GPU slot, unmanaged budgets, depth-1 queues).
+    #[serde(default)]
+    ledger: FileLedger,
     /// `[auth]` keys (REQ-7 key env-var NAME); absent table keeps the default.
     #[serde(default)]
     auth: FileAuth,
@@ -1011,6 +1220,39 @@ struct FileCore {
 struct FileServer {
     auth: Option<String>,
     queue_wait_secs: Option<u64>,
+}
+
+/// `[ledger]` keys (TASK-resource-ledger-bounded-queue): scalar capacities
+/// and queue knobs plus the file-only per-kind maps. Each missing key keeps
+/// its default (see [`LedgerSettings`]).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+struct FileLedger {
+    /// Shared GPU slots (default 1).
+    #[serde(default)]
+    gpu_slots: Option<u32>,
+    /// Total VRAM budget in bytes; `0`/absent = unmanaged.
+    #[serde(default)]
+    vram_budget_bytes: Option<u64>,
+    /// Total RAM budget in bytes; `0`/absent = unmanaged.
+    #[serde(default)]
+    ram_budget_bytes: Option<u64>,
+    /// CPU thread budget; `0`/absent = unmanaged.
+    #[serde(default)]
+    cpu_threads: Option<u64>,
+    /// OOM near-miss pressure margin in bytes.
+    #[serde(default)]
+    oom_headroom_bytes: Option<u64>,
+    /// Queue length per kind (clamped to >= 1; default 1).
+    #[serde(default)]
+    queue_cap: Option<usize>,
+    /// Per-kind queue-cap overrides (`[ledger.queue_caps]`, file-only;
+    /// labels are the fixed kind vocabulary, unknown labels are errors).
+    #[serde(default)]
+    queue_caps: Option<BTreeMap<String, usize>>,
+    /// Per-kind VRAM demand estimates in bytes (`[ledger.vram_demand]`,
+    /// file-only; absent = the kind claims no VRAM).
+    #[serde(default)]
+    vram_demand: Option<BTreeMap<String, u64>>,
 }
 
 /// `[auth]` keys: `api_key_env` — the NAME of the env var holding the
@@ -1705,6 +1947,114 @@ mod tests {
         assert_eq!(kept.queue_wait, Duration::from_secs(3));
         let empty = server_settings(Some(3), Some(""));
         assert_eq!(empty.queue_wait, Duration::from_secs(3));
+    }
+
+    /// `[ledger]` defaults keep the single-tenant dev flow: one GPU slot,
+    /// unmanaged budgets, depth-1 queues, and the queue TTL wired to the
+    /// `[server] queue_wait_secs` knob.
+    #[test]
+    fn ledger_defaults_keep_the_dev_flow() {
+        let settings = ledger_settings(&FileLedger::default(), None, None, None, None, None, None)
+            .expect("defaults");
+        assert_eq!(settings.gpu_slots, 1);
+        assert_eq!(settings.vram_budget_bytes, 0);
+        assert_eq!(settings.ram_budget_bytes, 0);
+        assert_eq!(settings.cpu_threads, 0);
+        assert_eq!(settings.queue_cap, DEFAULT_LEDGER_QUEUE_CAP);
+        assert_eq!(settings.queue_caps, Vec::<(ResourceKind, usize)>::new());
+        assert_eq!(settings.vram_demand, Vec::<(ResourceKind, u64)>::new());
+
+        let config = residency_config(&settings, Duration::from_secs(10));
+        assert_eq!(config.capacities.gpu_slots, 1);
+        assert_eq!(config.capacities.vram_bytes, 0);
+        assert_eq!(config.kind(ResourceKind::Sd).queue_cap, 1);
+        assert_eq!(config.kind(ResourceKind::Sd).ttl, Duration::from_secs(10));
+        assert_eq!(config.kind(ResourceKind::Sd).demand.vram_bytes, 0);
+        assert_eq!(config.kind(ResourceKind::Rag).demand.gpu_slots, 0);
+    }
+
+    /// `[ledger]` scalar knobs: env wins over the file, invalid env keeps
+    /// the previous stage, `queue_cap = 0` clamps to `1`.
+    #[test]
+    fn ledger_scalars_resolve_file_then_env() {
+        let file = FileLedger {
+            gpu_slots: Some(2),
+            vram_budget_bytes: Some(100),
+            queue_cap: Some(0),
+            ..Default::default()
+        };
+        let settings = ledger_settings(&file, Some("4"), Some("200"), None, None, None, Some("5"))
+            .expect("env overrides");
+        assert_eq!(settings.gpu_slots, 4);
+        assert_eq!(settings.vram_budget_bytes, 200);
+        assert_eq!(settings.queue_cap, 5);
+        // Untouched scalars keep the file value.
+        assert_eq!(settings.ram_budget_bytes, 0);
+
+        // Invalid env keeps the file stage.
+        let kept =
+            ledger_settings(&file, Some("bogus"), None, None, None, None, None).expect("kept");
+        assert_eq!(kept.gpu_slots, 2);
+        // A zero queue cap clamps to 1 (a zero queue would reject every
+        // busy request before its TTL ever ran).
+        assert_eq!(kept.queue_cap, 1);
+        // Empty env counts as unset.
+        let empty = ledger_settings(&file, Some(""), None, None, None, None, None).expect("empty");
+        assert_eq!(empty.gpu_slots, 2);
+    }
+
+    /// `[ledger.queue_caps]` / `[ledger.vram_demand]` override per kind;
+    /// unknown kind labels are config errors (a silently ignored typo
+    /// would admit far more than the operator wrote).
+    #[test]
+    fn ledger_kind_maps_validate_and_override() {
+        let file = FileLedger {
+            queue_caps: Some(BTreeMap::from([("sd".to_owned(), 2), ("3d".to_owned(), 4)])),
+            vram_demand: Some(BTreeMap::from([("llm".to_owned(), 4_000_000_000)])),
+            ..Default::default()
+        };
+        let settings = ledger_settings(&file, None, None, None, None, None, None).expect("maps");
+        assert!(settings.queue_caps.contains(&(ResourceKind::Sd, 2)));
+        assert!(settings.queue_caps.contains(&(ResourceKind::ThreeD, 4)));
+        let config = residency_config(&settings, Duration::from_secs(1));
+        assert_eq!(config.kind(ResourceKind::Sd).queue_cap, 2);
+        assert_eq!(config.kind(ResourceKind::ThreeD).queue_cap, 4);
+        assert_eq!(config.kind(ResourceKind::Ocr).queue_cap, 1);
+        assert_eq!(
+            config.kind(ResourceKind::Llm).demand.vram_bytes,
+            4_000_000_000
+        );
+
+        let bad = FileLedger {
+            queue_caps: Some(BTreeMap::from([("audio".to_owned(), 2)])),
+            ..Default::default()
+        };
+        let err = ledger_settings(&bad, None, None, None, None, None, None).unwrap_err();
+        assert!(err.contains("unknown kind"), "{err}");
+        assert!(err.contains("audio"), "{err}");
+    }
+
+    /// The `[ledger]` file table parses end-to-end through `load` (and a
+    /// missing table keeps the defaults).
+    #[test]
+    fn ledger_file_table_parses() {
+        let loaded = load_toml("ledger-absent", "[core]\n").expect("load");
+        assert_eq!(loaded.ledger, LedgerSettings::default());
+
+        let loaded = load_toml(
+            "ledger-file",
+            "[ledger]\n\
+             gpu_slots = 2\n\
+             vram_budget_bytes = 8_000_000_000\n\
+             queue_cap = 3\n\
+             [ledger.queue_caps]\n\
+             sd = 2\n",
+        )
+        .expect("load");
+        assert_eq!(loaded.ledger.gpu_slots, 2);
+        assert_eq!(loaded.ledger.vram_budget_bytes, 8_000_000_000);
+        assert_eq!(loaded.ledger.queue_cap, 3);
+        assert_eq!(loaded.ledger.queue_caps, vec![(ResourceKind::Sd, 2)]);
     }
 
     /// `--host` parsing: `localhost` maps to the IPv4 loopback; real IPs

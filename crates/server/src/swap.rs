@@ -464,6 +464,14 @@ pub fn spawn_reaper(manager: Arc<SwapManager>) -> tokio::task::JoinHandle<()> {
             if evicted > 0 {
                 tracing::debug!("swap: evicted {evicted} idle LLM pipeline(s)");
             }
+            // The resource ledger's queue-TTL sweep rides the same heartbeat
+            // (TASK-resource-ledger-bounded-queue): waiters that outlived
+            // their bound are evicted even if their polling request went
+            // away. Best-effort, like the idle evictions above.
+            let swept = honkbox_residency::global().sweep_expired();
+            if swept > 0 {
+                tracing::debug!("ledger: swept {swept} expired queue ticket(s)");
+            }
         }
     })
 }

@@ -554,13 +554,16 @@ async fn openapi_json() -> impl IntoResponse {
 )]
 async fn metrics_endpoint() -> Response {
     // The download metric families live in `downloads.rs` (its own
-    // AtomicU64 grids); their exposition fragment is appended here.
+    // AtomicU64 grids); their exposition fragment is appended here, and the
+    // residency ledger's fixed-kind admission grids append after those.
     (
         [(
             header::CONTENT_TYPE,
             "text/plain; version=0.0.4; charset=utf-8",
         )],
-        crate::metrics::exposition() + &crate::downloads::exposition(),
+        crate::metrics::exposition()
+            + &crate::downloads::exposition()
+            + &honkbox_residency::global().exposition(),
     )
         .into_response()
 }
@@ -1941,7 +1944,7 @@ async fn post_chat(
         Some(slug.clone()),
         false,
     );
-    let lease = crate::admission::acquire().await?;
+    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     let worker_req = worker_request_base(
         slug,
         worker_messages(&req.messages),
@@ -2091,7 +2094,7 @@ async fn post_chat_stream(
     // queue (REQ-6 Option A on top: a busy slot grants one bounded wait),
     // before the handler returns the SSE body. A rejection short-circuits
     // above as a real 429.
-    let lease = crate::admission::acquire().await?;
+    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     // The lease sits in a slot the token sink can drain: once the client is
     // gone, the next token boundary frees the slot right away. The handler
     // returns the SSE body without awaiting the worker, so tokens stream as
@@ -2379,7 +2382,7 @@ async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Respon
         Some(entry.slug.clone()),
         false,
     );
-    let lease = match crate::admission::acquire().await {
+    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Embed).await {
         Ok(lease) => lease,
         Err((status, message)) => {
             return with_job_id(
@@ -3290,7 +3293,7 @@ async fn post_images_generations(
         Some(slug.clone()),
         n > 1,
     );
-    let lease = match crate::admission::acquire().await {
+    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {
         Ok(lease) => lease,
         Err((status, message)) => {
             return with_job_id(openai_error_response(status, message, None), job.id());
@@ -3753,7 +3756,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
     };
     // Shared admission gate (REQ-6 Option A): same slot acquisition as the
     // generations route (lease dropped at the route ends below).
-    let lease = match crate::admission::acquire().await {
+    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {
         Ok(lease) => lease,
         Err((status, message)) => return openai_error_response(status, message, None),
     };
@@ -4039,7 +4042,7 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
         Some(slug.clone()),
         streaming,
     );
-    let lease = match crate::admission::acquire().await {
+    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await {
         Ok(lease) => lease,
         Err((status, message)) => {
             return with_job_id(
@@ -4621,13 +4624,17 @@ async fn post_synthesize(
 /// shapes): run the pipeline inside the GPU slot on the blocking pool. The
 /// slot comes through the admission queue (REQ-6 Option A); the caller
 /// registered the job (NEW-3) — one blocking FFI call, never interruptible.
+/// Audio pipelines share the `llm` admission bucket: the fixed ledger kind
+/// vocabulary has no audio kind, and `llm` is the warm-model-pipeline
+/// bucket the audio workers already load alongside (the label is admission
+/// topology, not model taxonomy).
 async fn run_transcription(
     pipe: Arc<dyn SttPipeline>,
     worker_req: WorkerTranscribeRequest,
     sample_rate: u32,
     pcm: Vec<i16>,
 ) -> Result<WorkerTranscript, (StatusCode, String)> {
-    let lease = crate::admission::acquire().await?;
+    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.transcribe(&pcm, sample_rate, &worker_req)
@@ -4649,11 +4656,13 @@ async fn run_transcription(
 
 /// Shared TTS execution (native `/v1/synthesize` and REQ-9
 /// `/v1/audio/speech` are the same worker call under two wire shapes).
+/// Audio pipelines share the `llm` admission bucket (see
+/// [`run_transcription`] for why).
 async fn run_synthesis(
     pipe: Arc<dyn TtsPipeline>,
     worker_req: WorkerSynthRequest,
 ) -> Result<SynthesizedAudio, (StatusCode, String)> {
-    let lease = crate::admission::acquire().await?;
+    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.synthesize(&worker_req).map_err(|err| {
