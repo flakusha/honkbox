@@ -19,7 +19,11 @@
 //! - ingest validators identify bytes with [`sniff`]/[`identify_png`] and
 //!   reject unknown/mismatched containers with named errors;
 //! - output validators accept exactly the `output` rows (the wire name →
-//!   `OutputFormat` enum mapping lives at the routes call site).
+//!   `OutputFormat` enum mapping lives at the routes call site);
+//! - the model export gate accepts exactly the `model_export` rows — the
+//!   [`MODEL_EXPORT_FORMATS`] allowlist shared with the structural
+//!   validator ([`crate::model_formats`]); `fbx`/`usd`/`obj` are
+//!   `external_only` (external conversion only, never silently accepted);
 //!
 //! # Compile-time codec derivation
 //!
@@ -92,7 +96,8 @@ pub(crate) enum FormatKind {
     Svg,
     /// Layered raster document (zip-based, e.g. `OpenRaster`).
     Ora,
-    /// 3D scene container (binary glTF).
+    /// 3D scene containers (binary glTF here; the external-only
+    /// interchange rows `fbx`/`usd`/`obj` share the family).
     Glb,
     /// Gaussian-splat point cloud.
     Splat,
@@ -145,7 +150,7 @@ pub(crate) struct FormatBudget {
 type Signature = &'static [(usize, &'static [u8])];
 
 /// One registry row: canonical identity + capability + budget.
-// The four capability columns are independent route-surface flags — the
+// The six capability columns are independent route-surface flags — the
 // registry IS a capability table, not a state machine — so the bool count
 // is the domain, not a design smell.
 #[allow(clippy::struct_excessive_bools)]
@@ -183,6 +188,16 @@ pub(crate) struct FormatInfo {
     /// `true` when `output_compression` affects this container (JPEG
     /// quality only; PNG is deterministic and WebP is lossless-only).
     pub output_compression: bool,
+    /// `true` when this 3D-model container is in the export allowlist
+    /// ([`MODEL_EXPORT_FORMATS`], locked by test): the bytes are
+    /// structurally validatable in-process by
+    /// [`crate::model_formats`] and may be exported to engine bundles.
+    pub model_export: bool,
+    /// `true` when this row is an interchange format served by EXTERNAL
+    /// conversion only: it is never read, never written, never silently
+    /// accepted in-process — admission answers with a named rejection
+    /// naming the conversion policy (`model_external_only`).
+    pub external_only: bool,
 }
 
 /// Decoded-pixel ceiling for the accepted raster containers (4096²): the
@@ -231,15 +246,30 @@ const ORA_SIG: Signature = &[(0, b"PK\x03\x04")];
 const GLB_SIG: Signature = &[(0, b"glTF")];
 /// Stanford PLY: an ASCII header line `ply\n` (binary payloads too).
 const PLY_SIG: Signature = &[(0, b"ply\n")];
+/// SPZ (Niantic), v4 plaintext header: the file OPENS with the 4-byte
+/// NGSP magic (`0x5053_474e` little-endian). Legacy v1–3 files are
+/// gzip-wrapped (`1f 8b 08`) with the header inside the compressed
+/// stream — gzip is a generic envelope, not an SPZ identity, so those
+/// files never match [`sniff`] and are admitted by explicit policy
+/// (the claimed `.spz` extension) in [`crate::model_formats`].
+const SPZ_SIG: Signature = &[(0, b"NGSP")];
+/// Autodesk FBX binary: the Kaydara signature. ASCII FBX has no
+/// reliable magic and never matches [`sniff`].
+const FBX_SIG: Signature = &[(0, b"Kaydara FBX Binary  \x00\x1a\x00")];
 
 /// The registry. Order is the advertisement order (`formats.write` derives
 /// from the `output` column in this order, locked to `OutputFormat::ALL`).
 ///
 /// Accepted today: `png` (SD ingest + image-ops) and `jpeg`/`webp`
-/// (image-ops inputs + encoders). Every other row is a designed extension
+/// (image-ops inputs + encoders). The 3D-model rows are pure structural
+/// rows — no codec probe applies to them: `glb`/`ply`/`splat`/`spz` carry
+/// `model_export` (the [`MODEL_EXPORT_FORMATS`] allowlist, structurally
+/// validated by [`crate::model_formats`]), while `fbx`/`usd`/`obj` are
+/// `external_only` interchange rows — never read, never written, never
+/// silently accepted in-process. Every other row is a designed extension
 /// point: capabilities stay `false`/`None` until its owning ticket wires
 /// the codec and flips the columns — flipping is the whole integration.
-static FORMATS: [FormatInfo; 11] = [
+static FORMATS: [FormatInfo; 15] = [
     FormatInfo {
         kind: FormatKind::Image,
         name: "png",
@@ -251,6 +281,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: true,
         output: true,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Image,
@@ -263,6 +295,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: true,
         output: true,
         output_compression: true,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Image,
@@ -275,6 +309,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: true,
         output: true,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::VideoFrame,
@@ -287,6 +323,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::VideoFrame,
@@ -299,6 +337,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Svg,
@@ -321,6 +361,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: true,
         output: false,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Ora,
@@ -344,6 +386,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: true,
         output: false,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Glb,
@@ -362,6 +406,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: true,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Splat,
@@ -381,6 +427,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: true,
+        external_only: false,
     },
     FormatInfo {
         kind: FormatKind::Splat,
@@ -401,6 +449,98 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: true,
+        external_only: false,
+    },
+    FormatInfo {
+        kind: FormatKind::Splat,
+        name: "spz",
+        mime: "application/octet-stream",
+        extensions: &["spz"],
+        // v4 NGSP plaintext header only (see [`SPZ_SIG`]): legacy v1–3
+        // files travel in a generic gzip envelope, which is deliberately
+        // NOT an identity here — those are admitted by explicit policy
+        // (the claimed `.spz` extension) in [`crate::model_formats`].
+        magic: &[SPZ_SIG],
+        budget: FormatBudget {
+            decoded_pixels: None,
+            // Point ceiling, shared with the ply/splat point clouds.
+            entries: Some(16_777_216),
+            uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
+        },
+        sd_image_ingest: false,
+        image_ops_input: false,
+        output: false,
+        output_compression: false,
+        model_export: true,
+        external_only: false,
+    },
+    FormatInfo {
+        kind: FormatKind::Glb,
+        name: "fbx",
+        mime: "application/octet-stream",
+        extensions: &["fbx"],
+        magic: &[FBX_SIG],
+        budget: FormatBudget {
+            decoded_pixels: None,
+            entries: Some(65_536),
+            uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
+        },
+        sd_image_ingest: false,
+        image_ops_input: false,
+        output: false,
+        output_compression: false,
+        model_export: false,
+        external_only: true,
+    },
+    FormatInfo {
+        kind: FormatKind::Glb,
+        name: "usd",
+        mime: "application/octet-stream",
+        extensions: &["usd", "usda", "usdc", "usdz"],
+        // No reliable family magic: `usdz` is a plain zip (the `PK` local
+        // file header is already the `ora` row's signature), `usda` and
+        // `usdc` are text/custom — admission is by explicit policy only.
+        magic: &[],
+        budget: FormatBudget {
+            decoded_pixels: None,
+            entries: Some(65_536),
+            uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
+        },
+        sd_image_ingest: false,
+        image_ops_input: false,
+        output: false,
+        output_compression: false,
+        model_export: false,
+        external_only: true,
+    },
+    FormatInfo {
+        kind: FormatKind::Glb,
+        name: "obj",
+        mime: "application/octet-stream",
+        extensions: &["obj"],
+        // Plain text, no reliable magic — admission is by explicit
+        // policy only.
+        magic: &[],
+        budget: FormatBudget {
+            decoded_pixels: None,
+            entries: Some(65_536),
+            uncompressed_bytes: Some(512 * 1024 * 1024),
+            entry_bytes: None,
+            elements: None,
+        },
+        sd_image_ingest: false,
+        image_ops_input: false,
+        output: false,
+        output_compression: false,
+        model_export: false,
+        external_only: true,
     },
     FormatInfo {
         kind: FormatKind::Blob,
@@ -422,6 +562,8 @@ static FORMATS: [FormatInfo; 11] = [
         image_ops_input: false,
         output: false,
         output_compression: false,
+        model_export: false,
+        external_only: false,
     },
 ];
 
@@ -511,6 +653,37 @@ pub(crate) fn image_ops_by_mime(mime: &str) -> Option<&'static FormatInfo> {
 /// candidates), derived from the accepted rows' extension lists.
 pub(crate) fn image_ops_extensions() -> impl Iterator<Item = &'static str> {
     image_ops_inputs().flat_map(|row| row.extensions.iter().copied())
+}
+
+/// The export allowlist for 3D-model artifacts: exactly the registry rows
+/// with `model_export`, in table order, pinned as a constant so the
+/// structural model gate ([`crate::model_formats`]) and the engine-bundle
+/// validator (TASK-model-bundle-validation) share ONE list — no duplicate
+/// rules. Locked to the rows by the `model_allowlist_matches_the_registry`
+/// tests here and in the `model_formats` suite.
+pub(crate) const MODEL_EXPORT_FORMATS: [&str; 4] = ["glb", "ply", "splat", "spz"];
+
+/// Registry rows in the model export allowlist, in table order.
+pub(crate) fn exportable_model_rows() -> impl Iterator<Item = &'static FormatInfo> {
+    FORMATS.iter().filter(|row| row.model_export)
+}
+
+/// The allowlist names (see [`MODEL_EXPORT_FORMATS`]), derived from the
+/// rows — never a second hand-maintained list.
+pub(crate) fn exportable_model_names() -> impl Iterator<Item = &'static str> {
+    exportable_model_rows().map(|row| row.name)
+}
+
+/// The model-family row claiming `extension` (exportable or
+/// `external_only`). `None` = no model row claims the extension, which is
+/// itself the admission answer for non-model containers.
+pub(crate) fn model_row_for_extension(extension: &str) -> Option<&'static FormatInfo> {
+    FORMATS
+        .iter()
+        .find(|row| {
+            (row.model_export || row.external_only)
+                && row.extensions.contains(&extension)
+        })
 }
 
 #[cfg(test)]
@@ -706,5 +879,45 @@ mod tests {
         assert_eq!(FormatKind::Glb.label(), "3D scene");
         assert_eq!(FormatKind::Splat.label(), "gaussian splat");
         assert_eq!(FormatKind::Blob.label(), "opaque blob");
+    }
+
+    /// ACCEPTANCE: the model export allowlist is exactly the `model_export`
+    /// rows, the external-only rows carry NO in-process capability at all,
+    /// and the two new magic identities sniff while the policy-admitted
+    /// containers (usd/obj, legacy gzip-wrapped spz) never do.
+    #[test]
+    fn model_allowlist_matches_the_registry() {
+        assert_eq!(
+            exportable_model_names().collect::<Vec<_>>(),
+            MODEL_EXPORT_FORMATS
+        );
+        for row in exportable_model_rows() {
+            assert!(!row.external_only, "{} must not be external-only", row.name);
+        }
+        for row in FORMATS.iter().filter(|row| row.external_only) {
+            assert!(!row.model_export, "{} is not exportable", row.name);
+            assert!(!row.sd_image_ingest, "{} ingest", row.name);
+            assert!(!row.image_ops_input, "{} image-ops", row.name);
+            assert!(!row.output, "{} output", row.name);
+        }
+        let external: Vec<&str> = FORMATS
+            .iter()
+            .filter(|row| row.external_only)
+            .map(|row| row.name)
+            .collect();
+        assert_eq!(external, ["fbx", "usd", "obj"]);
+        // Magic identities for the two new rows that have one.
+        assert_eq!(
+            sniff(b"NGSP\x04\x00\x00\x00").map(|row| row.name),
+            Some("spz")
+        );
+        assert_eq!(
+            sniff(b"Kaydara FBX Binary  \x00\x1a\x00\x00").map(|row| row.name),
+            Some("fbx")
+        );
+        // Policy-admitted containers have no identity: a usda text file and
+        // a generic gzip envelope never sniff to anything.
+        assert_eq!(sniff(b"#usda 1.0\n"), None);
+        assert_eq!(sniff(b"\x1f\x8b\x08not really gzip"), None);
     }
 }
