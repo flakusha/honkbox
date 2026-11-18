@@ -45,8 +45,10 @@ both this gate and the engine-bundle gate.
   JSON builder (`<artifact>.validation.json`: format, format_version,
   validator_version, sha256, size_bytes). Identification is magic-first;
   rejections name the sniffed format, never the claimed extension.
-- `crates/server/tests/model_formats.rs` (NEW) — 12 gate tests + the
-  allowlist==registry invariant lock, all fixtures hand-built bytes.
+- `crates/server/tests/model_formats.rs` (NEW) — 14 gate tests (hand-built
+  GLB/PLY/SPZ/splat fixtures, external-only + unknown-extension naming,
+  allowlist invariant, sidecar provenance) + the 10-test formats-registry
+  suite that ships in the same binary: 24 passing.
 - `crates/server/src/main.rs` — `mod model_formats;` (one line; UNCOMMITTED
   — main.rs carries the artifact lane's in-flight hunks, so the line rides
   with whichever lane commits main.rs next; the committed slice compiles
@@ -80,8 +82,14 @@ both this gate and the engine-bundle gate.
 ## Verification
 
 - `cargo test --locked -p honkbox-server --test model_formats` — 24
-  passed (12 gate tests + the formats-registry suite that ships inside
-  the same binary), observed green in-tree post-commit.
+  passed (14 gate tests + the 10-test formats-registry suite that ships
+  inside the same binary), observed green in-tree. Post-review fixes
+  (tab-separated PLY header acceptance, empty-bytes GLB truncation,
+  SPZ registry-budget `model_too_large`) verified in the detached
+  lint-mirroring scratch crate (clippy 0 warnings, 24 passed) while the
+  recognition-worker lane's half-written workspace manifest blocked
+  in-tree runs; the in-tree suite re-run belongs to the lane that lands
+  last.
 - The gate modules were additionally verified in a detached scratch crate
   mirroring the workspace lints (`model_formats.rs` + `formats.rs` +
   `container.rs`): clippy all+pedantic 0 warnings, tests 24 passed — run
