@@ -650,9 +650,10 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
     )
     .unwrap_or(u64::MAX);
     // ControlNet is honest about the 501: the flag is `true` only when the
-    // configured SD pipeline actually applies control images (the sd-cpp
-    // backend; `resolve_controlnet` answers `controlnet_unsupported` for
-    // everything else) AND conditioning targets exist in the catalog.
+    // configured SD pipeline actually executes control requests (the sd-cpp
+    // backend loads the named weights, applies the conditioning type, and
+    // unloads after; `resolve_controlnet` answers `controlnet_unsupported`
+    // for everything else) AND conditioning targets exist in the catalog.
     let controlnet_available =
         controlnet_models > 0 && config.sd.backend_id() == honkbox_sd_core::SD_CPP_BACKEND_ID;
     let ledger = honkbox_residency::global().admission_info();
@@ -3189,12 +3190,15 @@ fn resolve_loras(
 }
 
 /// Resolved `ControlNet` inputs for a validated generation request: the
-/// catalog-resolved weights file, the decoded PNG conditioning image, and
-/// the optional guidance-strength override.
+/// catalog-resolved weights file, the decoded PNG conditioning image, the
+/// optional guidance-strength override, and the optional named conditioning
+/// type (what the image depicts — `None` = the vendor default `none`, the
+/// preprocessed-map behavior).
 struct ResolvedControlNet {
     weights: PathBuf,
     image: Vec<u8>,
     strength: Option<f32>,
+    control_type: Option<honkbox_sd_core::sd_control_type_t>,
 }
 
 /// Outcome of [`controlnet_pair`]: the `(slug, image)` pair (a placeholder
@@ -3287,7 +3291,10 @@ fn controlnet_pair(req: &ImagesGenerationRequest) -> Option<ControlNetPair> {
 /// (400 `unknown_controlnet` — the same alias-or-slug rule as SD models and
 /// `LoRA`s), a non-finite or out-of-range `controlnet_strength` (400
 /// `invalid_controlnet_strength`, the same reject-not-clamp rule as img2img
-/// `strength`), and a configured pipeline that cannot carry control inputs
+/// `strength`), a `control_type` that is not one of the engine's names
+/// (400 `unknown_control_type` — the name table lives in the vendored
+/// engine, so validation and execution can never disagree), and a
+/// configured pipeline that cannot carry control inputs
 /// (501 `controlnet_unsupported`) — never a silent ignore: rendering
 /// without the requested conditioning image would misrepresent the output.
 fn resolve_controlnet(
@@ -3295,7 +3302,27 @@ fn resolve_controlnet(
     catalog: &ModelCatalog,
     pipeline: &dyn honkbox_sd_core::SdPipeline,
 ) -> (Option<ResolvedControlNet>, Option<Response>) {
+    // The named conditioning type (`control_type`): trimmed and treated like
+    // every other control field — whitespace-only is not a request.
+    let named_type = req
+        .control_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
     let pair = match controlnet_pair(req) {
+        // `control_type` modifies a `controlnet`/`control_image` pair; a
+        // stray modifier is refused like a lone pair half — a plain render
+        // would never use it, so accepting it would silently mislead.
+        None if named_type.is_some() => {
+            return (
+                None,
+                Some(openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    "control_type without a controlnet/control_image pair: the conditioning type modifies a ControlNet request, so it is refused on its own (a plain render would not use it)".to_owned(),
+                    Some("controlnet_pair"),
+                )),
+            );
+        }
         None => return (None, None),
         Some((pair, None)) => pair,
         Some((_, Some(response))) => return (None, Some(response)),
@@ -3333,6 +3360,29 @@ fn resolve_controlnet(
         }
         None => None,
     };
+    // The conditioning type is validated against the engine's own name
+    // table (`control_type_from_name` → `str_to_sd_control_type`): an
+    // unknown name is a named 400, not an ignored field — the render would
+    // either drop the conditioning (classic nets) or fail mid-generation
+    // (union nets).
+    let control_type = match named_type {
+        None => None,
+        Some(name) => match honkbox_sd_core::control_type_from_name(name) {
+            Some(parsed) => Some(parsed),
+            None => {
+                return (
+                    None,
+                    Some(openai_error_response(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "unknown control_type {name:?}: not a ControlNet type the engine knows (none, openpose, depth, scribble, canny, normal, segment, tile, repaint)"
+                        ),
+                        Some("unknown_control_type"),
+                    )),
+                );
+            }
+        },
+    };
     // Honest unsupported verdict: a pipeline without a `ControlNet` branch
     // (the stub backend) would render the prompt unconditioned.
     if pipeline.backend_id() != honkbox_sd_core::SD_CPP_BACKEND_ID {
@@ -3353,6 +3403,7 @@ fn resolve_controlnet(
             weights: PathBuf::from(&entry.path),
             image: decoded,
             strength,
+            control_type,
         }),
         None,
     )
@@ -3581,6 +3632,7 @@ async fn post_images_generations(
                 control_net: controlnet.as_ref().map(|c| c.weights.clone()),
                 control_image: controlnet.as_ref().map(|c| c.image.clone()),
                 controlnet_strength: controlnet.as_ref().and_then(|c| c.strength),
+                control_type: controlnet.as_ref().and_then(|c| c.control_type),
             },
             format,
             compression,
@@ -4075,6 +4127,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             control_net: None,
             control_image: None,
             controlnet_strength: None,
+            control_type: None,
         },
         format,
         compression,

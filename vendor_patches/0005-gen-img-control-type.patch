@@ -1,0 +1,186 @@
+diff --git a/vendor/diffusion-rs/src/api.rs b/vendor/diffusion-rs/src/api.rs
+--- a/vendor/diffusion-rs/src/api.rs
++++ b/vendor/diffusion-rs/src/api.rs
+@@ -18,8 +18,10 @@
+ use diffusion_rs_sys::new_upscaler_ctx;
+ use diffusion_rs_sys::sd_cache_mode_t;
+ use diffusion_rs_sys::sd_cache_params_t;
+-use diffusion_rs_sys::sd_control_type_t;
++use diffusion_rs_sys::sd_ctx_has_control_net;
++use diffusion_rs_sys::sd_ctx_load_control_net;
+ use diffusion_rs_sys::sd_ctx_params_t;
++use diffusion_rs_sys::sd_ctx_unload_control_net;
+ use diffusion_rs_sys::sd_embedding_t;
+ use diffusion_rs_sys::sd_get_default_sample_method;
+ use diffusion_rs_sys::sd_get_default_scheduler;
+@@ -39,6 +41,7 @@
+ use diffusion_rs_sys::sd_set_progress_callback;
+ use diffusion_rs_sys::sd_slg_params_t;
+ use diffusion_rs_sys::sd_tiling_params_t;
++use diffusion_rs_sys::str_to_sd_control_type;
+ use diffusion_rs_sys::upscaler_ctx_t;
+ use image::ImageBuffer;
+ use image::ImageError;
+@@ -81,6 +84,9 @@
+ /// VAE latent format
+ pub use diffusion_rs_sys::sd_vae_format_t as VaeFormat;
+ 
++/// ControlNet conditioning type
++pub use diffusion_rs_sys::sd_control_type_t;
++
+ static VALID_EXT: [&str; 3] = ["gguf", "safetensors", "pt"];
+ 
+ #[derive(Debug)]
+@@ -103,6 +109,8 @@
+     Io(#[from] std::io::Error),
+     #[error("The underling upscaler model returned a NULL image")]
+     Upscaler,
++    #[error("control net failed: {0}")]
++    ControlNet(String),
+ }
+ 
+ #[non_exhaustive]
+@@ -938,6 +946,12 @@
+         self.chroma_t5_mask_pad, self.use_qwen_image_zero_cond_true
+     ).into()
+     }
++
++    /// Path the ControlNet weights are loaded from (empty = none).
++    #[must_use]
++    pub fn control_net_path(&self) -> PathBuf {
++        PathBuf::from(&self.control_net)
++    }
+ }
+ 
+ impl Drop for ModelConfig {
+@@ -1053,6 +1067,13 @@
+     #[builder(default = "Default::default()")]
+     control_image: CLibPath,
+ 
++    /// ControlNet conditioning type applied to the control image (default:
++    /// NONE — the image rides along as a plain preprocessed conditioning
++    /// map). A union ControlNet REQUIRES a named type here; a classic one
++    /// ignores the value with an engine warning.
++    #[builder(default = "sd_control_type_t::SD_CONTROL_TYPE_NONE")]
++    control_type: sd_control_type_t,
++
+     /// Path to the IP-Adapter reference image
+     #[builder(default = "Default::default()")]
+     ip_adapter_image_path: PathBuf,
+@@ -1311,6 +1332,7 @@
+             .init_img(value.init_img.clone())
+             .mask_img(value.mask_img.clone())
+             .control_image(value.control_image.clone())
++            .control_type(value.control_type)
+             .ref_images(value.ref_images.clone())
+             .output(value.output.clone())
+             .prompt(value.prompt.clone())
+@@ -1344,6 +1366,20 @@
+     }
+ }
+ 
++impl Config {
++    /// The configured [`sd_control_type_t`] for ControlNet conditioning.
++    #[must_use]
++    pub fn control_type(&self) -> sd_control_type_t {
++        self.control_type
++    }
++
++    /// Path the ControlNet conditioning image is read from (empty = none).
++    #[must_use]
++    pub fn control_image_path(&self) -> PathBuf {
++        PathBuf::from(&self.control_image)
++    }
++}
++
+ #[derive(Debug, Clone, Default)]
+ struct CLibString(CString);
+ 
+@@ -1442,6 +1478,18 @@
+     gen_img_maybe_progress(config, model_config, None)
+ }
+ 
++/// Parse a ControlNet type by the engine's name or alias (`none`,
++/// `openpose`, `depth`, `scribble`, `canny`, `normal`, `segment`, `tile`,
++/// `repaint`, plus the engine aliases like `lineart`/`hed`): `None` = the
++/// name is not one the engine knows (`str_to_sd_control_type` returns
++/// COUNT for those).
++#[must_use]
++pub fn parse_control_type(name: &str) -> Option<sd_control_type_t> {
++    let c_name = CString::new(name).ok()?;
++    let parsed = unsafe { str_to_sd_control_type(c_name.as_ptr()) };
++    (parsed != sd_control_type_t::SD_CONTROL_TYPE_COUNT).then_some(parsed)
++}
++
+ fn gen_img_maybe_progress(
+     config: &Config,
+     model_config: &mut ModelConfig,
+@@ -1505,6 +1553,7 @@
+         };
+         // The control image is only sent to the engine when configured: an
+         // all-zero sd_image_t means "no ControlNet conditioning" there.
++        let control_requested = !config.control_image.0.as_bytes().is_empty();
+         let mut control_image = sd_image_t {
+             width: 0,
+             height: 0,
+@@ -1512,7 +1561,7 @@
+             data: null_mut(),
+         };
+         let mut control_buffer;
+-        if !config.control_image.0.as_bytes().is_empty() {
++        if control_requested {
+             let img = image::open(PathBuf::from(&config.control_image))?;
+             control_buffer = img.to_rgb8().into_raw();
+ 
+@@ -1523,6 +1572,27 @@
+                 data: control_buffer.as_mut_ptr(),
+             }
+         }
++        // The conditioning image steers the render through the ControlNet
++        // only when the net's weights are actually loaded in the context
++        // (ctx creation loads them when `.control_net()` is set; the
++        // hot-swap loader below covers a context where that load failed).
++        // The engine silently ignores a control image when no net is
++        // loaded, which would misrender the request: refuse loudly instead,
++        // naming the weights path.
++        if control_requested && !sd_ctx_has_control_net(sd_ctx) {
++            let weights = PathBuf::from(&model_config.control_net);
++            let loaded = sd_ctx_load_control_net(sd_ctx, model_config.control_net.as_ptr());
++            if !loaded {
++                return Err(DiffusionError::ControlNet(if weights.as_os_str().is_empty() {
++                    "a control image is set but no control net weights are configured".to_owned()
++                } else {
++                    format!(
++                        "control net load failed for {} — missing, unreadable, or not a ControlNet checkpoint",
++                        weights.display()
++                    )
++                }));
++            }
++        }
+         let vae_tiling_params = sd_tiling_params_t {
+             enabled: model_config.vae_tiling,
+             tile_size_w: model_config.vae_tile_size.0,
+@@ -1765,7 +1835,7 @@
+             ip_adapter_strength: config.ip_adapter_strength,
+             ip_adapter_image: ip_image,
+             image_preprocess: sd_image_preprocess_params_t { rules: null() },
+-            control_type: sd_control_type_t::SD_CONTROL_TYPE_NONE,
++            control_type: config.control_type,
+         };
+ 
+         let params_str = CString::from_raw(sd_img_gen_params_to_str(&sd_img_gen_params))
+@@ -1809,6 +1879,14 @@
+             Ok(())
+         };
+         free_sd_image_generation_result(result_out);
++        // ControlNet weights may have been hot-loaded for this render:
++        // release them before reporting (loud — a failed unload means the
++        // engine held state the caller did not ask to keep).
++        if control_requested && !sd_ctx_unload_control_net(sd_ctx) {
++            return Err(DiffusionError::ControlNet(
++                "control net unload failed after generation".to_owned(),
++            ));
++        }
+         ret
+     }
+ }

@@ -660,6 +660,18 @@ export type ImagesGenerationRequest = {
    * Only meaningful with `controlnet` + `control_image`.
    */
   controlnet_strength?: number | null;
+  /**
+   * `ControlNet` conditioning type (honkbox extension): what the
+   * conditioning image depicts — one of the engine's names or aliases
+   * (`none`, `openpose`, `depth`, `scribble`, `canny`, `normal`,
+   * `segment`, `tile`, `repaint`, plus engine aliases like `lineart`,
+   * `hed`, `mlsd`). Validated against the engine's own name table
+   * (unknown names are a 400 `unknown_control_type`); a union
+   * `ControlNet` requires a named type while a classic one accepts the
+   * default `none` (omitted = `none`, the preprocessed-map behavior).
+   * Only meaningful with `controlnet` + `control_image`.
+   */
+  control_type?: string | null;
 };
 export type ImagesLora = {
   /**

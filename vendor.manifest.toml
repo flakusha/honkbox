@@ -31,7 +31,7 @@
 [vendor]
 url = "https://github.com/newfla/diffusion-rs"
 rev = "89dcf933f754a173c31b2db30ca3df14ec899dac"
-patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch", "0003-sys-cargo-lints-allow.patch", "0004-gen-img-control-image.patch"]
+patches = ["0000-sd-cpp-5dcfa79-ffi-port.patch", "0001-no-free-of-null-context.patch", "0002-sd-cpp-log-wire.patch", "0003-sys-cargo-lints-allow.patch", "0004-gen-img-control-image.patch", "0005-gen-img-control-type.patch"]
 
 # Vendored crates.io tarball (llama-cpp-sys-4 0.11.0): [patch.crates-io]
 # points at the extracted tree (vendor/llama-cpp-sys-4-0.11.0) once sync

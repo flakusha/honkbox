@@ -689,6 +689,7 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         control_net: None,
         control_image: None,
         controlnet_strength: None,
+        control_type: None,
     }));
     let format = honkbox_sd_core::OutputFormat::from(format);
     let bytes = or_exit(honkbox_sd_core::encode_image(img, format));

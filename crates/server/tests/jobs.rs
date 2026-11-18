@@ -830,5 +830,103 @@ async fn controlnet_strength_default_and_rejection() {
     assert!(sd.captured.lock().expect("capture lock").is_none());
 }
 
+/// A named `control_type` rides the resolved pair into the pipeline: the
+/// captured request carries a NON-zero engine type (what the image depicts)
+/// next to the weights path — the typed ControlNet execution contract. The
+/// engine's alias table accepts aliases (`lineart` → canny) and rejects
+/// unknown names with a named 400 before any GPU work; a stray
+/// `control_type` without a pair is refused like a lone pair half.
+#[tokio::test]
+async fn controlnet_type_execution_contract() {
+    let _slot = SLOT_LOCK.lock().await;
+    let sd = Arc::new(CapturingSd {
+        captured: Mutex::new(None),
+    });
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+
+    let canny = honkbox_sd_core::control_type_from_name("canny").expect("engine name");
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "control_type": "canny"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let captured = sd
+        .captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("request");
+    assert_eq!(captured.control_type, Some(canny));
+    assert_ne!(
+        captured.control_type,
+        Some(honkbox_sd_core::sd_control_type_t::SD_CONTROL_TYPE_NONE)
+    );
+    assert_eq!(
+        captured.control_net.as_deref(),
+        Some(std::path::Path::new("/models/controlnet/c.safetensors"))
+    );
+
+    // The engine's alias resolves onto the same conditioning type.
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "control_type": "lineart"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let captured = sd
+        .captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("request");
+    assert_eq!(captured.control_type, Some(canny));
+
+    // An unknown type name is a named 400, refused pre-slot.
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "control_type": "bogus"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "unknown_control_type");
+    assert!(sd.captured.lock().expect("capture lock").is_none());
+
+    // The name match is the engine's own (case-sensitive).
+    let (status, _, body) = images(
+        app.clone(),
+        json!({"prompt": "a honk", "size": "64x64",
+               "controlnet": "comfy:controlnet/c.safetensors",
+               "control_image": CONTROL_PNG_B64,
+               "control_type": "CANNY"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "unknown_control_type");
+
+    // A stray `control_type` without a pair is refused like a lone half.
+    let (status, _, body) = images(
+        app,
+        json!({"prompt": "a honk", "size": "64x64", "control_type": "canny"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["error"]["code"], "controlnet_pair");
+    // No request ever reached the pipeline across the refusal branches.
+    assert!(sd.captured.lock().expect("capture lock").is_none());
+}
+
 /// The exact bytes behind [`CONTROL_PNG_B64`] (the 8-byte PNG magic).
 const CONTROL_PNG_B64_AS_BYTES: &[u8] = b"\x89PNG\r\n\x1a\n";

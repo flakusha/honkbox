@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use diffusion_rs::api::{
     ConfigBuilder, LoraSpec, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
+    parse_control_type,
 };
 
 /// Longest image edge in pixels accepted by the stub backend.
@@ -30,6 +31,23 @@ pub const IMG2IMG_STRENGTH: f32 = 0.75;
 /// `--control-strength`, 0.9); also the HTTP-surface default when a request
 /// omits `controlnet_strength`.
 pub const CONTROLNET_STRENGTH: f32 = 0.9;
+
+/// The engine's `ControlNet` conditioning type (`stable-diffusion.h`
+/// `sd_control_type_t`: what the request's control image depicts).
+/// Re-exported so callers thread the exact vendor value into
+/// [`Txt2ImgRequest::control_type`] without naming the vendor crate.
+pub use diffusion_rs::api::sd_control_type_t;
+
+/// Resolve a `ControlNet` type by the engine's name or alias (`none`,
+/// `openpose`, `depth`, `scribble`, `canny`, `normal`, `segment`, `tile`,
+/// `repaint`, plus engine aliases like `lineart`/`hed`/`mlsd`): `None` = a
+/// name the engine does not know. The name table lives in the vendor
+/// (`str_to_sd_control_type`), so HTTP validation and the engine can never
+/// disagree about what is accepted.
+#[must_use]
+pub fn control_type_from_name(name: &str) -> Option<sd_control_type_t> {
+    parse_control_type(name)
+}
 
 /// Sampler selection, mirroring the vendor `SampleMethod` C enum exactly
 /// (wire names are the sd.cpp CLI spellings, e.g. `dpm++2m`).
@@ -348,6 +366,13 @@ pub struct Txt2ImgRequest {
     /// [`CONTROLNET_STRENGTH`]. Only meaningful with
     /// [`Txt2ImgRequest::control_image`].
     pub controlnet_strength: Option<f32>,
+    /// `ControlNet` conditioning type (the engine's `--control-type`: what
+    /// the conditioning image depicts). `None` = the vendor default `none`,
+    /// where the image rides along as a plain preprocessed map (classic
+    /// `ControlNet`s work that way); a union `ControlNet` REQUIRES a named
+    /// type and the engine refuses to run without one. Only meaningful with
+    /// [`Txt2ImgRequest::control_net`] + [`Txt2ImgRequest::control_image`].
+    pub control_type: Option<sd_control_type_t>,
 }
 
 /// RGBA8 image produced by [`SdPipeline::generate`].
@@ -402,7 +427,7 @@ pub trait SdPipeline: Send + Sync {
 /// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`), the
 /// hires-fix pass, and the image inputs
 /// (`loras`/`init_image`/`mask_image`/`strength`/`control_net`/
-/// `control_image`/`controlnet_strength`) are honestly
+/// `control_image`/`controlnet_strength`/`control_type`) are honestly
 /// ignored: the stub has no sampler, no img2img branch, and no `ControlNet`
 /// — they only affect the real `SdCppPipeline` backend. Callers that need
 /// control inputs applied must check the backend (the HTTP surface answers
@@ -617,6 +642,16 @@ fn stage_control(
     let Some((weights, png)) = control_pair(req)? else {
         return Ok(None);
     };
+    // Loud, early refusal: the engine logs-and-moves-on when ControlNet
+    // weights fail to load and would render the prompt unconditioned, so a
+    // weights path that does not resolve to a readable file is an error
+    // here, never an unconditioned render.
+    if !weights.exists() {
+        return Err(SdError::Backend(format!(
+            "control_net weights not found: {}",
+            weights.display()
+        )));
+    }
     let path = std::env::temp_dir().join(format!(
         "honkbox-control-{}-{}-{}.png",
         std::process::id(),
@@ -628,6 +663,14 @@ fn stage_control(
     std::fs::write(&path, png).map_err(|e| SdError::Backend(e.to_string()))?;
     model.control_net(weights.to_path_buf());
     config.control_image(path.clone());
+    // The named conditioning type rides into the engine (a union ControlNet
+    // refuses to run without one); `None` stays the vendor default `none` —
+    // the preprocessed-map behavior, byte-identical to before typed
+    // execution landed.
+    config.control_type(
+        req.control_type
+            .unwrap_or(sd_control_type_t::SD_CONTROL_TYPE_NONE),
+    );
     Ok(Some(path))
 }
 
@@ -754,8 +797,9 @@ impl SdPipeline for SdCppPipeline {
             .control_strength(req.controlnet_strength.unwrap_or(CONTROLNET_STRENGTH))
             .output(out.clone());
         let mut model = ModelConfigBuilder::default();
-        // ControlNet conditioning: temp PNG via [`stage_control`]; the
-        // control type stays the vendor default (NONE, preprocessed image).
+        // ControlNet conditioning: temp PNG + named control type via
+        // [`stage_control`]; an unnamed type stays the vendor default (NONE,
+        // preprocessed image).
         let control_path = stage_control(req, &mut config, &mut model)?;
         let config = config
             .build()
@@ -952,6 +996,7 @@ mod tests {
             control_net: None,
             control_image: None,
             controlnet_strength: None,
+            control_type: None,
         }
     }
 
@@ -992,6 +1037,96 @@ mod tests {
                 "control_image without control_net weights: the engine ignores a control image when no ControlNet is loaded".to_owned(),
             )),
         );
+    }
+
+    #[test]
+    fn control_type_from_name_uses_the_engine_name_table() {
+        let canny = control_type_from_name("canny").expect("canny is a vendor name");
+        assert_ne!(canny, sd_control_type_t::SD_CONTROL_TYPE_NONE);
+        assert_eq!(
+            control_type_from_name("none"),
+            Some(sd_control_type_t::SD_CONTROL_TYPE_NONE)
+        );
+        // Engine aliases resolve onto the same conditioning type.
+        assert_eq!(control_type_from_name("lineart"), Some(canny));
+        assert_eq!(
+            control_type_from_name("hed"),
+            control_type_from_name("scribble")
+        );
+        // Anything else is rejected — empty, unknown, and wrong-case alike
+        // (the engine's name match is case-sensitive).
+        assert_eq!(control_type_from_name("bogus"), None);
+        assert_eq!(control_type_from_name(""), None);
+        assert_eq!(control_type_from_name("CANNY"), None);
+    }
+
+    #[test]
+    fn stage_control_threads_type_and_weights_and_refuses_missing_weights() {
+        let weights = std::env::temp_dir().join(format!(
+            "honkbox-test-cnet-{}-{}.safetensors",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos()),
+        ));
+        std::fs::write(&weights, b"cn").expect("write weights");
+        let png: &[u8] = b"\x89PNG\r\n\x1a\nfake";
+
+        // A named type + real weights file ride onto the vendor configs.
+        let mut both = req(7, 64, 64);
+        both.control_net = Some(weights.clone());
+        both.control_image = Some(png.to_vec());
+        both.control_type = control_type_from_name("canny");
+        let mut config = ConfigBuilder::default();
+        config.prompt("a honk".to_owned());
+        let mut model = ModelConfigBuilder::default();
+        let staged = stage_control(&both, &mut config, &mut model).expect("a complete pair stages");
+        let staged = staged.expect("pair present");
+        // The builder validates that a checkpoint slot is set (the engine
+        // path always has one); a stand-in path never reaches the engine.
+        model.model(PathBuf::from("comfy:checkpoints/x.safetensors"));
+        let built = config.build().expect("config builds");
+        let model_built = model.build().expect("model builds");
+        assert_eq!(
+            built.control_type(),
+            sd_control_type_t::SD_CONTROL_TYPE_CANNY
+        );
+        assert_eq!(built.control_image_path(), staged);
+        assert_eq!(model_built.control_net_path(), weights);
+        let _ = std::fs::remove_file(&staged);
+
+        // No named type: the vendor default NONE (preprocessed map).
+        let mut plain = req(7, 64, 64);
+        plain.control_net = Some(weights.clone());
+        plain.control_image = Some(png.to_vec());
+        let mut config = ConfigBuilder::default();
+        config.prompt("a honk".to_owned());
+        let mut model = ModelConfigBuilder::default();
+        let staged = stage_control(&plain, &mut config, &mut model)
+            .expect("a complete pair stages")
+            .expect("pair present");
+        let _ = std::fs::remove_file(&staged);
+        model.model(PathBuf::from("comfy:checkpoints/x.safetensors"));
+        assert_eq!(
+            config.build().expect("config builds").control_type(),
+            sd_control_type_t::SD_CONTROL_TYPE_NONE
+        );
+
+        // A weights path that does not resolve is refused before any engine
+        // work, naming the file.
+        let mut missing = req(7, 64, 64);
+        missing.control_net = Some(PathBuf::from("/nonexistent/cn.safetensors"));
+        missing.control_image = Some(png.to_vec());
+        let mut config = ConfigBuilder::default();
+        config.prompt("a honk".to_owned());
+        let mut model = ModelConfigBuilder::default();
+        let err = stage_control(&missing, &mut config, &mut model).expect_err("missing weights");
+        let SdError::Backend(msg) = err else {
+            panic!("expected Backend variant, got {err:?}")
+        };
+        assert!(msg.contains("/nonexistent/cn.safetensors"), "{msg}");
+
+        let _ = std::fs::remove_file(&weights);
     }
 
     #[test]

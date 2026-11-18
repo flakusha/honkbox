@@ -86,6 +86,7 @@ fn request(width: u32, height: u32, seed: u64) -> Txt2ImgRequest {
         control_net: None,
         control_image: None,
         controlnet_strength: None,
+        control_type: None,
     }
 }
 

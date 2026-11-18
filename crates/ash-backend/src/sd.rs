@@ -104,6 +104,7 @@ mod tests {
             control_net: None,
             control_image: None,
             controlnet_strength: None,
+            control_type: None,
         };
         let err = pipeline
             .generate(&req)
