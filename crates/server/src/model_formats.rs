@@ -51,6 +51,20 @@
 //! DIFFERENT registered format is rejected naming the SNIFFED format,
 //! never the claimed extension (the registry's rejection convention).
 //!
+//! # Trust boundary (authorization is NOT this gate)
+//!
+//! This gate is FORMAT admission only: it makes no caller-identity or
+//! permission decision, and the claimed file extension is UNTRUSTED
+//! client input (the bytes decide identification; the extension merely
+//! selects the expected container). Default-deny holds structurally:
+//! every non-allowlisted claim — unknown extension, known non-model
+//! container, external-only format, unrecognized bytes, budget excess —
+//! is a named [`ModelReject`]. Caller authentication/authorization remain
+//! the route layer's existing contract: whatever route wires this gate
+//! sits behind the bearer middleware (`route_layer(middleware::
+//! from_fn_with_state)` with the per-request `api_key_env` check), and a
+//! `ValidatedModel` verdict MUST NOT be treated as authorization.
+//!
 //! # Rejection codes (named, route-mappable)
 //!
 //! [`ModelReject::code`] yields the stable wire codes:
