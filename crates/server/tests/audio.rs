@@ -206,6 +206,63 @@ async fn post_json(app: Router, uri: &str, body: Value) -> (StatusCode, String, 
     .await
 }
 
+/// TASK-speech-input-cap: `input` over the 4096-character cap is a named
+/// 400 (`input_too_long`) — rejected, never truncated. The cap is counted
+/// in CHARACTERS: a multibyte string of 4097 characters is over the cap
+/// even though it is far smaller than any byte-based guess.
+#[tokio::test]
+async fn speech_input_over_cap_is_rejected_not_clamped() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, _, bytes) = post_json(
+        test_app(),
+        "/v1/audio/speech",
+        json!({"input": "a".repeat(4097)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: Value = serde_json::from_slice(&bytes).expect("envelope");
+    assert_eq!(parsed["error"]["code"], "input_too_long", "{parsed}");
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("4097") && m.contains("cap is 4096")),
+        "message names actual and cap: {parsed}"
+    );
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("not truncated")),
+        "reject-not-clamp is explicit: {parsed}"
+    );
+
+    // Multibyte counting: 4097 CJK characters (12 KB of UTF-8) is over the
+    // cap — the limit is not a byte limit.
+    let (status, _, _) = post_json(
+        test_app(),
+        "/v1/audio/speech",
+        json!({"input": "字".repeat(4097)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// TASK-speech-input-cap: at-cap (4096 characters) requests are unchanged —
+/// the stub TTS synthesizes them normally, and whitespace-only handling is
+/// untouched (the pre-existing `input is required` 400).
+#[tokio::test]
+async fn speech_input_at_cap_still_synthesizes() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, content_type, bytes) = post_json(
+        test_app(),
+        "/v1/audio/speech",
+        json!({"input": "h".repeat(4096)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "audio/wav");
+    assert!(bytes.starts_with(b"RIFF"), "wav container intact");
+}
+
 /// REQ-9 acceptance: the multipart transcription matches the native
 /// `/v1/transcribe` transcript for the same wav bytes.
 #[tokio::test]
@@ -493,6 +550,36 @@ async fn transcriptions_rejections_are_envelopes() {
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     let parsed: Value = serde_json::from_slice(&bytes).expect("envelope");
     assert!(parsed["error"]["message"].is_string(), "{parsed}");
+}
+
+/// The native `/v1/synthesize` twin enforces the SAME boundary as
+/// `/v1/audio/speech` (TASK-speech-input-cap): same worker, same cap,
+/// reject-not-clamp — a route without the check would be the bypass.
+#[tokio::test]
+async fn synthesize_input_over_cap_is_rejected() {
+    let app = test_app();
+    let over_cap = "a".repeat(4097);
+    let (status, _, body) = post_json(
+        app.clone(),
+        "/v1/synthesize",
+        json!({"model": "llm:tts-fake.gguf", "text": over_cap, "voice": "af_heart"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body = String::from_utf8(body).expect("utf8 error body");
+    assert!(body.contains("cap is 4096"), "{body}");
+    assert!(body.contains("rejected, not truncated"), "{body}");
+    // Blank text is rejected on the twin too (speech parity). Full valid
+    // shape so deserialization succeeds and the ROUTE boundary runs.
+    let (status, _, body) = post_json(
+        app,
+        "/v1/synthesize",
+        json!({"model": "llm:tts-fake.gguf", "text": "   ", "voice": "af_heart"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let body = String::from_utf8(body).expect("utf8 error body");
+    assert!(body.contains("text is required"), "{body}");
 }
 
 /// REQ-9 acceptance: `/v1/audio/speech` returns `audio/wav` bytes that

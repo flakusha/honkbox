@@ -722,6 +722,143 @@ export type TranscriptionVerbose = {
    */
   segments: Array<TranscriptSegment>;
 };
+export type ImageOpKind = "resize" | "crop" | "rotate" | "grayscale" | "format";
+export type ImageOpCommand =
+  | { "resize": ImageOpResize; }
+  | { "crop": ImageOpCrop; }
+  | { "rotate": ImageOpRotate; }
+  | "grayscale"
+  | "format";
+export type ImageOpResize = {
+  /**
+   * Target width in pixels, `[1, 8192]`.
+   */
+  width: number;
+  /**
+   * Target height in pixels, `[1, 8192]`.
+   */
+  height: number;
+};
+export type ImageOpCrop = {
+  /**
+   * Left edge of the crop rect, px from x=0.
+   */
+  x: number;
+  /**
+   * Top edge of the crop rect, px from y=0.
+   */
+  y: number;
+  /**
+   * Crop width in px (at least 1).
+   */
+  width: number;
+  /**
+   * Crop height in px (at least 1).
+   */
+  height: number;
+};
+export type ImageOpRotate = {
+  /**
+   * Rotation in degrees; accepted values are `90`, `180`, `270`
+   * (clockwise).
+   */
+  degrees: number;
+};
+export type ImageOpInput = { "data_uri": string; } | { "artifact": ImageOpArtifact; };
+export type ImageOpArtifact = {
+  /**
+   * Bundle id (ULID string, exactly as a prior response reported it).
+   */
+  bundle: string;
+  /**
+   * Zero-based artifact index within that bundle.
+   */
+  index: number;
+};
+export type ImageOpRequest = {
+  /**
+   * The op plus its params (see [`ImageOpCommand`]).
+   */
+  command: ImageOpCommand;
+  /**
+   * Input images; `1..=8` (the image-ops batch cap). Each is a data URI
+   * or an artifact reference (see [`ImageOpInput`]); one output is
+   * produced per input, in order.
+   */
+  inputs: Array<ImageOpInput>;
+  /**
+   * Output container: `"png"` (default), `"jpeg"`, or `"webp"` — the
+   * same vocabulary as the generation routes; unknown names are a 400.
+   */
+  output_format?: string | null;
+  /**
+   * JPEG quality in `[0, 100]` (`output_compression` precedent);
+   * non-integer or out-of-range values are a 400, never clamped. Only
+   * applied to `output_format: "jpeg"` (PNG/WebP are lossless here).
+   */
+  output_compression?: JsonValue | null;
+  /**
+   * Free-form caller identity recorded in the bundle sidecar (plugin
+   * name/version, e.g. `"krita-honkbox/1.0"`); `1..=128` chars when
+   * present. Never interpreted, never a credential.
+   */
+  client?: string | null;
+  /**
+   * Caller-chosen idempotency key, `1..=128` chars. Required so every
+   * submission is retry-safe by construction.
+   */
+  request_id: string;
+};
+export type ImageOpOutput = {
+  /**
+   * The produced image bytes (in the requested `output_format`),
+   * base64-encoded.
+   */
+  b64_json: string;
+  /**
+   * SHA-256 hex digest of the produced bytes (determinism checks).
+   */
+  sha256: string;
+  /**
+   * Container actually produced (`png` | `jpeg` | `webp`).
+   */
+  format: string;
+};
+export type ImageOpResponse = {
+  /**
+   * Completion time, Unix seconds.
+   */
+  created: bigint;
+  /**
+   * Registry job id (`job_<ulid>`); matches `X-Job-Id`, `GET /v1/jobs`,
+   * and the cancel routes while the job is live.
+   */
+  job_id: string;
+  /**
+   * The request's idempotency key, verbatim.
+   */
+  request_id: string;
+  /**
+   * Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle
+   * artifact inputs reference. Absent when the server runs without a
+   * data dir (bundles are disabled).
+   */
+  bundle: string | null;
+  /**
+   * One entry per input, in order.
+   */
+  outputs: Array<ImageOpOutput>;
+  /**
+   * Advisory notes; omitted when empty.
+   */
+  warnings: Array<string> | null;
+};
+export type ImageOpsCapability = {
+  /**
+   * Supported op wire names (the `ImageOpCommand` tag vocabulary).
+   */
+  ops: Array<string>;
+};
 export type SpeechRequest = {
   /**
    * Model id (alias or registry slug); omitted → server default TTS.
@@ -1183,7 +1320,7 @@ export type JobInfo = {
   id: string;
   /**
    * Modality: `chat`, `embeddings`, `images`, `transcribe`,
-   * `synthesize`, or `translations`.
+   * `synthesize`, `translations`, or `image_ops`.
    */
   kind: string;
   /**
@@ -1233,7 +1370,7 @@ export type JobEvent = {
   id: string;
   /**
    * Modality label (`chat`, `embeddings`, `images`, `transcribe`,
-   * `synthesize`, `translations`).
+   * `synthesize`, `translations`, `image_ops`).
    */
   kind: string;
   /**
@@ -1360,6 +1497,12 @@ export type Capabilities = {
    */
   queue: QueueCapabilities;
   /**
+   * CPU image-ops surface (`POST /v1/image-ops`): the supported op
+   * vocabulary. Present whenever the ops route is compiled (always
+   * today) — additive optional field per the version policy above.
+   */
+  image_ops: ImageOpsCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1418,9 +1561,13 @@ export type FeatureFlags = {
 export type VisionFeature = {
   /**
    * `true` when THIS build compiles the mtmd path (`llm-vision`). A
-   * text-only build reports `false` and its chat routes reject image
-   * parts with the named `vision_unsupported` 400 — the document agrees
-   * with the guard by construction (both read the same compile flag).
+   * text-only build reports `false`; scan-derived entries then never
+   * advertise vision, and image parts on any entry whose
+   * `capabilities.vision` is `false` get the named `vision_unsupported`
+   * 400 — the gate and `/v1/models` key on the same catalog flag, so
+   * `models` counts exactly the entries the routes accept as
+   * vision-capable. Operator-declared vision overrides still win over
+   * the build probe (a real pipeline fails loudly at model load).
    */
   built: boolean;
   /**

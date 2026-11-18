@@ -160,7 +160,7 @@
             }
           },
           "400": {
-            "description": "Empty input, unknown model, or unsupported response_format",
+            "description": "Empty input, oversized input (over 4096 characters), unknown model, or unsupported response_format",
             "content": {
               "application/json": {
                 "schema": {
@@ -657,6 +657,75 @@
         }
       }
     },
+    "/v1/image-ops": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/image-ops` (epic-editor-integration): one bounded CPU op over\n`1..=8` inputs — resize/crop/rotate/grayscale/format — deterministic by\nconstruction (Lanczos3, fixed encoders), with `request_id`-keyed\nidempotency (same key + same canonical command replays the first job's\nresponse byte-identically, no double execution; same key + different\ncommand is a named 400). The job is registry-visible while live (kind\n`image_ops`, cancel honored BETWEEN inputs), its lifecycle streams on\n`GET /v1/events`, and the result bundle lands under\n`<data_dir>/jobs/{bundle}/` via the existing jobs path (sidecar: command\nhash, input/output hashes, tool version, attempts, outcome). Inputs are\ndata URIs or this server's own bundle artifacts only — no paths, no\n`file://`, no remote URLs (nothing is fetched, so there is no SSRF\nsurface). Unsupported-in-principle ops do not exist in the vocabulary:\nthe op set is exactly what the in-process `image` crate covers\n(TASK-cheap-ops-spike Tier 0), so there is no 501 path today — unknown\nop tags are a 400 from parsing, and the capabilities advertisement lists\nthe supported vocabulary.",
+        "operationId": "post_image_ops",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageOpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One output per input, in order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageOpResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown field, unknown op, out-of-range params, oversized batch, bad input container/data URI/ artifact, unknown output_format or output_compression, or request_id conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job cancelled before completion (between inputs)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "CPU admission busy (ledger)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Decode/transform/encode failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/images/edits": {
       "post": {
         "tags": [],
@@ -1052,7 +1121,7 @@
             "description": "WAV audio"
           },
           "400": {
-            "description": "Unknown model slug"
+            "description": "Unknown model slug; blank `text`; `text` over the 4096-character cap (`text_too_long`)"
           },
           "429": {
             "description": "GPU slot busy"
@@ -1139,6 +1208,17 @@
           "formats": {
             "$ref": "#/components/schemas/Formats",
             "description": "Image containers accepted on ingest and producible on output, with\nthe size/quality limits the server actually enforces."
+          },
+          "image_ops": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImageOpsCapability",
+                "description": "CPU image-ops surface (`POST /v1/image-ops`): the supported op\nvocabulary. Present whenever the ops route is compiled (always\ntoday) — additive optional field per the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "models": {
             "type": "string",
@@ -2010,6 +2090,336 @@
           }
         }
       },
+      "ImageOpArtifact": {
+        "type": "object",
+        "description": "An artifact input: one output file of a finished job bundle written by\nthis server (under `<data_dir>/jobs/{bundle}/`). The bundle id is the\n`ImageOpResponse.bundle` ULID; the index is the zero-based position in\nthat response's `outputs`.",
+        "required": [
+          "bundle",
+          "index"
+        ],
+        "properties": {
+          "bundle": {
+            "type": "string",
+            "description": "Bundle id (ULID string, exactly as a prior response reported it)."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based artifact index within that bundle.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageOpCommand": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Resize to `width`x`height` (Lanczos3 resample — the single fixed\nfilter keeps bytes deterministic for identical inputs).",
+            "required": [
+              "resize"
+            ],
+            "properties": {
+              "resize": {
+                "$ref": "#/components/schemas/ImageOpResize",
+                "description": "Resize to `width`x`height` (Lanczos3 resample — the single fixed\nfilter keeps bytes deterministic for identical inputs)."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Crop the rect `x, y, width, height`.",
+            "required": [
+              "crop"
+            ],
+            "properties": {
+              "crop": {
+                "$ref": "#/components/schemas/ImageOpCrop",
+                "description": "Crop the rect `x, y, width, height`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Lossless quarter-turn rotation.",
+            "required": [
+              "rotate"
+            ],
+            "properties": {
+              "rotate": {
+                "$ref": "#/components/schemas/ImageOpRotate",
+                "description": "Lossless quarter-turn rotation."
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "Grayscale conversion.",
+            "enum": [
+              "grayscale"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Re-encode only (container conversion via `output_format`).",
+            "enum": [
+              "format"
+            ]
+          }
+        ],
+        "description": "One image-op command: the op tag plus exactly that op's params.\nParam ops are externally tagged single-key objects —\n`{\"resize\": {\"width\": 512, \"height\": 512}}` — while the no-param ops\n(`grayscale`, `format`) are bare strings (`\"grayscale\"`), their one and\nonly wire form. The params structs carry `deny_unknown_fields`, so\nunknown keys inside a params object are a 400; an unknown op tag or the\nwrong shape (e.g. `{\"format\": {}}`) is a 400 from parsing itself."
+      },
+      "ImageOpCrop": {
+        "type": "object",
+        "description": "`crop` params. All four values are required; the rect must satisfy\n`x + width <= input_width` and `y + height <= input_height` (out-of-bounds\ncrops are a named 400, never clamped to the image edge).",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Crop height in px (at least 1).",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Crop width in px (at least 1).",
+            "minimum": 0
+          },
+          "x": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Left edge of the crop rect, px from x=0.",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Top edge of the crop rect, px from y=0.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageOpInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`, and\n`image/webp` payloads are accepted (magic-sniffed after decode).",
+            "required": [
+              "data_uri"
+            ],
+            "properties": {
+              "data_uri": {
+                "type": "string",
+                "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`, and\n`image/webp` payloads are accepted (magic-sniffed after decode)."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A prior bundle's output artifact (see [`ImageOpArtifact`]).",
+            "required": [
+              "artifact"
+            ],
+            "properties": {
+              "artifact": {
+                "$ref": "#/components/schemas/ImageOpArtifact",
+                "description": "A prior bundle's output artifact (see [`ImageOpArtifact`])."
+              }
+            }
+          }
+        ],
+        "description": "One input image for `POST /v1/image-ops`: a data URI or a prior job\nbundle's artifact — never a filesystem path, `file://` URL, or remote\nURL (there is no fetch, so no SSRF surface by construction)."
+      },
+      "ImageOpKind": {
+        "type": "string",
+        "description": "The bounded `POST /v1/image-ops` op vocabulary (epic-editor-integration).\nWire names are the serde names; [`ImageOpKind::ALL`] is the authoritative\norder for the `GET /v1/capabilities` advertisement. Anything outside this\nset is a 400 naming the accepted values — the vocabulary is closed.",
+        "enum": [
+          "resize",
+          "crop",
+          "rotate",
+          "grayscale",
+          "format"
+        ]
+      },
+      "ImageOpOutput": {
+        "type": "object",
+        "description": "One produced image in the `POST /v1/image-ops` response.",
+        "required": [
+          "b64_json",
+          "sha256",
+          "format"
+        ],
+        "properties": {
+          "b64_json": {
+            "type": "string",
+            "description": "The produced image bytes (in the requested `output_format`),\nbase64-encoded."
+          },
+          "format": {
+            "type": "string",
+            "description": "Container actually produced (`png` | `jpeg` | `webp`)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 hex digest of the produced bytes (determinism checks)."
+          }
+        }
+      },
+      "ImageOpRequest": {
+        "type": "object",
+        "description": "`POST /v1/image-ops` request (epic-editor-integration). Bounds are\nreject-not-clamp everywhere: unknown fields (`deny_unknown_fields`),\nout-of-range params, oversized batches, and malformed inputs are named\n400s — defaults never silently repair an explicit request.\n\n`request_id` deduplicates retries: the same `request_id` with the same\ncanonical command replays the first job's response (same job id, same\nbundle, no double execution); the same `request_id` with a DIFFERENT\ncommand is a named 400 conflict.",
+        "required": [
+          "command",
+          "inputs",
+          "request_id"
+        ],
+        "properties": {
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-form caller identity recorded in the bundle sidecar (plugin\nname/version, e.g. `\"krita-honkbox/1.0\"`); `1..=128` chars when\npresent. Never interpreted, never a credential."
+          },
+          "command": {
+            "$ref": "#/components/schemas/ImageOpCommand",
+            "description": "The op plus its params (see [`ImageOpCommand`])."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageOpInput"
+            },
+            "description": "Input images; `1..=8` (the image-ops batch cap). Each is a data URI\nor an artifact reference (see [`ImageOpInput`]); one output is\nproduced per input, in order."
+          },
+          "output_compression": {
+            "description": "JPEG quality in `[0, 100]` (`output_compression` precedent);\nnon-integer or out-of-range values are a 400, never clamped. Only\napplied to `output_format: \"jpeg\"` (PNG/WebP are lossless here)."
+          },
+          "output_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Output container: `\"png\"` (default), `\"jpeg\"`, or `\"webp\"` — the\nsame vocabulary as the generation routes; unknown names are a 400."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Caller-chosen idempotency key, `1..=128` chars. Required so every\nsubmission is retry-safe by construction."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageOpResize": {
+        "type": "object",
+        "description": "`resize` params. Both edges are required (no implicit aspect preservation\nguess); accepted range `[1, 8192]` per edge with `width * height <=`\n`16_777_216` px — outside it is a named 400, never a clamp.",
+        "required": [
+          "width",
+          "height"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Target height in pixels, `[1, 8192]`.",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Target width in pixels, `[1, 8192]`.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageOpResponse": {
+        "type": "object",
+        "description": "`POST /v1/image-ops` response: one output per input, in order, plus the\njob/bundle ids a client needs to poll, cancel, or reference artifacts in\nfollow-up ops.",
+        "required": [
+          "created",
+          "job_id",
+          "request_id",
+          "outputs"
+        ],
+        "properties": {
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle\nartifact inputs reference. Absent when the server runs without a\ndata dir (bundles are disabled)."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Completion time, Unix seconds.",
+            "minimum": 0
+          },
+          "job_id": {
+            "type": "string",
+            "description": "Registry job id (`job_<ulid>`); matches `X-Job-Id`, `GET /v1/jobs`,\nand the cancel routes while the job is live."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageOpOutput"
+            },
+            "description": "One entry per input, in order."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The request's idempotency key, verbatim."
+          },
+          "warnings": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Advisory notes; omitted when empty."
+          }
+        }
+      },
+      "ImageOpRotate": {
+        "type": "object",
+        "description": "`rotate` params. Only lossless multiples of a quarter turn are accepted\n(`90`, `180`, `270`); arbitrary angles would need resampling — rejected\nwith a 400 naming the accepted values, never approximated.",
+        "required": [
+          "degrees"
+        ],
+        "properties": {
+          "degrees": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Rotation in degrees; accepted values are `90`, `180`, `270`\n(clockwise).",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImageOpsCapability": {
+        "type": "object",
+        "description": "Image-ops capability (`Capabilities::image_ops`): the supported op\nvocabulary of `POST /v1/image-ops`. Present whenever the ops route is\ncompiled into this server (always today); `None` means the route is not\nmounted and clients must not call it.",
+        "required": [
+          "ops"
+        ],
+        "properties": {
+          "ops": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Supported op wire names (the `ImageOpCommand` tag vocabulary)."
+          }
+        }
+      },
       "ImagesGenerationRequest": {
         "type": "object",
         "description": "`POST /v1/images/generations` request (REQ-10). `OpenAI` shape: `prompt`\nrequired; `model` optional (server default SD pipeline); `size` is\n`\"WxH\"` pixels (default `1024x1024`, longest edge capped by sd-core);\n`n` defaults to 1 and is clamped (never rejected) to 4;\n`response_format` currently only accepts `\"b64_json\"`.\n\nRecipe overrides (all optional; omitting every one is byte-identical to\nthe pre-passthrough fixed recipe: euler sampler, `normal`/discrete\nscheduler, CFG 7.0, server-chosen seed base):\n- `sampler`: one of the sd.cpp sampler names; an unknown name is a 400\n  naming it (accepted list comes from sd-core `SAMPLER_NAMES`).\n- `scheduler`: one of the sd.cpp scheduler names; unknown name = 400.\n- `cfg_scale`: classifier-free guidance scale in `[1.0, 30.0]`; outside\n  the range is a 400 (rejected, never silently clamped).\n- `negative_prompt`: text steered away from in CFG models.\n- `seed`: RNG base; per-image seed = `seed + i`. Omitted = the\n  server-chosen fixed base (deterministic, like today).\n- `loras`: per-request `LoRA` adapters (max 2; each `slug` resolves\n  against catalog entries of kind `lora` by slug or alias — unknown\n  names are a 400 naming the offender). `strength` is the adapter\n  multiplier, default 1.0, accepted range `[-2.0, 2.0]` (out of range\n  is a 400, never clamped). Weight licensing is the operator's\n  responsibility: honkbox never bundles `LoRA` weights, and the curated\n  catalog `license` is surfaced as a response warning when known — a\n  missing license means all-rights-reserved, i.e. local-only use\n  (ReviewedLicense-AGPL §2b/§2c). The high-noise adapter split is not\n  exposed; requests always apply adapters as standard `LoRA`s. Base-model\n  mismatch cannot be detected today (no base tags are recorded on scan\n  entries or `LoRA` files), so it is neither warned about nor rejected.\n\n**Named recipes and precedence**: `recipe` selects a curated bundle\n(sampler/scheduler/cfg/steps for a checkpoint family; names come from\nsd-core's supported enums and mirror the vendored stable-diffusion.cpp\npresets — e.g. `sd15`, `sdxl`, `sd35`, `turbo`, `lcm`, `flux-dev`,\n`flux-schnell`; an unknown name is a 400 listing every accepted value).\nExplicit per-field overrides ALWAYS win over the recipe defaults, which\nin turn win over the server defaults: request field > recipe > server\ndefault. Omitting `recipe` and every override field reproduces the\npre-recipe fixed recipe exactly (euler, discrete, CFG 7.0, 20 steps).\nThe applied recipe name — and which fields a recipe actually supplied —\nland verbatim in the job bundle sidecar.",
@@ -2286,7 +2696,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Modality label (`chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, `translations`)."
+            "description": "Modality label (`chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, `translations`, `image_ops`)."
           },
           "model": {
             "type": [
@@ -2332,7 +2742,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "Modality: `chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, or `translations`."
+            "description": "Modality: `chat`, `embeddings`, `images`, `transcribe`,\n`synthesize`, `translations`, or `image_ops`."
           },
           "model": {
             "type": [

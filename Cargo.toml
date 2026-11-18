@@ -44,6 +44,14 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 tokio-util = "0.7"
 sha2 = "0.11"
+# Response compression (FEAT-response-compression): gzip + brotli encoders.
+# The predicate set (SSE/image/grpc exclusion, size floor) is always
+# compiled — no filter feature in tower-http 0.6. Encoders reuse
+# lock-resident flate2/brotli via async-compression — no new heavy tree.
+tower-http = { version = "0.6", default-features = false, features = [
+    "compression-gzip",
+    "compression-br",
+] }
 honkbox-residency = { path = "crates/residency" }
 honkbox-sd-core = { path = "crates/sd-core" }
 honkbox-ash-backend = { path = "crates/ash-backend" }

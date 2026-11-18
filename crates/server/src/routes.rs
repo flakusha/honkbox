@@ -7,12 +7,12 @@
 //! The `OpenAPI` document is served as plain JSON via `Json` — no
 //! `utoipa-axum` router glue.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ use honkbox_api_types::{
     DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
     EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FeatureFlags, FinishReason,
     FormatLimits, Formats, FunctionCall, FunctionDefinition, GgufMetadata, Health, ImageB64,
+    ImageOpArtifact, ImageOpCommand, ImageOpCrop, ImageOpInput, ImageOpKind, ImageOpOutput,
+    ImageOpRequest, ImageOpResize, ImageOpResponse, ImageOpRotate, ImageOpsCapability,
     ImagesGenerationRequest, ImagesGenerationResponse, ImagesHiresFix, ImagesLora, JobCancelResult,
     JobEvent, JobEventType, JobInfo, JobList, JsonSchemaSpec, MemoryCapacity, MemoryGpu,
     MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind,
@@ -47,6 +49,7 @@ use honkbox_api_types::{
     TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
     Voice, VoiceList,
 };
+use sha2::{Digest as _, Sha256};
 
 /// Re-exported auth settings (REQ-7): `app` consumers (integration tests,
 /// `main`) build `AppConfig.auth` from these.
@@ -65,11 +68,13 @@ use honkbox_llm_worker::{
 };
 use rust_embed::Embed;
 use serde::Deserialize;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, OnceCell, mpsc};
 use tokio_stream::{
     Stream, StreamExt as _,
     wrappers::{BroadcastStream, UnboundedReceiverStream, errors::BroadcastStreamRecvError},
 };
+use tower_http::compression::predicate::SizeAbove;
+use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate as _};
 use utoipa::OpenApi;
 
 /// Compile-time UI bundle (release always embeds; dev serves from disk instead).
@@ -95,6 +100,7 @@ struct EmbeddedUi;
         post_chat_completions,
         post_images_generations,
         post_images_edits,
+        post_image_ops,
         post_transcribe,
         post_synthesize,
         post_audio_transcriptions,
@@ -190,6 +196,17 @@ struct EmbeddedUi;
         ImagesHiresFix,
         ImageB64,
         ImagesGenerationResponse,
+        ImageOpKind,
+        ImageOpCommand,
+        ImageOpResize,
+        ImageOpCrop,
+        ImageOpRotate,
+        ImageOpInput,
+        ImageOpArtifact,
+        ImageOpRequest,
+        ImageOpOutput,
+        ImageOpResponse,
+        ImageOpsCapability,
         JobInfo,
         JobList,
         JobCancelResult,
@@ -313,6 +330,23 @@ impl AppConfig {
 /// the contract test cross-checks the two against each other.
 pub(crate) const AUDIO_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
+/// Response-compression size floor (FEAT-response-compression; the ticket
+/// names no number, this is the pick): bodies SMALLER than this are passed
+/// through uncompressed — a sub-1 KiB JSON costs more codec time than the
+/// bytes it saves and gzip of tiny bodies can even grow them. 1 KiB is the
+/// common proxy default. Payloads at/above it compress when the client asks
+/// (`Accept-Encoding: gzip` / `br`) and decompress byte-identical. (`u16`:
+/// `SizeAbove`'s field width.)
+const COMPRESSION_MIN_BYTES: u16 = 1024;
+
+/// `POST /v1/audio/speech` `input` cap (TASK-speech-input-cap,
+/// blocking-grade finding): CHARACTERS, not bytes — 4096, the `OpenAI` TTS
+/// precedent. Larger `input` is a named 400 (`input_too_long`), never a
+/// silent truncation: reject-not-clamp, same policy as `cfg_scale` and
+/// `strength`. Under-cap requests are byte-identical to the pre-ticket
+/// behavior.
+pub(crate) const SPEECH_INPUT_MAX_CHARS: usize = 4096;
+
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
     Router::new()
@@ -332,6 +366,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/embeddings", post(post_embeddings))
         .route("/v1/images/generations", post(post_images_generations))
         .route("/v1/images/edits", post(post_images_edits))
+        .route("/v1/image-ops", post(post_image_ops))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
         .route("/v1/audio/voices", get(get_audio_voices))
@@ -359,6 +394,15 @@ pub fn app(config: AppConfig) -> Router {
         // H1 (ReviewedAudio): lift the silent 2 MiB default; see
         // [`AUDIO_BODY_LIMIT_BYTES`] for the byte math.
         .layer(DefaultBodyLimit::max(AUDIO_BODY_LIMIT_BYTES))
+        // FEAT-response-compression: gzip/brotli on ordinary JSON/binary
+        // routes; the predicate is DefaultPredicate's exclusion set (gRPC,
+        // `image/*`, `text/event-stream` — BOTH SSE routes stay unbuffered)
+        // with a 1 KiB size floor. Mounted INSIDE `track_metrics` so
+        // status/`Retry-After` bookkeeping still sees the final response.
+        .layer(
+            CompressionLayer::new()
+                .compress_when(DefaultPredicate::new().and(SizeAbove::new(COMPRESSION_MIN_BYTES))),
+        )
         .layer(middleware::from_fn(track_metrics))
         .with_state(config)
 }
@@ -684,6 +728,14 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
         },
         openapi: "/v1/openapi.json".to_owned(),
         models: "/v1/models".to_owned(),
+        image_ops: Some(ImageOpsCapability {
+            // The closed vocabulary, derived from the enum itself (never a
+            // prose copy — add an op to `ImageOpKind` and this follows).
+            ops: ImageOpKind::ALL
+                .iter()
+                .map(|op| op.label().to_owned())
+                .collect(),
+        }),
     }
 }
 
@@ -4733,7 +4785,7 @@ async fn post_transcribe(
     request_body = SynthesizeRequest,
     responses(
         (status = 200, description = "WAV audio"),
-        (status = 400, description = "Unknown model slug"),
+        (status = 400, description = "Unknown model slug; blank `text`; `text` over the 4096-character cap (`text_too_long`)"),
         (status = 429, description = "GPU slot busy"),
         (status = 500, description = "Synthesis failed")
     )
@@ -4742,6 +4794,24 @@ async fn post_synthesize(
     State(config): State<AppConfig>,
     Json(req): Json<SynthesizeRequest>,
 ) -> Result<Response, (StatusCode, String)> {
+    // Same boundary as `/v1/audio/speech` (TASK-speech-input-cap): this is
+    // the native twin of the OpenAI-shaped route — same worker, same
+    // unbounded-PCM risk; reject-not-clamp (no silent truncation).
+    if req.text.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "text is required: the text to synthesize".to_owned(),
+        ));
+    }
+    let text_chars = req.text.chars().count();
+    if text_chars > SPEECH_INPUT_MAX_CHARS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "text is {text_chars} characters; the cap is {SPEECH_INPUT_MAX_CHARS} — rejected, not truncated"
+            ),
+        ));
+    }
     let catalog = config.catalog_snapshot();
     validate_model(Some(&req.model), config.tts_model.as_deref(), &catalog)
         .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
@@ -5472,6 +5542,839 @@ async fn get_audio_voices() -> Response {
     .into_response()
 }
 
+/// The image-ops batch cap: inputs (and thus outputs) per request.
+const IMAGE_OP_MAX_INPUTS: usize = 8;
+/// `resize` edge cap (px). With [`IMAGE_OP_MAX_PIXELS`] this bounds both
+/// allocation and encode time on the blocking pool.
+const IMAGE_OP_MAX_EDGE: u32 = 8192;
+/// Pixel cap for resize targets AND decoded inputs (`16_777_216` px, e.g.
+/// 4096×4096): the decoder-level strict caps stop decompression-bomb
+/// allocations before they happen, and this line rejects every input or
+/// result above it. Reject-not-clamp.
+const IMAGE_OP_MAX_PIXELS: u64 = 16_777_216;
+/// Decoder-level strict caps (`image::Limits`): no decoded edge above this,
+/// and no more than this much decoder allocation at once — a small PNG can
+/// decode to gigabytes without these.
+fn image_decode_limits() -> image::Limits {
+    // `Limits` is `#[non_exhaustive]`: start from `default()` (512 MiB
+    // allocation allowance) and tighten the strict caps.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16384);
+    limits.max_image_height = Some(16384);
+    // RGBA of the pixel cap is ~67 MB; intermediates stay well under
+    // this allowance.
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits
+}
+/// `request_id` / `client` string cap, characters.
+const IMAGE_OP_ID_MAX_CHARS: usize = 128;
+/// Idempotency memory bounds (TASK-image-ops-command-dto): at most this
+/// many `request_id`s remembered and this many retained response bytes —
+/// oldest-first eviction, so retries replay exactly but memory stays
+/// capped. Failures are never remembered (a retry re-executes).
+const IMAGE_OP_DEDUP_MAX_ENTRIES: usize = 128;
+const IMAGE_OP_DEDUP_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// A settled image-op attempt, replayable byte-identical: the completed
+/// response, or the exact error the first attempt answered (status +
+/// message + named code). Errors carry the registry job id the execute
+/// path registered, so the replay still stamps `X-Job-Id`.
+#[derive(Clone)]
+struct ImageOpSettled {
+    response: Result<ImageOpResponse, (StatusCode, String, Option<String>)>,
+    job_id: Option<String>,
+}
+
+/// One remembered image-op submission: the canonical command hash it
+/// answered and the replayable outcome. Same-hash losers of a same-key
+/// race await the cell (single execution, identical replay); a different
+/// hash under the same `request_id` is a conflict, never silent execution.
+struct ImageOpDedupEntry {
+    command_sha256: [u8; 32],
+    /// Approximate retained size of the settled response (set only for
+    /// successes; failures are forgotten and their size never counts).
+    retained_bytes: std::sync::atomic::AtomicUsize,
+    /// The single-flight cell: concurrent same-key retries all await the
+    /// one execution (tokio `get_or_init` guarantees exactly one closure
+    /// runs even under concurrency).
+    outcome: OnceCell<ImageOpSettled>,
+}
+
+/// The image-op idempotency ledger: `request_id` → entry, bounded on
+/// entries AND retained bytes (oldest-first eviction).
+#[derive(Default)]
+struct ImageOpDedup {
+    map: HashMap<String, Arc<ImageOpDedupEntry>>,
+    /// Insertion order for oldest-first eviction (stale ids tolerated).
+    order: VecDeque<String>,
+}
+
+/// Outcome of [`ImageOpDedup::reserve`].
+enum ImageOpReservation {
+    /// Fresh key: this caller participates in the single-flight cell.
+    Execute(Arc<ImageOpDedupEntry>),
+    /// Same key + same canonical command: replay the first outcome.
+    Replay(Arc<ImageOpDedupEntry>),
+    /// Same key with a DIFFERENT command: a named 400, never execution.
+    Conflict,
+}
+
+impl ImageOpDedup {
+    /// Reserve `request_id` for `command_sha256`.
+    fn reserve(&mut self, request_id: &str, command_sha256: [u8; 32]) -> ImageOpReservation {
+        if let Some(entry) = self.map.get(request_id) {
+            return if entry.command_sha256 == command_sha256 {
+                ImageOpReservation::Replay(Arc::clone(entry))
+            } else {
+                ImageOpReservation::Conflict
+            };
+        }
+        let entry = Arc::new(ImageOpDedupEntry {
+            command_sha256,
+            retained_bytes: const { std::sync::atomic::AtomicUsize::new(0) },
+            outcome: OnceCell::new(),
+        });
+        self.map.insert(request_id.to_owned(), Arc::clone(&entry));
+        self.order.push_back(request_id.to_owned());
+        self.trim();
+        ImageOpReservation::Execute(entry)
+    }
+
+    /// Record the retained size of a settled SUCCESS (bounded cache).
+    fn remember(&mut self, request_id: &str, retained_bytes: usize) {
+        if let Some(entry) = self.map.get(request_id) {
+            entry
+                .retained_bytes
+                .store(retained_bytes, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.trim();
+    }
+
+    /// Forget an entry (a FAILED attempt): a genuine retry re-executes.
+    fn forget(&mut self, request_id: &str) {
+        self.map.remove(request_id);
+    }
+
+    /// Evict oldest-first while over either budget.
+    fn trim(&mut self) {
+        while self.map.len() > IMAGE_OP_DEDUP_MAX_ENTRIES
+            || self.retained_bytes() > IMAGE_OP_DEDUP_MAX_BYTES
+        {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&oldest);
+        }
+    }
+
+    /// Sum of retained response bytes.
+    fn retained_bytes(&self) -> usize {
+        self.map
+            .values()
+            .map(|entry| {
+                entry
+                    .retained_bytes
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            })
+            .sum()
+    }
+}
+
+/// The image-op idempotency ledger (process-global, like the job registry).
+static IMAGE_OP_DEDUP: LazyLock<Mutex<ImageOpDedup>> =
+    LazyLock::new(|| Mutex::new(ImageOpDedup::default()));
+
+/// The op wire name for sidecars/labels (the tag of the command).
+fn op_label(command: &ImageOpCommand) -> &'static str {
+    match command {
+        ImageOpCommand::Resize(_) => "resize",
+        ImageOpCommand::Crop(_) => "crop",
+        ImageOpCommand::Rotate(_) => "rotate",
+        ImageOpCommand::Grayscale => "grayscale",
+        ImageOpCommand::Format => "format",
+    }
+}
+
+/// Lowercase-hex SHA-256 of `bytes` (sidecar + response digests).
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Validate the bounded image-op params (reject-not-clamp on every number):
+/// resize edges in `[1, 8192]` with the pixel cap, crop rects at least 1px
+/// (the image-bounds check happens per-input against the real pixels), and
+/// rotation restricted to the lossless quarter turns. `Err((message, code))`
+/// is a named 400.
+fn validate_image_op_params(command: &ImageOpCommand) -> Result<(), (String, &'static str)> {
+    match command {
+        ImageOpCommand::Resize(resize) => {
+            if resize.width == 0
+                || resize.width > IMAGE_OP_MAX_EDGE
+                || resize.height == 0
+                || resize.height > IMAGE_OP_MAX_EDGE
+            {
+                return Err((
+                    format!(
+                        "resize width/height must be in [1, {IMAGE_OP_MAX_EDGE}] pixels; got {}x{} — rejected, not clamped",
+                        resize.width, resize.height
+                    ),
+                    "invalid_image_op_params",
+                ));
+            }
+            if u64::from(resize.width) * u64::from(resize.height) > IMAGE_OP_MAX_PIXELS {
+                return Err((
+                    format!(
+                        "resize target {}x{} exceeds the {IMAGE_OP_MAX_PIXELS}-pixel cap — rejected, not clamped",
+                        resize.width, resize.height
+                    ),
+                    "invalid_image_op_params",
+                ));
+            }
+        }
+        ImageOpCommand::Crop(crop) => {
+            if crop.width == 0 || crop.height == 0 {
+                return Err((
+                    "crop width/height must be at least 1 pixel — rejected, not clamped".to_owned(),
+                    "invalid_image_op_params",
+                ));
+            }
+        }
+        ImageOpCommand::Rotate(rotate) => {
+            if !matches!(rotate.degrees, 90 | 180 | 270) {
+                return Err((
+                    format!(
+                        "rotate degrees must be one of 90, 180, 270; got {} — rejected, not approximated",
+                        rotate.degrees
+                    ),
+                    "invalid_image_op_params",
+                ));
+            }
+        }
+        ImageOpCommand::Grayscale | ImageOpCommand::Format => {}
+    }
+    Ok(())
+}
+
+/// Decode a `data:image/(png|jpeg|webp);base64,…` URI. The declared MIME
+/// must be one of the accepted containers (the caller additionally sniffs
+/// the real bytes, so declared/actual mismatches are caught there).
+fn decode_data_uri(uri: &str) -> Result<Vec<u8>, ImageOpWorkError> {
+    let bad = |message: String| ImageOpWorkError::Bad {
+        message,
+        code: "invalid_image_op_inputs",
+    };
+    let trimmed = uri.trim();
+    let Some(rest) = trimmed.strip_prefix("data:") else {
+        return Err(bad(
+            "input data URI must start with `data:image/…;base64,`".to_owned()
+        ));
+    };
+    let Some((header, payload)) = rest.split_once(',') else {
+        return Err(bad(
+            "input data URI is missing the `,<base64 payload>` part".to_owned(),
+        ));
+    };
+    let Some(mime) = header.strip_suffix(";base64") else {
+        return Err(bad("input data URI must declare `;base64`".to_owned()));
+    };
+    if !matches!(mime, "image/png" | "image/jpeg" | "image/webp") {
+        return Err(bad(format!(
+            "unsupported input container {mime:?}: accepted data URIs are image/png, image/jpeg, image/webp"
+        )));
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        // Tolerate padding-stripped payloads (some encoders trim `=`).
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(payload.trim()))
+        .map_err(|e| bad(format!("input data URI is not valid base64: {e}")))
+}
+
+/// Resolve an artifact input against the bundle store:
+/// `<data_dir>/jobs/{bundle}/op_XX.{ext}` (ops bundles) or
+/// `final_XX.{ext}` (generation bundles). The bundle id must parse as a
+/// ULID, so no client-supplied bytes ever reach the filesystem join.
+fn read_artifact(data_dir: &Path, artifact: &ImageOpArtifact) -> Result<Vec<u8>, ImageOpWorkError> {
+    let bad = |message: String| ImageOpWorkError::Bad {
+        message,
+        code: "invalid_image_op_inputs",
+    };
+    let id = ulid::Ulid::from_string(artifact.bundle.trim()).map_err(|_| {
+        bad(format!(
+            "artifact bundle {:?} is not a bundle id",
+            artifact.bundle
+        ))
+    })?;
+    if artifact.index > 99 {
+        return Err(bad(format!(
+            "artifact index {} is out of range (0-99)",
+            artifact.index
+        )));
+    }
+    let dir = data_dir.join("jobs").join(id.to_string());
+    let names = ["png", "jpg", "jpeg", "webp"]
+        .iter()
+        .flat_map(|ext| {
+            [
+                format!("op_{:02}.{ext}", artifact.index),
+                format!("final_{:02}.{ext}", artifact.index),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let entries = std::fs::read_dir(&dir).map_err(|_| {
+        bad(format!(
+            "artifact bundle {:?} not found (expired by GC, or never written by this server)",
+            artifact.bundle
+        ))
+    })?;
+    let mut found: Vec<std::ffi::OsString> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if names.iter().any(|wanted| *wanted == name_str) {
+            found.push(name);
+        }
+    }
+    found.sort();
+    match found.first() {
+        Some(name) => std::fs::read(dir.join(name)).map_err(|e| {
+            ImageOpWorkError::Failed(format!(
+                "cannot read artifact {:?}: {e}",
+                name.to_string_lossy()
+            ))
+        }),
+        None => Err(bad(format!(
+            "artifact {} of bundle {:?} not found",
+            artifact.index, artifact.bundle
+        ))),
+    }
+}
+
+/// One processed unit: the encoded output bytes and their digest.
+struct ImageOpUnitOutput {
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+/// A failed image-op batch. The whole batch fails fast on the first bad
+/// input — partial results would mislead an editor about what landed.
+enum ImageOpWorkError {
+    /// Cancel marked between units (`completed` units are done).
+    Cancelled { completed: usize },
+    /// Named 400-class rejection.
+    Bad { message: String, code: &'static str },
+    /// 500-class failure (decode/encode/IO).
+    Failed(String),
+}
+
+/// Apply the op to one decoded image. Deterministic by construction: the
+/// single fixed resample is Lanczos3, crops are pixel-exact, rotations are
+/// the lossless quarter turns, grayscale uses the `image` crate's Luma
+/// conversion, and `format` passes pixels through untouched.
+fn apply_image_op(
+    command: &ImageOpCommand,
+    decoded: image::DynamicImage,
+) -> Result<image::DynamicImage, ImageOpWorkError> {
+    Ok(match command {
+        ImageOpCommand::Resize(resize) => decoded.resize_exact(
+            resize.width,
+            resize.height,
+            image::imageops::FilterType::Lanczos3,
+        ),
+        ImageOpCommand::Crop(crop) => {
+            // Bounds checked against the REAL pixels here: the DTO-level
+            // validation knows the rect shape, not the image.
+            if crop.x.saturating_add(crop.width) > decoded.width()
+                || crop.y.saturating_add(crop.height) > decoded.height()
+            {
+                return Err(ImageOpWorkError::Bad {
+                    message: format!(
+                        "crop rect {}+{}x{}+{} exceeds the {}x{} input — rejected, not clamped",
+                        crop.x,
+                        crop.width,
+                        crop.y,
+                        crop.height,
+                        decoded.width(),
+                        decoded.height()
+                    ),
+                    code: "invalid_crop_rect",
+                });
+            }
+            decoded.crop_imm(crop.x, crop.y, crop.width, crop.height)
+        }
+        ImageOpCommand::Rotate(rotate) => match rotate.degrees {
+            90 => decoded.rotate90(),
+            180 => decoded.rotate180(),
+            270 => decoded.rotate270(),
+            // DTO-level validation rejects every other value first.
+            _ => decoded,
+        },
+        ImageOpCommand::Grayscale => decoded.grayscale(),
+        ImageOpCommand::Format => decoded,
+    })
+}
+
+/// Run the op units (blocking pool): per input — cancel check, decode (data
+/// URI or artifact), apply, encode. Fails fast on the first bad input.
+fn run_image_op_units(
+    command: &ImageOpCommand,
+    inputs: &[ImageOpInput],
+    data_dir: Option<&Path>,
+    format: honkbox_sd_core::OutputFormat,
+    jpeg_quality: Option<u8>,
+    token: &tokio_util::sync::CancellationToken,
+) -> Result<(Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>), ImageOpWorkError> {
+    let mut outputs = Vec::with_capacity(inputs.len());
+    let mut records = Vec::with_capacity(inputs.len());
+    for (i, input) in inputs.iter().enumerate() {
+        // Cooperative cancellation (NEW-3 contract): honored BETWEEN units;
+        // the unit in flight always completes.
+        if token.is_cancelled() {
+            return Err(ImageOpWorkError::Cancelled { completed: i });
+        }
+        let (source, raw) = match input {
+            ImageOpInput::DataUri(uri) => (String::from("data_uri"), decode_data_uri(uri)?),
+            ImageOpInput::Artifact(artifact) => {
+                let Some(dir) = data_dir else {
+                    return Err(ImageOpWorkError::Bad {
+                        message: "artifact inputs need a configured data dir (this server keeps no job bundles)"
+                            .to_owned(),
+                        code: "invalid_image_op_inputs",
+                    });
+                };
+                (
+                    format!("artifact:{}/{}", artifact.bundle, artifact.index),
+                    read_artifact(dir, artifact)?,
+                )
+            }
+        };
+        let input_sha256 = sha256_hex(&raw);
+        // Container authority is the MAGIC, for both input forms: the data
+        // URI's declared MIME was checked at parse, artifacts declare
+        // nothing, and a mismatch between declaration and bytes surfaces
+        // here as an unrecognizable/unsupported container.
+        let container = image::guess_format(&raw).map_err(|_| ImageOpWorkError::Bad {
+            message: "input is not a recognizable image (accepted containers: png, jpeg, webp)"
+                .to_owned(),
+            code: "invalid_image_op_inputs",
+        })?;
+        if !matches!(
+            container,
+            image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP
+        ) {
+            return Err(ImageOpWorkError::Bad {
+                message: format!(
+                    "unsupported input container {container:?}: accepted containers are png, jpeg, webp"
+                ),
+                code: "invalid_image_op_inputs",
+            });
+        }
+        // Bounded decode: the reader-level strict caps stop
+        // decompression-bomb allocations before they happen; the pixel cap
+        // is the honest reject line for oversized-but-bounded inputs.
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(&raw));
+        reader.limits(image_decode_limits());
+        let decoded = reader
+            .with_guessed_format()
+            .map_err(|e| ImageOpWorkError::Bad {
+                message: format!("cannot read image container: {e}"),
+                code: "invalid_image_op_inputs",
+            })?
+            .decode()
+            .map_err(|e| ImageOpWorkError::Bad {
+                message: format!("cannot decode image: {e}"),
+                code: "invalid_image_op_inputs",
+            })?;
+        let pixels = u64::from(decoded.width()) * u64::from(decoded.height());
+        if pixels > IMAGE_OP_MAX_PIXELS {
+            return Err(ImageOpWorkError::Bad {
+                message: format!(
+                    "input is {}x{} ({pixels} pixels); the cap is {IMAGE_OP_MAX_PIXELS} pixels — rejected, not downscaled",
+                    decoded.width(),
+                    decoded.height()
+                ),
+                code: "invalid_image_op_inputs",
+            });
+        }
+        let worked = apply_image_op(command, decoded)?;
+        let rgba = worked.to_rgba8();
+        let generated = honkbox_sd_core::GeneratedImage {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        };
+        let bytes = honkbox_sd_core::encode_image_with_quality(
+            generated,
+            format,
+            jpeg_quality.unwrap_or(honkbox_sd_core::DEFAULT_JPEG_QUALITY),
+        )
+        .map_err(|e| ImageOpWorkError::Failed(format!("output encode failed: {e}")))?;
+        records.push(crate::jobs::OpsInputRecord {
+            source,
+            sha256: input_sha256,
+        });
+        outputs.push(ImageOpUnitOutput {
+            sha256: sha256_hex(&bytes),
+            bytes,
+        });
+    }
+    Ok((outputs, records))
+}
+
+/// The blocking-pool work result (units + sidecar input records).
+type ImageOpWork = (Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>);
+
+/// Map the blocking-pool work outcome onto units or a settleable failure:
+/// cancel → 409 between units, bad input → named 400, work/join failure →
+/// 500. Every failure stamps the job id so the replay keeps `X-Job-Id`
+/// (boxed: `ImageOpSettled` carries the full response and is big).
+fn settle_image_op_work(
+    job_id: &str,
+    total_inputs: usize,
+    work: Result<Result<ImageOpWork, ImageOpWorkError>, tokio::task::JoinError>,
+) -> Result<ImageOpWork, Box<ImageOpSettled>> {
+    match work {
+        Ok(Ok(pair)) => Ok(pair),
+        Ok(Err(ImageOpWorkError::Cancelled { completed })) => Err(Box::new(ImageOpSettled {
+            response: Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "job {job_id} cancelled before completion ({completed} of {total_inputs} input(s) processed)"
+                ),
+                Some("job_cancelled".to_owned()),
+            )),
+            job_id: Some(job_id.to_owned()),
+        })),
+        Ok(Err(ImageOpWorkError::Bad { message, code })) => Err(Box::new(ImageOpSettled {
+            response: Err((StatusCode::BAD_REQUEST, message, Some(code.to_owned()))),
+            job_id: Some(job_id.to_owned()),
+        })),
+        Ok(Err(ImageOpWorkError::Failed(message))) => Err(Box::new(ImageOpSettled {
+            response: Err((StatusCode::INTERNAL_SERVER_ERROR, message, None)),
+            job_id: Some(job_id.to_owned()),
+        })),
+        Err(join) => Err(Box::new(ImageOpSettled {
+            response: Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("image-op worker failed: {join}"),
+                None,
+            )),
+            job_id: Some(job_id.to_owned()),
+        })),
+    }
+}
+
+/// Execute one image-op command: register the job, acquire CPU admission,
+/// run the units on the blocking pool (cancel checked between inputs),
+/// write the bundle (best-effort, like generation), and build the response.
+/// NEVER returns without a settleable outcome — every failure path returns
+/// the exact error the caller must replay.
+async fn execute_image_op(
+    config: &AppConfig,
+    req: &ImageOpRequest,
+    command_sha256: [u8; 32],
+    format: honkbox_sd_core::OutputFormat,
+    jpeg_quality: Option<u8>,
+) -> ImageOpSettled {
+    let started = Instant::now();
+    let job = crate::jobs_registry::global().register(
+        crate::jobs_registry::JobKind::ImageOps,
+        None,
+        req.inputs.len() > 1,
+    );
+    // Admission (TASK-image-ops-job-route): CPU-only work takes the
+    // ledger's CPU-only bucket (`rag`, 0 GPU slots) — the fixed 8-kind
+    // vocabulary has no image-ops kind, the same nearest-bucket mapping the
+    // audio routes use with `llm`. Image ops therefore contend with rag
+    // pipelines on CPU threads instead of bypassing the ledger entirely.
+    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Rag).await {
+        Ok(lease) => lease,
+        Err((status, message)) => {
+            return ImageOpSettled {
+                response: Err((status, message, None)),
+                job_id: Some(job.id().to_owned()),
+            };
+        }
+    };
+    let command = req.command.clone();
+    let inputs = req.inputs.clone();
+    let data_dir = config.data_dir.clone();
+    let token = job.token().clone();
+    let work = tokio::task::spawn_blocking(move || {
+        run_image_op_units(
+            &command,
+            &inputs,
+            data_dir.as_deref(),
+            format,
+            jpeg_quality,
+            &token,
+        )
+    })
+    .await;
+    drop(lease);
+    let (units, input_records) = match settle_image_op_work(job.id(), req.inputs.len(), work) {
+        Ok(pair) => pair,
+        Err(settled) => return *settled,
+    };
+    // Bundle (best-effort, exactly like generation: a bundle write failure
+    // never discards completed work — the response gains a warning).
+    let mut warnings: Vec<String> = Vec::new();
+    let bundle = config.data_dir.as_deref().and_then(|data_dir| {
+        let output_records: Vec<crate::jobs::OpsOutputRecord> = units
+            .iter()
+            .enumerate()
+            .map(|(i, unit)| crate::jobs::OpsOutputRecord {
+                file: format!("op_{i:02}.{}", format.extension()),
+                sha256: unit.sha256.clone(),
+            })
+            .collect();
+        let byte_refs: Vec<&[u8]> = units.iter().map(|unit| unit.bytes.as_slice()).collect();
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let ops_inputs = crate::jobs::OpsBundleInputs {
+            op: op_label(&req.command).to_owned(),
+            command_sha256: sha256_hex(&command_sha256),
+            request_id: req.request_id.clone(),
+            client: req.client.clone(),
+            inputs: input_records,
+            format,
+        };
+        match crate::jobs::write_ops_bundle(
+            data_dir,
+            &ops_inputs,
+            &output_records,
+            &byte_refs,
+            elapsed_ms,
+        ) {
+            Ok(dir) => Some(
+                dir.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            Err(err) => {
+                tracing::warn!(%err, "image-ops bundle write failed; response still complete");
+                warnings.push(
+                    "job bundle could not be written; artifact inputs will not resolve".to_owned(),
+                );
+                None
+            }
+        }
+    });
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    ImageOpSettled {
+        response: Ok(ImageOpResponse {
+            created,
+            job_id: job.id().to_owned(),
+            request_id: req.request_id.clone(),
+            bundle,
+            outputs: units
+                .iter()
+                .map(|unit| ImageOpOutput {
+                    b64_json: base64::engine::general_purpose::STANDARD.encode(&unit.bytes),
+                    sha256: unit.sha256.clone(),
+                    format: format.name().to_owned(),
+                })
+                .collect(),
+            warnings: (!warnings.is_empty()).then_some(warnings),
+        }),
+        job_id: Some(job.id().to_owned()),
+    }
+}
+
+/// A named image-op rejection: status + message + error code — the shape
+/// the validators return and the handler turns into the envelope response
+/// (the same pattern as `validate_images_request`).
+type ImageOpRejection = (StatusCode, String, Option<&'static str>);
+
+/// Validate an image-op request (reject-not-clamp, named 400s): id/client
+/// string caps, batch cap, output container, JPEG quality, and the per-op
+/// param bounds. `Err(ImageOpRejection)` is the named 400.
+fn validate_image_op_request(
+    req: &ImageOpRequest,
+) -> Result<(honkbox_sd_core::OutputFormat, Option<u8>), ImageOpRejection> {
+    if req.request_id.is_empty() || req.request_id.chars().count() > IMAGE_OP_ID_MAX_CHARS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "request_id must be 1..={IMAGE_OP_ID_MAX_CHARS} characters; got {}",
+                req.request_id.chars().count()
+            ),
+            Some("invalid_image_op_request_id"),
+        ));
+    }
+    if let Some(client) = req.client.as_deref()
+        && (client.is_empty() || client.chars().count() > IMAGE_OP_ID_MAX_CHARS)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "client must be 1..={IMAGE_OP_ID_MAX_CHARS} characters; got {}",
+                client.chars().count()
+            ),
+            Some("invalid_image_op_request"),
+        ));
+    }
+    if req.inputs.is_empty() || req.inputs.len() > IMAGE_OP_MAX_INPUTS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "inputs must contain 1..={IMAGE_OP_MAX_INPUTS} images; got {}",
+                req.inputs.len()
+            ),
+            Some("invalid_image_op_inputs"),
+        ));
+    }
+    let format = match req.output_format.as_deref().map(str::trim) {
+        None => honkbox_sd_core::OutputFormat::Png,
+        Some(raw) => match honkbox_sd_core::OutputFormat::from_name(raw) {
+            Some(format) => format,
+            None => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "unsupported output_format {raw:?}: accepted values are \"png\", \"jpeg\", \"webp\""
+                    ),
+                    Some("unsupported_output_format"),
+                ));
+            }
+        },
+    };
+    let jpeg_quality = parse_output_compression(req.output_compression.as_ref())
+        .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?;
+    validate_image_op_params(&req.command)
+        .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?;
+    Ok((format, jpeg_quality))
+}
+
+/// `POST /v1/image-ops` (epic-editor-integration): one bounded CPU op over
+/// `1..=8` inputs — resize/crop/rotate/grayscale/format — deterministic by
+/// construction (Lanczos3, fixed encoders), with `request_id`-keyed
+/// idempotency (same key + same canonical command replays the first job's
+/// response byte-identically, no double execution; same key + different
+/// command is a named 400). The job is registry-visible while live (kind
+/// `image_ops`, cancel honored BETWEEN inputs), its lifecycle streams on
+/// `GET /v1/events`, and the result bundle lands under
+/// `<data_dir>/jobs/{bundle}/` via the existing jobs path (sidecar: command
+/// hash, input/output hashes, tool version, attempts, outcome). Inputs are
+/// data URIs or this server's own bundle artifacts only — no paths, no
+/// `file://`, no remote URLs (nothing is fetched, so there is no SSRF
+/// surface). Unsupported-in-principle ops do not exist in the vocabulary:
+/// the op set is exactly what the in-process `image` crate covers
+/// (TASK-cheap-ops-spike Tier 0), so there is no 501 path today — unknown
+/// op tags are a 400 from parsing, and the capabilities advertisement lists
+/// the supported vocabulary.
+#[utoipa::path(
+    post,
+    path = "/v1/image-ops",
+    request_body = ImageOpRequest,
+    responses(
+        (status = 200, description = "One output per input, in order", body = ImageOpResponse),
+        (status = 400, description = "Unknown field, unknown op, out-of-range params, oversized batch, bad input container/data URI/ artifact, unknown output_format or output_compression, or request_id conflict", body = OpenAiError),
+        (status = 409, description = "Job cancelled before completion (between inputs)", body = OpenAiError),
+        (status = 429, description = "CPU admission busy (ledger)", body = OpenAiError),
+        (status = 500, description = "Decode/transform/encode failed", body = OpenAiError)
+    )
+)]
+async fn post_image_ops(
+    State(config): State<AppConfig>,
+    body: Result<Json<ImageOpRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => {
+            // deny_unknown_fields / malformed JSON / wrong types all land
+            // here as one named 400 carrying serde's specific message.
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid image-op request: {}", rejection.body_text()),
+                Some("invalid_image_op_request"),
+            );
+        }
+    };
+    let (format, jpeg_quality) = match validate_image_op_request(&req) {
+        Ok(validated) => validated,
+        Err((status, message, code)) => {
+            return openai_error_response(status, message, code);
+        }
+    };
+    // Canonical command hash (the idempotency key's command half): hash the
+    // RE-SERIALIZED request — field order is fixed by the DTO, so two wire
+    // spellings of the same command collapse into one dedup key while any
+    // actual difference (params, inputs, format, …) produces a new hash.
+    let command_sha256: [u8; 32] =
+        Sha256::digest(serde_json::to_vec(&req).unwrap_or_default()).into();
+    let reserved = {
+        // std mutex, no await inside: reserve-or-conflict is decided here.
+        let mut dedup = IMAGE_OP_DEDUP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match dedup.reserve(&req.request_id, command_sha256) {
+            ImageOpReservation::Conflict => {
+                return openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "request_id {:?} was already used with a different command — retries must resend the identical request; use a fresh request_id for different work",
+                        req.request_id
+                    ),
+                    Some("image_op_request_id_conflict"),
+                );
+            }
+            ImageOpReservation::Execute(entry) => (entry, false),
+            ImageOpReservation::Replay(entry) => (entry, true),
+        }
+    };
+    let (entry, is_replay) = reserved;
+    // Single flight: whether this caller is the executor or a waiting
+    // retry, `get_or_init` runs the execution exactly once per entry —
+    // concurrent same-key retries all await the same settled outcome.
+    let cmd = req.clone();
+    let cfg = config.clone();
+    let settled = entry
+        .outcome
+        .get_or_init(|| async move {
+            execute_image_op(&cfg, &cmd, command_sha256, format, jpeg_quality).await
+        })
+        .await
+        .clone();
+    if !is_replay {
+        // Exactly one caller owns the entry: a success stays remembered
+        // (bounded), a failure is forgotten so a genuine retry re-executes.
+        let retained = match &settled.response {
+            Ok(response) => {
+                256 + response
+                    .outputs
+                    .iter()
+                    .map(|out| out.b64_json.len())
+                    .sum::<usize>()
+            }
+            Err((_, message, _)) => 128 + message.len(),
+        };
+        let mut dedup = IMAGE_OP_DEDUP
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if settled.response.is_ok() {
+            dedup.remember(&req.request_id, retained);
+        } else {
+            dedup.forget(&req.request_id);
+        }
+    }
+    let response = match &settled.response {
+        Ok(body) => Json(body.clone()).into_response(),
+        Err((status, message, code)) => {
+            openai_error_response(*status, message.clone(), code.as_deref())
+        }
+    };
+    match settled.job_id.as_deref() {
+        Some(job_id) => with_job_id(response, job_id),
+        None => response,
+    }
+}
+
 /// `POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as
 /// `/v1/synthesize`. `model` optional (server default TTS), `voice` passed
 /// through; `response_format` is `"wav"` (default, RIFF/WAVE container) or
@@ -5486,7 +6389,7 @@ async fn get_audio_voices() -> Response {
     responses(
         (status = 200, description = "WAV audio (RIFF container)", content_type = "audio/wav"),
         (status = 200, description = "Raw s16le mono PCM (pcm response_format; no container)", content_type = "audio/pcm-s16le"),
-        (status = 400, description = "Empty input, unknown model, or unsupported response_format", body = OpenAiError),
+        (status = 400, description = "Empty input, oversized input (over 4096 characters), unknown model, or unsupported response_format", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Synthesis failed", body = OpenAiError)
     )
@@ -5513,6 +6416,18 @@ async fn post_audio_speech(
             StatusCode::BAD_REQUEST,
             "input is required: the text to synthesize".to_owned(),
             None,
+        );
+    }
+    // TASK-speech-input-cap: unbounded `input` means unbounded PCM growth;
+    // reject-not-clamp (no silent truncation, no derived clamp).
+    let input_chars = req.input.chars().count();
+    if input_chars > SPEECH_INPUT_MAX_CHARS {
+        return openai_error_response(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input is {input_chars} characters; the cap is {SPEECH_INPUT_MAX_CHARS} — rejected, not truncated"
+            ),
+            Some("input_too_long"),
         );
     }
     let catalog = config.catalog_snapshot();

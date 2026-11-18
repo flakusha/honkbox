@@ -85,6 +85,10 @@ pub(crate) enum JobKind {
     Synthesize,
     /// Speech translation to English (`/v1/audio/translations`).
     Translations,
+    /// CPU image ops (`POST /v1/image-ops`): decode/transform/encode work
+    /// on the blocking pool — no GPU slot; cancel is honored between
+    /// inputs (one op batch = many work units).
+    ImageOps,
 }
 
 impl JobKind {
@@ -97,6 +101,7 @@ impl JobKind {
             Self::Transcribe => "transcribe",
             Self::Synthesize => "synthesize",
             Self::Translations => "translations",
+            Self::ImageOps => "image_ops",
         }
     }
 }

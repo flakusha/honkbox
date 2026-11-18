@@ -187,6 +187,119 @@ pub fn write_bundle_into(
     Ok(())
 }
 
+/// One recorded input of an image-ops job bundle (sidecar record): where
+/// the bytes came from and what they hashed to. Data-URI payloads are
+/// recorded by DIGEST only — no payload bytes ever land in a sidecar.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OpsInputRecord {
+    /// Provenance label: `"data_uri"` or `"artifact:<bundle>/<index>"`.
+    pub source: String,
+    /// SHA-256 hex digest of the decoded input bytes.
+    pub sha256: String,
+}
+
+/// One recorded output of an image-ops job bundle (sidecar record).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OpsOutputRecord {
+    /// File name within the bundle dir (e.g. `op_00.png`).
+    pub file: String,
+    /// SHA-256 hex digest of the file bytes.
+    pub sha256: String,
+}
+
+/// Everything the image-ops bundle records about the command
+/// (TASK-image-ops-job-route): command hash, per-input/output hashes,
+/// tool version, attempts, outcome. No data-URI payload, no token, and no
+/// full URL ever lands in a bundle.
+#[derive(Debug, Clone)]
+pub struct OpsBundleInputs {
+    /// Op wire name (`resize`, `crop`, …).
+    pub op: String,
+    /// SHA-256 hex over the canonical command JSON (the retry-dedup key's
+    /// hash: command + params + output format + compression).
+    pub command_sha256: String,
+    /// The request's idempotency key, verbatim.
+    pub request_id: String,
+    /// Caller identity, verbatim (`None` = not supplied).
+    pub client: Option<String>,
+    /// Per-input provenance + digests, in order.
+    pub inputs: Vec<OpsInputRecord>,
+    /// Output container.
+    pub format: honkbox_sd_core::OutputFormat,
+}
+
+/// Write an image-ops job bundle under `<data_dir>/jobs/{ulid}/`; returns
+/// the bundle dir. Same atomic-write discipline as [`write_bundle_into`]
+/// (`.part` + fsync + rename) and the same GC lifecycle (`gc_jobs`).
+///
+/// Layout: `command.json` (the bounded command — no payloads), one
+/// `op_XX.{ext}` file per output, `ops.json` (the sidecar: command hash,
+/// input/output hashes, `seed: null` — pixel ops are seedless, the null
+/// keeps the record shape uniform with generation bundles — tool version,
+/// attempts, outcome), and `run.log`.
+pub fn write_ops_bundle(
+    data_dir: &Path,
+    inputs: &OpsBundleInputs,
+    outputs: &[OpsOutputRecord],
+    output_bytes: &[&[u8]],
+    elapsed_ms: u64,
+) -> Result<PathBuf, String> {
+    let dir = data_dir.join("jobs").join(ulid::Ulid::new().to_string());
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("cannot create job dir {}: {e}", dir.display()))?;
+    let command = serde_json::json!({
+        "op": inputs.op,
+        "output_format": inputs.format.name(),
+        "request_id": inputs.request_id,
+        "client": inputs.client,
+    });
+    let tool = serde_json::json!({
+        "name": "honkbox-image-ops",
+        "version": env!("CARGO_PKG_VERSION"),
+        "engine": "image-rs",
+    });
+    let sidecar = serde_json::json!({
+        "command_sha256": inputs.command_sha256,
+        "request_id": inputs.request_id,
+        "op": inputs.op,
+        "output_format": inputs.format.name(),
+        "client": inputs.client,
+        "inputs": inputs.inputs,
+        "outputs": outputs,
+        "seed": serde_json::Value::Null,
+        "tool": tool,
+        "attempts": 1,
+        "outcome": "done",
+        "elapsed_ms": elapsed_ms,
+    });
+    let log = format!(
+        "op={} outputs={} format={} client={:?}\ndone elapsed_ms={elapsed_ms}\n",
+        inputs.op,
+        outputs.len(),
+        inputs.format.name(),
+        inputs.client,
+    );
+    write_atomic(
+        &dir,
+        "command.json",
+        serde_json::to_string_pretty(&command)
+            .map_err(|e| format!("cannot encode command.json: {e}"))?
+            .as_bytes(),
+    )?;
+    write_atomic(
+        &dir,
+        "ops.json",
+        serde_json::to_string_pretty(&sidecar)
+            .map_err(|e| format!("cannot encode ops.json: {e}"))?
+            .as_bytes(),
+    )?;
+    for (record, bytes) in outputs.iter().zip(output_bytes) {
+        write_atomic(&dir, &record.file, bytes)?;
+    }
+    write_atomic(&dir, "run.log", log.as_bytes())?;
+    Ok(dir)
+}
+
 /// Write `bytes` to `dir/name` via `<name>.part` + best-effort fsync + rename.
 fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     let tmp = dir.join(format!("{name}.part"));

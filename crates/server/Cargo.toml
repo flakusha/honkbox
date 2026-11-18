@@ -36,9 +36,19 @@ base64 = "0.22"
 reqwest = { workspace = true }
 tokio-util = { workspace = true }
 sha2 = { workspace = true }
+tower-http = { workspace = true }
+# Pixel ops (`POST /v1/image-ops`): the same workspace-pinned `image` the
+# sd-core encoders use (png/jpeg/webp features, no new codecs).
+image = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
+# Property tests for the validator/contract surfaces (tests/validator_properties.rs):
+# MIT/Apache-2.0, dev-only — the shipped binary's dependency graph is unchanged.
+proptest = "1"
+# Decompress the gzip path in the compression tests (byte-identity proof).
+# Rust backend = the lock-resident miniz_oxide/zlib-rs, no system zlib.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [features]
 # Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
