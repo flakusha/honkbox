@@ -3451,6 +3451,11 @@ struct ImageEditUpload {
     /// JPEG quality `[0, 100]`; kept raw here so the handler can reject
     /// non-numeric / out-of-range values with the named 400, never a clamp.
     output_compression: Option<String>,
+    /// Per-request `LoRA` adapters, the same validated `ImagesLora` list as
+    /// txt2img (max 2, strength `[-2, 2]`); parsed as a JSON array from the
+    /// form field and resolved by [`resolve_loras`] — no separate edits-side
+    /// validation.
+    loras: Option<Vec<ImagesLora>>,
 }
 
 /// Collect the multipart fields. Unknown fields are ignored (client SDKs
@@ -3474,6 +3479,7 @@ async fn parse_image_edit_upload(
         steps: None,
         output_format: None,
         output_compression: None,
+        loras: None,
     };
     while let Some(field) = multipart
         .next_field()
@@ -3496,7 +3502,7 @@ async fn parse_image_edit_upload(
             }
             "prompt" | "model" | "size" | "recipe" | "sampler" | "scheduler"
             | "negative_prompt" | "strength" | "cfg_scale" | "seed" | "steps" | "output_format"
-            | "output_compression" => {
+            | "output_compression" | "loras" => {
                 let text = field
                     .text()
                     .await
@@ -3554,6 +3560,17 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
         "output_compression" => {
             edit.output_compression = (!value.is_empty()).then_some(value);
         }
+        "loras" => {
+            // Same shape as txt2img (`[{slug, strength}, ...]`); the semantic
+            // checks (count, range, catalog, single dir) all live in
+            // [`resolve_loras`], next to their 400 codes.
+            let parsed: Vec<ImagesLora> = serde_json::from_str(&value).map_err(|err| {
+                bad_multipart(format!(
+                    "loras must be a JSON array of {{slug, strength}} objects: {err}"
+                ))
+            })?;
+            edit.loras = Some(parsed);
+        }
         _ => {}
     }
     Ok(())
@@ -3576,21 +3593,26 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 /// `hires_fix` on this route: the output stays at the source image's
 /// dimensions. Inputs are staged as temp
 /// PNG paths (the vendor reads images from the filesystem) and removed
-/// after the generation, including on failure. `LoRA` adapters are not
-/// accepted on this route yet — use `/v1/images/generations`. The stub
+/// after the generation, including on failure. `loras` (a JSON array of
+/// `{slug, strength}` objects) resolves through the same
+/// [`resolve_loras`] as `generations` — max 2, strength `[-2, 2]`
+/// reject-not-clamp, catalog lookup, single directory — with license notes
+/// surfaced as response `warnings` and the resolved slugs/strengths recorded
+/// in the bundle sidecar. The stub
 /// backend honestly ignores image inputs, so its pixels never depend on
 /// the upload; tests cover the wire/validation paths. Errors are `OpenAI`
 /// envelopes: 400 (missing image/prompt, non-PNG bytes, bad
-/// `strength`/`size`/`recipe`/`output_format`/`output_compression` fields), 404
+/// `strength`/`size`/`recipe`/`output_format`/`output_compression`/`loras`
+/// fields), 404
 /// unknown model, 429 busy, 500 staging or generation failure.
 #[allow(clippy::too_many_lines)] // linear multipart handler; see `post_images_generations`
 #[utoipa::path(
     post,
     path = "/v1/images/edits",
-    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100)"),
+    request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100), loras? (JSON array of {slug, strength})"),
     responses(
         (status = 200, description = "Edited image (base64-encoded bytes in the requested output_format)", body = ImagesGenerationResponse),
-        (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, or recipe fields", body = OpenAiError),
+        (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, or loras fields", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Generation failed", body = OpenAiError)
@@ -3698,6 +3720,16 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         },
     };
     let catalog = config.catalog_snapshot();
+    // Per-request `loras`: validated and resolved by the shared
+    // [`resolve_loras`] (max 2, strength `[-2, 2]` reject-not-clamp, catalog
+    // lookup, single directory) — identical to `/v1/images/generations`.
+    let (pipeline_loras, lora_records, lora_warnings) =
+        match resolve_loras(edit.loras.as_deref().unwrap_or_default(), &catalog) {
+            Ok(resolved) => resolved,
+            Err((message, code)) => {
+                return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+            }
+        };
     let slug: String = match edit
         .model
         .as_deref()
@@ -3772,7 +3804,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             scheduler: Some(recipe.scheduler),
             cfg_scale: Some(recipe.cfg_scale),
             negative_prompt: recipe.negative_prompt.clone(),
-            loras: None,
+            loras: (!pipeline_loras.is_empty()).then(|| pipeline_loras.clone()),
             init_image: Some(init_path.clone()),
             mask_image: staged_mask.then(|| mask_path.clone()),
             strength: Some(strength),
@@ -3819,7 +3851,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             scheduler: image_scheduler_name(recipe.scheduler),
             cfg_scale: recipe.cfg_scale,
             negative_prompt: recipe.negative_prompt,
-            loras: Vec::new(),
+            loras: lora_records,
             strength: Some(strength),
             recipe: recipe.name.map(str::to_owned),
             hires: None,
@@ -3833,7 +3865,7 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         data: vec![ImageB64 {
             b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
         }],
-        warnings: None,
+        warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
     })
     .into_response()
 }

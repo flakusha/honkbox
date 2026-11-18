@@ -605,3 +605,232 @@ async fn output_format_and_compression_parity() {
         assert_eq!(body["error"]["code"], code, "{field}={value}: {body}");
     }
 }
+
+/// One `LoRA` catalog entry (registry-scan shape; `path` mirrors the
+/// absolute weight-file path a real scan produces) — same fixture as the
+/// `/v1/images/generations` tests.
+fn lora_entry(id: &str, path: &str) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        kind: ModelKind::Lora,
+        capabilities: ModelCapabilities::for_kind(ModelKind::Lora),
+        modalities: vec!["image".to_owned()],
+        category: "loras".to_owned(),
+        path: path.to_owned(),
+        ..sd_entry(id)
+    }
+}
+
+/// A multipart edits request with `loras` as a JSON array text part.
+fn loras_part(value: &Value) -> Part {
+    part("loras", &value.to_string())
+}
+
+/// An unknown `LoRA` slug — or a known non-`LoRA` slug — is a 400 naming the
+/// offender: the edits route rides the same `resolve_loras` validation as
+/// txt2img, with no edits-side duplicates.
+#[tokio::test]
+async fn edits_unknown_lora_slug_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let mut catalog = catalog_with(&[sd_entry("comfy:f.safetensors")]);
+    catalog.data.push(lora_entry(
+        "comfy:loras/detail.safetensors",
+        "/models/loras/detail.safetensors",
+    ));
+    let app = app_with(catalog, None);
+    for slug in ["comfy:loras/missing.safetensors", "comfy:f.safetensors"] {
+        let (status, body) = edits(
+            app.clone(),
+            &[
+                png_part("image", png_bytes(4, 4)),
+                part("prompt", "redo this"),
+                loras_part(&json!([{ "slug": slug }])),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "slug {slug}: {body}");
+        assert_eq!(body["error"]["code"], "unknown_lora", "slug {slug}: {body}");
+    }
+}
+
+/// More than two adapters per request is the documented `too_many_loras`
+/// 400, on edits exactly as on generations.
+#[tokio::test]
+async fn edits_too_many_loras_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry("comfy:loras/a.safetensors", "/models/loras/a.safetensors"),
+        lora_entry("comfy:loras/b.safetensors", "/models/loras/b.safetensors"),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            loras_part(&json!([
+                {"slug": "comfy:loras/a.safetensors"},
+                {"slug": "comfy:loras/b.safetensors"},
+                {"slug": "comfy:loras/c.safetensors"}
+            ])),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "too_many_loras", "{body}");
+}
+
+/// A `LoRA` strength outside `[-2.0, 2.0]` is a 400 on edits too —
+/// rejected, never clamped (same `invalid_lora_strength` code).
+#[tokio::test]
+async fn edits_lora_strength_out_of_range_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry("comfy:loras/a.safetensors", "/models/loras/a.safetensors"),
+    ]);
+    let app = app_with(catalog, None);
+    for strength in [5.0_f64, -3.0] {
+        let (status, body) = edits(
+            app.clone(),
+            &[
+                png_part("image", png_bytes(4, 4)),
+                part("prompt", "redo this"),
+                loras_part(&json!([
+                    {"slug": "comfy:loras/a.safetensors", "strength": strength}
+                ])),
+            ],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "strength {strength}: {body}"
+        );
+        assert_eq!(body["error"]["code"], "invalid_lora_strength", "{body}");
+    }
+}
+
+/// Adapters spanning more than one directory are the `mixed_lora_dirs` 400:
+/// the vendor applies a single `LoRA` dir per generation.
+#[tokio::test]
+async fn edits_mixed_lora_dirs_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/a.safetensors",
+            "/roots/one/loras/a.safetensors",
+        ),
+        lora_entry(
+            "comfy:loras/b.safetensors",
+            "/roots/two/loras/b.safetensors",
+        ),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            loras_part(&json!([
+                {"slug": "comfy:loras/a.safetensors"},
+                {"slug": "comfy:loras/b.safetensors"}
+            ])),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "mixed_lora_dirs", "{body}");
+}
+
+/// A valid edits `LoRA` request renders (stub backend) with the advisory
+/// license warning in the response, and the bundle sidecar records the
+/// resolved slug + strength. Per-test temp job dir, removed afterwards.
+#[tokio::test]
+async fn edits_loras_warn_and_record() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir =
+        std::env::temp_dir().join(format!("honkbox-edit-lora-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/detail.safetensors",
+            "/models/loras/detail.safetensors",
+        ),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, Some(data_dir.clone())),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            loras_part(&json!([
+                {"slug": "comfy:loras/detail.safetensors", "strength": 0.8}
+            ])),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let warnings = body["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1, "{body}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .is_some_and(|w| w.contains("no license recorded")
+                && w.contains("comfy:loras/detail.safetensors")),
+        "{body}"
+    );
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let request: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        request["loras"][0]["slug"],
+        "comfy:loras/detail.safetensors"
+    );
+    // f32 strengths widen to f64 in the sidecar JSON: compare with a
+    // tolerance, not equality.
+    assert!((request["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Without `loras` the response omits the `warnings` key entirely
+/// (skip-if-none), keeping edits byte-compatible with pre-`LoRA` consumers.
+#[tokio::test]
+async fn edits_warnings_absent_without_loras() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = edits(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        &[png_part("image", png_bytes(4, 4)), part("prompt", "redo this")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("warnings").is_none(), "{body}");
+}
+
+/// A malformed `loras` text part (not a JSON array of `{slug, strength}`)
+/// is a 400 naming the field, never a silent ignore.
+#[tokio::test]
+async fn edits_malformed_loras_field_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry("comfy:loras/a.safetensors", "/models/loras/a.safetensors"),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            part("loras", "not-json"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("loras must be a JSON array")),
+        "{body}"
+    );
+}

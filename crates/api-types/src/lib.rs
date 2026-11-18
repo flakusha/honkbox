@@ -85,8 +85,10 @@ pub enum ContentPart {
         /// The text itself.
         text: String,
     },
-    /// An image reference (data URI or http(s) URL). Honkbox ships no
-    /// vision backend: carrying this part is an explicit 400
+    /// An image reference (data URI or http(s) URL). Vision-capable models
+    /// (a sibling `mmproj*.gguf` projector or an operator
+    /// `capabilities.vision` override) accept the part; models without a
+    /// vision backend reject the request with an explicit 400
     /// (`vision not supported by backend`), never a silent drop.
     ImageUrl {
         /// The image reference.
