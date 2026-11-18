@@ -1,6 +1,6 @@
 # honkbox
 
-Local-first generative studio in Rust: Stable Diffusion image/video generation
+Local-first generative studio in Rust: Stable Diffusion image generation
 plus local LLM chat plus audio (STT/TTS) behind one Axum REST/SSE server,
 Vulkan-first GPU with CPU fallback, and a tabbed web UI served over the same
 API.
@@ -67,11 +67,11 @@ alias hbx=honkbox
 ## Layout
 
 - `crates/api-types` — shared DTOs only (serde + ts-rs + utoipa derives).
-- `crates/sd-core` — `SdPipeline` impl, samplers/schedulers, video job types.
+- `crates/sd-core` — `SdPipeline` impl, samplers/schedulers.
 - `crates/llm-worker` — llama-cpp sessions, GGUF load, token streaming.
 - `crates/audio-worker` — whisper STT, Kokoro TTS, Silero VAD.
 - `crates/residency` — VRAM ledger + tier presets, `/v1/memory` backing types.
-- `crates/registry` — SQLite schema, model-dir scan, hf-hub downloads.
+- `crates/registry` — model-dir scan, weight metadata, SQLite catalog cache.
 - `crates/server` — Axum REST+SSE binary, clap CLI, queue, embedded UI, TOML
   config.
 - `packages/web-ui` — tabbed frontend (Vite + TS).
@@ -113,8 +113,10 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
 
 - Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over
   file), `HONKBOX_QUEUE_WAIT_SECS` for the queue bound.
-- Jobs & cancellation: every GPU request is stamped with an `X-Job-Id`
-  response header and listed (while in flight) by `GET /v1/jobs`;
+- Jobs & cancellation: every ADMITTED GPU request is stamped with an
+  `X-Job-Id` response header and listed (while in flight) by `GET /v1/jobs`;
+  a request refused before admission (bad body, model without the required
+  capability) never registers a job and carries no header.
   `POST /v1/jobs/{id}/cancel` — or the REST-shaped `DELETE /v1/jobs/{id}`,
   same contract — marks a job's cooperative-stop token: it actually stops
   multi-image generations (between images; the request then answers 409
@@ -221,8 +223,13 @@ localStorage keys are read once, then rewritten under `honkbox.*`.
 
 ## Docs
 
-`.tmp/research/Reviewed*.md` are the design record (baseline, crates, model
-config, logging, licensing); read them before changing architecture.
+`AGENTS.md` is the authoritative repository contract and `.plan/` tracks work
+items. The API reference is generated from the server source and served live
+at `GET /v1/openapi.json` (also checked in under `packages/web-ui/src/gen/`)
+— read it instead of a copied endpoint list; it is drift-gated by
+`bun run codegen:check`. `bun run doc:rs` builds the Rust API docs.
+`.tmp/research/Reviewed*.md` is the local design record (gitignored scratch on
+this machine, not a published doc).
 
 ## License
 
