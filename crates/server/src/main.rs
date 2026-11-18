@@ -19,6 +19,7 @@ mod swap;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -671,7 +672,8 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         Backend::Stub => Box::new(honkbox_sd_core::StubPipeline),
         Backend::SdCpp => Box::new(honkbox_sd_core::SdCppPipeline::new(model_path)),
     };
-    let img = or_exit(pipeline.generate(&honkbox_sd_core::Txt2ImgRequest {
+    let img = or_exit(pipeline.generate(
+        &honkbox_sd_core::Txt2ImgRequest {
         prompt: prompt.clone(),
         seed,
         steps,
@@ -694,7 +696,10 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         control_image: None,
         controlnet_strength: None,
         control_type: None,
-    }));
+    },
+    // CLI `generate` has nobody to cancel it: a fresh false flag.
+    &AtomicBool::new(false),
+    ));
     let format = honkbox_sd_core::OutputFormat::from(format);
     let bytes = or_exit(honkbox_sd_core::encode_image(img, format));
     let base = data_dir.unwrap_or_else(|| {

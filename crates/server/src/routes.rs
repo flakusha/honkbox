@@ -20,7 +20,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, Multipart, Path as AxumPath, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    http::{Extensions, HeaderMap, HeaderValue, StatusCode, Uri, Version, header},
     middleware::{self, Next},
     response::{
         Html, IntoResponse, Response,
@@ -30,24 +30,25 @@ use axum::{
 };
 use base64::Engine as _;
 use honkbox_api_types::{
-    AuthCapabilities, Capabilities, CatalogEntry, CatalogList, CatalogLocal, ChatContent,
-    ChatMessage, ChatRequest, ChatResponse, ChatRole, ChatTool, CompressionRange,
-    ControlNetFeature, DeltaFunction, DeltaToolCall, DownloadAccepted, DownloadKind, DownloadList,
-    DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData, EmbeddingsInput,
-    EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FeatureFlags, FinishReason,
-    FormatLimits, Formats, FunctionCall, FunctionDefinition, GgufMetadata, Health, ImageB64,
-    ImageOpArtifact, ImageOpCommand, ImageOpCrop, ImageOpInput, ImageOpKind, ImageOpOutput,
-    ImageOpRequest, ImageOpResize, ImageOpResponse, ImageOpRotate, ImageOpsCapability,
-    ImagesGenerationRequest, ImagesGenerationResponse, ImagesHiresFix, ImagesLora, JobCancelResult,
-    JobEvent, JobEventType, JobInfo, JobList, JsonSchemaSpec, MemoryCapacity, MemoryGpu,
-    MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelDeleteResult, ModelKind,
-    ModelMetadata, NamedFunction, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice,
-    OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError, OpenAiUsage, OutputFormatCapability,
-    Pill, QueueCapabilities, QueueKindCapacity, ResidentModel, ResponseFormat, ResponseFormatType,
-    RunningList, RunningModel, SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest,
-    ToolCall, ToolCallType, ToolCallingCapability, ToolChoiceSpec, ToolType, Transcript,
-    TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult,
-    Version, VisionFeature, Voice, VoiceList,
+    ArtifactChunk, ArtifactInfo, ArtifactManifest, AuthCapabilities, Capabilities, CatalogEntry,
+    CatalogList, CatalogLocal, ChatContent, ChatMessage, ChatRequest, ChatResponse, ChatRole,
+    ChatTool, CompressionRange, ControlNetFeature, DeltaFunction, DeltaToolCall, DownloadAccepted,
+    DownloadKind, DownloadList, DownloadRequest, DownloadState, DownloadStatus, EmbeddingsData,
+    EmbeddingsInput, EmbeddingsRequest, EmbeddingsResponse, EmbeddingsUsage, FeatureFlags,
+    FinishReason, FormatLimits, Formats, FunctionCall, FunctionDefinition, GgufMetadata, Health,
+    ImageB64, ImageOpArtifact, ImageOpCommand, ImageOpCrop, ImageOpInput, ImageOpKind,
+    ImageOpOutput, ImageOpRequest, ImageOpResize, ImageOpResponse, ImageOpRotate,
+    ImageOpsCapability, ImagesGenerationRequest, ImagesGenerationResponse, ImagesHiresFix,
+    ImagesLora, JobCancelResult, JobEvent, JobEventType, JobInfo, JobList, JsonSchemaSpec,
+    MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
+    ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
+    OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
+    OpenAiUsage, OutputFormatCapability, Pill, QueueCapabilities, QueueKindCapacity,
+    ResidentModel, ResponseFormat, ResponseFormatType, RunningList, RunningModel,
+    SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType,
+    ToolCallingCapability, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
+    TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
+    Voice, VoiceList,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -120,7 +121,9 @@ struct EmbeddedUi;
         get_running,
         post_unload_all,
         post_unload_one,
-        post_embeddings
+        post_embeddings,
+        crate::artifacts::post_artifact,
+        crate::artifacts::get_artifact_bytes
     ),
     components(schemas(
         Health,
@@ -223,7 +226,10 @@ struct EmbeddedUi;
         Pill,
         CatalogLocal,
         CatalogEntry,
-        CatalogList
+        CatalogList,
+        ArtifactChunk,
+        ArtifactInfo,
+        ArtifactManifest
     ))
 )]
 pub struct ApiDoc;
@@ -303,6 +309,11 @@ pub struct AppConfig {
     /// into `<data_dir>/models/{llm,sd,stt,tts}` and fires the rescan
     /// signal on every commit.
     pub downloads: Arc<crate::downloads::DownloadManager>,
+    /// Binary artifact store (`/v1/artifacts`, TASK-binary-artifact-api):
+    /// content-addressed blobs under `<data_dir>/artifacts` with the
+    /// resumable-chunk upload registry. Degrades honestly when there is no
+    /// data dir (uploads 500, downloads 404).
+    pub artifacts: Arc<crate::artifacts::Registry>,
     /// Auth settings (REQ-7): `[server] auth` mode + `[auth] api_key_env`
     /// NAME. The middleware reads the key VALUE per request via `std::env`
     /// (rotation without restart); the value is never stored or logged.
@@ -349,6 +360,23 @@ const COMPRESSION_MIN_BYTES: u16 = 1024;
 /// behavior.
 pub(crate) const SPEECH_INPUT_MAX_CHARS: usize = 4096;
 
+/// TASK-binary-artifact-api: a partial-content response (any response
+/// carrying `Content-Range`) must NEVER travel through the compression
+/// layer — a compressed 206 corrupts `Content-Range` math and breaks resume
+/// offsets, and the artifacts bytes route serves exactly those. This is the
+/// same predicate-composition mechanism that excludes SSE by content type
+/// (`DefaultPredicate`'s `NotForContentType` arm); it keys on the
+/// `Content-Range` header instead so arbitrary artifact content types are
+/// covered, and plain 200 downloads still compress when negotiated.
+fn partial_content_stays_plain(
+    _: StatusCode,
+    _: Version,
+    headers: &HeaderMap,
+    _: &Extensions,
+) -> bool {
+    !headers.contains_key(header::CONTENT_RANGE)
+}
+
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
     Router::new()
@@ -386,6 +414,26 @@ pub fn app(config: AppConfig) -> Router {
         .route(
             "/v1/downloads/{id}",
             get(get_download).delete(delete_download),
+        )
+        .route(
+            "/v1/artifacts",
+            // TASK-binary-artifact-api: bodies stream straight to disk under
+            // the chunk/artifact caps, so the POST route raises the router's
+            // 64 MiB audio ceiling to the configured total cap (plus per-
+            // chunk framing headroom) instead of rejecting large uploads
+            // before the streaming caps can name their 413s.
+            post(crate::artifacts::post_artifact).layer(DefaultBodyLimit::max(
+                usize::try_from(
+                    config
+                        .artifact_max_bytes
+                        .saturating_add(crate::artifacts::CHUNK_MAX_BYTES),
+                )
+                .unwrap_or(usize::MAX),
+            )),
+        )
+        .route(
+            "/v1/artifacts/{id}/bytes",
+            get(crate::artifacts::get_artifact_bytes),
         )
         .route("/metrics", get(metrics_endpoint))
         .route_layer(middleware::from_fn_with_state(
@@ -2374,7 +2422,7 @@ async fn post_chat_stream(
 
 /// OpenAI-shaped error body → JSON response (`/v1/chat/completions` only;
 /// the native route keeps its plain-text errors).
-fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
+pub(crate) fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
     let body = OpenAiError::new(status.as_u16(), message, code.map(str::to_owned));
     (status, Json(body)).into_response()
 }
@@ -3439,25 +3487,61 @@ const IMAGE_SEED_BASE: u64 = 42;
 /// when the request names no recipe and passes no `steps` override.
 const IMAGE_STEPS: u32 = 20;
 
+/// Why an image generation stopped: a backend failure (500), or the job's
+/// shared cancel flag interrupted the in-flight render — kept a named
+/// variant so the route can answer the honest 409 `job_cancelled` instead
+/// of a generic 500.
+enum GenerateFailure {
+    Cancelled,
+    Failed(String),
+}
+
 /// One PNG generation under `spawn_blocking` (GPU work off the async
 /// runtime, like every other GPU route). Returns the encoded container
-/// bytes or the backend failure.
+/// bytes, or why it stopped. `cancel` is the job's shared cancel flag and
+/// `token` the job's registry token: the cancel endpoint can only reach
+/// the token, so this future bridges the two — the moment the token is
+/// marked the flag is set, and the configured pipeline (polling the flag
+/// mid-sampling) stops the running sd.cpp generation through
+/// `sd_cancel_generation`. The bridge waits for the worker to return so
+/// the 409-vs-500 contract stays with the actual outcome.
 async fn generate_image_bytes(
     pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
     txt2img: honkbox_sd_core::Txt2ImgRequest,
     format: honkbox_sd_core::OutputFormat,
     compression: Option<u8>,
-) -> Result<Vec<u8>, String> {
-    tokio::task::spawn_blocking(move || {
-        let img = pipeline.generate(&txt2img)?;
+    cancel: Arc<AtomicBool>,
+    token: tokio_util::sync::CancellationToken,
+) -> Result<Vec<u8>, GenerateFailure> {
+    let worker_cancel = Arc::clone(&cancel);
+    let mut worker = tokio::task::spawn_blocking(move || {
+        let img = pipeline
+            .generate(&txt2img, &worker_cancel)
+            .map_err(|err| match err {
+                honkbox_sd_core::SdError::Cancelled => GenerateFailure::Cancelled,
+                other => GenerateFailure::Failed(other.to_string()),
+            })?;
         match compression {
-            Some(q) => honkbox_sd_core::encode_image_with_quality(img, format, q),
-            None => honkbox_sd_core::encode_image(img, format),
+            Some(q) => honkbox_sd_core::encode_image_with_quality(img, format, q)
+                .map_err(|err| GenerateFailure::Failed(err.to_string())),
+            None => honkbox_sd_core::encode_image(img, format)
+                .map_err(|err| GenerateFailure::Failed(err.to_string())),
         }
-    })
-    .await
-    .map_err(|err| format!("generation task failed: {err}"))?
-    .map_err(|err| err.to_string())
+    });
+    let join_failure = |err: tokio::task::JoinError| {
+        GenerateFailure::Failed(format!("generation task failed: {err}"))
+    };
+    // Token → flag bridge: whichever lands first wins; a cancel makes the
+    // worker return shortly (engine stop), and its answer — normally
+    // `Cancelled` — decides the response.
+    let outcome = tokio::select! {
+        outcome = &mut worker => outcome.map_err(join_failure)?,
+        () = token.cancelled() => {
+            cancel.store(true, Ordering::Release);
+            (&mut worker).await.map_err(join_failure)?
+        }
+    };
+    outcome
 }
 
 /// Sidecar `scheduler` name for a resolved recipe: the fixed recipe's
@@ -3573,13 +3657,15 @@ async fn post_images_generations(
     let pipeline = Arc::clone(&config.sd);
     let prompt = req.prompt;
     let started = Instant::now();
-    // NEW-3: the images job is registry-visible and — for n > 1 —
-    // interruptible: the loop below checks the cancel token BETWEEN images
-    // (the running sd.cpp FFI call itself cannot be aborted mid-flight).
+    // NEW-3, engine level: the images job is registry-visible and
+    // interruptible — the loop checks the cancel token BETWEEN images, and
+    // the running sd.cpp generation itself is aborted mid-flight through
+    // `sd_cancel_generation` (the per-request flag below bridges the job
+    // token into the pipeline seam).
     let job = crate::jobs_registry::global().register(
         crate::jobs_registry::JobKind::Images,
         Some(slug.clone()),
-        n > 1,
+        true,
     );
     let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {
         Ok(lease) => lease,
@@ -3597,11 +3683,19 @@ async fn post_images_generations(
     let model_sha256 = resolve_model_entry(&slug, &catalog)
         .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
     let engine_version = honkbox_sd_core::engine_version_for(backend_id);
+    // Per-request cancel flag, shared with every `generate` call below: a
+    // cancel marks the job token AND this flag (the token→flag bridge in
+    // `generate_image_bytes`), so the in-flight render stops at the engine
+    // (`sd_cancel_generation`) instead of running to completion. Covers
+    // the n = 1 single-FFI case the token alone cannot reach.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let job_token = job.token().clone();
     for i in 0..u64::from(n) {
-        // Cooperative cancellation (NEW-3): honored BETWEEN images only —
+        // Cooperative cancellation (NEW-3): checked BETWEEN images here —
         // including a cancel that arrived while this request waited in the
-        // admission queue (then 0 images are generated). The in-flight
-        // sd.cpp call always runs to completion.
+        // admission queue (then 0 images are generated) — and, through the
+        // flag, DURING an image: the engine aborts its sampling loop and
+        // the worker below answers the same named 409.
         if job.token().is_cancelled() {
             return with_job_id(
                 openai_error_response(
@@ -3646,11 +3740,31 @@ async fn post_images_generations(
             },
             format,
             compression,
+            Arc::clone(&cancel),
+            job_token.clone(),
         )
         .await
         {
             Ok(bytes) => bytes,
-            Err(message) => {
+            Err(GenerateFailure::Cancelled) => {
+                // The in-flight render was aborted mid-sampling (or refused
+                // to start): answer the named 409, honestly counting the
+                // interrupted image as NOT generated.
+                return with_job_id(
+                    openai_error_response(
+                        StatusCode::CONFLICT,
+                        format!(
+                            "job {} cancelled mid-generation: image {} of {n} interrupted ({} of {n} generated)",
+                            job.id(),
+                            i + 1,
+                            i
+                        ),
+                        Some("job_cancelled"),
+                    ),
+                    job.id(),
+                );
+            }
+            Err(GenerateFailure::Failed(message)) => {
                 return openai_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     message,
@@ -4150,6 +4264,11 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
         },
         format,
         compression,
+        // The edits route registers no job, so nothing can cancel it: a
+        // fresh flag and a never-cancelled token (the pipeline never
+        // observes a cancel here).
+        Arc::new(AtomicBool::new(false)),
+        tokio_util::sync::CancellationToken::new(),
     )
     .await;
     let _ = std::fs::remove_file(&init_path);
@@ -4158,7 +4277,13 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
     }
     let bytes = match generated {
         Ok(bytes) => bytes,
-        Err(message) => {
+        Err(failure) => {
+            // `Cancelled` cannot happen with a never-set flag; the arm
+            // keeps the match exhaustive without inventing a success.
+            let message = match failure {
+                GenerateFailure::Failed(message) => message,
+                GenerateFailure::Cancelled => String::from("generation cancelled"),
+            };
             return openai_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 message,
@@ -5502,14 +5627,14 @@ async fn get_jobs() -> Json<JobList> {
 /// Shared cancel machinery for `POST /v1/jobs/{id}/cancel` and
 /// `DELETE /v1/jobs/{id}` (same semantics, two spellings — the REST-shaped
 /// verb and the explicit action): mark the job's cooperative-stop token
-/// and answer honestly. 200 `{cancelled: bool}` — `true` only for jobs
-/// that check the token between work units (multi-image generations
-/// between images, streaming chat at the next token boundary); `false` =
-/// the job was found but its single blocking FFI call cannot be
-/// interrupted mid-flight and runs to completion (engine-level
-/// cancellation needs a per-backend spike, per the design record). 404:
-/// unknown id (never registered, or the request already ended — the
-/// registry holds live work only).
+/// and answer honestly. 200 `{cancelled: bool}` — `true` for jobs that
+/// check the token between work units or interrupt the engine mid-flight
+/// (image generations between images AND mid-sampling via
+/// `sd_cancel_generation`, streaming chat at the next token boundary);
+/// `false` = the job was found but its single blocking FFI call cannot be
+/// interrupted and runs to completion (still true for the whisper/audio
+/// backends). 404: unknown id (never registered, or the request already
+/// ended — the registry holds live work only).
 fn cancel_job_response(id: &str) -> Response {
     match crate::jobs_registry::global().cancel(id) {
         Some(interruptible) => Json(JobCancelResult {

@@ -66,6 +66,7 @@ mod swap;
 
 use std::io::Read as _;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Condvar, LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
@@ -130,6 +131,7 @@ impl honkbox_sd_core::SdPipeline for GatedSd {
     fn generate(
         &self,
         _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &AtomicBool,
     ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
         self.gate.wait();
         Ok(honkbox_sd_core::GeneratedImage {

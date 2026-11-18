@@ -1,9 +1,11 @@
 //! In-flight job registry + cooperative cancel (NEW-3): GPU routes stamp
 //! `X-Job-Id`, `GET /v1/jobs` lists live work (kind/model/interruptible),
 //! `POST /v1/jobs/{id}/cancel` marks the token — honest about whether it
-//! can stop anything: multi-image generations abort BETWEEN images (409
-//! `job_cancelled`), single-image/single-shot jobs run to completion, and
-//! unknown ids are a plain 404.
+//! can stop anything: image generations abort BETWEEN images (409
+//! `job_cancelled`), a cancel that lands DURING a render interrupts the
+//! engine mid-sampling through the pipeline seam (`SdError::Cancelled` →
+//! the same 409, naming the interrupted image), and unknown ids are a
+//! plain 404.
 
 // No lib target on this binary crate, so include the modules directly.
 #[allow(dead_code)]
@@ -91,30 +93,45 @@ impl Gate {
         self.signal.notify_all();
     }
 
-    fn wait(&self) {
-        let mut open = self.open.lock().expect("gate lock");
-        while !*open {
-            open = self.signal.wait(open).expect("gate wait");
+    /// Bounded park: `true` once the gate opened; `false` after `dur` so
+    /// the parked "generation" can poll its cancel flag mid-flight.
+    fn wait_bounded(&self, dur: Duration) -> bool {
+        let open = self.open.lock().expect("gate lock");
+        if *open {
+            return true;
         }
+        let (open, _) = self.signal.wait_timeout(open, dur).expect("gate wait");
+        *open
     }
 }
 
 /// SD double: every generate call signals the test, parks on the gate (one
-/// "diffusion run" in flight), then returns a 1x1 image.
+/// "diffusion run" in flight), then returns a 1x1 image. With
+/// `honor_cancel`, a cancel observed while parked interrupts the
+/// "generation" — the seam contract a real sd.cpp render follows via
+/// `sd_cancel_generation` — answering `SdError::Cancelled` instead of an
+/// image. Without it, the run always completes (the between-images token
+/// check takes over).
 struct GatedSd {
     gate: Arc<Gate>,
     calls: std::sync::atomic::AtomicUsize,
     entered: AtomicBool,
+    honor_cancel: bool,
 }
 
 impl honkbox_sd_core::SdPipeline for GatedSd {
     fn generate(
         &self,
         _req: &honkbox_sd_core::Txt2ImgRequest,
+        cancel: &AtomicBool,
     ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.entered.store(true, Ordering::SeqCst);
-        self.gate.wait();
+        while !self.gate.wait_bounded(Duration::from_millis(5)) {
+            if self.honor_cancel && cancel.load(Ordering::SeqCst) {
+                return Err(honkbox_sd_core::SdError::Cancelled);
+            }
+        }
         Ok(honkbox_sd_core::GeneratedImage {
             width: 1,
             height: 1,
@@ -236,6 +253,7 @@ async fn multi_image_cancel_aborts_between_images() {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: false,
     });
     let app = test_app(sd.clone());
 
@@ -284,17 +302,23 @@ async fn multi_image_cancel_aborts_between_images() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
-/// Honesty for non-interruptible jobs: a single-image generation is marked
-/// by a cancel (`cancelled: false`) but still completes 200 with its image;
-/// the response carries the `X-Job-Id` header.
+/// The single-image honesty contract, engine level (TASK-sd-ffi-cancel):
+/// the job lists as interruptible, the cancel endpoint answers
+/// `cancelled: true` (it CAN stop something now), and the in-flight
+/// render — a double that honors the cancel flag mid-flight exactly like
+/// the real sd.cpp backend does via `sd_cancel_generation` — answers the
+/// 409 `job_cancelled` envelope naming the interrupted image. No image is
+/// produced, the registry entry is gone afterwards, and the spent id is a
+/// plain 404.
 #[tokio::test]
-async fn single_image_cancel_is_honest_and_job_completes() {
+async fn single_image_cancel_interrupts_mid_generation() {
     let _slot = SLOT_LOCK.lock().await;
     let gate = Arc::new(Gate::new());
     let sd = Arc::new(GatedSd {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: true,
     });
     let app = test_app(sd.clone());
 
@@ -306,36 +330,37 @@ async fn single_image_cancel_is_honest_and_job_completes() {
 
     let listed = jobs_list(app.clone()).await;
     let row = &listed["data"].as_array().unwrap()[0];
-    assert_eq!(row["interruptible"], false);
+    assert_eq!(row["kind"], "images");
+    assert_eq!(row["interruptible"], true);
     let id = row["id"].as_str().expect("job id").to_owned();
 
     let (status, _, body) = cancel_job(app.clone(), &id).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
-        parsed["cancelled"], false,
-        "single FFI call cannot stop: {body}"
+        parsed["cancelled"], true,
+        "single FFI call is engine-interruptible now: {body}"
     );
 
-    gate.open();
-    let (status, headers, body) = tokio::time::timeout(Duration::from_secs(5), generation)
+    // The double sees the flag while parked and aborts mid-"sampling" —
+    // the gate never needs to open.
+    let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
         .await
         .expect("generation finishes")
         .unwrap();
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let job_header = headers
-        .get("x-job-id")
-        .map(|v| v.to_str().unwrap().to_owned())
-        .expect("X-Job-Id stamped");
-    assert_eq!(job_header, id);
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let parsed: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(parsed["data"].as_array().unwrap().len(), 1);
-    // Decodes to a real PNG (the test double returns a 1x1 RGBA image).
-    let b64 = parsed["data"][0]["b64_json"].as_str().unwrap();
-    let png = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .unwrap();
-    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "not a PNG");
+    assert_eq!(parsed["error"]["code"], "job_cancelled");
+    let message = parsed["error"]["message"].as_str().expect("message");
+    assert!(message.contains("cancelled mid-generation"), "{body}");
+    assert!(message.contains("image 1 of 1 interrupted"), "{body}");
+    // Exactly one generate call was entered (and abandoned).
+    assert_eq!(sd.calls.load(Ordering::SeqCst), 1);
+    // No bundle and no live job: the registry emptied.
+    let listed = jobs_list(app.clone()).await;
+    assert_eq!(listed["data"].as_array().unwrap().len(), 0);
+    let (status, _, body) = cancel_job(app, &id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 /// Unknown ids are 404 both before anything runs and for garbage input.
@@ -364,6 +389,7 @@ async fn delete_job_alias_cancels_in_flight() {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: false,
     });
     let app = test_app(sd.clone());
 
@@ -496,6 +522,7 @@ async fn events_stream_delivers_the_lifecycle() {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: false,
     });
     let app = test_app(sd.clone());
 
@@ -561,6 +588,7 @@ async fn events_stream_reports_plain_finish() {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: false,
     });
     let app = test_app(sd.clone());
 
@@ -588,7 +616,9 @@ async fn events_stream_reports_plain_finish() {
         .to_owned();
 
     let registered = frame_for(&mut stream, "job_registered", &id).await;
-    assert_eq!(registered["interruptible"], false);
+    // Images jobs are engine-interruptible since `sd_cancel_generation`
+    // (n = 1 included) — the honest `true` even for a plain finish.
+    assert_eq!(registered["interruptible"], true);
 
     gate.open();
     let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
@@ -636,6 +666,7 @@ async fn controlnet_rejections_are_precise_400s() {
         gate: Arc::clone(&gate),
         calls: std::sync::atomic::AtomicUsize::new(0),
         entered: AtomicBool::new(false),
+        honor_cancel: false,
     });
     let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
 
@@ -710,6 +741,7 @@ impl honkbox_sd_core::SdPipeline for CapturingSd {
     fn generate(
         &self,
         req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &AtomicBool,
     ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
         *self.captured.lock().expect("capture lock") = Some(req.clone());
         Ok(honkbox_sd_core::GeneratedImage {

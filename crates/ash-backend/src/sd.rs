@@ -10,6 +10,7 @@
 use crate::device::VulkanDevice;
 use honkbox_sd_core::{GeneratedImage, SdError, SdPipeline, Txt2ImgRequest};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Sidecar/backend tag for the experimental direct-Vulkan SD path.
 pub const ASH_SD_BACKEND_ID: &str = "ash-sd";
@@ -41,10 +42,15 @@ impl SdPipeline for AshSdPipeline {
         ASH_SD_BACKEND_ID
     }
 
-    fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
+    fn generate(
+        &self,
+        req: &Txt2ImgRequest,
+        _cancel: &AtomicBool,
+    ) -> Result<GeneratedImage, SdError> {
         // P0 skeleton: nothing is dispatchable yet; kernels arrive in P1+
         // (elementwise lift first, then matmul/norm, conv2d, attention, VAE
-        // slice per ReviewedAsh-DirectVulkan §2).
+        // slice per ReviewedAsh-DirectVulkan §2). The cancel flag rides the
+        // seam for the future kernel loop to poll.
         Err(SdError::Backend(format!(
             "{}: not implemented yet (experimental skeleton); requested {}x{}, \
              {} steps, model '{}'",
@@ -106,8 +112,7 @@ mod tests {
             controlnet_strength: None,
             control_type: None,
         };
-        let err = pipeline
-            .generate(&req)
+        let err = pipeline.generate(&req, &AtomicBool::new(false))
             .expect_err("skeleton must not render");
         let SdError::Backend(msg) = err else {
             panic!("expected Backend variant, got {err:?}")

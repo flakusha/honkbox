@@ -204,6 +204,7 @@ impl honkbox_sd_core::SdPipeline for FakeSdCpp {
     fn generate(
         &self,
         _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
         Err(honkbox_sd_core::SdError::Backend(
             "capabilities tests never generate".to_owned(),

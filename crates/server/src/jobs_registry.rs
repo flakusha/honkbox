@@ -5,20 +5,24 @@
 //!
 //! Cancellation semantics are **cooperative** by design. GPU inference runs
 //! on the blocking pool across one synchronous C FFI call (llama.cpp /
-//! sd.cpp / whisper.cpp); true engine-level cancellation needs a per-backend
-//! spike (on record in the design docs). Marking the token therefore cannot
-//! interrupt a call mid-FFI:
+//! sd.cpp / whisper.cpp). Marking the token cannot itself reach into a
+//! call — but backends can expose an engine-level stop the route bridges
+//! the token into:
 //!
-//! - `/v1/images/generations` with `n > 1` checks the token between images
-//!   and stops before generating the remaining ones (the one real
-//!   mid-flight abort; a queued job aborts before its first image);
+//! - `/v1/images/generations` checks the token between images and stops
+//!   before generating the remaining ones, and — since the sd.cpp backend
+//!   gained `sd_cancel_generation` — aborts the RUNNING single-image
+//!   generation mid-sampling too (a queued job aborts before its first
+//!   image; a cancelled image answers 409 `job_cancelled` naming the
+//!   interrupted image, never a partial render);
 //! - the streaming chat routes check the token at every token boundary and
 //!   abort the pipeline at the next one (the same path an SSE disconnect
 //!   takes);
-//! - single-shot calls (one image, sync chat/completions, embeddings,
-//!   transcribe, synthesize, translations) run to completion. `cancel`
-//!   answers honestly: `cancelled: true` only for jobs that check the token
-//!   between work units (`interruptible`).
+//! - single-shot calls that have no engine stop (sync chat/completions,
+//!   embeddings, transcribe, synthesize, translations) run to completion.
+//!   `cancel` answers honestly: `cancelled: true` for jobs that check the
+//!   token between work units or bridge it into an engine stop
+//!   (`interruptible`).
 //!
 //! The registry is process-global like the residency ledger. Entries are
 //! removed when the route handler's [`JobGuard`] drops, so the registry
@@ -119,9 +123,11 @@ struct JobEntry {
     /// millisecond resolution and same-ms ties are otherwise decided by
     /// `HashMap` iteration order (nondeterministic).
     seq: u64,
-    /// Whether the route honors the token between work units (multi-image
-    /// generations, streaming chat). Surfaced verbatim by `cancel` so the
-    /// response never promises an interruption the route cannot deliver.
+    /// Whether the route honors the token — between work units (multi-image
+    /// generations, streaming chat) or by bridging it into an engine-level
+    /// stop (image generations mid-sampling via `sd_cancel_generation`).
+    /// Surfaced verbatim by `cancel` so the response never promises an
+    /// interruption the route cannot deliver.
     interruptible: bool,
 }
 

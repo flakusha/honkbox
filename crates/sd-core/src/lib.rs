@@ -8,6 +8,10 @@
 use std::fmt;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use diffusion_rs::api::{
     ConfigBuilder, LoraSpec, ModelConfigBuilder, SampleMethod, Scheduler as VendorScheduler,
@@ -398,6 +402,10 @@ pub enum SdError {
     Encode(String),
     /// Real-backend failure (config build, `gen_img`, file IO).
     Backend(String),
+    /// A cancel was requested through [`SdPipeline::generate`]'s cancel
+    /// flag before or during sampling: the generation stopped early and
+    /// there is NO image (never a partial or "normal" render).
+    Cancelled,
 }
 
 impl fmt::Display for SdError {
@@ -408,6 +416,7 @@ impl fmt::Display for SdError {
             }
             Self::Encode(e) => write!(f, "png encode failed: {e}"),
             Self::Backend(e) => write!(f, "sd-cpp backend failed: {e}"),
+            Self::Cancelled => write!(f, "generation cancelled before completion"),
         }
     }
 }
@@ -417,14 +426,27 @@ impl std::error::Error for SdError {}
 /// Sync image pipeline seam; `server` codes against this trait, never a backend.
 pub trait SdPipeline: Send + Sync {
     /// Sample one image; deterministic per backend contract.
-    fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError>;
+    ///
+    /// `cancel` is the cooperative stop flag: a backend that can honor it
+    /// mid-sampling polls it while the generation runs and answers
+    /// [`SdError::Cancelled`] — never a partial or normal-looking image —
+    /// when the flag is observed set. A flag set before the call cancels
+    /// without doing any work. Callers share one flag per job (an
+    /// `Arc<AtomicBool>` handed out to the cancel endpoint).
+    fn generate(
+        &self,
+        req: &Txt2ImgRequest,
+        cancel: &AtomicBool,
+    ) -> Result<GeneratedImage, SdError>;
     /// Backend tag recorded in bundle sidecars (`"stub"` here).
     fn backend_id(&self) -> &'static str;
 }
 
 /// Deterministic stub: pixels are a pure function of the seed
-/// (SAME seed = byte-identical PNG); honors `width`/`height`. Recipe
-/// overrides (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`), the
+/// (SAME seed = byte-identical PNG); honors `width`/`height`. The cancel
+/// flag is honored per row (and before any work), answering
+/// [`SdError::Cancelled`]. Recipe overrides
+/// (`sampler`/`scheduler`/`cfg_scale`/`negative_prompt`), the
 /// hires-fix pass, and the image inputs
 /// (`loras`/`init_image`/`mask_image`/`strength`/`control_net`/
 /// `control_image`/`controlnet_strength`/`control_type`) are honestly
@@ -440,18 +462,31 @@ impl SdPipeline for StubPipeline {
         "stub"
     }
 
-    fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
+    fn generate(&self, req: &Txt2ImgRequest, cancel: &AtomicBool) -> Result<GeneratedImage, SdError> {
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
             return Err(SdError::TooLarge { edge });
         }
+        if cancel.load(Ordering::Acquire) {
+            return Err(SdError::Cancelled);
+        }
         let mut rgba = vec![0u8; req.width as usize * req.height as usize * 4];
-        for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let h = splitmix64(req.seed ^ i as u64).to_le_bytes();
-            px[0] = h[7];
-            px[1] = h[6];
-            px[2] = h[5];
-            px[3] = 255;
+        let row_len = req.width as usize * 4;
+        let mut px_index = 0usize;
+        for (row, pixels) in rgba.chunks_mut(row_len).enumerate() {
+            // Cooperative stop between rows: a cancel that arrived while
+            // this "generation" was parked answers Cancelled mid-flight.
+            if row > 0 && cancel.load(Ordering::Acquire) {
+                return Err(SdError::Cancelled);
+            }
+            for px in pixels.as_chunks_mut::<4>().0 {
+                let h = splitmix64(req.seed ^ px_index as u64).to_le_bytes();
+                px[0] = h[7];
+                px[1] = h[6];
+                px[2] = h[5];
+                px[3] = 255;
+                px_index += 1;
+            }
         }
         Ok(GeneratedImage {
             width: req.width,
@@ -769,13 +804,18 @@ impl SdPipeline for SdCppPipeline {
         SD_CPP_BACKEND_ID
     }
 
-    fn generate(&self, req: &Txt2ImgRequest) -> Result<GeneratedImage, SdError> {
+    fn generate(&self, req: &Txt2ImgRequest, cancel: &AtomicBool) -> Result<GeneratedImage, SdError> {
         #[cfg(feature = "vulkan")]
         use diffusion_rs::api::{BackendDevice, Module};
 
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
             return Err(SdError::TooLarge { edge });
+        }
+        // A cancel that arrived while this request waited (admission queue,
+        // prior batch images) cancels without touching the model at all.
+        if cancel.load(Ordering::Acquire) {
+            return Err(SdError::Cancelled);
         }
         // Unique temp PNG: pid + nanos, so concurrent generates never collide.
         let out = std::env::temp_dir().join(format!(
@@ -841,8 +881,40 @@ impl SdPipeline for SdCppPipeline {
             vec![BackendDevice::VULKAN0],
         )]));
         let mut model_config = model.build().map_err(|e| SdError::Backend(e.to_string()))?;
-        diffusion_rs::api::gen_img(&config, &mut model_config)
-            .map_err(|e| SdError::Backend(e.to_string()))?;
+        // Engine-level cancellation (TASK-sd-ffi-cancel): `gen_img_with_cancel`
+        // polls a vendor `CancelHandle`; a scoped relay thread flips it as
+        // soon as the caller's shared flag sets. The vendor side relays the
+        // handle into `sd_cancel_generation` (`stable-diffusion.h:611`),
+        // which the engine polls between sampling steps; a hard stop makes
+        // `generate_image` return without an image and surfaces here as
+        // [`SdError::Cancelled`]. The relay stops with the scope (worst
+        // case one 25 ms poll after the FFI call returns).
+        let gen_result = std::thread::scope(|scope| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let handle = diffusion_rs::api::CancelHandle::new();
+            let relay = scope.spawn({
+                let handle = handle.clone();
+                let stop = Arc::clone(&stop);
+                move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        if cancel.load(Ordering::Acquire) {
+                            handle.cancel();
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                }
+            });
+            let rendered =
+                diffusion_rs::api::gen_img_with_cancel(&config, &mut model_config, &handle);
+            stop.store(true, Ordering::Relaxed);
+            let _ = relay.join();
+            rendered
+        });
+        gen_result.map_err(|err| match err {
+            diffusion_rs::api::DiffusionError::Cancelled => SdError::Cancelled,
+            other => SdError::Backend(other.to_string()),
+        })?;
         let bytes = std::fs::read(&out);
         let _ = std::fs::remove_file(&out);
         if let Some(path) = &control_path {
@@ -1191,8 +1263,8 @@ mod tests {
 
     #[test]
     fn stub_is_byte_deterministic() {
-        let a = StubPipeline.generate(&req(42, 32, 32)).expect("gen");
-        let b = StubPipeline.generate(&req(42, 32, 32)).expect("gen");
+        let a = StubPipeline.generate(&req(42, 32, 32), &AtomicBool::new(false)).expect("gen");
+        let b = StubPipeline.generate(&req(42, 32, 32), &AtomicBool::new(false)).expect("gen");
         assert_eq!(a.rgba, b.rgba);
         let pa = encode_image(a, OutputFormat::Png).expect("png");
         let pb = encode_image(b, OutputFormat::Png).expect("png");
@@ -1202,22 +1274,58 @@ mod tests {
 
     #[test]
     fn stub_honors_size() {
-        let img = StubPipeline.generate(&req(7, 8, 6)).expect("gen");
+        let img = StubPipeline.generate(&req(7, 8, 6), &AtomicBool::new(false)).expect("gen");
         assert_eq!((img.width, img.height), (8, 6));
         assert_eq!(img.rgba.len(), 8 * 6 * 4);
     }
 
+    /// Cancel contract at the seam: a set flag answers the NAMED
+    /// [`SdError::Cancelled`] — never a partial or normal-looking image —
+    /// and a fresh flag behaves exactly like the uncancellable past. The
+    /// stub checks the flag before any work and again between pixel rows,
+    /// so a cancel that lands mid-render interrupts the same way; the
+    /// deterministic mid-flight interruption (parked inside `generate`,
+    /// cancel from the job endpoint, 409 `job_cancelled`) lives at the
+    /// HTTP layer in `crates/server/tests/jobs.rs`, where timing is
+    /// gate-controlled.
+    #[test]
+    fn stub_cancelled_flag_returns_named_error() {
+        let cancelled = AtomicBool::new(false);
+        cancelled.store(true, Ordering::Relaxed);
+        let err = StubPipeline
+            .generate(&req(42, 32, 32), &cancelled)
+            .expect_err("cancelled");
+        assert_eq!(err, SdError::Cancelled);
+        assert_eq!(err.to_string(), "generation cancelled before completion");
+
+        // Largest canvas the seam accepts: the between-rows check runs
+        // 2047 times, so a flag flipped while the render is underway still
+        // resolves to the same named error (observed on any but the
+        // fastest possible completion; the entry check above is the
+        // always-deterministic half).
+        let flag = Arc::new(AtomicBool::new(false));
+        let worker_flag = Arc::clone(&flag);
+        let worker = std::thread::spawn(move || {
+            let img_req = req(7, 2048, 2048);
+            StubPipeline.generate(&img_req, &worker_flag)
+        });
+        flag.store(true, Ordering::Relaxed);
+        if let Err(err) = worker.join().expect("worker") {
+            assert_eq!(err, SdError::Cancelled);
+        }
+    }
+
     #[test]
     fn stub_caps_longest_edge() {
-        assert!(StubPipeline.generate(&req(1, 2049, 16)).is_err());
-        assert!(StubPipeline.generate(&req(1, 16, 2049)).is_err());
-        assert!(StubPipeline.generate(&req(1, 2048, 2048)).is_ok());
+        assert!(StubPipeline.generate(&req(1, 2049, 16), &AtomicBool::new(false)).is_err());
+        assert!(StubPipeline.generate(&req(1, 16, 2049), &AtomicBool::new(false)).is_err());
+        assert!(StubPipeline.generate(&req(1, 2048, 2048), &AtomicBool::new(false)).is_ok());
     }
 
     #[test]
     fn different_seeds_differ() {
-        let a = StubPipeline.generate(&req(1, 16, 16)).expect("gen");
-        let b = StubPipeline.generate(&req(2, 16, 16)).expect("gen");
+        let a = StubPipeline.generate(&req(1, 16, 16), &AtomicBool::new(false)).expect("gen");
+        let b = StubPipeline.generate(&req(2, 16, 16), &AtomicBool::new(false)).expect("gen");
         assert_ne!(a.rgba, b.rgba);
     }
 
@@ -1246,8 +1354,8 @@ mod tests {
             controlnet_strength: Some(0.5),
             ..req(9, 16, 16)
         };
-        let a = StubPipeline.generate(&plain).expect("gen");
-        let b = StubPipeline.generate(&with).expect("gen");
+        let a = StubPipeline.generate(&plain, &AtomicBool::new(false)).expect("gen");
+        let b = StubPipeline.generate(&with, &AtomicBool::new(false)).expect("gen");
         assert_eq!(a.rgba, b.rgba);
         // The stub ignores the hires pass, so the output stays at the base
         // size (the real backend would land at the hires target).
@@ -1327,7 +1435,7 @@ mod tests {
     #[test]
     fn formats_roundtrip_dims_and_pixels() {
         for format in [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp] {
-            let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+            let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
             let bytes = encode_image(img, format).expect("encode");
             assert!(!bytes.is_empty(), "{format:?}");
             let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
@@ -1335,14 +1443,14 @@ mod tests {
         }
         // Lossless containers preserve every pixel.
         for format in [OutputFormat::Png, OutputFormat::Webp] {
-            let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+            let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
             let want = img.rgba.clone();
             let bytes = encode_image(img, format).expect("encode");
             let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
             assert_eq!(decoded.as_raw(), &want, "{format:?}");
         }
         // JPEG quality 90 on noise: small mean error, not garbage.
-        let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+        let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
         let want = img.rgba.clone();
         let bytes = encode_image(img, OutputFormat::Jpeg).expect("encode");
         let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
@@ -1377,7 +1485,7 @@ mod tests {
 
     #[test]
     fn jpeg_quality_knob_changes_bytes_and_default_matches_90() {
-        let img = StubPipeline.generate(&req(42, 16, 16)).expect("gen");
+        let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
         let default_bytes = encode_image(img.clone(), OutputFormat::Jpeg).expect("encode");
         let q90 = encode_image_with_quality(img.clone(), OutputFormat::Jpeg, 90).expect("encode");
         assert_eq!(default_bytes, q90, "default = quality 90");

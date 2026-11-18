@@ -1,0 +1,204 @@
+diff --git a/vendor/diffusion-rs/src/api.rs b/vendor/diffusion-rs/src/api.rs
+--- a/vendor/diffusion-rs/src/api.rs
++++ b/vendor/diffusion-rs/src/api.rs
+@@ -8,7 +8,12 @@ use std::ptr::null;
+ use std::ptr::null_mut;
+ use std::slice;
+ use std::str::FromStr;
++use std::sync::Arc;
++use std::sync::atomic::AtomicBool;
++use std::sync::atomic::Ordering;
+ use std::sync::mpsc::Sender;
++use std::thread;
++use std::time::Duration;
+ 
+ use chrono::Local;
+ use derive_builder::Builder;
+@@ -18,6 +23,7 @@ use diffusion_rs_sys::generate_image;
+ use diffusion_rs_sys::new_upscaler_ctx;
+ use diffusion_rs_sys::sd_cache_mode_t;
+ use diffusion_rs_sys::sd_cache_params_t;
++use diffusion_rs_sys::sd_cancel_generation;
+ use diffusion_rs_sys::sd_ctx_has_control_net;
+ use diffusion_rs_sys::sd_ctx_load_control_net;
+ use diffusion_rs_sys::sd_ctx_params_t;
+@@ -87,6 +93,12 @@ pub use diffusion_rs_sys::sd_vae_format_t as VaeFormat;
+ /// ControlNet conditioning type
+ pub use diffusion_rs_sys::sd_control_type_t;
+ 
++/// Cancel modes for `sd_cancel_generation`: `SD_CANCEL_ALL` stops the
++/// in-flight generation as soon as possible (no image), while
++/// `SD_CANCEL_NEW_LATENTS` finishes the current image and skips further
++/// batch latents (completed images return normally).
++pub use diffusion_rs_sys::sd_cancel_mode_t;
++
+ static VALID_EXT: [&str; 3] = ["gguf", "safetensors", "pt"];
+ 
+ #[derive(Debug)]
+@@ -111,6 +123,8 @@ pub enum DiffusionError {
+     Upscaler,
+     #[error("control net failed: {0}")]
+     ControlNet(String),
++    #[error("the generation was cancelled")]
++    Cancelled,
+ }
+ 
+ #[non_exhaustive]
+@@ -1470,12 +1484,103 @@ pub fn gen_img_with_progress(
+     model_config: &mut ModelConfig,
+     sender: Sender<Progress>,
+ ) -> Result<(), DiffusionError> {
+-    gen_img_maybe_progress(config, model_config, Some(sender))
++    gen_img_maybe_progress(config, model_config, Some(sender), None)
+ }
+ 
+ /// Generate an image
+ pub fn gen_img(config: &Config, model_config: &mut ModelConfig) -> Result<(), DiffusionError> {
+-    gen_img_maybe_progress(config, model_config, None)
++    gen_img_maybe_progress(config, model_config, None, None)
++}
++
++/// Cooperative cancellation for a generation in flight.
++///
++/// Share a handle with a worker thread running [`gen_img_with_cancel`] and
++/// call [`CancelHandle::cancel`] from another thread: a side watcher
++/// relays the flag into `sd_cancel_generation`, which the engine polls
++/// between sampling steps. [`CancelHandle::new`] (the default) stops the
++/// generation as soon as possible — the FFI call returns without an image
++/// and the wrapper reports [`DiffusionError::Cancelled`];
++/// [`CancelHandle::graceful`] finishes the current image and skips further
++/// batch latents, returning whatever completed normally.
++#[derive(Clone, Debug)]
++pub struct CancelHandle {
++    flag: Arc<AtomicBool>,
++    mode: sd_cancel_mode_t,
++}
++
++impl Default for CancelHandle {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++impl CancelHandle {
++    /// Hard stop: interrupt the generation mid-sampling; no image.
++    #[must_use]
++    pub fn new() -> Self {
++        Self {
++            flag: Arc::new(AtomicBool::new(false)),
++            mode: sd_cancel_mode_t::SD_CANCEL_ALL,
++        }
++    }
++
++    /// Graceful stop: finish the current image, skip further batch latents.
++    #[must_use]
++    pub fn graceful() -> Self {
++        Self {
++            flag: Arc::new(AtomicBool::new(false)),
++            mode: sd_cancel_mode_t::SD_CANCEL_NEW_LATENTS,
++        }
++    }
++
++    /// Ask the in-flight generation to stop.
++    pub fn cancel(&self) {
++        self.flag.store(true, Ordering::Release);
++    }
++
++    /// Whether a cancellation has been requested.
++    #[must_use]
++    pub fn is_cancelled(&self) -> bool {
++        self.flag.load(Ordering::Acquire)
++    }
++
++    /// The configured engine cancel mode.
++    #[must_use]
++    pub fn mode(&self) -> sd_cancel_mode_t {
++        self.mode
++    }
++
++    fn shared_flag(&self) -> Arc<AtomicBool> {
++        Arc::clone(&self.flag)
++    }
++}
++
++/// The generation context, shared with the cancel watcher thread while the
++/// generation owns it: `sd_cancel_generation` only stores a lock-free
++/// atomic through the pointer (the engine guarantees that with a
++/// `static_assert`), and the context outlives the `generate_image` call
++/// it races with. `Send` is the watcher-thread plumbing, nothing more.
++struct CancelCtx(*mut sd_ctx_t);
++
++unsafe impl Send for CancelCtx {}
++
++impl CancelCtx {
++    fn ptr(&self) -> *mut sd_ctx_t {
++        self.0
++    }
++}
++
++/// [`gen_img`] with cooperative cancellation: call `cancel.cancel()` from
++/// another thread while this runs. With the default (`SD_CANCEL_ALL`)
++/// handle an honoured cancel reports [`DiffusionError::Cancelled`]; with
++/// [`CancelHandle::graceful`] the engine returns the completed images and
++/// this returns `Ok`.
++pub fn gen_img_with_cancel(
++    config: &Config,
++    model_config: &mut ModelConfig,
++    cancel: &CancelHandle,
++) -> Result<(), DiffusionError> {
++    gen_img_maybe_progress(config, model_config, None, Some(cancel))
+ }
+ 
+ /// Parse a ControlNet type by the engine's name or alias (`none`,
+@@ -1494,6 +1599,7 @@ fn gen_img_maybe_progress(
+     config: &Config,
+     model_config: &mut ModelConfig,
+     mut sender: Option<Sender<Progress>>,
++    cancel: Option<&CancelHandle>,
+ ) -> Result<(), DiffusionError> {
+     let prompt: CLibString = CLibString::from(config.prompt.as_str());
+     let files = output_files(&config.output, config.batch_count);
+@@ -1842,7 +1948,43 @@ fn gen_img_maybe_progress(
+             .into_string()
+             .unwrap();
+         let mut result_out: *mut sd_image_generation_result_t = null_mut();
++        // Cancel relay: the engine polls its own atomic between sampling
++        // steps, so a side thread watches the caller's flag and calls
++        // `sd_cancel_generation` while the FFI call is in flight. The flag
++        // keeps re-firing every poll: the engine resets its atomic at
++        // generation start, so a cancel racing that reset must latch
++        // again. The context outlives the FFI call, keeping the raw
++        // pointer valid for the watcher (see `CancelCtx`).
++        let cancel_mode = cancel.map_or(sd_cancel_mode_t::SD_CANCEL_ALL, CancelHandle::mode);
++        let watcher = cancel.map(|handle| {
++            let flag = handle.shared_flag();
++            let done = Arc::new(AtomicBool::new(false));
++            let done_watcher = Arc::clone(&done);
++            let ctx = CancelCtx(sd_ctx);
++            let join = thread::spawn(move || {
++                while !done_watcher.load(Ordering::Relaxed) {
++                    if flag.load(Ordering::Acquire) {
++                        // Method call, not `ctx.0`: disjoint closure
++                        // captures would otherwise capture the raw
++                        // pointer field directly, bypassing `Send`.
++                        sd_cancel_generation(ctx.ptr(), cancel_mode);
++                    }
++                    thread::sleep(Duration::from_millis(25));
++                }
++            });
++            (join, done)
++        });
+         let gen_result = generate_image(sd_ctx, &sd_img_gen_params, &mut result_out);
++        if let Some((join, done)) = watcher {
++            done.store(true, Ordering::Relaxed);
++            let _ = join.join();
++        }
++        // A hard cancel comes back as a plain FFI failure (the engine
++        // logs "cancelling generation" and returns false): distinguish it
++        // from a real backend error when the caller asked for cancellation.
++        if !gen_result && cancel.is_some_and(CancelHandle::is_cancelled) {
++            return Err(DiffusionError::Cancelled);
++        }
+         let ret = {
+             if !gen_result || result_out.is_null() {
+                 return Err(DiffusionError::Forward);
