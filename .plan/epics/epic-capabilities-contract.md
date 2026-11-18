@@ -19,6 +19,10 @@ Keep the existing `/api/version` response byte-compatible.
 - `FEAT-capabilities-api.md` — `GET /v1/capabilities` DTO + route + auth (P0).
 - `TASK-capabilities-contract-test.md` — flag/route agreement test (P0).
 - `TASK-api-version-policy.md` — when to bump `api_version` (P1).
+- `TASK-truthful-reserved-capability-rows.md` — reserved `blender`/`3d` queue rows are capacity labels, not callable job kinds (P1).
+- `BUG-openapi-embeddings-unlisted.md` — every mounted route appears in the generated OpenAPI document (P1, done).
+- `FEAT-model-modality-advertisement.md` — model input/output modalities agree with the live catalog and capability flags (P2).
+- `TASK-audiocpp-capabilities.md` — `features.audio_cpp` compile-probed flags and family lists (P2).
 
 ## Acceptance
 
