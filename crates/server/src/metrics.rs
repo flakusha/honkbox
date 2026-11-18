@@ -537,7 +537,10 @@ mod tests {
         assert!(series_value(&body, le005) >= 1);
         assert!(body.contains("# TYPE honkbox_request_duration_seconds histogram"));
         assert!(body.contains("honkbox_request_duration_seconds_bucket{le=\"+Inf\"}"));
-        assert!(body.contains("honkbox_request_duration_seconds_sum 0."));
+        // Family presence only: the cumulative sum crosses 1s when other
+        // tests in this binary recorded routed requests first (serial -j1),
+        // so a value-shape assert here would be ordering-dependent.
+        assert!(body.contains("honkbox_request_duration_seconds_sum "));
         assert!(series_value(&body, "honkbox_request_duration_seconds_count") >= 2);
 
         assert!(body.contains("# TYPE honkbox_gpu_slot_busy_rejections_total counter"));

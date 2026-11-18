@@ -1480,3 +1480,626 @@ mod tests {
         assert!(body.ends_with('\n'));
     }
 }
+
+/// Property-style hardening for the ledger contract. proptest was judged
+/// too heavy for this deliberately dependency-free crate (its dev tree
+/// pulls rand/rusty-fork/tempfile), so these tests drive randomized — but
+/// SEEDED, hence reproducible — operation sequences through a tiny in-crate
+/// LCG and assert the invariants after EVERY step against an independently
+/// maintained mirror:
+/// - committed demand never exceeds the configured capacities;
+/// - gauges (`running`, `queue_depth`) and counters (`admissions`,
+///   `wait_count`, `hold_count`) never drift from observable state;
+/// - a cancelled/dropped/expired ticket never acquires (it polls
+///   `Cancelled` forever and no admission is ever counted for it);
+/// - a granted lease frees its demand exactly once, on either exit path
+///   (explicit `release` or drop) — double release is impossible by
+///   construction (`release` consumes), which the counter parity asserts;
+/// - grants within a kind are strictly FIFO (a non-head waiter can never
+///   grant before the head);
+/// - the TTL sweep evicts EXACTLY the expired waiters — none missing, none
+///   extra — and a still-fresh waiter keeps its queue slot.
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+
+    /// `usize` count in the gauge/counter domain (u64).
+    fn u64c(n: usize) -> u64 {
+        u64::try_from(n).unwrap_or(u64::MAX)
+    }
+
+    /// Slot in the fixed 8-wide arrays (the private `slot()` is not
+    /// reachable from a sibling test module).
+    fn slot_of(kind: ResourceKind) -> usize {
+        ResourceKind::ALL
+            .iter()
+            .position(|k| *k == kind)
+            .expect("kind is in ALL")
+    }
+
+    /// Tiny deterministic LCG (Knuth's MMIX constants). Fixed seeds keep
+    /// every failure reproducible from the seed alone.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn new(seed: u64) -> Self {
+            Self(seed ^ 0x5EED_1D5E_5EED_1D5E)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
+
+        /// Uniform in `[0, bound)` (0 for a zero bound).
+        fn below(&mut self, bound: u64) -> u64 {
+            if bound == 0 {
+                0
+            } else {
+                self.next_u64() % bound
+            }
+        }
+
+        fn pick_kind(&mut self) -> ResourceKind {
+            let idx = self.index(ResourceKind::ALL.len());
+            ResourceKind::ALL[idx]
+        }
+
+        /// A live index into a collection of the given length.
+        fn index(&mut self, len: usize) -> usize {
+            usize::try_from(self.below(u64c(len))).unwrap_or(0)
+        }
+    }
+
+    /// The test-side mirror of the ledger: every invariant is checked
+    /// against this independently maintained model, never against another
+    /// ledger readout alone.
+    struct Mirror {
+        config: LedgerConfig,
+        /// Committed (gpu slots, vram, ram, cpu threads) sums.
+        committed: (u64, u64, u64, u64),
+        /// Index-parallel to the test's `leases` slot vector.
+        held: Vec<Option<(ResourceKind, Demand)>>,
+        /// `(tickets slot, kind)` of every live queued ticket, in enqueue
+        /// order (the FIFO reference).
+        queued: Vec<(usize, ResourceKind)>,
+        grants: [u64; 8],
+    }
+
+    impl Mirror {
+        fn new(config: LedgerConfig) -> Self {
+            Self {
+                config,
+                committed: (0, 0, 0, 0),
+                held: Vec::new(),
+                queued: Vec::new(),
+                grants: [0; 8],
+            }
+        }
+
+        fn demand_of(&self, kind: ResourceKind) -> Demand {
+            self.config.kind(kind).demand
+        }
+
+        fn grant(&mut self, kind: ResourceKind) {
+            let demand = self.demand_of(kind);
+            self.committed.0 += u64::from(demand.gpu_slots);
+            self.committed.1 += demand.vram_bytes;
+            self.committed.2 += demand.ram_bytes;
+            self.committed.3 += u64::from(demand.cpu_threads);
+            self.held.push(Some((kind, demand)));
+            self.grants[slot_of(kind)] += 1;
+        }
+
+        fn release(&mut self, demand: Demand) {
+            self.committed.0 -= u64::from(demand.gpu_slots);
+            self.committed.1 -= demand.vram_bytes;
+            self.committed.2 -= demand.ram_bytes;
+            self.committed.3 -= u64::from(demand.cpu_threads);
+        }
+
+        /// The invariants that must hold after EVERY ledger operation.
+        fn assert_invariants(&self, ledger: &Ledger, queue_grants: &[u64; 8]) {
+            let caps = self.config.capacities;
+            assert!(
+                self.committed.0 <= u64::from(caps.gpu_slots),
+                "gpu slots overcommitted: {} > {}",
+                self.committed.0,
+                caps.gpu_slots
+            );
+            if caps.vram_bytes > 0 {
+                assert!(
+                    self.committed.1 <= caps.vram_bytes,
+                    "vram overcommitted: {} > {}",
+                    self.committed.1,
+                    caps.vram_bytes
+                );
+            }
+            if caps.ram_bytes > 0 {
+                assert!(
+                    self.committed.2 <= caps.ram_bytes,
+                    "ram overcommitted: {} > {}",
+                    self.committed.2,
+                    caps.ram_bytes
+                );
+            }
+            if caps.cpu_threads > 0 {
+                assert!(
+                    self.committed.3 <= caps.cpu_threads,
+                    "cpu threads overcommitted: {} > {}",
+                    self.committed.3,
+                    caps.cpu_threads
+                );
+            }
+            assert_eq!(
+                ledger.is_busy(),
+                self.committed.0 >= u64::from(caps.gpu_slots),
+                "is_busy disagrees with the committed gpu slots"
+            );
+            for kind in ResourceKind::ALL {
+                let stats = ledger.stats(kind);
+                let slot = slot_of(kind);
+                let running = self
+                    .held
+                    .iter()
+                    .flatten()
+                    .filter(|(k, _)| *k == kind)
+                    .count();
+                assert_eq!(
+                    stats.running,
+                    u64c(running),
+                    "running gauge drifted from held leases for {kind}"
+                );
+                let queued = self.queued.iter().filter(|(_, k)| *k == kind).count();
+                assert_eq!(
+                    stats.queue_depth,
+                    u64c(queued),
+                    "queue_depth gauge drifted from live tickets for {kind}"
+                );
+                assert_eq!(
+                    stats.admissions, self.grants[slot],
+                    "admissions counter drifted for {kind}"
+                );
+                assert_eq!(
+                    stats.wait_count, queue_grants[slot],
+                    "queue-wait count drifted from poll grants for {kind}"
+                );
+                // Every granted lease releases exactly once (drop or
+                // explicit `release`): released == granted - still running.
+                assert_eq!(
+                    stats.hold_count,
+                    self.grants[slot] - u64c(running),
+                    "hold count drifted (double release or leak) for {kind}"
+                );
+            }
+        }
+    }
+
+    /// Random admit/queue/poll/cancel/release sequences never violate the
+    /// ledger contract (per-step mirror assertions; every ticket that
+    /// leaves the queue via cancel/drop is dead forever).
+    #[test]
+    #[allow(clippy::too_many_lines)] // one continuous invariant block per op
+    fn random_operation_sequences_preserve_the_ledger_contract() {
+        for seed in 0..48u64 {
+            let mut rng = Lcg::new(seed);
+            let mut config = LedgerConfig::new();
+            config.capacities.gpu_slots = u32::try_from(1 + rng.below(2)).unwrap_or(1);
+            config.capacities.vram_bytes = 4096 * rng.below(2);
+            config.capacities.ram_bytes = 4096 * rng.below(2);
+            config.capacities.cpu_threads = rng.below(3);
+            for kind in ResourceKind::ALL {
+                let settings = config.kind_mut(kind);
+                settings.queue_cap = 1 + rng.index(3);
+                settings.demand = Demand {
+                    gpu_slots: u32::try_from(rng.below(3)).unwrap_or(0),
+                    vram_bytes: 1024 * rng.below(4),
+                    ram_bytes: 2048 * rng.below(3),
+                    cpu_threads: u32::try_from(rng.below(3)).unwrap_or(0),
+                };
+            }
+            let ledger = Ledger::with_config(config.clone());
+            let mut mirror = Mirror::new(config);
+            let mut leases: Vec<Option<Lease<'_>>> = Vec::new();
+            let mut tickets: Vec<Option<Ticket<'_>>> = Vec::new();
+            let mut dead: Vec<usize> = Vec::new();
+            let mut queue_grants = [0u64; 8];
+
+            for _ in 0..40 {
+                match rng.below(7) {
+                    // Fast-path acquire.
+                    0 => {
+                        let kind = rng.pick_kind();
+                        if let Ok(lease) = ledger.try_acquire(kind) {
+                            mirror.grant(kind);
+                            leases.push(Some(lease));
+                        }
+                    }
+                    // Join the bounded queue (rejections change nothing).
+                    1 => {
+                        let kind = rng.pick_kind();
+                        if let Ok(ticket) = ledger.enqueue(kind) {
+                            tickets.push(Some(ticket));
+                            mirror.queued.push((tickets.len() - 1, kind));
+                        }
+                    }
+                    // Poll a queued ticket: grants are strictly FIFO.
+                    2 if !mirror.queued.is_empty() => {
+                        let idx = rng.index(mirror.queued.len());
+                        let (slot, kind) = mirror.queued[idx];
+                        match tickets[slot].as_ref().expect("live ticket").poll() {
+                            PollOutcome::Granted(lease) => {
+                                let head = mirror
+                                    .queued
+                                    .iter()
+                                    .find(|(_, k)| *k == kind)
+                                    .expect("granted ticket was queued");
+                                assert_eq!(
+                                    *head,
+                                    (slot, kind),
+                                    "queue grant out of turn for {kind}"
+                                );
+                                mirror.queued.remove(idx);
+                                mirror.grant(kind);
+                                queue_grants[slot_of(kind)] += 1;
+                                leases.push(Some(lease));
+                            }
+                            PollOutcome::Waiting => {}
+                            PollOutcome::Expired => {
+                                panic!("ttl is zero in this scenario; poll must not expire")
+                            }
+                            PollOutcome::Cancelled => {
+                                panic!("mirror says slot {slot} is queued; ledger disagrees")
+                            }
+                        }
+                    }
+                    // Explicit cancel: the ticket never acquires afterwards.
+                    3 if !mirror.queued.is_empty() => {
+                        let idx = rng.index(mirror.queued.len());
+                        let (slot, _) = mirror.queued[idx];
+                        let cancel = tickets[slot].as_ref().expect("live ticket").cancel();
+                        assert!(cancel, "cancel of a queued ticket must report true");
+                        mirror.queued.remove(idx);
+                        dead.push(slot);
+                        assert!(matches!(
+                            tickets[slot].as_ref().expect("live ticket").poll(),
+                            PollOutcome::Cancelled
+                        ));
+                    }
+                    // Drop a lease (RAII exit path).
+                    4 if leases.iter().any(Option::is_some) => {
+                        let idx = rng.index(leases.len());
+                        if let Some((_, demand)) = mirror.held[idx].take() {
+                            drop(leases[idx].take().expect("live lease"));
+                            mirror.release(demand);
+                        }
+                    }
+                    // Explicit release (the other exit path).
+                    5 if leases.iter().any(Option::is_some) => {
+                        let idx = rng.index(leases.len());
+                        if let Some((_, demand)) = mirror.held[idx].take() {
+                            leases[idx].take().expect("live lease").release();
+                            mirror.release(demand);
+                        }
+                    }
+                    // Drop a queued ticket (cancel-on-drop path).
+                    6 if !mirror.queued.is_empty() => {
+                        let idx = rng.index(mirror.queued.len());
+                        let (slot, _) = mirror.queued[idx];
+                        let ticket = tickets[slot].take().expect("live ticket");
+                        assert!(ticket.is_queued());
+                        drop(ticket);
+                        mirror.queued.remove(idx);
+                    }
+                    _ => {}
+                }
+                mirror.assert_invariants(&ledger, &queue_grants);
+            }
+
+            // Drain: every held lease exits (alternating drop / explicit
+            // release — both must free exactly once), every remaining
+            // ticket cancels on drop.
+            for (idx, lease_slot) in leases.iter_mut().enumerate() {
+                if let Some((_, demand)) = mirror.held[idx].take() {
+                    mirror.release(demand);
+                    let lease = lease_slot.take().expect("live lease");
+                    if idx % 2 == 0 {
+                        drop(lease);
+                    } else {
+                        lease.release();
+                    }
+                }
+            }
+            for (slot, ticket) in tickets.iter_mut().enumerate() {
+                // Cancelled tickets stay observable for the final poll.
+                if !dead.contains(&slot) {
+                    drop(ticket.take());
+                }
+            }
+            mirror.queued.clear();
+            mirror.assert_invariants(&ledger, &queue_grants);
+
+            for kind in ResourceKind::ALL {
+                let stats = ledger.stats(kind);
+                assert_eq!(stats.running, 0, "{kind} leaked a lease");
+                assert_eq!(stats.queue_depth, 0, "{kind} leaked a queued ticket");
+                assert_eq!(stats.evictions, 0, "no ttl is configured in this scenario");
+                assert_eq!(
+                    stats.hold_count, stats.admissions,
+                    "{kind}: every grant must release exactly once"
+                );
+                assert_eq!(
+                    stats.wait_count,
+                    queue_grants[slot_of(kind)],
+                    "{kind}: queue-wait observations must match poll grants"
+                );
+            }
+            assert!(!ledger.is_busy());
+            for slot in dead {
+                assert!(matches!(
+                    tickets[slot]
+                        .as_ref()
+                        .expect("cancelled ticket stays observable")
+                        .poll(),
+                    PollOutcome::Cancelled
+                ));
+            }
+
+            // The rendered exposition agrees with the counters (every 8th
+            // sequence, a cheap cross-check of the rendering path).
+            if seed % 8 == 0 {
+                let body = ledger.exposition();
+                for kind in ResourceKind::ALL {
+                    let stats = ledger.stats(kind);
+                    let k = kind.label();
+                    for (series, value) in [
+                        (
+                            format!("honkbox_ledger_queue_depth{{kind=\"{k}\"}}"),
+                            stats.queue_depth,
+                        ),
+                        (
+                            format!("honkbox_ledger_running{{kind=\"{k}\"}}"),
+                            stats.running,
+                        ),
+                        (
+                            format!("honkbox_ledger_admissions_total{{kind=\"{k}\"}}"),
+                            stats.admissions,
+                        ),
+                        (
+                            format!("honkbox_ledger_queue_evictions_total{{kind=\"{k}\"}}"),
+                            stats.evictions,
+                        ),
+                    ] {
+                        let line = format!("{series} {value}");
+                        assert!(body.contains(&line), "exposition missing {line:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Queue grants leave a kind's queue strictly in enqueue order: polls
+    /// in randomized order only ever grant the head, one grant per capacity
+    /// window, no matter how the waiter polls are interleaved.
+    #[test]
+    fn queue_grants_are_strictly_fifo_within_a_kind() {
+        let mut rng = Lcg::new(0xF10);
+        for n in 1..=6 {
+            let mut config = LedgerConfig::new();
+            config.kind_mut(ResourceKind::Sd).queue_cap = n;
+            let ledger = Ledger::with_config(config);
+            let holder = ledger.try_acquire(ResourceKind::Sd).expect("initial hold");
+            let tickets: Vec<Ticket<'_>> = (0..n)
+                .map(|_| ledger.enqueue(ResourceKind::Sd).expect("queued"))
+                .collect();
+
+            // While capacity is held, ANY poll order yields Waiting for all.
+            for _ in 0..(2 * n) {
+                let idx = rng.index(n);
+                assert!(matches!(tickets[idx].poll(), PollOutcome::Waiting));
+                assert!(tickets[idx].is_queued());
+            }
+
+            drop(holder);
+            // Grant rounds: exactly the head grants per round; later
+            // waiters never overtake.
+            let mut live: Vec<usize> = (0..n).collect();
+            let mut grant_order = Vec::new();
+            while !live.is_empty() {
+                let start = rng.index(live.len());
+                let mut granted = None;
+                for offset in 0..live.len() {
+                    let idx = live[(start + offset) % live.len()];
+                    match tickets[idx].poll() {
+                        PollOutcome::Granted(lease) => {
+                            assert!(granted.is_none(), "two grants in one capacity window");
+                            assert_eq!(idx, live[0], "a non-head waiter overtook the head");
+                            granted = Some(lease);
+                        }
+                        PollOutcome::Waiting => {}
+                        other => panic!("unexpected outcome {other:?} for waiter {idx}"),
+                    }
+                }
+                let lease = granted.expect("head must grant once capacity is free");
+                grant_order.push(live.remove(0));
+                drop(lease);
+                assert_eq!(
+                    ledger.stats(ResourceKind::Sd).queue_depth,
+                    u64c(live.len()),
+                    "queue depth must shrink by exactly one per grant"
+                );
+            }
+            assert_eq!(grant_order, (0..n).collect::<Vec<_>>());
+            let stats = ledger.stats(ResourceKind::Sd);
+            assert_eq!(stats.admissions, u64c(n + 1));
+            assert_eq!(stats.wait_count, u64c(n));
+            assert_eq!(stats.hold_count, u64c(n + 1));
+        }
+    }
+
+    /// REQ-6 best-effort ordering: the FAST path may barge past a queued
+    /// waiter when capacity is free — but the queue itself never grants out
+    /// of turn (asserted by `queue_grants_are_strictly_fifo_within_a_kind`).
+    #[test]
+    fn fast_path_may_barge_past_a_queued_waiter() {
+        let mut config = LedgerConfig::new();
+        config.kind_mut(ResourceKind::Sd).queue_cap = 2;
+        let ledger = Ledger::with_config(config);
+        let waiter = ledger.enqueue(ResourceKind::Sd).expect("queued");
+        let barger = ledger
+            .try_acquire(ResourceKind::Sd)
+            .expect("fast path barges");
+        assert!(matches!(waiter.poll(), PollOutcome::Waiting));
+        drop(barger);
+        let PollOutcome::Granted(lease) = waiter.poll() else {
+            panic!("the queued waiter grants once capacity frees");
+        };
+        assert_eq!(lease.kind(), ResourceKind::Sd);
+        drop(lease);
+    }
+
+    /// The TTL sweep evicts EXACTLY the expired waiters: none is left
+    /// queued past its bound, none still grants, and the freed capacity is
+    /// genuinely free.
+    #[test]
+    fn ttl_sweep_evicts_exactly_expired_waiters() {
+        for seed in 0..4u64 {
+            let mut rng = Lcg::new(seed);
+            let kind = rng.pick_kind();
+            let count = 1 + rng.index(4);
+            let mut config = LedgerConfig::new();
+            config.kind_mut(kind).ttl = Duration::from_millis(100);
+            config.kind_mut(kind).queue_cap = count;
+            let ledger = Ledger::with_config(config);
+            let holder = ledger.try_acquire(kind).expect("hold the slot");
+            let mut tickets = Vec::new();
+            for _ in 0..count {
+                tickets.push(ledger.enqueue(kind).expect("queued"));
+            }
+
+            // Nothing expired yet: the sweep is a no-op.
+            assert_eq!(ledger.sweep_expired(), 0);
+            assert_eq!(ledger.stats(kind).queue_depth, u64c(count));
+
+            std::thread::sleep(Duration::from_millis(160));
+            assert_eq!(ledger.sweep_expired(), count, "exactly the expired waiters");
+            let stats = ledger.stats(kind);
+            assert_eq!(stats.evictions, u64c(count));
+            assert_eq!(stats.queue_depth, 0);
+            assert_eq!(stats.admissions, 1, "no evicted waiter ever acquired");
+            for ticket in &tickets {
+                assert!(!ticket.is_queued());
+                assert!(matches!(ticket.poll(), PollOutcome::Cancelled));
+            }
+
+            drop(holder);
+            assert!(ledger.try_acquire(kind).is_ok(), "capacity genuinely free");
+        }
+    }
+
+    /// Expiry is per-waiter: a waiter that joined LATER survives a sweep
+    /// that evicts an older one, keeps its queue slot, and still grants at
+    /// the head afterwards.
+    #[test]
+    fn ttl_sweep_spares_fresh_waiters() {
+        let mut config = LedgerConfig::new();
+        config.kind_mut(ResourceKind::Llm).ttl = Duration::from_millis(250);
+        config.kind_mut(ResourceKind::Llm).queue_cap = 2;
+        let ledger = Ledger::with_config(config);
+        let holder = ledger.try_acquire(ResourceKind::Llm).expect("hold");
+        let stale = ledger.enqueue(ResourceKind::Llm).expect("queued");
+        std::thread::sleep(Duration::from_millis(150));
+        let fresh = ledger.enqueue(ResourceKind::Llm).expect("queued");
+        std::thread::sleep(Duration::from_millis(150));
+
+        assert_eq!(ledger.sweep_expired(), 1, "exactly the stale waiter");
+        assert!(matches!(stale.poll(), PollOutcome::Cancelled));
+        assert!(fresh.is_queued());
+        let stats = ledger.stats(ResourceKind::Llm);
+        assert_eq!(stats.evictions, 1);
+        assert_eq!(stats.queue_depth, 1);
+
+        drop(holder);
+        let PollOutcome::Granted(lease) = fresh.poll() else {
+            panic!("a fresh waiter still grants at the head after older ones were evicted");
+        };
+        drop(lease);
+        assert_eq!(ledger.stats(ResourceKind::Llm).wait_count, 1);
+    }
+
+    /// A demand that can never fit is rejected with `Oversized` naming the
+    /// binding dimension on BOTH paths (fast + queue), no matter how often
+    /// the caller retries, and never counts an admission.
+    #[test]
+    fn oversized_demand_is_never_admitted_on_any_path() {
+        for seed in 0..64u64 {
+            let mut rng = Lcg::new(seed);
+            let kind = rng.pick_kind();
+            let mut config = LedgerConfig::new();
+            config.capacities.gpu_slots = u32::try_from(1 + rng.below(2)).unwrap_or(1);
+            config.capacities.vram_bytes = 4096 * rng.below(2);
+            config.capacities.ram_bytes = 8192 * rng.below(2);
+            config.capacities.cpu_threads = 2 * rng.below(2);
+            let demand = Demand {
+                gpu_slots: u32::try_from(rng.below(3)).unwrap_or(0),
+                vram_bytes: 1024 * rng.below(5),
+                ram_bytes: 2048 * rng.below(5),
+                cpu_threads: u32::try_from(rng.below(3)).unwrap_or(0),
+            };
+            config.kind_mut(kind).demand = demand;
+            let caps = config.capacities;
+            let ledger = Ledger::with_config(config);
+
+            // Reference predicate: the binding dimension per the documented
+            // precedence (gpu slots, then vram, ram, cpu).
+            let gpu_over = u64::from(demand.gpu_slots) > u64::from(caps.gpu_slots);
+            let vram_over = caps.vram_bytes > 0 && demand.vram_bytes > caps.vram_bytes;
+            let ram_over = caps.ram_bytes > 0 && demand.ram_bytes > caps.ram_bytes;
+            let cpu_over = caps.cpu_threads > 0 && u64::from(demand.cpu_threads) > caps.cpu_threads;
+            let expected = if gpu_over {
+                "gpu slots"
+            } else if vram_over {
+                "vram budget"
+            } else if ram_over {
+                "ram budget"
+            } else if cpu_over {
+                "cpu threads"
+            } else {
+                ""
+            };
+
+            match ledger.try_acquire(kind) {
+                Err(AcquireError::Oversized { what }) => {
+                    assert_eq!(what, expected, "binding dimension for {demand:?}");
+                    assert!(matches!(
+                        ledger.enqueue(kind),
+                        Err(EnqueueError::Oversized { what }) if what == expected
+                    ));
+                    for _ in 0..3 {
+                        assert!(ledger.try_acquire(kind).is_err(), "never admitted on retry");
+                        assert!(matches!(
+                            ledger.enqueue(kind),
+                            Err(EnqueueError::Oversized { .. })
+                        ));
+                    }
+                    let stats = ledger.stats(kind);
+                    assert_eq!(stats.admissions, 0);
+                    assert_eq!(stats.running, 0);
+                    assert_eq!(
+                        stats.rejections_capacity, 8,
+                        "all fast-path and queue attempts count as capacity rejections"
+                    );
+                }
+                other => {
+                    assert!(
+                        expected.is_empty(),
+                        "oversized demand {demand:?} was admitted: {other:?}"
+                    );
+                }
+            }
+        }
+    }
+}

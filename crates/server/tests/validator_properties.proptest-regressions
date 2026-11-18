@@ -1,0 +1,15 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3366e8aca476cca23d0d19c2e66b1b222e204b0796cd4e8859d3883b00f362ee # shrinks to value = "\u{1cf00}"
+cc a282f4b594fef5479e677ff1748350aa9a74fcd85e45bc7df13f913b910ff208 # shrinks to content = Number(42)
+cc 5a91d73b1761e73e3399a8a90335e491caf5589d4d0ed60128ec3d5f62c6380f # shrinks to model = "chat-model"
+cc 61a390cdca48ed7fa00202f9655b2fbd6960f6e2db5bfa25f08164d0e2b06f2d # shrinks to content = "a"
+cc 7da46958e7001249a1122fe4aad49d400daf396d68f178a89a99a28ffcc1bb7e # shrinks to model = ""
+cc b7a1720ba4b3a944dbf6b5cd07adcd583b44a160ff1672f91a833dd07db3d5d5 # shrinks to body = Object {"input": String(""), "model": String("emb-model")}
+cc fc1203f15cf31755614257d029e3eba27cde704f661b4f38a1b56985a445d8d0 # shrinks to part = Object {"text": String(""), "type": String("text")}
+cc 2ca0a565f4cbcf7c921d7086c17f07beebf0cfdbc99aca22af9e9d6d4fdbcd9e # shrinks to ttl = 0
+cc e6355b8e4558acdcd63310bab209d0c66431abc174ec5eb964ae5bc0c6f2c2a0 # shrinks to raw = Null

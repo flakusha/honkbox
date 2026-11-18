@@ -67,6 +67,11 @@ pub struct Capabilities {
     /// per-kind queue caps, the queue wait bound, and the `Retry-After`
     /// hint the server's 429s carry.
     pub queue: QueueCapabilities,
+    /// CPU image-ops surface (`POST /v1/image-ops`): the supported op
+    /// vocabulary. Present whenever the ops route is compiled (always
+    /// today) — additive optional field per the version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_ops: Option<ImageOpsCapability>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
@@ -1325,6 +1330,221 @@ pub struct ImagesGenerationResponse {
     pub warnings: Option<Vec<String>>,
 }
 
+/// The bounded `POST /v1/image-ops` op vocabulary (epic-editor-integration).
+/// Wire names are the serde names; [`ImageOpKind::ALL`] is the authoritative
+/// order for the `GET /v1/capabilities` advertisement. Anything outside this
+/// set is a 400 naming the accepted values — the vocabulary is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOpKind {
+    /// Resize to an explicit `WxH` (Lanczos3, see [`ImageOpResize`]).
+    Resize,
+    /// Pixel-exact crop rect (see [`ImageOpCrop`]).
+    Crop,
+    /// Lossless 90/180/270 rotation (see [`ImageOpRotate`]).
+    Rotate,
+    /// Convert every pixel to grayscale (no params).
+    Grayscale,
+    /// Container conversion only — pixels untouched, `output_format`
+    /// decides the encoding (no params).
+    Format,
+}
+
+impl ImageOpKind {
+    /// Every supported op, in advertisement order (`GET /v1/capabilities`
+    /// `image_ops.ops` lists exactly these).
+    pub const ALL: [ImageOpKind; 5] = [
+        ImageOpKind::Resize,
+        ImageOpKind::Crop,
+        ImageOpKind::Rotate,
+        ImageOpKind::Grayscale,
+        ImageOpKind::Format,
+    ];
+
+    /// Wire label (the serde name; also the bundle sidecar `op` value).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            ImageOpKind::Resize => "resize",
+            ImageOpKind::Crop => "crop",
+            ImageOpKind::Rotate => "rotate",
+            ImageOpKind::Grayscale => "grayscale",
+            ImageOpKind::Format => "format",
+        }
+    }
+}
+
+/// `resize` params. Both edges are required (no implicit aspect preservation
+/// guess); accepted range `[1, 8192]` per edge with `width * height <=`
+/// `16_777_216` px — outside it is a named 400, never a clamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageOpResize {
+    /// Target width in pixels, `[1, 8192]`.
+    pub width: u32,
+    /// Target height in pixels, `[1, 8192]`.
+    pub height: u32,
+}
+
+/// `crop` params. All four values are required; the rect must satisfy
+/// `x + width <= input_width` and `y + height <= input_height` (out-of-bounds
+/// crops are a named 400, never clamped to the image edge).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageOpCrop {
+    /// Left edge of the crop rect, px from x=0.
+    pub x: u32,
+    /// Top edge of the crop rect, px from y=0.
+    pub y: u32,
+    /// Crop width in px (at least 1).
+    pub width: u32,
+    /// Crop height in px (at least 1).
+    pub height: u32,
+}
+
+/// `rotate` params. Only lossless multiples of a quarter turn are accepted
+/// (`90`, `180`, `270`); arbitrary angles would need resampling — rejected
+/// with a 400 naming the accepted values, never approximated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageOpRotate {
+    /// Rotation in degrees; accepted values are `90`, `180`, `270`
+    /// (clockwise).
+    pub degrees: u16,
+}
+
+/// One image-op command: the op tag plus exactly that op's params.
+/// Param ops are externally tagged single-key objects —
+/// `{"resize": {"width": 512, "height": 512}}` — while the no-param ops
+/// (`grayscale`, `format`) are bare strings (`"grayscale"`), their one and
+/// only wire form. The params structs carry `deny_unknown_fields`, so
+/// unknown keys inside a params object are a 400; an unknown op tag or the
+/// wrong shape (e.g. `{"format": {}}`) is a 400 from parsing itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOpCommand {
+    /// Resize to `width`x`height` (Lanczos3 resample — the single fixed
+    /// filter keeps bytes deterministic for identical inputs).
+    Resize(ImageOpResize),
+    /// Crop the rect `x, y, width, height`.
+    Crop(ImageOpCrop),
+    /// Lossless quarter-turn rotation.
+    Rotate(ImageOpRotate),
+    /// Grayscale conversion.
+    Grayscale,
+    /// Re-encode only (container conversion via `output_format`).
+    Format,
+}
+
+/// One input image for `POST /v1/image-ops`: a data URI or a prior job
+/// bundle's artifact — never a filesystem path, `file://` URL, or remote
+/// URL (there is no fetch, so no SSRF surface by construction).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOpInput {
+    /// `data:image/png;base64,…` — only `image/png`, `image/jpeg`, and
+    /// `image/webp` payloads are accepted (magic-sniffed after decode).
+    DataUri(String),
+    /// A prior bundle's output artifact (see [`ImageOpArtifact`]).
+    Artifact(ImageOpArtifact),
+}
+
+/// An artifact input: one output file of a finished job bundle written by
+/// this server (under `<data_dir>/jobs/{bundle}/`). The bundle id is the
+/// `ImageOpResponse.bundle` ULID; the index is the zero-based position in
+/// that response's `outputs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageOpArtifact {
+    /// Bundle id (ULID string, exactly as a prior response reported it).
+    pub bundle: String,
+    /// Zero-based artifact index within that bundle.
+    pub index: u32,
+}
+
+/// `POST /v1/image-ops` request (epic-editor-integration). Bounds are
+/// reject-not-clamp everywhere: unknown fields (`deny_unknown_fields`),
+/// out-of-range params, oversized batches, and malformed inputs are named
+/// 400s — defaults never silently repair an explicit request.
+///
+/// `request_id` deduplicates retries: the same `request_id` with the same
+/// canonical command replays the first job's response (same job id, same
+/// bundle, no double execution); the same `request_id` with a DIFFERENT
+/// command is a named 400 conflict.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImageOpRequest {
+    /// The op plus its params (see [`ImageOpCommand`]).
+    pub command: ImageOpCommand,
+    /// Input images; `1..=8` (the image-ops batch cap). Each is a data URI
+    /// or an artifact reference (see [`ImageOpInput`]); one output is
+    /// produced per input, in order.
+    pub inputs: Vec<ImageOpInput>,
+    /// Output container: `"png"` (default), `"jpeg"`, or `"webp"` — the
+    /// same vocabulary as the generation routes; unknown names are a 400.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<String>,
+    /// JPEG quality in `[0, 100]` (`output_compression` precedent);
+    /// non-integer or out-of-range values are a 400, never clamped. Only
+    /// applied to `output_format: "jpeg"` (PNG/WebP are lossless here).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_compression: Option<serde_json::Value>,
+    /// Free-form caller identity recorded in the bundle sidecar (plugin
+    /// name/version, e.g. `"krita-honkbox/1.0"`); `1..=128` chars when
+    /// present. Never interpreted, never a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+    /// Caller-chosen idempotency key, `1..=128` chars. Required so every
+    /// submission is retry-safe by construction.
+    pub request_id: String,
+}
+
+/// One produced image in the `POST /v1/image-ops` response.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct ImageOpOutput {
+    /// The produced image bytes (in the requested `output_format`),
+    /// base64-encoded.
+    pub b64_json: String,
+    /// SHA-256 hex digest of the produced bytes (determinism checks).
+    pub sha256: String,
+    /// Container actually produced (`png` | `jpeg` | `webp`).
+    pub format: String,
+}
+
+/// `POST /v1/image-ops` response: one output per input, in order, plus the
+/// job/bundle ids a client needs to poll, cancel, or reference artifacts in
+/// follow-up ops.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct ImageOpResponse {
+    /// Completion time, Unix seconds.
+    pub created: u64,
+    /// Registry job id (`job_<ulid>`); matches `X-Job-Id`, `GET /v1/jobs`,
+    /// and the cancel routes while the job is live.
+    pub job_id: String,
+    /// The request's idempotency key, verbatim.
+    pub request_id: String,
+    /// Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle
+    /// artifact inputs reference. Absent when the server runs without a
+    /// data dir (bundles are disabled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+    /// One entry per input, in order.
+    pub outputs: Vec<ImageOpOutput>,
+    /// Advisory notes; omitted when empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warnings: Option<Vec<String>>,
+}
+
+/// Image-ops capability (`Capabilities::image_ops`): the supported op
+/// vocabulary of `POST /v1/image-ops`. Present whenever the ops route is
+/// compiled into this server (always today); `None` means the route is not
+/// mounted and clients must not call it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ImageOpsCapability {
+    /// Supported op wire names (the `ImageOpCommand` tag vocabulary).
+    pub ops: Vec<String>,
+}
+
 /// `POST /v1/audio/transcriptions` plain shape (`response_format` absent
 /// or `"json"`; REQ-9).
 #[derive(Debug, Clone, Serialize, TS, ToSchema)]
@@ -1832,7 +2052,7 @@ pub struct JobInfo {
     /// (on SSE routes it precedes the stream body).
     pub id: String,
     /// Modality: `chat`, `embeddings`, `images`, `transcribe`,
-    /// `synthesize`, or `translations`.
+    /// `synthesize`, `translations`, or `image_ops`.
     pub kind: String,
     /// Model slug the job runs against, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1909,7 +2129,7 @@ pub struct JobEvent {
     /// Registry id (`job_<ulid>`); matches `GET /v1/jobs` and `X-Job-Id`.
     pub id: String,
     /// Modality label (`chat`, `embeddings`, `images`, `transcribe`,
-    /// `synthesize`, `translations`).
+    /// `synthesize`, `translations`, `image_ops`).
     pub kind: String,
     /// Model slug the job runs against, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2068,6 +2288,17 @@ mod tests {
             ImagesGenerationResponse::decl(&config),
             TranscriptionText::decl(&config),
             TranscriptionVerbose::decl(&config),
+            ImageOpKind::decl(&config),
+            ImageOpCommand::decl(&config),
+            ImageOpResize::decl(&config),
+            ImageOpCrop::decl(&config),
+            ImageOpRotate::decl(&config),
+            ImageOpInput::decl(&config),
+            ImageOpArtifact::decl(&config),
+            ImageOpRequest::decl(&config),
+            ImageOpOutput::decl(&config),
+            ImageOpResponse::decl(&config),
+            ImageOpsCapability::decl(&config),
             SpeechRequest::decl(&config),
             TranscriptSegment::decl(&config),
             Transcript::decl(&config),
@@ -2146,6 +2377,417 @@ mod tests {
         ] {
             let caps = ModelCapabilities::for_kind(kind);
             assert!(!caps.chat && !caps.completion && !caps.embeddings);
+        }
+    }
+}
+
+/// Property-style hardening of the widened `ChatMessage.content` contract
+/// (REQ-8). proptest is not a dependency of this crate, so these tests use
+/// exhaustive enumeration over the malformed-grammar variants plus a tiny
+/// seeded LCG driving randomized strings and part sequences (deterministic,/// hence reproducible from the seed). Invariants:
+/// - the string form round-trips byte-identically (serialization is exactly
+///   the JSON encoding of the plain string, for EVERY input);
+/// - serialization is ALWAYS `string | null` — never the parts array, and
+///   image payloads never echo back;
+/// - an unknown part `type` is a named rejection (never a silent accept);
+/// - every malformed variant (missing/wrong-typed fields, non-object parts,
+///   nested arrays, scalar content) maps to a NAMED error, never a panic;
+/// - text parts flatten in order with no separator, and each `image_url`
+///   part records its byte offset in the flattened text, so media markers
+///   splice back at exactly the right positions.
+#[cfg(test)]
+mod content_parts_properties {
+    use super::*;
+
+    /// Tiny deterministic LCG (Knuth's MMIX constants): seeded, so a
+    /// failure reproduces from the reported seed alone.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn new(seed: u64) -> Self {
+            Self(seed ^ 0xC0BB_AB1E_C0DE)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
+
+        fn index(&mut self, len: usize) -> usize {
+            if len == 0 {
+                0
+            } else {
+                usize::try_from(self.next_u64() % u64::try_from(len).unwrap_or(u64::MAX))
+                    .unwrap_or(0)
+            }
+        }
+    }
+
+    /// String atoms with distinct JSON-escaping and byte-length behavior:
+    /// ASCII, quotes/backslashes, control chars, multi-byte UTF-8, emoji,
+    /// and the media marker itself (for collision coverage).
+    const ATOMS: [&str; 14] = [
+        "",
+        "a",
+        "hello world",
+        "\n",
+        "\t",
+        "\"",
+        "\\",
+        "\u{0}",
+        "\u{7f}",
+        "é",
+        "🎉",
+        "語",
+        "data:image/png;base64,AAAA",
+        "<__media__>",
+    ];
+
+    /// Atoms that can never contain the media marker (marker-free alphabet
+    /// for the exact-splice-position property).
+    const MARKER_FREE_ATOMS: [&str; 11] = [
+        "",
+        "a",
+        "hello world",
+        "\n",
+        "\t",
+        "\"",
+        "\\",
+        "\u{0}",
+        "é",
+        "🎉",
+        "語",
+    ];
+
+    /// A seeded random string over `atoms` (0..=6 atoms concatenated).
+    fn random_string(rng: &mut Lcg, atoms: &[&str]) -> String {
+        let mut out = String::new();
+        for _ in 0..rng.index(7) {
+            out.push_str(atoms[rng.index(atoms.len())]);
+        }
+        out
+    }
+
+    /// The string form is byte-identical to a plain JSON string, in both
+    /// directions, for EVERY string — including escaping-heavy ones.
+    #[test]
+    fn string_form_round_trips_byte_identically() {
+        for seed in 0..256u64 {
+            let mut rng = Lcg::new(seed);
+            let text = random_string(&mut rng, &ATOMS);
+            let content = ChatContent::text(text.clone());
+
+            // Serializing the content is byte-identical to serializing the
+            // bare string (the wire shape is exactly a JSON string).
+            let as_content = serde_json::to_string(&content).expect("serialize content");
+            let as_string = serde_json::to_string(&text).expect("serialize string");
+            assert_eq!(
+                as_content, as_string,
+                "seed {seed}: wire form must be the plain string"
+            );
+
+            // Parse(serialize) reproduces the exact text.
+            let reparsed =
+                ChatContent::parse(&serde_json::Value::String(text.clone())).expect("parses");
+            assert_eq!(reparsed.text.as_deref(), Some(text.as_str()));
+            assert!(!reparsed.has_image);
+            assert_eq!(reparsed.images, [] as [ChatImageRef; 0]);
+
+            // Via the serde entry point too (the routes' deserialization).
+            let via_serde: ChatContent =
+                serde_json::from_value(serde_json::Value::String(text.clone()))
+                    .expect("string form deserializes");
+            assert_eq!(via_serde, content);
+
+            // A ChatMessage serializes its content as that exact string.
+            let message = ChatMessage {
+                role: ChatRole::User,
+                content: content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            };
+            let rendered = serde_json::to_string(&message).expect("serialize message");
+            let expected = format!("{{\"role\":\"user\",\"content\":{as_content}}}");
+            assert_eq!(rendered, expected, "seed {seed}: message content wire form");
+        }
+    }
+
+    /// Serialization NEVER emits the parts array and never echoes image
+    /// payloads: parsed parts arrays serialize as the flattened string (or
+    /// null), with no image URL anywhere in the output.
+    #[test]
+    fn serialization_is_never_an_array_and_images_never_echo() {
+        for seed in 0..256u64 {
+            let image_url = format!("data:image/png;base64,seed{seed}");
+            let parts = vec![
+                serde_json::json!({"type": "text", "text": "before "}),
+                serde_json::json!({"type": "image_url", "image_url": {"url": image_url}}),
+                serde_json::json!({"type": "text", "text": "after"}),
+            ];
+            let content: ChatContent =
+                serde_json::from_value(serde_json::Value::Array(parts)).expect("parts parse");
+            assert!(content.has_image);
+            let rendered = serde_json::to_string(&content).expect("serialize");
+            assert_eq!(rendered, "\"before after\"", "seed {seed}");
+            assert!(
+                !rendered.contains(&image_url),
+                "image payloads never echo back"
+            );
+            assert!(!rendered.starts_with('['), "never the parts array");
+
+            // Null content serializes as null.
+            let null_content: ChatContent =
+                serde_json::from_value(serde_json::Value::Null).expect("null parses");
+            assert_eq!(
+                serde_json::to_string(&null_content).expect("serialize null"),
+                "null"
+            );
+        }
+    }
+
+    /// An unknown part `type` is rejected BY NAME — the exact documented
+    /// message, quoting the offending type — for arbitrary type strings.
+    #[test]
+    fn unknown_part_type_is_rejected_by_name() {
+        for seed in 0..256u64 {
+            let mut rng = Lcg::new(seed);
+            let unknown = random_string(&mut rng, &ATOMS);
+            if unknown == "text" || unknown == "image_url" {
+                continue;
+            }
+            let body = serde_json::json!({"type": unknown, "text": "x"});
+            let err = ChatContent::parse(&serde_json::Value::Array(vec![body]))
+                .expect_err("unknown type must be rejected");
+            assert_eq!(
+                err,
+                format!(
+                    "unsupported content part type {unknown:?}: supported types are `text` and `image_url`"
+                ),
+                "seed {seed}: the rejection must name the offending type"
+            );
+        }
+    }
+
+    /// Every malformed variant of the parts grammar maps to its named
+    /// error — never a panic, never a silent accept.
+    #[test]
+    #[allow(clippy::too_many_lines)] // the grammar's variants are enumerated flat
+    fn malformed_variants_map_to_named_errors() {
+        let scalar_parts: Vec<serde_json::Value> = vec![
+            serde_json::json!("bare string"),
+            serde_json::json!(42),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(true),
+            serde_json::json!(null),
+            serde_json::json!([{"type": "text", "text": "nested"}]),
+        ];
+        for part in &scalar_parts {
+            let err = ChatContent::parse(&serde_json::Value::Array(vec![part.clone()]))
+                .expect_err("non-object part must be rejected");
+            assert!(
+                err.contains("content part must be an object with a `type` field"),
+                "unexpected error for {part}: {err}"
+            );
+        }
+
+        // A `type` field that is missing or not a string.
+        for type_field in [
+            serde_json::json!({"text": "no type"}),
+            serde_json::json!({"type": 42, "text": "x"}),
+            serde_json::json!({"type": true, "text": "x"}),
+            serde_json::json!({"type": null, "text": "x"}),
+            serde_json::json!({"type": ["text"], "text": "x"}),
+            serde_json::json!({"type": {"t": "text"}, "text": "x"}),
+        ] {
+            let err = ChatContent::parse(&serde_json::Value::Array(vec![type_field.clone()]))
+                .expect_err("missing/non-string type must be rejected");
+            assert_eq!(
+                err, "content part requires a string `type` field",
+                "unexpected error for {type_field}"
+            );
+        }
+
+        // A `text` part without a string `text` field.
+        for text_field in [
+            serde_json::json!({"type": "text"}),
+            serde_json::json!({"type": "text", "text": 42}),
+            serde_json::json!({"type": "text", "text": null}),
+            serde_json::json!({"type": "text", "text": ["x"]}),
+            serde_json::json!({"type": "text", "text": {"t": "x"}}),
+        ] {
+            let err = ChatContent::parse(&serde_json::Value::Array(vec![text_field.clone()]))
+                .expect_err("text part without string text must be rejected");
+            assert_eq!(
+                err, "text part requires a string `text` field",
+                "unexpected error for {text_field}"
+            );
+        }
+
+        // An `image_url` part without a string `image_url.url`.
+        for image_field in [
+            serde_json::json!({"type": "image_url"}),
+            serde_json::json!({"type": "image_url", "image_url": null}),
+            serde_json::json!({"type": "image_url", "image_url": "data:image/png;base64,x"}),
+            serde_json::json!({"type": "image_url", "image_url": {}}),
+            serde_json::json!({"type": "image_url", "image_url": {"url": 42}}),
+            serde_json::json!({"type": "image_url", "image_url": {"url": null}}),
+        ] {
+            let err = ChatContent::parse(&serde_json::Value::Array(vec![image_field.clone()]))
+                .expect_err("image_url part without url must be rejected");
+            assert_eq!(
+                err, "image_url part requires a string `image_url.url` field",
+                "unexpected error for {image_field}"
+            );
+        }
+
+        // Content itself is neither string, null, nor array.
+        for content in [
+            serde_json::json!(42),
+            serde_json::json!(true),
+            serde_json::json!(1.5),
+            serde_json::json!({"type": "text", "text": "x"}),
+        ] {
+            let err =
+                ChatContent::parse(&content).expect_err("scalar/object content must be rejected");
+            assert!(
+                err.contains("content must be a string, null, or an array of content parts"),
+                "unexpected error for {content}: {err}"
+            );
+            let via_serde = serde_json::from_value::<ChatContent>(content.clone());
+            assert!(via_serde.is_err(), "serde path must reject {content}");
+        }
+
+        // Deeply nested arrays are still just non-object parts.
+        let nested = serde_json::json!([[{"type": "text", "text": "x"}]]);
+        let err = ChatContent::parse(&nested).expect_err("nested array must be rejected");
+        assert!(err.contains("content part must be an object"));
+    }
+
+    /// The degenerate forms parse to the documented defaults: `null` and
+    /// `[]` carry no text and no images (an empty flattening is `None`, not
+    /// the empty string); missing content (via `ChatMessage`) equals null.
+    #[test]
+    fn degenerate_forms_parse_to_defaults() {
+        let null_content: ChatContent =
+            serde_json::from_value(serde_json::Value::Null).expect("null");
+        assert_eq!(null_content.text, None);
+        assert!(!null_content.has_image);
+        assert_eq!(null_content.images, [] as [ChatImageRef; 0]);
+
+        let empty: ChatContent =
+            serde_json::from_value(serde_json::Value::Array(Vec::new())).expect("empty array");
+        assert_eq!(empty.text, None, "an empty flattening is None");
+        assert!(!empty.has_image);
+        assert_eq!(empty.images, [] as [ChatImageRef; 0]);
+
+        let message: ChatMessage =
+            serde_json::from_str("{\"role\":\"assistant\"}").expect("missing content");
+        assert_eq!(message.content.text, None);
+        assert!(!message.content.has_image);
+    }
+
+    /// Random text/image part sequences: text parts flatten in order with
+    /// no separator; `has_image` is exactly "at least one image part"; each
+    /// image ref keeps its URL in request order and its BYTE OFFSET in the
+    /// flattened text; markers spliced at those offsets land at
+    /// `offset + i * marker_len` (marker-free alphabet: offsets are exact).
+    #[test]
+    fn part_sequences_flatten_in_order_with_exact_offsets() {
+        const MARKER: &str = "<__media__>";
+        for seed in 0..256u64 {
+            let mut rng = Lcg::new(seed);
+            let mut parts = Vec::new();
+            let mut expected_text = String::new();
+            let mut expected_images: Vec<(String, usize)> = Vec::new();
+            for _ in 0..=rng.index(8) {
+                if rng.index(3) == 0 {
+                    let url = format!("data:image/png;base64,s{seed}i{}", expected_images.len());
+                    expected_images.push((url.clone(), expected_text.len()));
+                    parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {"url": url}
+                    }));
+                } else {
+                    let text = random_string(&mut rng, &MARKER_FREE_ATOMS);
+                    expected_text.push_str(&text);
+                    parts.push(serde_json::json!({"type": "text", "text": text}));
+                }
+            }
+
+            let content: ChatContent =
+                serde_json::from_value(serde_json::Value::Array(parts)).expect("parts parse");
+            assert_eq!(content.has_image, !expected_images.is_empty());
+            let flattened = content.text.clone().unwrap_or_default();
+            if expected_text.is_empty() {
+                assert_eq!(content.text, None);
+            } else {
+                assert_eq!(flattened, expected_text, "seed {seed}: flattening order");
+            }
+            assert_eq!(content.images.len(), expected_images.len());
+            for (image, (url, offset)) in content.images.iter().zip(expected_images.iter()) {
+                assert_eq!(&image.url, url);
+                assert_eq!(
+                    image.text_offset, *offset,
+                    "byte offset of part in flat text"
+                );
+            }
+
+            // Markers splice exactly at the recorded offsets (inserting in
+            // reverse order shifts image i's marker by i marker lengths).
+            let spliced = content.text_with_media_markers(MARKER);
+            let marker_len = MARKER.len();
+            assert_eq!(
+                spliced.len(),
+                flattened.len() + expected_images.len() * marker_len,
+                "seed {seed}: exactly one marker per image"
+            );
+            for (i, (_, offset)) in expected_images.iter().enumerate() {
+                let at = offset + i * marker_len;
+                assert_eq!(
+                    &spliced[at..at + marker_len],
+                    MARKER,
+                    "seed {seed}: marker {i} at its part offset"
+                );
+            }
+        }
+    }
+
+    /// Marker-collision robustness: texts CONTAINING the media marker never
+    /// panic the splice and always add exactly one marker per image to the
+    /// byte length.
+    #[test]
+    fn media_marker_inside_text_never_panics() {
+        const MARKER: &str = "<__media__>";
+        for seed in 0..128u64 {
+            let mut rng = Lcg::new(seed);
+            let mut parts = Vec::new();
+            let mut flattened_len = 0usize;
+            let mut images = 0usize;
+            for i in 0..=rng.index(6) {
+                if i % 2 == 0 {
+                    parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {"url": format!("data:x,s{seed}i{i}")}
+                    }));
+                    images += 1;
+                } else {
+                    let text = random_string(&mut rng, &ATOMS);
+                    flattened_len += text.len();
+                    parts.push(serde_json::json!({"type": "text", "text": text}));
+                }
+            }
+            let content: ChatContent =
+                serde_json::from_value(serde_json::Value::Array(parts)).expect("parts parse");
+            let spliced = content.text_with_media_markers(MARKER);
+            assert_eq!(
+                spliced.len(),
+                flattened_len + images * MARKER.len(),
+                "seed {seed}: splice length is exact even with marker-bearing text"
+            );
         }
     }
 }
