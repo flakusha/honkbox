@@ -1,6 +1,6 @@
 # TASK: Proxy stream safety
 
-Status: proposed
+Status: done (mesh-proxy lane, commit e5f1a72 — client foundation, stream rules, no-lease proof; route mounting deferred to TASK-reroute-policy)
 Priority: P2
 Epic: epic-mesh-integration
 Owner: unassigned

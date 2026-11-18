@@ -1,6 +1,6 @@
 # TASK: Mesh client spike (chat only)
 
-Status: proposed
+Status: done (mesh-proxy lane, commit e5f1a72 — [mesh] config + client + SSE/cancel/header contract tests; chat route consumption deferred to TASK-reroute-policy per lane scope)
 Priority: P2
 Epic: epic-mesh-integration
 Owner: unassigned
