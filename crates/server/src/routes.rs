@@ -119,7 +119,8 @@ struct EmbeddedUi;
         get_catalog,
         get_running,
         post_unload_all,
-        post_unload_one
+        post_unload_one,
+        post_embeddings
     ),
     components(schemas(
         Health,

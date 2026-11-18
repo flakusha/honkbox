@@ -642,6 +642,76 @@
         }
       }
     },
+    "/v1/embeddings": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/embeddings` (REQ-4): OpenAI-shaped embeddings over the same\nresidency model as chat — one GPU slot, `spawn_blocking` inference.\nResolution: alias/slug → 404 envelope when unknown; a model without\n`capabilities.embeddings` is refused with an explicit 400 (never\nloaded, never garbage tokens). The pipeline is cached per slug\n(`EmbedCache`: load-once, idle-TTL reuse, capacity 1) outside the\nslot; the embed call itself runs inside the lease.",
+        "description": "Errors: 400 bad body / not-embeddings-capable, 404 unknown model, 429\nbusy slot (+`Retry-After` via the shared middleware), 500 embed failure.",
+        "operationId": "post_embeddings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Embeddings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request or not an embeddings-capable model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "GPU slot busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Embedding failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/events": {
       "get": {
         "tags": [],

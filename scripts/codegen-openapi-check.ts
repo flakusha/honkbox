@@ -19,3 +19,22 @@ if (code !== 0) {
 }
 await Bun.write(out, body.endsWith("\n") ? body : `${body}\n`);
 console.log(`wrote ${out}`);
+
+// Coverage: every mounted route must appear in the generated document. The
+// `git diff --exit-code` drift gate above cannot see this class — a route
+// missing from the `#[openapi(paths(...))]` list regenerates identically every
+// time, so the served reference just silently loses the endpoint.
+const routesSrc = await Bun.file("crates/server/src/routes.rs").text();
+const mounted = [...routesSrc.matchAll(/\.route\(\s*"([^"]+)"/g)].map((m) => m[1] as string);
+const documented = new Set(Object.keys((JSON.parse(body) as { paths?: object; }).paths ?? {}));
+const missing = [...new Set(mounted)].filter((path) => !documented.has(path)).sort();
+if (missing.length > 0) {
+  console.error(
+    `honkbox codegen: ${missing.length} mounted route(s) missing from the OpenAPI document: ${
+      missing.join(", ")
+    }`,
+  );
+  console.error("add them to the `#[openapi(paths(...))]` list in crates/server/src/routes.rs");
+  process.exit(1);
+}
+console.log(`openapi covers all ${new Set(mounted).size} mounted routes`);
