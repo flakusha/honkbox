@@ -997,6 +997,8 @@ async fn delete_model_path(path: &Path) -> std::io::Result<Vec<String>> {
         tokio::fs::remove_dir_all(path).await?;
     } else {
         tokio::fs::remove_file(path).await?;
+        // The provenance sidecar (downloads.rs) must not outlive its file.
+        crate::downloads::remove_artifact_meta(path).await;
     }
     Ok(vec![path.display().to_string()])
 }
@@ -3587,6 +3589,14 @@ async fn post_images_generations(
     };
     let mut images = Vec::with_capacity(n as usize);
     let backend_id = pipeline.backend_id();
+    // Provenance (TASK-determinism-contract): the verified digest sidecar
+    // exists only when the model arrived as a checksum-verified download;
+    // locally-placed or unverified weights stay null — never a fabricated
+    // hash. The vendored engine identity maps from the backend id (None
+    // for the stub, which has no separate engine).
+    let model_sha256 = resolve_model_entry(&slug, &catalog)
+        .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
+    let engine_version = honkbox_sd_core::engine_version_for(backend_id);
     for i in 0..u64::from(n) {
         // Cooperative cancellation (NEW-3): honored BETWEEN images only —
         // including a cancel that arrived while this request waited in the
@@ -3659,6 +3669,8 @@ async fn post_images_generations(
                 height,
                 format,
                 backend_id,
+                model_sha256: model_sha256.clone(),
+                engine_version,
                 sampler: recipe.sampler.name().to_string(),
                 scheduler: image_scheduler_name(recipe.scheduler),
                 cfg_scale: recipe.cfg_scale,
@@ -4098,6 +4110,13 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
     }
     let pipeline = Arc::clone(&config.sd);
     let backend_id = pipeline.backend_id();
+    // Provenance (TASK-determinism-contract): verified-digest sidecar when
+    // the model was a checksum-verified download; null otherwise (never a
+    // fabricated hash). Vendored engine identity from the backend id
+    // (None for the stub — no separate engine).
+    let model_sha256 = resolve_model_entry(&slug, &catalog)
+        .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
+    let engine_version = honkbox_sd_core::engine_version_for(backend_id);
     let started = Instant::now();
     let generated = generate_image_bytes(
         pipeline,
@@ -4158,6 +4177,8 @@ async fn post_images_edits(State(config): State<AppConfig>, multipart: Multipart
             height,
             format,
             backend_id,
+            model_sha256,
+            engine_version,
             sampler: recipe.sampler.name().to_string(),
             scheduler: image_scheduler_name(recipe.scheduler),
             cfg_scale: recipe.cfg_scale,

@@ -468,6 +468,23 @@ pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-vulkan";
 #[cfg(not(feature = "vulkan"))]
 pub const SD_CPP_BACKEND_ID: &str = "sd-cpp-cpu";
 
+/// Vendored engine identity for the sd-cpp backends: the exact revs
+/// `vendor.manifest.toml` pins (that manifest is the source of truth —
+/// keep this in sync when a rev moves). Bundles record it as
+/// `engine_version` (TASK-determinism-contract) so a run names the engine
+/// that produced it.
+pub const SD_CPP_ENGINE_VERSION: &str = "stable-diffusion.cpp 5dcfa79801213f23e27b3e83617350ebb8ea93aa (ggml eeda9ec48fc84a3df0bb9dcc19ae9053075a2539, diffusion-rs 89dcf933f754a173c31b2db30ca3df14ec899dac)";
+
+/// The vendored engine identity for a backend id: `Some` for the sd-cpp
+/// backends ([`SD_CPP_BACKEND_ID`]), `None` for everything else — the
+/// stub is in-process honkbox code (covered by the bundle's recorded
+/// `code_version`) and has no separate engine to name; `None` is honest
+/// absence, never a fabricated version.
+#[must_use]
+pub fn engine_version_for(backend_id: &str) -> Option<&'static str> {
+    (backend_id == SD_CPP_BACKEND_ID).then_some(SD_CPP_ENGINE_VERSION)
+}
+
 /// Real txt2img via `diffusion-rs` (stable-diffusion.cpp) on a caller-provided
 /// single-file checkpoint (e.g. an SDXL finetune `.safetensors`).
 ///
@@ -973,6 +990,13 @@ fn splitmix64(mut x: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_version_maps_by_backend_id() {
+        assert_eq!(engine_version_for(SD_CPP_BACKEND_ID), Some(SD_CPP_ENGINE_VERSION));
+        assert_eq!(engine_version_for("stub"), None, "stub has no separate engine");
+        assert_eq!(engine_version_for(""), None);
+    }
 
     fn req(seed: u64, width: u32, height: u32) -> Txt2ImgRequest {
         Txt2ImgRequest {

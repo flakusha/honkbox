@@ -43,9 +43,10 @@
 //!
 //! The bundle record ([`bundle_record`]) is version-scoped on purpose: it
 //! embeds `record_version` and the server's code version, and its
-//! `model_sha256`/`engine_version` keys are reserved (null) until the
-//! model-file digest and engine version are wired at the bundle
-//! construction sites. A hash never means "this pixel output equals that
+//! `model_sha256`/`engine_version` keys carry provenance when known (the
+//! verified digest sidecar of a checksum-verified download; the vendored
+//! engine identity) and stay null otherwise — honest absence, never a
+//! fabricated hash. A hash never means "this pixel output equals that
 //! one" — it means "this recorded input set equals that one" (L0/L1
 //! evidence, never L3).
 
@@ -183,11 +184,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// version/provenance context (`record_version`, `code_version`,
 /// `backend_id`).
 ///
-/// `model_sha256` and `engine_version` are reserved keys, null until the
-/// construction sites (routes.rs txt2img/img2img, main.rs) pass the
-/// model-file digest (download records publish one when the source is
-/// HF LFS) and engine version through. The key set is fixed now so the
-/// record's meaning does not shift when that wiring lands.
+/// `model_sha256` carries the verified digest sidecar of a
+/// checksum-verified download and `engine_version` the vendored engine
+/// identity (`sd-core::engine_version_for`); both are null when unknown —
+/// locally-placed or unverified weights, and the stub backend, which has
+/// no separate engine (its identity is `code_version`). Null is honest
+/// absence; a hash is never fabricated.
 ///
 /// Deliberately absent: ULID, wall-clock values, queue position,
 /// `elapsed_ms` — the record covers *inputs*, not telemetry.
@@ -198,8 +200,8 @@ pub fn bundle_record(inputs: &BundleInputs) -> Value {
         "code_version": env!("CARGO_PKG_VERSION"),
         "backend_id": inputs.backend_id,
         "model": inputs.model_slug,
-        "model_sha256": Value::Null,
-        "engine_version": Value::Null,
+        "model_sha256": inputs.model_sha256,
+        "engine_version": inputs.engine_version,
         "prompt": inputs.prompt,
         "negative_prompt": inputs.negative_prompt,
         "seed": inputs.seed,

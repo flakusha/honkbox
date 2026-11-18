@@ -26,6 +26,8 @@ fn fixture() -> BundleInputs {
         height: 16,
         format: honkbox_sd_core::OutputFormat::Png,
         backend_id: "stub",
+        model_sha256: None,
+        engine_version: None,
         sampler: "euler".to_string(),
         scheduler: "normal".to_string(),
         cfg_scale: 7.0,
@@ -153,11 +155,11 @@ fn bundle_record_pins_versions_and_notices_input_changes() {
     assert_eq!(rec["loras"], serde_json::json!([]));
     assert!(
         rec["model_sha256"].is_null(),
-        "model digest wiring deferred"
+        "unknown provenance stays null (fixture carries no digest)"
     );
     assert!(
         rec["engine_version"].is_null(),
-        "engine version wiring deferred"
+        "stub backend has no separate engine"
     );
 
     let mut other = fixture();
@@ -192,6 +194,24 @@ fn equal_full_requests_share_the_key() {
     assert_eq!(
         determinism::bundle_record_hash(&build()),
         determinism::bundle_record_hash(&build())
+    );
+}
+
+/// Provenance wiring: a record whose input carries a known verified
+/// digest and engine identity publishes both in the record, and they
+/// change the canonical key; absence keeps null (never fabricated).
+#[test]
+fn known_provenance_lands_in_the_record() {
+    let mut with = fixture();
+    with.model_sha256 = Some("ab".repeat(32));
+    with.engine_version = Some("stable-diffusion.cpp test");
+    let rec = determinism::bundle_record(&with);
+    assert_eq!(rec["model_sha256"], "ab".repeat(32));
+    assert_eq!(rec["engine_version"], "stable-diffusion.cpp test");
+    assert_ne!(
+        determinism::bundle_record_hash(&with),
+        determinism::bundle_record_hash(&fixture()),
+        "provenance is part of the recorded inputs"
     );
 }
 

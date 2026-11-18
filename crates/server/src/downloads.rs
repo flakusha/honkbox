@@ -60,6 +60,13 @@ const MAX_CONCURRENT: usize = 2;
 const PART_SUFFIX: &str = ".part";
 /// Sibling sidecar recording `{url, etag, bytes_total, sha256?}` for resume.
 const META_SUFFIX: &str = ".part.meta.json";
+/// Sibling sidecar holding the VERIFIED digest of a completed download
+/// (`<final>.sha256.json` `{"sha256": "…"}`). Written only when the source
+/// published a checksum AND the streamed bytes matched it — the file never
+/// records an unverified value. Survives completion (unlike
+/// `.part.meta.json`) so generations can attribute provenance
+/// (TASK-determinism-contract).
+const ARTIFACT_META_SUFFIX: &str = ".sha256.json";
 /// `HuggingFace` repo-metadata endpoint (`siblings[].lfs.sha256`).
 const HF_API_BASE: &str = "https://huggingface.co/api/models";
 /// `HuggingFace` raw-file resolve endpoint.
@@ -884,23 +891,29 @@ async fn send_get(
 }
 
 /// Commit a fully fetched `.part`: honor an externally landed target,
-/// otherwise rename into place and drop the sidecar.
-async fn commit(job: &Job, part: &Path) -> Outcome {
+/// otherwise rename into place and drop the sidecar, persisting the
+/// verified digest (if the source published one and it matched) as the
+/// artifact provenance sidecar.
+async fn commit(job: &Job, part: &Path, verified: Option<String>) -> Outcome {
     // Someone landed the file while we fetched: keep theirs, drop ours.
     if job.target.is_file() {
         remove_sidecars(&job.target).await;
+        let _ = tokio::fs::remove_file(with_suffix(&job.target, ARTIFACT_META_SUFFIX)).await;
         return Outcome::AlreadyPresent;
     }
     if let Err(err) = tokio::fs::rename(part, &job.target).await {
         return Outcome::failed(format!("commit rename failed: {err}"));
     }
     let _ = tokio::fs::remove_file(with_suffix(&job.target, META_SUFFIX)).await;
+    if let Some(sha256) = verified {
+        write_artifact_meta(&job.target, &sha256);
+    }
     Outcome::Done
 }
 
 /// Terminal tail of a fetched stream: fsync, checksum enforcement (only
 /// when the source published one — a mismatch deletes the sidecars), then
-/// the commit rename.
+/// the commit rename, carrying the verified digest for provenance.
 async fn finalize(
     job: &Job,
     part: &Path,
@@ -913,6 +926,7 @@ async fn finalize(
         return Outcome::failed(format!("cannot flush {}: {err}", part.display()));
     }
     drop(file);
+    let mut verified: Option<String> = None;
     if let (Some(expected), Some(hash)) = (expected, hasher) {
         let got = hex_lower(&hash.finalize());
         if got != expected.to_ascii_lowercase() {
@@ -922,8 +936,9 @@ async fn finalize(
                 keep_part: false,
             };
         }
+        verified = Some(got);
     }
-    let outcome = commit(job, part).await;
+    let outcome = commit(job, part, verified).await;
     if outcome == Outcome::Done {
         patch_entry(&job.entry, |e| e.bytes_done = done);
     }
@@ -942,6 +957,50 @@ fn record_meta(meta_path: &Path, job: &Job, negotiated: &Negotiated) {
             sha256: negotiated.expected_sha.clone(),
         },
     );
+}
+
+/// Sidecar of a COMPLETED download (`<final>.sha256.json`): the digest of
+/// the bytes that were streamed AND verified against the source's
+/// published checksum. Never written without that verification — an
+/// unverified download leaves no digest anywhere.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ArtifactMeta {
+    sha256: String,
+}
+
+/// Persist the verified digest beside the completed artifact (tiny file,
+/// sync write; failure only loses provenance and is logged).
+fn write_artifact_meta(target: &Path, sha256: &str) {
+    let path = with_suffix(target, ARTIFACT_META_SUFFIX);
+    match serde_json::to_string(&ArtifactMeta {
+        sha256: sha256.to_owned(),
+    }) {
+        Ok(json) => {
+            if let Err(err) = std::fs::write(&path, json) {
+                tracing::warn!(path = %path.display(), %err, "artifact meta write failed");
+            }
+        }
+        Err(err) => tracing::warn!(%err, "artifact meta encode failed"),
+    }
+}
+
+/// The verified digest recorded beside a completed download, if any.
+/// `None` = unknown (no sidecar, malformed JSON, or not 64 lowercase hex
+/// characters) — callers record null, never a fabricated hash. Sync read
+/// of a tiny file, safe from the request path.
+#[must_use]
+pub fn artifact_sha256(target: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(with_suffix(target, ARTIFACT_META_SUFFIX)).ok()?;
+    let meta: ArtifactMeta = serde_json::from_str(&raw).ok()?;
+    let looks_like_sha = meta.sha256.len() == 64
+        && meta.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+    looks_like_sha.then_some(meta.sha256)
+}
+
+/// Delete the provenance sidecar of `target` (best effort) — used when the
+/// model file itself is deleted so the sidecar never outlives its file.
+pub async fn remove_artifact_meta(target: &Path) {
+    let _ = tokio::fs::remove_file(with_suffix(target, ARTIFACT_META_SUFFIX)).await;
 }
 
 /// Open the `.part` for the negotiated mode and seed the hasher: append

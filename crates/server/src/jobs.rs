@@ -47,6 +47,17 @@ pub struct BundleInputs {
     pub format: honkbox_sd_core::OutputFormat,
     /// `SdPipeline::backend_id` (currently `"stub"`).
     pub backend_id: &'static str,
+    /// Verified sha256 of the weight file actually used, from the
+    /// download provenance sidecar (`<file>.sha256.json`, written only
+    /// when the source published a checksum and the streamed bytes
+    /// matched). `None` = unknown — locally-placed files, unverified
+    /// downloads, and the CLI path carry no digest; the bundle records
+    /// null, never a fabricated hash (TASK-determinism-contract).
+    pub model_sha256: Option<String>,
+    /// Vendored engine identity (`sd-core::engine_version_for`); `None`
+    /// when the backend has no separate engine (the stub is in-process
+    /// honkbox code, covered by the record's `code_version`).
+    pub engine_version: Option<&'static str>,
     /// Sampler wire name actually used (e.g. `"euler"`).
     pub sampler: String,
     /// Scheduler wire name actually used (`"normal"` = vendor discrete).
@@ -135,6 +146,8 @@ pub fn write_bundle_into(
     let inputs_sha256 = determinism::bundle_record_hash(inputs);
     let request = serde_json::json!({
         "model": inputs.model_slug,
+        "model_sha256": inputs.model_sha256,
+        "engine_version": inputs.engine_version,
         "prompt": inputs.prompt,
         "seed": inputs.seed,
         "steps": inputs.steps,
@@ -162,6 +175,8 @@ pub fn write_bundle_into(
         "model_slug": inputs.model_slug,
         "format": inputs.format.name(),
         "backend_id": inputs.backend_id,
+        "model_sha256": inputs.model_sha256,
+        "engine_version": inputs.engine_version,
         "loras": inputs.loras,
         "strength": inputs.strength,
         "recipe": inputs.recipe,
@@ -488,6 +503,8 @@ mod tests {
             height: 16,
             format: honkbox_sd_core::OutputFormat::Png,
             backend_id: "stub",
+            model_sha256: None,
+            engine_version: None,
             sampler: "euler".to_string(),
             scheduler: "normal".to_string(),
             cfg_scale: 7.0,
@@ -578,6 +595,39 @@ mod tests {
         assert_eq!(side["scheduler"], "karras");
         assert_eq!(side["cfg_scale"], 4.5);
         assert_eq!(side["negative_prompt"], "blurry");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Provenance (TASK-determinism-contract): the verified model digest
+    /// and vendored engine identity land in the sidecar when known and
+    /// stay explicit nulls (never absent, never fabricated) otherwise.
+    #[test]
+    fn sidecar_records_provenance() {
+        let dir =
+            std::env::temp_dir().join(format!("honkbox-jobs-prov-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+
+        let mut bundle = inputs();
+        bundle.model_sha256 = Some("a".repeat(64));
+        bundle.engine_version = Some("stable-diffusion.cpp test");
+        write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert_eq!(side["model_sha256"], "a".repeat(64));
+        assert_eq!(side["engine_version"], "stable-diffusion.cpp test");
+        let req: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("request.json")).expect("request"))
+                .expect("request json");
+        assert_eq!(req["model_sha256"], "a".repeat(64));
+
+        write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("plain bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert!(side["model_sha256"].is_null());
+        assert!(side["engine_version"].is_null());
         fs::remove_dir_all(&dir).ok();
     }
 

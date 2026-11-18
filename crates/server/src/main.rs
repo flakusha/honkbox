@@ -714,6 +714,13 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
             height,
             format,
             backend_id: pipeline.backend_id(),
+            // No catalog on the CLI path: the model may be any weight the
+            // backend accepts, and provenance lookup needs the scan
+            // machinery — record null (TASK-determinism-contract: never a
+            // fabricated hash). The vendored engine identity still maps
+            // from the backend id (None for the stub).
+            model_sha256: None,
+            engine_version: honkbox_sd_core::engine_version_for(pipeline.backend_id()),
             sampler: honkbox_sd_core::SAMPLER.to_string(),
             scheduler: honkbox_sd_core::SCHEDULER.to_string(),
             cfg_scale: 7.0,
