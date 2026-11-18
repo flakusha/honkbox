@@ -39,6 +39,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -95,6 +98,7 @@ fn catalog_with(entries: &[ModelCatalogEntry]) -> ModelCatalog {
 
 fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
     app(AppConfig {
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
@@ -116,7 +120,11 @@ fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Rout
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
-        data_dir,
+        data_dir: data_dir.clone(),
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            data_dir.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
         vram_budget: None,
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),

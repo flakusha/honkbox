@@ -84,6 +84,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -247,6 +250,7 @@ fn entry(
 /// auth, no swap unless the caller installs one).
 fn base_config(catalog: Vec<ModelCatalogEntry>, data_dir: Option<PathBuf>) -> AppConfig {
     AppConfig {
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {
@@ -270,7 +274,11 @@ fn base_config(catalog: Vec<ModelCatalogEntry>, data_dir: Option<PathBuf>) -> Ap
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_secs(3600),
-        data_dir,
+        data_dir: data_dir.clone(),
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            data_dir,
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
         vram_budget: None,
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),

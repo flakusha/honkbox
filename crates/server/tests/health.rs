@@ -34,6 +34,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -59,37 +62,34 @@ use std::sync::{Arc, RwLock};
 
 fn test_app() -> axum::Router {
     app(AppConfig {
-        auth: AuthConfig::default(),
-        dev: false,
-        web_dist_dir: "web-dist".into(),
-        catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {
-            object: "list".to_owned(),
-            data: Vec::new(),
-        }))),
-        roots: honkbox_registry::ModelRoots {
-            llm_dirs: Vec::new(),
-            comfyui_dirs: Vec::new(),
-            stt_dirs: Vec::new(),
-            tts_dirs: Vec::new(),
-        },
-        llm_model: None,
-        stt_model: None,
-        tts_model: None,
-        llm: Arc::new(StubLlm::default()),
-        stt: Arc::new(StubStt),
-        tts: Arc::new(StubTts),
-        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-        sd_model: None,
-        swap: None,
-        embed: Arc::new(swap::stub_embed_cache()),
-        swap_max_ttl: std::time::Duration::from_hours(24),
-        data_dir: None,
-        vram_budget: None,
-        model_entries: Vec::new(),
-        downloads: std::sync::Arc::new(
-            downloads::DownloadManager::new(None).expect("download manager"),
-        ),
-    })
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
+    dev: false,
+    web_dist_dir: "web-dist".into(),
+    catalog: Arc::new(RwLock::new(Arc::new(ModelCatalog {
+        object: "list".to_owned(),
+        data: Vec::new(),
+    }))),
+    roots: honkbox_registry::ModelRoots {
+        llm_dirs: Vec::new(),
+        comfyui_dirs: Vec::new(),
+        stt_dirs: Vec::new(),
+        tts_dirs: Vec::new(),
+    },
+    llm_model: None,
+    stt_model: None,
+    tts_model: None,
+    llm: Arc::new(StubLlm::default()),
+    stt: Arc::new(StubStt),
+    tts: Arc::new(StubTts),
+    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+    sd_model: None,
+    swap: None,
+    embed: Arc::new(swap::stub_embed_cache()),
+    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
+    model_entries: Vec::new(),
+    downloads: std::sync::Arc::new(
+        downloads::DownloadManager::new(None).expect("download manager"),
+    ), })
 }
 
 /// GET `/health` with the given `Accept` value (`None` = no header);

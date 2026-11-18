@@ -1,6 +1,7 @@
 //! `honkbox` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
 mod admission;
+mod artifacts;
 mod backends;
 mod catalog;
 mod config;
@@ -11,6 +12,7 @@ mod jobs;
 mod jobs_registry;
 mod logging;
 mod metrics;
+mod model_formats;
 mod ora;
 mod raster;
 mod routes;
@@ -116,6 +118,11 @@ struct ServeArgs {
     /// Transcription backend (`stub` needs no model/GPU).
     #[arg(long, value_enum, default_value = "stub")]
     stt_backend: SttBackend,
+    /// audio.cpp family for `--stt-backend audio-cpp` (eSpeak-free ASR set;
+    /// default `qwen3_asr`, compiled by the server's `audio-cpp` feature; an
+    /// unknown family is a loud exit-1 naming the compiled set).
+    #[arg(long, default_value = "qwen3_asr")]
+    stt_audiocpp_family: String,
     /// Synthesis backend (`stub` needs no model/GPU).
     #[arg(long, value_enum, default_value = "stub")]
     tts_backend: TtsBackend,
@@ -229,6 +236,10 @@ struct TranscribeArgs {
     /// Which pipeline transcribes (`stub` needs no model/GPU).
     #[arg(long, value_enum, default_value = "stub")]
     stt_backend: SttBackend,
+    /// audio.cpp family for `--stt-backend audio-cpp` (see `serve`; unknown
+    /// family is a loud exit-1 naming the compiled set).
+    #[arg(long, default_value = "qwen3_asr")]
+    stt_audiocpp_family: String,
     /// Also write the transcript JSON to this file.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -433,6 +444,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         log_file,
         llm_backend,
         stt_backend,
+        stt_audiocpp_family,
         tts_backend,
         llm_model,
         stt_model,
@@ -499,7 +511,12 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // into `AppConfig` (they are accepted as request `model` values alongside
     // the catalog).
     let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
-    let stt = backends::make_stt(stt_backend, stt_model.as_deref(), &resolve);
+    let stt = backends::make_stt(
+        stt_backend,
+        stt_model.as_deref(),
+        Some(stt_audiocpp_family.as_str()),
+        &resolve,
+    );
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
     let sd = backends::make_sd(sd_backend, sd_model.as_deref(), &resolve);
     let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
@@ -517,6 +534,12 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         stale = crate::downloads::count_stale_parts(models_root.as_deref()),
         "stale download *.part files (kept for resume)"
     );
+    // Binary artifact store (TASK-binary-artifact-api): content-addressed
+    // blobs + resumable chunk uploads under `<data_dir>/artifacts`.
+    let artifacts = std::sync::Arc::new(crate::artifacts::Registry::new(
+        data_dir.clone(),
+        loaded.artifact_max_bytes,
+    ));
     let app_config = AppConfig {
         dev,
         web_dist_dir,
@@ -537,7 +560,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         vram_budget,
         model_entries,
         downloads,
+        artifacts,
         auth,
+        recognition: crate::backends::make_recognition(),
     };
     let rescan_signal = app_config.downloads.rescan_signal();
     tokio::spawn(routes::rescan_on_downloads(
@@ -812,6 +837,7 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
         input,
         language,
         stt_backend,
+        stt_audiocpp_family,
         out,
     } = args;
     info!("honkbox transcribe model={model} backend={stt_backend:?}");
@@ -821,9 +847,17 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
     let found = match stt_backend {
         SttBackend::Stub => Vec::new(),
         SttBackend::Whisper => scan_models(cfg),
+        // `audio-cpp` serves the model by direct path (a registry scan adds
+        // nothing); the engine's own registry validates the family at load.
+        SttBackend::AudioCpp => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
-    let pipe = backends::make_stt(stt_backend, Some(model.as_str()), &resolve);
+    let pipe = backends::make_stt(
+        stt_backend,
+        Some(model.as_str()),
+        Some(stt_audiocpp_family.as_str()),
+        &resolve,
+    );
     // Reserve BEFORE the model loads. Audio pipelines share the `llm`
     // admission bucket (the fixed ledger vocabulary has no audio kind; see
     // `run_transcription` in routes.rs). The CLI takes the fast path only:

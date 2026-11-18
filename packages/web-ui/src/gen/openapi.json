@@ -137,6 +137,164 @@
         }
       }
     },
+    "/v1/artifacts": {
+      "post": {
+        "tags": [
+          "crate::artifacts"
+        ],
+        "summary": "`POST /v1/artifacts`: upload one binary artifact.",
+        "description": "Two modes on one route:\n\n**Single-shot** — any non-multipart body (usually\n`application/octet-stream`). The whole body is the artifact; it streams\nto disk (never buffered) and is rejected with a named 413\n`artifact_too_large` past the configured cap. Returns `201` with the\n[`ArtifactInfo`] descriptor — `id` IS the content sha256, and it is the\n`{id}` of the bytes route.\n\n**Chunked/resumable** — `multipart/form-data`. Declare `X-Chunk-Count`\non the first request; each form part is one binary chunk, optionally\ntagged with an `X-Chunk-Index` header (parts without it fill the lowest\nunreceived index, so chunks may arrive in any order). Every response\ncarries the current [`ArtifactManifest`] (`status: \"uploading\"` with the\nreceived-chunk registry). To resume an interrupted upload, re-send ONLY\nthe missing chunks with `X-Upload-Id: <upload_id>` set (the count must\nmatch); a duplicate chunk re-POST with identical bytes is idempotent\n(`200`, no state change), while different bytes for a received index are\n`409 upload_conflict`. The request delivering the last missing chunk\nfinalizes in-line: its manifest flips to `status: \"complete\"` with the\n`artifact` descriptor (content sha256, size, chunk count, id). Chunks\nare capped at 8 MiB each (named 413 `chunk_too_large`), the artifact\ntotal at the configured cap (`artifact_too_large`).\n\nOptional `X-Artifact-Content-Type` (both modes) records the content type\nserved by `GET /v1/artifacts/{id}/bytes` (default\n`application/octet-stream`).",
+        "operationId": "post_artifact",
+        "requestBody": {
+          "description": "raw artifact bytes (single-shot), or multipart/form-data where each part is one binary chunk",
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Chunk(s) accepted; current upload manifest (complete when the final chunk landed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactManifest"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Single-shot upload stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad chunk count/index or unusable content type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown X-Upload-Id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Chunk index re-sent with different bytes, or chunk count changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Chunk over 8 MiB (chunk_too_large) or artifact over the configured total cap (artifact_too_large)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "No data dir (storage unavailable) or disk failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{id}/bytes": {
+      "get": {
+        "tags": [
+          "crate::artifacts"
+        ],
+        "summary": "`GET /v1/artifacts/{id}/bytes` (HEAD behaves identically minus the\nbody): stream the stored artifact from disk.",
+        "description": "Always answers `Accept-Ranges: bytes` and `ETag: \"<sha256>\"`. A single\n`Range: bytes=a-b` request gets `206` + `Content-Range` + exactly the\nslice; bogus/multi/unsatisfiable ranges are a named `416 invalid_range`\ncarrying `Content-Range: bytes */<size>`. `If-Match` with a stale `ETag`\nis `412 precondition_failed`; `If-Range` with a stale `ETag` serves the\nfull `200` (RFC 7233). `{id}` is the content sha256 hex digest from the\nupload manifest (`artifact.id`). Range responses leave this route\nuncompressed — the router's compression predicate skips every response\ncarrying `Content-Range` — so range math and resume offsets stay honest.",
+        "operationId": "get_artifact_bytes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Artifact id (the content sha256 hex digest) from the upload manifest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full artifact bytes (binary body)",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "206": {
+            "description": "Single byte-range slice (Content-Range included)",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "404": {
+            "description": "Unknown artifact id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match does not match the current ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "Malformed, multi-, or unsatisfiable Range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/audio/speech": {
       "post": {
         "tags": [],
@@ -1172,6 +1330,65 @@
         }
       }
     },
+    "/v1/recognize": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/recognize` (recognition tickets): one image in, recognition\nout. Stage 1 is synchronous — barcode-class latency is sub-millisecond,\nso the request-response shape needs no job registry entry; the\nOCR/document pipeline becomes job-based (cancellable, cache-keyed per\nFEAT-ocr-ingest) when the first OCR backend lands, and this route is\nthat shape's already-valid request prefix. Only `data:` URI image\npayloads are accepted: nothing is ever fetched, so there is no SSRF\nsurface (same policy as `/v1/image-ops`). Kinds without a compiled\nbackend answer the named 501 `recognition_kind_unsupported` — the same\n`kinds()` gate `features.recognition` advertises, so honest absence is\nobservable from both directions.",
+        "operationId": "post_recognize",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecognizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recognition result (`pages: []` when a valid image held nothing recognizable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecognizeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown field or kind (typed enum parse), non-`data:` URI, undeclared base64, unsupported container, invalid base64, or empty payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Recognition engine failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Kind (or engine override) not served by this build's compiled backends (`recognition_kind_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/synthesize": {
       "post": {
         "tags": [],
@@ -1237,6 +1454,124 @@
   },
   "components": {
     "schemas": {
+      "ArtifactChunk": {
+        "type": "object",
+        "description": "One received chunk record in an artifact upload manifest\n(`POST /v1/artifacts` chunked mode).",
+        "required": [
+          "index",
+          "sha256",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Chunk size in bytes.",
+            "minimum": 0
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0-based chunk index within the upload.",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "description": "sha256 digest (lowercase hex) of this chunk's bytes."
+          }
+        }
+      },
+      "ArtifactInfo": {
+        "type": "object",
+        "description": "Completed artifact descriptor: `id` is the content sha256 hex digest and\ndoubles as the `{id}` of `GET /v1/artifacts/{id}/bytes`.",
+        "required": [
+          "id",
+          "sha256",
+          "size_bytes",
+          "chunk_count",
+          "content_type"
+        ],
+        "properties": {
+          "chunk_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of chunks the artifact was uploaded in (1 for single-shot).",
+            "minimum": 0
+          },
+          "content_type": {
+            "type": "string",
+            "description": "Content type served by the bytes route (default\n`application/octet-stream`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Content sha256 (lowercase hex) — the artifact id."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Same digest, named explicitly for direct hash checks."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total artifact size in bytes.",
+            "minimum": 0
+          }
+        }
+      },
+      "ArtifactManifest": {
+        "type": "object",
+        "description": "Upload manifest returned on every chunked `POST /v1/artifacts` request:\nthe registry of received chunks plus the completed artifact descriptor\nonce the final chunk lands.",
+        "required": [
+          "upload_id",
+          "chunk_count",
+          "received",
+          "chunks",
+          "status"
+        ],
+        "properties": {
+          "artifact": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactInfo",
+                "description": "Present exactly when `status` is `\"complete\"`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chunk_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Declared total chunk count.",
+            "minimum": 0
+          },
+          "chunks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChunk"
+            },
+            "description": "Per-chunk digests/sizes, ordered by index."
+          },
+          "received": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Received chunk indices, ascending (the resume worklist's complement)."
+          },
+          "status": {
+            "type": "string",
+            "description": "`\"uploading\"` until the final chunk, then `\"complete\"`."
+          },
+          "upload_id": {
+            "type": "string",
+            "description": "Server-assigned upload session id (`X-Upload-Id` on resume)."
+          }
+        }
+      },
       "AuthCapabilities": {
         "type": "object",
         "description": "Auth mode (`Capabilities::auth`).",
@@ -1302,6 +1637,17 @@
           "queue": {
             "$ref": "#/components/schemas/QueueCapabilities",
             "description": "Resource-ledger admission knobs a client needs to plan retries:\nper-kind queue caps, the queue wait bound, and the `Retry-After`\nhint the server's 429s carry."
+          },
+          "recognition": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecognitionFeature",
+                "description": "Recognition surface (`POST /v1/recognize`): probe-driven flags per\nkind. Present whenever the recognize route is mounted (always\ntoday) — additive optional field per the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "server": {
             "$ref": "#/components/schemas/ServerInfo",
@@ -3755,6 +4101,174 @@
             "format": "int64",
             "description": "Queue TTL in seconds (a waiter un-admitted after this long is\nevicted); `0` = never expires.",
             "minimum": 0
+          }
+        }
+      },
+      "RecKind": {
+        "type": "string",
+        "description": "Recognition surface kind (`POST /v1/recognize`, recognition tickets).\nSnake-case wire names are the worker crate's `RecKind::as_str` spellings.",
+        "enum": [
+          "barcode",
+          "ocr"
+        ]
+      },
+      "RecognitionEngineMeta": {
+        "type": "object",
+        "description": "Which engine produced a result, and what its output honestly contains.",
+        "required": [
+          "id",
+          "bbox_support"
+        ],
+        "properties": {
+          "bbox_support": {
+            "type": "boolean",
+            "description": "`true` only when `regions[].bbox` carries real coordinates — a\nclient must not treat regions as located otherwise (VLM rule)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable backend id (`\"rxing\"`, `\"stub-recognition\"`, …)."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Engine dependency version this build linked; absent for the stub."
+          }
+        }
+      },
+      "RecognitionFeature": {
+        "type": "object",
+        "description": "Recognition capability (`Capabilities::recognition`): probe-driven flags\nper kind — a `true` here is the same compile probe the route's 501/200\nbehavior keys on, so the document cannot drift from the binary.",
+        "required": [
+          "barcode",
+          "ocr"
+        ],
+        "properties": {
+          "barcode": {
+            "type": "boolean",
+            "description": "Barcode/QR decode is compiled and served by `POST /v1/recognize`."
+          },
+          "ocr": {
+            "type": "boolean",
+            "description": "OCR is compiled and served. Always `false` until the first OCR\nbackend lands — honest absence, never a half seam."
+          }
+        }
+      },
+      "RecognitionPage": {
+        "type": "object",
+        "description": "One page of recognition output; barcode decode yields exactly one.",
+        "required": [
+          "text",
+          "regions"
+        ],
+        "properties": {
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecognitionRegion"
+            },
+            "description": "Located regions; empty when the engine cannot localize or nothing\nwas found."
+          },
+          "text": {
+            "type": "string",
+            "description": "Full recognized text."
+          }
+        }
+      },
+      "RecognitionRegion": {
+        "type": "object",
+        "description": "One located region: axis-aligned pixel bbox + text. `confidence` is\n`null` when the engine produces none (rxing does not).",
+        "required": [
+          "bbox",
+          "text"
+        ],
+        "properties": {
+          "bbox": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "Pixel bbox `[x_min, y_min, x_max, y_max]` in source-image\ncoordinates; meaningful only when the engine's `bbox_support` is\n`true`."
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Engine confidence in `0.0..=1.0`, absent when unknown."
+          },
+          "text": {
+            "type": "string",
+            "description": "Recognized text for this region (barcode: the full payload)."
+          }
+        }
+      },
+      "RecognizeRequest": {
+        "type": "object",
+        "description": "One recognition request over one image (`POST /v1/recognize`).\n\nStage 1 is synchronous: barcode-class latency is sub-millisecond. The\nOCR/document pipeline becomes job-based when FEAT-ocr-ingest lands; the\nrequest shape is its already-compatible prefix.",
+        "required": [
+          "kind",
+          "image"
+        ],
+        "properties": {
+          "engine": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional engine override (`\"rxing\"`, `\"vlm-mtmd\"`, …); `None` = the\nserver's default backend for the kind. Unknown engines answer the\nnamed 501 naming the engine."
+          },
+          "image": {
+            "type": "string",
+            "description": "One image as a data URI (`data:image/png;base64,…`) — no paths, no\nURLs, nothing is ever fetched (no SSRF surface, same policy as\n`/v1/image-ops`)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RecKind",
+            "description": "Which recognition work to run."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Language hint (BCP-47); barcode decode ignores it."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Mode hint (`text_layer` | `layout_regions` | `full_page` |\n`replace_text_layer`); barcode decode ignores it. Unparsed beyond\npresence in stage 1 — the OCR ticket owns the vocabulary."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecognizeResult": {
+        "type": "object",
+        "description": "Recognition result. `pages: []` is the honest \"processed, found\nnothing\" answer — never an error for a valid image.",
+        "required": [
+          "kind",
+          "engine",
+          "pages"
+        ],
+        "properties": {
+          "engine": {
+            "$ref": "#/components/schemas/RecognitionEngineMeta",
+            "description": "Producing engine metadata."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RecKind",
+            "description": "The kind that was served."
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecognitionPage"
+            },
+            "description": "One entry per processed page."
           }
         }
       },

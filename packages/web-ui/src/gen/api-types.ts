@@ -1481,6 +1481,69 @@ export type CatalogList = {
    */
   data: Array<CatalogEntry>;
 };
+export type ArtifactChunk = {
+  /**
+   * 0-based chunk index within the upload.
+   */
+  index: number;
+  /**
+   * sha256 digest (lowercase hex) of this chunk's bytes.
+   */
+  sha256: string;
+  /**
+   * Chunk size in bytes.
+   */
+  bytes: bigint;
+};
+export type ArtifactInfo = {
+  /**
+   * Content sha256 (lowercase hex) — the artifact id.
+   */
+  id: string;
+  /**
+   * Same digest, named explicitly for direct hash checks.
+   */
+  sha256: string;
+  /**
+   * Total artifact size in bytes.
+   */
+  size_bytes: bigint;
+  /**
+   * Number of chunks the artifact was uploaded in (1 for single-shot).
+   */
+  chunk_count: number;
+  /**
+   * Content type served by the bytes route (default
+   * `application/octet-stream`).
+   */
+  content_type: string;
+};
+export type ArtifactManifest = {
+  /**
+   * Server-assigned upload session id (`X-Upload-Id` on resume).
+   */
+  upload_id: string;
+  /**
+   * Declared total chunk count.
+   */
+  chunk_count: number;
+  /**
+   * Received chunk indices, ascending (the resume worklist's complement).
+   */
+  received: Array<number>;
+  /**
+   * Per-chunk digests/sizes, ordered by index.
+   */
+  chunks: Array<ArtifactChunk>;
+  /**
+   * `"uploading"` until the final chunk, then `"complete"`.
+   */
+  status: string;
+  /**
+   * Present exactly when `status` is `"complete"`.
+   */
+  artifact: ArtifactInfo | null;
+};
 export type Capabilities = {
   /**
    * Wire-contract version (`"v1"`); see the version policy above.
@@ -1525,6 +1588,12 @@ export type Capabilities = {
    * version policy above.
    */
   tools: ToolCallingCapability | null;
+  /**
+   * Recognition surface (`POST /v1/recognize`): probe-driven flags per
+   * kind. Present whenever the recognize route is mounted (always
+   * today) — additive optional field per the version policy above.
+   */
+  recognition: RecognitionFeature | null;
   /**
    * Where the generated `OpenAPI` document lives.
    */
@@ -1735,4 +1804,100 @@ export type ToolCallingCapability = {
    * parallel-`true` clients are not rejected.
    */
   parallel_tool_calls: boolean;
+};
+export type RecKind = "barcode" | "ocr";
+export type RecognitionFeature = {
+  /**
+   * Barcode/QR decode is compiled and served by `POST /v1/recognize`.
+   */
+  barcode: boolean;
+  /**
+   * OCR is compiled and served. Always `false` until the first OCR
+   * backend lands — honest absence, never a half seam.
+   */
+  ocr: boolean;
+};
+export type RecognizeRequest = {
+  /**
+   * Which recognition work to run.
+   */
+  kind: RecKind;
+  /**
+   * One image as a data URI (`data:image/png;base64,…`) — no paths, no
+   * URLs, nothing is ever fetched (no SSRF surface, same policy as
+   * `/v1/image-ops`).
+   */
+  image: string;
+  /**
+   * Language hint (BCP-47); barcode decode ignores it.
+   */
+  language?: string | null;
+  /**
+   * Mode hint (`text_layer` | `layout_regions` | `full_page` |
+   * `replace_text_layer`); barcode decode ignores it. Unparsed beyond
+   * presence in stage 1 — the OCR ticket owns the vocabulary.
+   */
+  mode?: string | null;
+  /**
+   * Optional engine override (`"rxing"`, `"vlm-mtmd"`, …); `None` = the
+   * server's default backend for the kind. Unknown engines answer the
+   * named 501 naming the engine.
+   */
+  engine?: string | null;
+};
+export type RecognitionRegion = {
+  /**
+   * Pixel bbox `[x_min, y_min, x_max, y_max]` in source-image
+   * coordinates; meaningful only when the engine's `bbox_support` is
+   * `true`.
+   */
+  bbox: [number, number, number, number];
+  /**
+   * Recognized text for this region (barcode: the full payload).
+   */
+  text: string;
+  /**
+   * Engine confidence in `0.0..=1.0`, absent when unknown.
+   */
+  confidence: number | null;
+};
+export type RecognitionPage = {
+  /**
+   * Full recognized text.
+   */
+  text: string;
+  /**
+   * Located regions; empty when the engine cannot localize or nothing
+   * was found.
+   */
+  regions: Array<RecognitionRegion>;
+};
+export type RecognitionEngineMeta = {
+  /**
+   * Stable backend id (`"rxing"`, `"stub-recognition"`, …).
+   */
+  id: string;
+  /**
+   * Engine dependency version this build linked; absent for the stub.
+   */
+  version: string | null;
+  /**
+   * `true` only when `regions[].bbox` carries real coordinates — a
+   * client must not treat regions as located otherwise (VLM rule).
+   */
+  bbox_support: boolean;
+};
+export type RecognizeResult = {
+  /**
+   * The kind that was served.
+   */
+  kind: RecKind;
+  /**
+   * Producing engine metadata.
+   */
+  engine: RecognitionEngineMeta;
+  /**
+   * One entry per processed page.
+   */
+  pages: Array<RecognitionPage>;
 };

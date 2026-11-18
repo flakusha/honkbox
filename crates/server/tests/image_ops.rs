@@ -54,6 +54,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -91,8 +94,9 @@ fn fresh_data_dir(tag: &str) -> std::path::PathBuf {
     dir
 }
 
-fn app_with(data_dir: Option<std::path::PathBuf>) -> Router {
+fn app_with(data_dir: Option<&std::path::PathBuf>) -> Router {
     app(AppConfig {
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
         dev: false,
         web_dist_dir: "web-dist".into(),
@@ -117,7 +121,11 @@ fn app_with(data_dir: Option<std::path::PathBuf>) -> Router {
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
-        data_dir,
+        data_dir: data_dir.map(ToOwned::to_owned),
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            data_dir.map(ToOwned::to_owned),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
         vram_budget: None,
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
@@ -236,7 +244,7 @@ fn sole_bundle(data_dir: &std::path::Path) -> std::path::PathBuf {
 async fn resize_produces_exact_dimensions_and_bundle() {
     let data_dir = fresh_data_dir("resize");
     let (status, headers, body) = image_ops(
-        app_with(Some(data_dir.clone())),
+        app_with(Some(&data_dir)),
         resize_request("resize-bundle-1", 2, 3, &one_input(4, 4)),
     )
     .await;
@@ -327,7 +335,7 @@ async fn identical_commands_produce_identical_bytes() {
 #[tokio::test]
 async fn idempotent_retry_replays_first_response() {
     let data_dir = fresh_data_dir("idem");
-    let app = app_with(Some(data_dir.clone()));
+    let app = app_with(Some(&data_dir));
     let request = resize_request("idem-1", 2, 2, &one_input(4, 4));
     let (status, _, first) = image_ops(app.clone(), request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{first}");
@@ -353,7 +361,7 @@ async fn idempotent_retry_replays_first_response() {
 #[tokio::test]
 async fn request_id_reuse_with_different_command_is_400() {
     let data_dir = fresh_data_dir("conflict");
-    let app = app_with(Some(data_dir.clone()));
+    let app = app_with(Some(&data_dir));
     let (status, _, first) = image_ops(
         app.clone(),
         resize_request("conflict-1", 2, 2, &one_input(4, 4)),
@@ -699,7 +707,7 @@ async fn malformed_inputs_are_named_400s() {
 #[tokio::test]
 async fn artifact_round_trip_and_unknown_bundle() {
     let data_dir = fresh_data_dir("artifact");
-    let app = app_with(Some(data_dir.clone()));
+    let app = app_with(Some(&data_dir));
     let (status, _, first) = image_ops(
         app.clone(),
         resize_request("artifact-1", 3, 3, &one_input(4, 4)),
@@ -762,7 +770,7 @@ async fn cancel_between_units_is_honored() {
     // request below runs lock-free because this test owns the lock.
     let _op = OP_LOCK.lock().await;
     let data_dir = fresh_data_dir("cancel");
-    let app = app_with(Some(data_dir.clone()));
+    let app = app_with(Some(&data_dir));
     // 8 × 512² resizes: a real processing window, still fast in CI.
     let request = resize_request(
         "cancel-1",
@@ -1065,7 +1073,7 @@ async fn malicious_svg_is_rejected_before_a_job_is_admitted() {
     let inputs = json!([{ "data_uri": svg_data_uri(source) }]);
     let data_dir = fresh_data_dir("svg-bad");
     let (status, headers, body) = image_ops(
-        app_with(Some(data_dir.clone())),
+        app_with(Some(&data_dir)),
         resize_request("svg-bad-1", 8, 8, &inputs),
     )
     .await;
@@ -1103,7 +1111,7 @@ async fn malicious_ora_is_rejected_before_a_job_is_admitted() {
     let inputs = json!([{ "data_uri": ora_data_uri(&bytes) }]);
     let data_dir = fresh_data_dir("ora-bad");
     let (status, headers, body) = image_ops(
-        app_with(Some(data_dir.clone())),
+        app_with(Some(&data_dir)),
         resize_request("ora-bad-1", 8, 8, &inputs),
     )
     .await;

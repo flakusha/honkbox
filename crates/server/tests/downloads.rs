@@ -35,6 +35,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -966,35 +969,33 @@ async fn post_without_models_root_is_500() {
 /// given download supervisor.
 fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
     AppConfig {
-        auth: AuthConfig::default(),
-        dev: false,
-        web_dist_dir: "web-dist".into(),
-        catalog: Arc::new(std::sync::RwLock::new(Arc::new(
-            honkbox_api_types::ModelCatalog {
-                object: "list".to_owned(),
-                data: Vec::new(),
-            },
-        ))),
-        roots: honkbox_registry::ModelRoots {
-            llm_dirs: Vec::new(),
-            comfyui_dirs: Vec::new(),
-            stt_dirs: Vec::new(),
-            tts_dirs: Vec::new(),
+    auth: AuthConfig::default(),
+    recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+    dev: false,
+    web_dist_dir: "web-dist".into(),
+    catalog: Arc::new(std::sync::RwLock::new(Arc::new(
+        honkbox_api_types::ModelCatalog {
+            object: "list".to_owned(),
+            data: Vec::new(),
         },
-        llm_model: None,
-        stt_model: None,
-        tts_model: None,
-        llm: Arc::new(honkbox_llm_worker::StubLlm::default()),
-        stt: Arc::new(honkbox_audio_worker::StubStt),
-        tts: Arc::new(honkbox_audio_worker::StubTts),
-        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-        sd_model: None,
-        swap: None,
-        embed: Arc::new(swap::stub_embed_cache()),
-        swap_max_ttl: std::time::Duration::from_hours(24),
-        data_dir: Some(root.to_path_buf()),
-        vram_budget: None,
-        model_entries: Vec::new(),
-        downloads: mgr,
-    }
+    ))),
+    roots: honkbox_registry::ModelRoots {
+        llm_dirs: Vec::new(),
+        comfyui_dirs: Vec::new(),
+        stt_dirs: Vec::new(),
+        tts_dirs: Vec::new(),
+    },
+    llm_model: None,
+    stt_model: None,
+    tts_model: None,
+    llm: Arc::new(honkbox_llm_worker::StubLlm::default()),
+    stt: Arc::new(honkbox_audio_worker::StubStt),
+    tts: Arc::new(honkbox_audio_worker::StubTts),
+    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+    sd_model: None,
+    swap: None,
+    embed: Arc::new(swap::stub_embed_cache()),
+    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: Some(root.to_path_buf()), artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(Some(root.to_path_buf()).clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
+    model_entries: Vec::new(),
+    downloads: mgr, }
 }

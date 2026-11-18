@@ -86,6 +86,11 @@ pub struct Capabilities {
     /// version policy above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolCallingCapability>,
+    /// Recognition surface (`POST /v1/recognize`): probe-driven flags per
+    /// kind. Present whenever the recognize route is mounted (always
+    /// today) — additive optional field per the version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recognition: Option<RecognitionFeature>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
@@ -2311,6 +2316,55 @@ pub struct CatalogList {
     pub data: Vec<CatalogEntry>,
 }
 
+/// One received chunk record in an artifact upload manifest
+/// (`POST /v1/artifacts` chunked mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ArtifactChunk {
+    /// 0-based chunk index within the upload.
+    pub index: u32,
+    /// sha256 digest (lowercase hex) of this chunk's bytes.
+    pub sha256: String,
+    /// Chunk size in bytes.
+    pub bytes: u64,
+}
+
+/// Completed artifact descriptor: `id` is the content sha256 hex digest and
+/// doubles as the `{id}` of `GET /v1/artifacts/{id}/bytes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ArtifactInfo {
+    /// Content sha256 (lowercase hex) — the artifact id.
+    pub id: String,
+    /// Same digest, named explicitly for direct hash checks.
+    pub sha256: String,
+    /// Total artifact size in bytes.
+    pub size_bytes: u64,
+    /// Number of chunks the artifact was uploaded in (1 for single-shot).
+    pub chunk_count: u32,
+    /// Content type served by the bytes route (default
+    /// `application/octet-stream`).
+    pub content_type: String,
+}
+
+/// Upload manifest returned on every chunked `POST /v1/artifacts` request:
+/// the registry of received chunks plus the completed artifact descriptor
+/// once the final chunk lands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ArtifactManifest {
+    /// Server-assigned upload session id (`X-Upload-Id` on resume).
+    pub upload_id: String,
+    /// Declared total chunk count.
+    pub chunk_count: u32,
+    /// Received chunk indices, ascending (the resume worklist's complement).
+    pub received: Vec<u32>,
+    /// Per-chunk digests/sizes, ordered by index.
+    pub chunks: Vec<ArtifactChunk>,
+    /// `"uploading"` until the final chunk, then `"complete"`.
+    pub status: String,
+    /// Present exactly when `status` is `"complete"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactInfo>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2430,6 +2484,9 @@ mod tests {
             CatalogLocal::decl(&config),
             CatalogEntry::decl(&config),
             CatalogList::decl(&config),
+            ArtifactChunk::decl(&config),
+            ArtifactInfo::decl(&config),
+            ArtifactManifest::decl(&config),
             Capabilities::decl(&config),
             ServerInfo::decl(&config),
             FeatureFlags::decl(&config),
@@ -2443,6 +2500,13 @@ mod tests {
             QueueCapabilities::decl(&config),
             QueueKindCapacity::decl(&config),
             ToolCallingCapability::decl(&config),
+            RecKind::decl(&config),
+            RecognitionFeature::decl(&config),
+            RecognizeRequest::decl(&config),
+            RecognitionRegion::decl(&config),
+            RecognitionPage::decl(&config),
+            RecognitionEngineMeta::decl(&config),
+            RecognizeResult::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');
@@ -2885,4 +2949,108 @@ mod content_parts_properties {
             );
         }
     }
+}
+
+/// Recognition surface kind (`POST /v1/recognize`, recognition tickets).
+/// Snake-case wire names are the worker crate's `RecKind::as_str` spellings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RecKind {
+    /// Barcode/QR decode (symbology + payload + corner-derived bbox).
+    Barcode,
+    /// Document/scene OCR. Advertised `false` until an OCR backend lands
+    /// (`.plan/tickets/TASK-ocr-ocrs-backend.md` and siblings); requests
+    /// answer the named 501 `recognition_kind_unsupported` meanwhile.
+    Ocr,
+}
+
+/// Recognition capability (`Capabilities::recognition`): probe-driven flags
+/// per kind — a `true` here is the same compile probe the route's 501/200
+/// behavior keys on, so the document cannot drift from the binary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct RecognitionFeature {
+    /// Barcode/QR decode is compiled and served by `POST /v1/recognize`.
+    pub barcode: bool,
+    /// OCR is compiled and served. Always `false` until the first OCR
+    /// backend lands — honest absence, never a half seam.
+    pub ocr: bool,
+}
+
+/// One recognition request over one image (`POST /v1/recognize`).
+///
+/// Stage 1 is synchronous: barcode-class latency is sub-millisecond. The
+/// OCR/document pipeline becomes job-based when FEAT-ocr-ingest lands; the
+/// request shape is its already-compatible prefix.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecognizeRequest {
+    /// Which recognition work to run.
+    pub kind: RecKind,
+    /// One image as a data URI (`data:image/png;base64,…`) — no paths, no
+    /// URLs, nothing is ever fetched (no SSRF surface, same policy as
+    /// `/v1/image-ops`).
+    pub image: String,
+    /// Language hint (BCP-47); barcode decode ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Mode hint (`text_layer` | `layout_regions` | `full_page` |
+    /// `replace_text_layer`); barcode decode ignores it. Unparsed beyond
+    /// presence in stage 1 — the OCR ticket owns the vocabulary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Optional engine override (`"rxing"`, `"vlm-mtmd"`, …); `None` = the
+    /// server's default backend for the kind. Unknown engines answer the
+    /// named 501 naming the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+}
+
+/// One located region: axis-aligned pixel bbox + text. `confidence` is
+/// `null` when the engine produces none (rxing does not).
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct RecognitionRegion {
+    /// Pixel bbox `[x_min, y_min, x_max, y_max]` in source-image
+    /// coordinates; meaningful only when the engine's `bbox_support` is
+    /// `true`.
+    pub bbox: [f32; 4],
+    /// Recognized text for this region (barcode: the full payload).
+    pub text: String,
+    /// Engine confidence in `0.0..=1.0`, absent when unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+/// One page of recognition output; barcode decode yields exactly one.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct RecognitionPage {
+    /// Full recognized text.
+    pub text: String,
+    /// Located regions; empty when the engine cannot localize or nothing
+    /// was found.
+    pub regions: Vec<RecognitionRegion>,
+}
+
+/// Which engine produced a result, and what its output honestly contains.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct RecognitionEngineMeta {
+    /// Stable backend id (`"rxing"`, `"stub-recognition"`, …).
+    pub id: String,
+    /// Engine dependency version this build linked; absent for the stub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `true` only when `regions[].bbox` carries real coordinates — a
+    /// client must not treat regions as located otherwise (VLM rule).
+    pub bbox_support: bool,
+}
+
+/// Recognition result. `pages: []` is the honest "processed, found
+/// nothing" answer — never an error for a valid image.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
+pub struct RecognizeResult {
+    /// The kind that was served.
+    pub kind: RecKind,
+    /// Producing engine metadata.
+    pub engine: RecognitionEngineMeta,
+    /// One entry per processed page.
+    pub pages: Vec<RecognitionPage>,
 }

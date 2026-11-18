@@ -6,7 +6,9 @@
 //! `HONKBOX_SWAP_LLM_TTL` / `HONKBOX_SWAP_LLM_MAX_LOADED` /
 //! `HONKBOX_SWAP_MAX_TTL` / `HONKBOX_SWAP_PIN`), `[core] data_dir`, the
 //! `[server] queue_wait_secs` admission-queue bound (REQ-6 Option A, env
-//! `HONKBOX_QUEUE_WAIT_SECS`), and the `[ledger]` resource-ledger knobs
+//! `HONKBOX_QUEUE_WAIT_SECS`), the `[artifacts] max_artifact_bytes`
+//! binary-artifact total cap (TASK-binary-artifact-api, env
+//! `HONKBOX_ARTIFACT_MAX_BYTES`), and the `[ledger]` resource-ledger knobs
 //! (TASK-resource-ledger-bounded-queue: `gpu_slots`, `vram_budget_bytes`,
 //! `ram_budget_bytes`, `cpu_threads`, `oom_headroom_bytes`, `queue_cap`
 //! with `HONKBOX_LEDGER_*` env stages, plus the file-only per-kind maps
@@ -165,6 +167,11 @@ pub const DEFAULT_SWAP_TTL_SECS: u64 = 600;
 /// Default `[swap]` warm capacity: one resident LLM (matches the
 /// single-GPU residency slot; loading another slug swaps, not coexists).
 pub const DEFAULT_SWAP_MAX_LOADED: usize = 1;
+/// Default `[artifacts] max_artifact_bytes` (TASK-binary-artifact-api): the
+/// bounded total size of ONE stored binary artifact. Generous for real
+/// media (a 1 GiB `LoRA` bundle, an hour of WAV), still a hard wall against
+/// unbounded disk growth; operators tighten or raise it via config/env.
+pub const DEFAULT_ARTIFACT_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 /// Per-request `ttl_seconds` cap (`max_ttl_secs`): 24 h. Advice above the cap
 /// is clamped at the route with a `warn!` (never a 400) so a third-party
 /// client cannot out-stay the residency budget a server operator chose.
@@ -498,6 +505,9 @@ pub struct LoadedConfig {
     /// `[ledger]` resource-ledger settings (bounded per-kind admission
     /// queues + capacity budgets, TASK-resource-ledger-bounded-queue).
     pub ledger: LedgerSettings,
+    /// `[artifacts] max_artifact_bytes`: the total size cap for ONE stored
+    /// binary artifact (TASK-binary-artifact-api).
+    pub artifact_max_bytes: u64,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
 }
@@ -519,6 +529,34 @@ fn server_settings(file: Option<u64>, env: Option<&str>) -> ServerConfig {
         cfg.queue_wait = Duration::from_secs(secs);
     }
     cfg
+}
+
+/// Resolve the `[artifacts] max_artifact_bytes` knob
+/// (TASK-binary-artifact-api): defaults → file key → env override
+/// (`HONKBOX_ARTIFACT_MAX_BYTES`). A `0` would reject every artifact, so it
+/// warns and keeps the previous stage (a misconfigured cap should be loud,
+/// not a silent full stop). Pure (env as args) so tests stay thread-safe.
+fn artifact_settings(file: Option<u64>, env: Option<&str>) -> u64 {
+    let mut cap = DEFAULT_ARTIFACT_MAX_BYTES;
+    if let Some(bytes) = file {
+        if bytes > 0 {
+            cap = bytes;
+        } else {
+            tracing::warn!(
+                "[artifacts] max_artifact_bytes = 0 would reject every artifact; keeping the default"
+            );
+        }
+    }
+    if let Some(raw) = env.filter(|raw| !raw.is_empty()) {
+        match raw.parse::<u64>() {
+            Ok(0) => tracing::warn!(
+                "HONKBOX_ARTIFACT_MAX_BYTES = 0 would reject every artifact; keeping {cap}"
+            ),
+            Ok(bytes) => cap = bytes,
+            Err(_) => tracing::warn!("HONKBOX_ARTIFACT_MAX_BYTES {raw:?} is not a number; keeping {cap}"),
+        }
+    }
+    cap
 }
 
 /// Default `[ledger] queue_cap` (TASK-resource-ledger-bounded-queue): ONE
@@ -764,6 +802,8 @@ struct FileStages {
     jobs: FileJobs,
     /// `[swap]` keys.
     swap: FileSwap,
+    /// `[artifacts]` keys (TASK-binary-artifact-api), resolved in `load`.
+    artifacts: Option<u64>,
     /// `[core]` keys.
     core: FileCore,
     /// `[models] vram_budget_bytes` (NEW-5).
@@ -832,6 +872,7 @@ fn stage_config_file(
     }
     out.jobs = file.jobs;
     out.swap = file.swap;
+    out.artifacts = file.artifacts.max_artifact_bytes;
     out.core = file.core;
     out.auth = file.server.auth;
     out.api_key_env = file.auth.api_key_env;
@@ -916,6 +957,7 @@ fn clean_slug_key(value: &str, key: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
+#[allow(clippy::too_many_lines)] // one stage per knob, by design
 pub fn load(
     config_path: Option<PathBuf>,
     cli_dir: Option<PathBuf>,
@@ -941,6 +983,7 @@ pub fn load(
         api_key_env,
         queue_wait: queue_wait_file,
         ledger: file_ledger,
+        artifacts: artifact_cap_file,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -1016,11 +1059,16 @@ pub fn load(
         std::env::var("HONKBOX_LEDGER_OOM_HEADROOM").ok().as_deref(),
         std::env::var("HONKBOX_LEDGER_QUEUE_CAP").ok().as_deref(),
     )?;
+    let artifact_max_bytes = artifact_settings(
+        artifact_cap_file,
+        std::env::var("HONKBOX_ARTIFACT_MAX_BYTES").ok().as_deref(),
+    );
     Ok(LoadedConfig {
         models,
         auth,
         server,
         ledger,
+        artifact_max_bytes,
         data_dir,
     })
 }
@@ -1204,6 +1252,10 @@ struct FileConfig {
     jobs: FileJobs,
     #[serde(default)]
     swap: FileSwap,
+    /// `[artifacts]` keys (TASK-binary-artifact-api); absent table keeps
+    /// the default (1 GiB total artifact cap).
+    #[serde(default)]
+    artifacts: FileArtifacts,
 }
 
 /// `[core]` keys: `data_dir` (the one data-dir knob's file stage).
@@ -1327,6 +1379,15 @@ struct FileSwap {
     max_ttl_secs: Option<u64>,
     #[serde(default)]
     pin: Option<Vec<String>>,
+}
+
+/// `[artifacts]` keys (TASK-binary-artifact-api): `max_artifact_bytes` —
+/// the total size cap for ONE stored binary artifact; a missing or invalid
+/// key keeps [`DEFAULT_ARTIFACT_MAX_BYTES`].
+#[derive(Debug, Default, Clone, Copy, serde::Deserialize)]
+struct FileArtifacts {
+    #[serde(default)]
+    max_artifact_bytes: Option<u64>,
 }
 
 impl Default for SwapConfig {
