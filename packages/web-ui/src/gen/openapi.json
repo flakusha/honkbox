@@ -2524,6 +2524,13 @@
             ],
             "description": "Conditioning image for [`ImagesGenerationRequest::controlnet`]:\nbase64-encoded PNG. Validated (bad base64 / not a PNG = 400) and\napplied as-is by the sd-cpp pipeline — pass a preprocessed\nconditioning map (depth, edges, pose); the engine resizes it to the\ngeneration size."
           },
+          "control_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ControlNet` conditioning type (honkbox extension): what the\nconditioning image depicts — one of the engine's names or aliases\n(`none`, `openpose`, `depth`, `scribble`, `canny`, `normal`,\n`segment`, `tile`, `repaint`, plus engine aliases like `lineart`,\n`hed`, `mlsd`). Validated against the engine's own name table\n(unknown names are a 400 `unknown_control_type`); a union\n`ControlNet` requires a named type while a classic one accepts the\ndefault `none` (omitted = `none`, the preprocessed-map behavior).\nOnly meaningful with `controlnet` + `control_image`."
+          },
           "controlnet": {
             "type": [
               "string",
