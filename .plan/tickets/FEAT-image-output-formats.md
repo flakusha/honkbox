@@ -1,11 +1,11 @@
 # FEAT: JPEG/WebP image output over HTTP
 
-Status: proposed
+Status: done
 Priority: P1
 Epic: epic-output-formats
 Owner: unassigned
 Acceptance: `/v1/images/generations` and `/v1/images/edits` accept `output_format: png|jpeg|webp` and emit matching bytes/sidecars; optional `output_compression` quality knob.
-Verification: `cargo test --locked -p honkbox-server`, `bun run codegen:check`, `bun run test:server`
+Verification: done — `crates/server/tests/images.rs`: `jpeg_output_format_returns_jpeg_bytes`, `webp_output_format_returns_webp_bytes` (lossless), `bundle_sidecar_agrees_with_output_format`, `unknown_output_format_is_400`, `output_compression_semantics`, `default_output_format_unchanged_png`; `crates/server/tests/edits.rs`: `jpeg_output_format_and_bundle_agree`, `output_format_and_compression_parity`; inline `crates/sd-core/src/lib.rs`: `output_format_naming_and_mime_agree`, `jpeg_quality_knob_changes_bytes_and_default_matches_90`.
 Links: `.tmp/research/ReviewedOutput-Formats.md` §1
 Resources: per-test temp job dirs via runner tmp facility; no shared output paths
 
