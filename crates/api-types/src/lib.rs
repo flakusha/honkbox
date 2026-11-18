@@ -35,6 +35,13 @@ pub struct Version {
 /// to an advertised capability flag. Purely ADDITIVE optional fields may
 /// land under the existing `api_version` (the `codegen:check` idempotence
 /// gate keeps the generated schema honest).
+///
+/// Deliberately NO `min_client_api_version`: the server serves exactly one
+/// contract and additive optional fields are feature-detected by presence
+/// (`skip_serializing_if`), so a min field would just duplicate
+/// `api_version` until the first breaking bump. Introduce it only if a
+/// bump ships with a real compatibility window (see `docs/README.md`,
+/// "API version policy").
 pub const API_VERSION: &str = "v1";
 
 /// Machine-readable server contract (`GET /v1/capabilities`). Everything is

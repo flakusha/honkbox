@@ -246,6 +246,37 @@ async fn api_version_is_the_wire_contract() {
     assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
 }
 
+/// The version policy is discoverable WITHOUT prose: the generated `OpenAPI`
+/// `Capabilities` schema description carries the rule (bump on an
+/// incompatible wire change, additive optional fields under the current
+/// version), and `docs/README.md` mirrors it — the `include_str!` fails
+/// the build outright if the policy section is deleted.
+#[tokio::test]
+async fn version_policy_is_discoverable_from_the_contract() {
+    let app = app_with(catalog_with(&[]));
+    let (_, openapi) = get_json(&app, "/v1/openapi.json").await;
+    let description = openapi["components"]["schemas"]["Capabilities"]["description"]
+        .as_str()
+        .expect("Capabilities schema description");
+    for needle in ["wire-contract version", "incompatibly", "additive"] {
+        assert!(
+            description.contains(needle),
+            "policy marker {needle:?} missing from schema description"
+        );
+    }
+    let readme = include_str!("../../../docs/README.md");
+    for needle in [
+        "## API version policy",
+        "wire-contract version",
+        "min_client_api_version",
+    ] {
+        assert!(
+            readme.contains(needle),
+            "docs/README.md policy missing {needle:?}"
+        );
+    }
+}
+
 /// The document never carries user data: with a catalog full of
 /// user-visible slugs/paths, none of them (nor any filesystem path shape)
 /// appears in the serialized body. Queue labels are the fixed kind

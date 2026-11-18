@@ -9,6 +9,27 @@ dependencies, or CI gates are added by this scaffold.
 Anything here that disagrees with `AGENTS.md` or `src/` is wrong or aspirational
 and must be marked as such.
 
+## API version policy
+
+`api_version` on `GET /v1/capabilities` is the **wire-contract version**
+(`"v1"`), deliberately independent of the crate `version` (which tracks
+releases, not the wire shape):
+
+- **Bump `api_version` only for an incompatible wire change**: a DTO field
+  removal or type change, an error-code change, or a semantic change to an
+  advertised capability flag.
+- **Purely additive optional fields land under the existing version** (serde
+  `skip_serializing_if` keeps them absent on older servers); the
+  `codegen:check` idempotence gate keeps the generated schema honest.
+- There is deliberately **no `min_client_api_version`**: the server serves
+  exactly one contract and additive fields are feature-detected by presence,
+  so a min field would duplicate `api_version` until the first breaking bump.
+  Introduce it only if a bump ever ships with a real compatibility window.
+
+Clients discover the rule machine-readably: it is embedded in the
+`Capabilities` schema description (`crates/api-types/src/lib.rs`), which
+flows into the served `GET /v1/openapi.json`.
+
 ## Planned structure (create directories when content exists)
 
 | Directory | Content |
