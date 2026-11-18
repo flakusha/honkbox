@@ -3,7 +3,8 @@
 # NOTE: this repo starts with no remote; this workflow first runs on the first
 # push after a remote is added.
 #
-# Single workflow mirroring the local `bun run ci` gate job-for-job.
+# Workflow mirroring the local `bun run ci` gate job-for-job; local hook
+# checks (`hooks:check`) are not mirrored in CI.
 # Pins: BUN_VERSION below; Rust comes from rust-toolchain.toml (channel 1.99.0),
 # so the dtolnay action takes NO `toolchain:` input — the root pin is what
 # makes local and CI agree. No rust-cache/sccache at init (adopt on evidence).
@@ -44,7 +45,7 @@ jobs:
       - name: Fetch vendored sources
         run: bun scripts/vendor-patches.ts sync
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check TS/JSON/MD formatting
+      - name: Check TS/JSON formatting
         run: bunx dprint check
       - name: Check Rust formatting
         run: cargo fmt --check

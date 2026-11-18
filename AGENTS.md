@@ -37,7 +37,7 @@ CLI (clap) / HTTP (axum)
 
 ```bash
 bun run dev            # Vite + cargo-watch server together
-bun run check          # dprint + oxlint + tsc + clippy + codegen:check
+bun run check          # dprint + oxlint + tsc + clippy + codegen:check + hooks:check
 bun run test           # bun test --isolate && cargo test --workspace --locked
 bun run ci             # check + test + build (full local gate)
 bun run lint:rs        # cargo clippy --workspace --all-targets -- -D warnings
@@ -71,13 +71,13 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 - **Bun ≥1.4.4 only** for JS (no Node/npm/yarn); `bun install --frozen-lockfile` in CI.
 - Rust via `rust-toolchain.toml` (rustup-managed); all cargo invocations use `--locked`.
-- Pre-commit hooks in `.githooks/` — activate with `git config core.hooksPath .githooks` (dprint fmt + restage, oxlint, `sh -n`).
+- Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), generated-file tripwire (`packages/web-ui/src/gen/`), hook self-check. Markdown is intentionally NOT dprint-gated.
 - Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
 
 ## Testing & QA
 
 - Rust: inline `#[cfg(test)]` modules per crate + integration tests `crates/server/tests/{health,models,metrics,cancel,downloads,swap}.rs` (axum `tower::ServiceExt::oneshot`; use `#[path = "../src/routes.rs"]` + `#[path = "../src/metrics.rs"]` since server is bin-only).
-- TS: `bun test --isolate --pass-with-no-tests` (no `*.test.ts` files yet).
+- TS: `bun test --isolate --pass-with-no-tests`; `scripts/pre-commit-hook.test.ts` exercises the `.githooks/pre-commit` hook with per-test shims.
 - Per-crate: `bun run test:core|test:server|test:registry|…` (each `cargo test --locked -p honkbox-<crate>`).
 - CI matrix: `test-rs` 3-OS (Linux Vulkan default features; Windows/macOS `--no-default-features` CPU-only) + `lavapipe` CPU-Vulkan smoke + lcov coverage (collected, **no threshold gate**).
 - Parity harness: `crates/sd-core/tests/parity.rs` — structural backend agreement (PNG magic + decode, exact dimensions, `MAX_EDGE` cap, stub seed determinism; byte-level cross-backend equality is impossible without GPU determinism and is NOT asserted). Default runs skip the real backend; `bun run test:parity` (`-- --include-ignored`) exercises `SdCppPipeline` and needs `HONKBOX_PARITY_MODEL=path` to a local single-file checkpoint (no model download in CI; ci.yml untouched — the gap stays opt-in locally).

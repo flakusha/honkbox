@@ -38,8 +38,9 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - Tests are designed for parallel execution: unique tmp dirs / port 0 or offsets
   / per-test DB or collection names, deterministic teardown in `afterEach`/
   `finally`, no ordering dependence. State the resource contract in `Resources:`. Serial runs are shakeout only, not the end goal.
-- Use plain git worktrees; giwt is not adopted. Pre-commit hooks are not yet
-  wired into these tickets (2026-11-17).
+- Use plain git worktrees; giwt is not adopted. Hook hardening is tracked by
+  `tickets/TASK-precommit-gates.md`; hook tests must satisfy the parallel-safe
+  test contracts above (per-test temp git repos, no shared index/hooksPath).
 - Keep ticket diffs small: one route/DTO seam or one engine adapter per ticket.
 
 ## Current epics

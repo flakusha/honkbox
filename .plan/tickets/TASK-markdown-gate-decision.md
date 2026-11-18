@@ -1,13 +1,22 @@
 # TASK: Markdown formatting and link gate decision
 
-Status: postponed
+Status: done
 Priority: P3
 Epic: epic-docs-tooling
 Owner: unassigned
 Acceptance: a recorded decision on Markdown formatting/link checking before any hook or CI change.
-Verification: none now; after a future change run `bun run spdx`, `bun run check`
+Verification: `bun run hooks:check`, `bun run check`
 Links: `.tmp/research/ReviewedDocs-Organization.md`, `dprint.json`
 Resources: none (decision ticket)
+
+## Decision (2026-11-18)
+
+No dprint Markdown plugin is added now. `.md` is removed from the staged
+dprint bucket in `.githooks/pre-commit` (it was dead without the plugin), the
+CI step label was corrected, and Markdown is intentionally NOT dprint-gated.
+Revisit only when a Markdown formatting gate is requested. The original
+deferral below is superseded by user approval of pre-commit hardening on
+2026-11-18; see `TASK-precommit-gates.md`.
 
 ## Decision inputs
 
@@ -19,4 +28,5 @@ Resources: none (decision ticket)
 
 ## Acceptance detail
 
-No `.githooks/` or CI change by this ticket; record the decision first.
+Original scope: no `.githooks/` or CI change by this ticket; record the
+decision first. Superseded by the 2026-11-18 decision above.

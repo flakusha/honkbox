@@ -17,16 +17,22 @@ being built in this round.
 - `TASK-docs-site-decision.md` — VitePress (separate MIT dep, Node 22+) vs plain
   Markdown, decided only when there is content to publish.
 - `TASK-markdown-gate-decision.md` — dprint Markdown plugin + link check + CI gate.
+- `TASK-precommit-gates.md` — hardened pre-commit gates ported from the audited
+  loop-lore hook (tool guards, generated-file tripwire, captured reports,
+  restage verification).
 
 ## Acceptance
 
 Each ticket records a decision with cost/runtime tradeoffs before any dependency
-or hook change; no pre-commit hook is added by this epic.
+or hook change. The user approved pre-commit hardening (2026-11-18), so
+`TASK-precommit-gates.md` landed hook changes; no dprint Markdown plugin is
+added in this round.
 
 ## Verification
 
-`bun run spdx`, `bun run check` after any future change; none required now.
+`bun run spdx`, `bun run check` after any future change; for hook changes verify with `sh -n .githooks/pre-commit`, `bun test --isolate scripts/pre-commit-hook.test.ts`, `bun run test:unit`, and `bun run check`.
 
 ## Non-goals
 
-Creating empty `docs/` subdirectories, adding VitePress now, editing `.githooks/`.
+Creating empty `docs/` subdirectories, adding VitePress now, adding a dprint
+Markdown plugin in this round.

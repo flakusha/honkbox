@@ -1,72 +1,180 @@
 #!/bin/sh
-# honkbox pre-commit hook — staged files only (fast).
-# Install: git config core.hooksPath .githooks
+# honkbox pre-commit hook - staged files only (fast).
+# Install: point core.hooksPath at .githooks (user-run setup, not done here).
 #
 # REUSE compliance lives in REUSE.toml (project-wide [[annotations]] catch-all);
 # no per-file SPDX headers are required, so none are checked here.
-# Written in POSIX sh so `sh -n .githooks/pre-commit` passes cleanly.
+# Written in POSIX sh so a syntax self-check passes cleanly.
 set -u
 
 failures=0
 
-STAGED_FMT=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|json|md)$' || true)
-STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.tsx?$' || true)
-STAGED_RS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.rs$' || true)
-STAGED_SH=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.sh$' || true)
-HOOK_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -x -e '.githooks/pre-commit' -e '.githooks/pre-push' || true)
+# OS-agnostic temp dir, per-run, cleaned up on exit. umask 077 before mktemp
+# keeps it private; trap installed only after successful creation.
+umask 077
+TMPDIR_BASE="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+TMPDIR=$(mktemp -d "${TMPDIR_BASE%/}/honkbox-pre-commit.XXXXXX") || exit 1
+trap 'rm -rf "$TMPDIR"' EXIT
 
-if [ -z "$STAGED_FMT" ] && [ -z "$STAGED_TS" ] && [ -z "$STAGED_RS" ] \
-   && [ -z "$STAGED_SH" ] && [ -z "$HOOK_STAGED" ]; then
-  echo "No staged files for file gates — skipping"
+# Staged paths (renames and type changes included), newline-delimited.
+STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACMRT || true)
+
+# Generated-file tripwire: never allow hand edits under gen/.
+if printf '%s\n' "$STAGED_ALL" | grep -q '^packages/web-ui/src/gen/'; then
+  echo "FAIL: generated files staged under packages/web-ui/src/gen/ - run codegen, never hand-edit"
+  failures=$((failures + 1))
+fi
+
+# Bucket the staged files into per-type lists, one path per line
+# (paths may contain spaces; never expanded unquoted).
+: >"$TMPDIR/fmt.list"
+: >"$TMPDIR/ts.list"
+: >"$TMPDIR/sh.list"
+RS=0
+HOOK_SELF=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    *.ts|*.tsx)
+      printf '%s\n' "$f" >>"$TMPDIR/fmt.list"
+      printf '%s\n' "$f" >>"$TMPDIR/ts.list"
+      ;;
+    *.json) printf '%s\n' "$f" >>"$TMPDIR/fmt.list" ;;
+    *.rs) RS=1 ;;
+    *.sh) printf '%s\n' "$f" >>"$TMPDIR/sh.list" ;;
+  esac
+  case "$f" in
+    .githooks/pre-commit|.githooks/pre-push) HOOK_SELF=1 ;;
+  esac
+done <<EOF
+$STAGED_ALL
+EOF
+
+# Hook self-check: even if only a deletion of one hook file is staged,
+# syntax-check the ones that still exist on disk.
+if [ "$HOOK_SELF" -eq 0 ]; then
+  if git diff --cached --name-only --diff-filter=D | grep -q -x -e '.githooks/pre-commit' -e '.githooks/pre-push'; then
+    HOOK_SELF=1
+  fi
+fi
+
+# Generated-file deletions: staged deletions are not in the bucket loop (they
+# would trigger tool gates with no workable path); scan them separately.
+# Rename-source coverage remains a documented limitation. Run this BEFORE the
+# all-empty skip below so a deletion-only commit still increments the failure
+# count and cannot short-circuit.
+if git diff --cached --name-only --diff-filter=D | grep -q -E '^packages/web-ui/src/gen/.*\.(ts|tsx|rs)$'; then
+  echo "FAIL: staged deletion of generated file under packages/web-ui/src/gen/ - restore it or delete via codegen"
+  failures=$((failures + 1))
+fi
+
+if ! [ -s "$TMPDIR/fmt.list" ] && ! [ -s "$TMPDIR/ts.list" ] && [ "$RS" -eq 0 ] \
+   && ! [ -s "$TMPDIR/sh.list" ] && [ "$HOOK_SELF" -eq 0 ] && [ "$failures" -eq 0 ]; then
+  echo "No staged files for file gates - skipping"
   exit 0
 fi
 
-if [ -n "$STAGED_FMT" ]; then
-  if echo "$STAGED_FMT" | xargs bunx dprint fmt >/dev/null 2>&1; then
-    echo "$STAGED_FMT" | xargs git add 2>/dev/null
-    echo "PASS: dprint fmt (restaged)"
-  else
-    echo "FAIL: dprint fmt — run 'bun install' then retry"
+# dprint fmt: staged ts/tsx/json, then restage.
+if [ -s "$TMPDIR/fmt.list" ]; then
+  if ! command -v bunx >/dev/null 2>&1; then
+    echo "FAIL: tool unavailable: bunx - run 'bun install'"
     failures=$((failures + 1))
+  else
+    if (
+      set --
+      while IFS= read -r f; do
+        [ -n "$f" ] && set -- "$@" "$f"
+      done < "$TMPDIR/fmt.list"
+      if bunx dprint fmt --allow-no-files -- "$@" >"$TMPDIR/dprint.log" 2>&1; then
+        git add -- "$@" || exit 2
+      else
+        exit 1
+      fi
+    ); then
+      echo "PASS: dprint fmt (restaged)"
+    else
+      dprint_rc=$?
+      if [ "$dprint_rc" -eq 2 ]; then
+        echo "FAIL: dprint fmt - restaging formatted files failed; re-stage manually"
+      else
+        echo "FAIL: dprint fmt - report:"
+        cat "$TMPDIR/dprint.log"
+      fi
+      failures=$((failures + 1))
+    fi
   fi
 fi
 
-if [ -n "$STAGED_TS" ]; then
-  if echo "$STAGED_TS" | xargs bunx oxlint >/dev/null 2>&1; then
-    echo "PASS: oxlint"
-  else
-    echo "FAIL: oxlint — fix the findings above, re-stage, and retry"
+# oxlint: staged ts/tsx.
+if [ -s "$TMPDIR/ts.list" ]; then
+  if ! command -v bunx >/dev/null 2>&1; then
+    echo "FAIL: tool unavailable: bunx - run 'bun install'"
     failures=$((failures + 1))
+  else
+    if (
+      set --
+      while IFS= read -r f; do
+        [ -n "$f" ] && set -- "$@" "$f"
+      done < "$TMPDIR/ts.list"
+      bunx oxlint -- "$@"
+    ) >"$TMPDIR/oxlint.log" 2>&1; then
+      echo "PASS: oxlint"
+    else
+      echo "FAIL: oxlint - report:"
+      cat "$TMPDIR/oxlint.log"
+      failures=$((failures + 1))
+    fi
   fi
 fi
 
-if [ -n "$STAGED_RS" ]; then
-  # cargo fmt is workspace-wide but near-instant once the toolchain is warm.
-  if cargo fmt --all -- --check >/dev/null 2>&1; then
-    echo "PASS: cargo fmt"
-  else
-    echo "FAIL: cargo fmt — run 'cargo fmt --all' and re-stage"
+# cargo fmt: workspace-wide check, only when Rust files are staged.
+if [ "$RS" -eq 1 ]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "FAIL: tool unavailable: cargo - install the Rust toolchain"
     failures=$((failures + 1))
+  else
+    if cargo fmt --all -- --check >"$TMPDIR/cargo-fmt.log" 2>&1; then
+      echo "PASS: cargo fmt"
+    else
+      echo "FAIL: cargo fmt - report:"
+      cat "$TMPDIR/cargo-fmt.log"
+      failures=$((failures + 1))
+    fi
   fi
 fi
 
-if [ -n "$STAGED_SH" ]; then
-  ok=1
-  for f in $STAGED_SH; do
-    if ! sh -n "$f"; then
+# Syntax-check staged shell scripts.
+if [ -s "$TMPDIR/sh.list" ]; then
+  sh_ok=1
+  set --
+  while IFS= read -r f; do
+    [ -n "$f" ] && set -- "$@" "$f"
+  done < "$TMPDIR/sh.list"
+  for f in "$@"; do
+    if ! sh -n "./$f" >"$TMPDIR/sh-n.log" 2>&1; then
       echo "FAIL: sh -n syntax error in $f"
-      ok=0
+      cat "$TMPDIR/sh-n.log"
+      sh_ok=0
     fi
   done
-  if [ "$ok" -eq 1 ]; then
+  if [ "$sh_ok" -eq 1 ]; then
     echo "PASS: sh -n"
   else
     failures=$((failures + 1))
   fi
 fi
 
-if [ -n "$HOOK_STAGED" ]; then
-  if sh -n .githooks/pre-commit && { [ ! -f .githooks/pre-push ] || sh -n .githooks/pre-push; }; then
+# Hook self-check: syntax-check the hook files that exist.
+if [ "$HOOK_SELF" -eq 1 ]; then
+  hook_ok=1
+  for h in .githooks/pre-commit .githooks/pre-push; do
+    [ -f "$h" ] || continue
+    if ! sh -n "$h" >"$TMPDIR/hook-sh-n.log" 2>&1; then
+      cat "$TMPDIR/hook-sh-n.log"
+      hook_ok=0
+    fi
+  done
+  if [ "$hook_ok" -eq 1 ]; then
     echo "PASS: hook self-check (sh -n)"
   else
     echo "FAIL: hook self-check (sh -n)"
@@ -75,7 +183,7 @@ if [ -n "$HOOK_STAGED" ]; then
 fi
 
 if [ "$failures" -gt 0 ]; then
-  echo "$failures check(s) failed — commit blocked"
+  echo "$failures check(s) failed - commit blocked"
   exit 1
 fi
 
