@@ -25,7 +25,7 @@
     "format:fix": "dprint fmt",
     "lint": "oxlint scripts packages",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --isolate --pass-with-no-tests && cargo test --workspace --locked",
+    "test": "bun test --isolate --pass-with-no-tests && cargo test --workspace --locked && dprint fmt packages/web-ui/src/gen >/dev/null",
     "test:unit": "bun test --isolate --pass-with-no-tests",
     "test:rs": "cargo test --workspace --locked",
     "test:api-types": "cargo test --locked -p honkbox-api-types",
