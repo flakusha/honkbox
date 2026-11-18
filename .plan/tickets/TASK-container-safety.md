@@ -60,9 +60,8 @@ produce their own named variant.
 
 ## Verification
 
-- `crates/server/tests/container_safety.rs`: 20 tests, all green (run in the
-  isolation harness `.tmp/verify-wave`, which compiles the same module
-  file; see `.tmp/intercom/FIXED-container-safety.md`).
+- `crates/server/tests/container_safety.rs`: 20 tests, all green
+  (`cargo test --locked -p honkbox-server --test container_safety`).
 - `bun run deny` exit 0 (licenses/bans/advisories ok) and `bun run spdx`
   exit 0 on the new dependency set (`zip`, `sha2`).
 

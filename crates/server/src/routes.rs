@@ -6390,6 +6390,7 @@ fn settle_image_op_work(
 /// write the bundle (best-effort, like generation), and build the response.
 /// NEVER returns without a settleable outcome — every failure path returns
 /// the exact error the caller must replay.
+#[allow(clippy::too_many_lines)] // one linear execution: admit, register, run, settle
 async fn execute_image_op(
     config: &AppConfig,
     req: &ImageOpRequest,

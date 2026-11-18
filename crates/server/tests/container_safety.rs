@@ -194,7 +194,7 @@ fn rejects_a_symlink_entry() {
         .add_symlink(
             "link.txt",
             "target.txt",
-            SimpleFileOptions::default().unix_permissions(0o120777),
+            SimpleFileOptions::default().unix_permissions(0o120_777),
         )
         .expect("write the symlink entry");
     let bytes = writer.finish().expect("finish the zip").into_inner();
@@ -458,7 +458,7 @@ fn reads_a_directory_entry_as_empty_bytes() {
     let file = container
         .read_entry("dir/", limits())
         .expect("the entry must read");
-    assert!(file.bytes.is_empty());
+    assert_eq!(file.bytes.len(), 0);
     assert_eq!(file.sha256, sha256_hex(b""));
 }
 

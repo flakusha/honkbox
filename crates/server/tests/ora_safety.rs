@@ -17,6 +17,7 @@ mod ora;
 #[path = "../src/raster.rs"]
 mod raster;
 
+use std::fmt::Write as _;
 use std::io::{Cursor, Write as _};
 
 use crate::container::ContainerError;
@@ -73,16 +74,16 @@ fn png_claiming(width: u32, height: u32) -> Vec<u8> {
     header.extend_from_slice(&height.to_be_bytes());
     // 8-bit RGBA, deflate, adaptive filtering, no interlacing.
     header.extend_from_slice(&[8, 6, 0, 0, 0]);
-    write_chunk(&mut out, b"IHDR", &header);
-    write_chunk(&mut out, b"IEND", &[]);
+    write_chunk(&mut out, *b"IHDR", &header);
+    write_chunk(&mut out, *b"IEND", &[]);
     out
 }
 
 /// One PNG chunk (length, kind, data, CRC).
-fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+fn write_chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
     let length = u32::try_from(data.len()).expect("the chunk data is short");
     out.extend_from_slice(&length.to_be_bytes());
-    out.extend_from_slice(kind);
+    out.extend_from_slice(&kind);
     out.extend_from_slice(data);
     let mut crc_input = kind.to_vec();
     crc_input.extend_from_slice(data);
@@ -108,9 +109,10 @@ fn stack_xml(width: u32, height: u32, layers: &[(&str, &str)]) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<image version=\"0.0.3\" x=\"0\" y=\"0\" width=\"{width}\" height=\"{height}\">\n<stack>\n"
     );
     for (name, src) in layers {
-        xml.push_str(&format!(
-            "<layer name=\"{name}\" src=\"{src}\" x=\"0\" y=\"0\" opacity=\"1.0\"/>\n"
-        ));
+        let _ = writeln!(
+            xml,
+            "<layer name=\"{name}\" src=\"{src}\" x=\"0\" y=\"0\" opacity=\"1.0\"/>"
+        );
     }
     xml.push_str("</stack>\n</image>\n");
     xml

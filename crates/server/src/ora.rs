@@ -1,4 +1,4 @@
-//! The safe OpenRaster (ORA) read path (TASK-svg-ora-support).
+//! The safe `OpenRaster` (ORA) read path (TASK-svg-ora-support).
 //!
 //! An ORA file is a zip container with two conventions on top: the FIRST
 //! entry is a STORED `mimetype` entry holding exactly `image/openraster`,
@@ -33,6 +33,7 @@ const STACK_ENTRY: &str = "stack.xml";
 const MAX_LAYER_EDGE: u32 = 8192;
 
 /// The limits of the ORA read path.
+#[allow(clippy::struct_field_names)] // every cap is a maximum; the prefix says so
 pub(crate) struct OraLimits {
     /// The maximum number of entries in the archive.
     pub max_entries: u64,
@@ -140,6 +141,7 @@ impl std::error::Error for OraError {}
 
 /// One layer of an ORA stack.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // the corpus asserts the metadata; the route reads what it needs
 pub(crate) struct OraLayer {
     /// The layer name (the `name` attribute of the `<layer>` element).
     pub name: String,
@@ -161,6 +163,7 @@ pub(crate) struct OraLayer {
 
 /// A read ORA file: the canvas plus its layers.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // the corpus asserts the metadata; the route reads what it needs
 pub(crate) struct OraDocument {
     /// The canvas width in pixels.
     pub width: u32,
@@ -214,6 +217,7 @@ pub(crate) fn flatten_ora(bytes: &[u8], limits: &OraLimits) -> Result<RasterImag
 /// Read the archive, the stack and every layer header; returns the document
 /// plus the layer PNG bytes (NOT decoded — the decode belongs to
 /// [`flatten_ora`], so the layers are decoded exactly once).
+#[allow(clippy::too_many_lines)] // one linear read: container, stack, canvas, layers
 fn read_inner(bytes: &[u8], limits: &OraLimits) -> Result<(OraDocument, Vec<Vec<u8>>), OraError> {
     let container =
         Container::open_zip(bytes, container_limits(limits)).map_err(OraError::Container)?;
@@ -406,17 +410,16 @@ fn max_alloc(limits: &OraLimits) -> u64 {
 }
 
 /// Scale the alpha channel of `pixels` by `opacity` (in place).
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // the clamp bounds the cast
 fn apply_opacity(pixels: &mut image::RgbaImage, opacity: f32) {
     if opacity >= 1.0 {
         return;
     }
     for (_, _, pixel) in pixels.enumerate_pixels_mut() {
         let alpha = f32::from(pixel.0[3]) * opacity;
-        // The value is clamped into `[0, 255]`, so the truncation is exact.
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            pixel.0[3] = alpha.round().clamp(0.0, 255.0) as u8;
-        }
+        // The value is clamped into `[0, 255]`, so the truncation is exact
+        // and the cast cannot lose the sign.
+        pixel.0[3] = alpha.round().clamp(0.0, 255.0) as u8;
     }
 }
 
@@ -472,7 +475,7 @@ fn parse_stack(xml: &str) -> Result<ParsedStack, OraError> {
     let mut layers: Vec<LayerSpec> = Vec::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
                 match element.local_name().as_ref() {
                     b"image" => canvas = Some(parse_canvas(&element)?),
                     b"layer" => layers.push(parse_layer(&element)?),

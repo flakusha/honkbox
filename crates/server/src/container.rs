@@ -61,6 +61,7 @@ const GLB_BIN_NAME: &str = "<glb bin chunk>";
 
 /// The caps enforced while reading one container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // every cap is a maximum; the prefix says so
 pub(crate) struct ContainerLimits {
     /// Maximum number of entries the container may declare.
     pub max_entries: u64,
@@ -193,7 +194,7 @@ impl Container {
     /// read, so a hostile archive never gets past the central directory.
     pub(crate) fn open_zip(bytes: &[u8], limits: ContainerLimits) -> Result<Self, ContainerError> {
         let mut archive = ZipArchive::new(Cursor::new(bytes))
-            .map_err(|err| map_zip_error(err, "reading the zip central directory"))?;
+            .map_err(|err| map_zip_error(&err, "reading the zip central directory"))?;
         let count = u64::try_from(archive.len()).unwrap_or(u64::MAX);
         if count > limits.max_entries {
             return Err(ContainerError::TooManyEntries {
@@ -206,7 +207,7 @@ impl Container {
         for index in 0..archive.len() {
             let file = archive
                 .by_index(index)
-                .map_err(|err| map_zip_error(err, "reading a zip entry header"))?;
+                .map_err(|err| map_zip_error(&err, "reading a zip entry header"))?;
             let name = file.name().to_owned();
             if let Some(reason) = path_reason(&name) {
                 return Err(ContainerError::UnsafePath { name, reason });
@@ -280,10 +281,10 @@ impl Container {
             .position(|candidate| candidate.name == entry.name)
             .unwrap_or(0);
         let mut archive = ZipArchive::new(Cursor::new(self.bytes.as_slice()))
-            .map_err(|err| map_zip_error(err, "reading the zip central directory"))?;
+            .map_err(|err| map_zip_error(&err, "reading the zip central directory"))?;
         let mut file = archive
             .by_index(index)
-            .map_err(|err| map_zip_error(err, name))?;
+            .map_err(|err| map_zip_error(&err, name))?;
         let mut bytes: Vec<u8> = Vec::new();
         let mut hasher = Sha256::new();
         let mut chunk = vec![0u8; READ_CHUNK];
@@ -358,6 +359,7 @@ pub(crate) struct GlbInfo {
 /// path, because following it would read bytes from outside the
 /// container that was handed to us.
 #[allow(dead_code)] // wired by the GLB read path (integration lane)
+#[allow(clippy::too_many_lines)] // one linear read: header, chunks, caps, buffer rule
 pub(crate) fn validate_glb(
     bytes: &[u8],
     limits: ContainerLimits,
@@ -544,13 +546,13 @@ fn has_drive_letter(name: &str) -> bool {
 /// Whether the zip entry is a symbolic link (its unix mode says so).
 fn is_symlink<R: std::io::Read + std::io::Seek>(file: &zip::read::ZipFile<'_, R>) -> bool {
     file.unix_mode()
-        .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
 }
 
 /// Map a zip error onto a named container error: an archive this reader
 /// cannot decode (an encrypted entry, an unknown compression method) is
 /// `Unsupported`; a structurally broken archive is `Malformed`.
-fn map_zip_error(err: ZipError, context: &str) -> ContainerError {
+fn map_zip_error(err: &ZipError, context: &str) -> ContainerError {
     let detail = format!("{context}: {err}");
     match err {
         ZipError::UnsupportedArchive(_) => ContainerError::Unsupported { detail },
@@ -578,10 +580,10 @@ fn has_external_buffer(json: &str) -> bool {
     let bytes = json.as_bytes();
     let mut index = 0usize;
     while index + 5 <= bytes.len() {
-        if bytes[index..index + 5] == *b"\"uri\"" {
-            if let Some(value) = json_uri_value(bytes, index + 5) {
-                return !value.starts_with("data:");
-            }
+        if bytes[index..index + 5] == *b"\"uri\""
+            && let Some(value) = json_uri_value(bytes, index + 5)
+        {
+            return !value.starts_with("data:");
         }
         index = index.saturating_add(1);
     }

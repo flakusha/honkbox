@@ -46,7 +46,7 @@ fn svg_source(width: u32, height: u32) -> String {
 #[test]
 fn valid_svg_reports_its_viewport() {
     let source = svg_source(40, 20);
-    let document = svg::read_svg(source.as_bytes(), &limits()).expect("the SVG is valid");
+    let document = svg::validate_svg(source.as_bytes(), &limits()).expect("the SVG is valid");
     assert_eq!(document.width, 40);
     assert_eq!(document.height, 20);
     assert_eq!(document.sha256.len(), 64, "the source digest is recorded");
@@ -69,7 +69,7 @@ fn rasterizes_a_valid_svg_deterministically() {
 #[test]
 fn script_element_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><script>alert(1)</script></svg>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::Script) => {}
         other => panic!("expected Script, got {other:?}"),
     }
@@ -79,7 +79,7 @@ fn script_element_is_rejected() {
 #[test]
 fn event_handler_attribute_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\" onload=\"alert(1)\"/>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::Script) => {}
         other => panic!("expected Script, got {other:?}"),
     }
@@ -90,7 +90,7 @@ fn event_handler_attribute_is_rejected() {
 #[test]
 fn external_href_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><image href=\"http://example.invalid/x.png\"/></svg>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::ExternalReference { attr, value }) => {
             assert_eq!(attr, "href");
             assert!(
@@ -106,7 +106,7 @@ fn external_href_is_rejected() {
 #[test]
 fn external_style_url_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect style=\"fill:url(http://example.invalid/x.svg)\"/></svg>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::ExternalReference { attr, value }) => {
             assert_eq!(attr, "style");
             assert!(
@@ -122,7 +122,7 @@ fn external_style_url_is_rejected() {
 #[test]
 fn external_style_element_url_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><style>@import url(http://example.invalid/x.css);</style></svg>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::ExternalReference { .. }) => {}
         other => panic!("expected ExternalReference, got {other:?}"),
     }
@@ -132,7 +132,7 @@ fn external_style_element_url_is_rejected() {
 #[test]
 fn same_document_reference_is_accepted() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs><rect id=\"box\" width=\"4\" height=\"4\"/></defs><use href=\"#box\"/></svg>";
-    svg::read_svg(source.as_bytes(), &limits()).expect("a same-document reference is local");
+    svg::validate_svg(source.as_bytes(), &limits()).expect("a same-document reference is local");
 }
 
 /// A DTD (and with it an entity declaration) is rejected outright, so
@@ -140,7 +140,7 @@ fn same_document_reference_is_accepted() {
 #[test]
 fn doctype_is_rejected() {
     let source = "<!DOCTYPE svg [<!ENTITY lol \"lol\">]><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">&lol;</svg>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::Doctype) => {}
         other => panic!("expected Doctype, got {other:?}"),
     }
@@ -153,7 +153,7 @@ fn source_over_the_limit_is_rejected() {
     source.push_str("<!-- ");
     source.push_str(&"x".repeat(4096));
     source.push_str(" -->");
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::SourceTooLarge { limit, found }) => {
             assert_eq!(limit, 4096);
             assert_eq!(found, u64::try_from(source.len()).unwrap_or(u64::MAX));
@@ -171,7 +171,7 @@ fn too_many_elements_are_rejected() {
         source.push_str("<rect/>");
     }
     source.push_str("</svg>");
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::TooManyElements { limit, found }) => {
             assert_eq!(limit, 16);
             assert!(found > 16, "the found count is reported: {found}");
@@ -184,7 +184,7 @@ fn too_many_elements_are_rejected() {
 #[test]
 fn viewport_over_the_pixel_limit_is_rejected() {
     let source = svg_source(10_000, 10_000);
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::RasterTooLarge { limit, found }) => {
             assert_eq!(limit, 4096);
             assert_eq!(found, 100_000_000);
@@ -197,7 +197,7 @@ fn viewport_over_the_pixel_limit_is_rejected() {
 #[test]
 fn malformed_xml_is_rejected() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect>";
-    match svg::read_svg(source.as_bytes(), &limits()) {
+    match svg::validate_svg(source.as_bytes(), &limits()) {
         Err(SvgError::Invalid { .. }) => {}
         other => panic!("expected Invalid, got {other:?}"),
     }
@@ -207,7 +207,7 @@ fn malformed_xml_is_rejected() {
 #[test]
 fn non_utf8_source_is_rejected() {
     let source = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><text>\xff\xfe</text></svg>";
-    match svg::read_svg(source, &limits()) {
+    match svg::validate_svg(source, &limits()) {
         Err(SvgError::Invalid { .. }) => {}
         other => panic!("expected Invalid, got {other:?}"),
     }
@@ -218,7 +218,7 @@ fn non_utf8_source_is_rejected() {
 #[test]
 fn viewbox_sizes_the_raster_when_no_viewport_is_given() {
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 12\"><rect width=\"24\" height=\"12\"/></svg>";
-    let document = svg::read_svg(source.as_bytes(), &limits()).expect("the SVG is valid");
+    let document = svg::validate_svg(source.as_bytes(), &limits()).expect("the SVG is valid");
     assert_eq!(document.width, 24);
     assert_eq!(document.height, 12);
 }
@@ -228,7 +228,7 @@ fn viewbox_sizes_the_raster_when_no_viewport_is_given() {
 fn byte_order_mark_is_tolerated() {
     let mut source = b"\xEF\xBB\xBF".to_vec();
     source.extend_from_slice(svg_source(10, 10).as_bytes());
-    let document = svg::read_svg(&source, &limits()).expect("the SVG is valid");
+    let document = svg::validate_svg(&source, &limits()).expect("the SVG is valid");
     assert_eq!(document.width, 10);
     assert_eq!(document.height, 10);
 }

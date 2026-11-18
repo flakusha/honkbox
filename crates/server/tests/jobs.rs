@@ -844,7 +844,7 @@ async fn controlnet_strength_default_and_rejection() {
 
 /// A named `control_type` rides the resolved pair into the pipeline: the
 /// captured request carries a NON-zero engine type (what the image depicts)
-/// next to the weights path — the typed ControlNet execution contract. The
+/// next to the weights path — the typed `ControlNet` execution contract. The
 /// engine's alias table accepts aliases (`lineart` → canny) and rejects
 /// unknown names with a named 400 before any GPU work; a stray
 /// `control_type` without a pair is refused like a lone pair half.

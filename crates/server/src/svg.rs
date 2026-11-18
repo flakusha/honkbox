@@ -37,6 +37,7 @@ const DTD_MARKERS: [&[u8]; 2] = [b"<!DOCTYPE", b"<!ENTITY"];
 
 /// The limits of the SVG read path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // every cap is a maximum; the prefix says so
 pub(crate) struct SvgLimits {
     /// The largest accepted source size, in bytes.
     pub max_source_bytes: u64,
@@ -136,13 +137,6 @@ pub(crate) struct SvgDocument {
     pub height: u32,
     /// The SHA-256 of the source bytes, lowercase hex.
     pub sha256: String,
-}
-
-/// Read an SVG file: validate it and return its viewport and digest.
-///
-/// This is the read-path entry point; [`rasterize_svg`] builds on it.
-pub(crate) fn read_svg(bytes: &[u8], limits: &SvgLimits) -> Result<SvgDocument, SvgError> {
-    validate_svg(bytes, limits)
 }
 
 /// Validate an SVG file against the limits.
@@ -478,7 +472,7 @@ fn decode_source(bytes: &[u8]) -> Result<&str, SvgError> {
 /// Decode the text of an element.
 fn decode_text(text: &quick_xml::events::BytesText<'_>) -> Result<String, SvgError> {
     text.decode()
-        .map(|decoded| decoded.into_owned())
+        .map(std::borrow::Cow::into_owned)
         .map_err(|err| SvgError::Invalid {
             detail: format!("the SVG has text that is not valid UTF-8: {err}"),
         })
@@ -504,7 +498,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 /// Copy the PREMULTIPLIED RGBA bytes of a pixmap into STRAIGHT RGBA bytes.
 fn straight_alpha(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
-    for pixel in data.chunks_exact(4) {
+    for pixel in data.as_chunks::<4>().0 {
         let alpha = pixel[3];
         if alpha == 0 {
             out.extend_from_slice(&[0, 0, 0, 0]);

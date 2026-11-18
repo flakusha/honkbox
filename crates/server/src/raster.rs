@@ -19,11 +19,6 @@ pub(crate) struct RasterImage {
 }
 
 impl RasterImage {
-    /// The raster's pixel count (`width * height`).
-    pub(crate) fn pixel_count(&self) -> u64 {
-        u64::from(self.width) * u64::from(self.height)
-    }
-
     /// Consume the raster into an `image::DynamicImage` (RGBA8). No copy:
     /// the pixel buffer moves.
     pub(crate) fn into_dynamic_image(self) -> image::DynamicImage {
