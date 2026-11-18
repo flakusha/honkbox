@@ -133,6 +133,10 @@ fn truncated_glb_fails_model_truncated() {
     let err = validate_model(&b"glTF\x02\x00"[..], "glb")
         .expect_err("the header is cut short");
     assert_eq!(err.code(), "model_truncated");
+
+    // Empty bytes with a glb claim: no header at all is truncation.
+    let err = validate_model(&[], "glb").expect_err("no bytes");
+    assert_eq!(err.code(), "model_truncated");
 }
 
 #[test]
@@ -244,6 +248,13 @@ fn ply_header_grammar_is_strict() {
         "got {:?}",
         err.detail()
     );
+
+    // Tab-separated tokens are legal header whitespace: they parse.
+    let bytes = b"ply\nformat ascii 1.0\nelement\tvertex\t3\n".to_vec();
+    let mut bytes = bytes;
+    bytes.extend_from_slice(b"property\tfloat\tx\nend_header\n0 0\n1 0\n0 1\n");
+    let validated = validate_model(&bytes, "ply").expect("tab-separated header parses");
+    assert_eq!(validated.format, "ply");
 
     // Property before any element.
     let mut bytes = b"ply\nformat ascii 1.0\n".to_vec();
@@ -373,6 +384,15 @@ fn spz_ngsp_headers_are_validated() {
         "got {:?}",
         err.detail()
     );
+
+    // Over the REGISTRY point budget (big enough to pass the ratio bound):
+    // named too_large. 16_777_217 points need ~147 KB to pass the
+    // compression-ratio bound, so the fixture pads to 150 KB.
+    let mut bytes = spz_ngsp(16_777_217);
+    bytes.resize(150_000, 0);
+    let err = validate_model(&bytes, "spz").expect_err("above the point budget");
+    assert_eq!(err.code(), "model_too_large");
+    assert_eq!(err.detail(), "the model declares or holds 16777217, exceeding the limit of 16777216");
 }
 
 #[test]

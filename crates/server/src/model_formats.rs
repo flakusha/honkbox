@@ -491,8 +491,12 @@ fn parse_ply_header(
             seen_end_header = true;
             break;
         }
-        let tokens: Vec<&[u8]> =
-            line.split(|&b| b == b' ').filter(|t| !t.is_empty()).collect();
+        // Tokens separate on spaces AND tabs (both are legal PLY header
+        // whitespace; a tab-separated header must not over-reject).
+        let tokens: Vec<&[u8]> = line
+            .split(|&b| b == b' ' || b == b'\t')
+            .filter(|t| !t.is_empty())
+            .collect();
         match tokens[0] {
             b"ply" if elements.is_empty() && encoding.is_none() && tokens.len() == 1 => {}
             b"format" => {
