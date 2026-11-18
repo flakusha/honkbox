@@ -1,11 +1,11 @@
 # TASK: Execute ControlNet requests
 
-Status: implemented — parked on shared-file reconciliation; lane gates below
+Status: done
 Owner: honkbox-controlnet-exec
 Priority: P0
 Epic: epic-sd-native-backend
 Acceptance: a valid ControlNet request runs through the vendored engine instead of returning 501 `controlnet_unsupported`.
-Verification (observed 2026-11-18): `cargo test --locked -p honkbox-sd-core` 22 passed / 0 failed (incl. new `control_type_from_name_uses_the_engine_name_table`, `stage_control_threads_type_and_weights_and_refuses_missing_weights` — the latter asserts the type lands on the vendor config via `Config::control_type()`); `bun scripts/vendor-patches.ts sync` converges (6 applied / 0 now, re-run + `--dry-run` report "tree is converged"); `cargo check --locked -p honkbox-server --all-targets` — zero errors in every lane file; `cargo clippy -p honkbox-sd-core -p honkbox-api-types -p honkbox-ash-backend --all-targets` — 0 issues. PENDING tree-green (blocked ONLY by the binary-formats wave's in-flight `src/formats.rs`/`src/svg.rs`/`src/ora.rs`/image-ops hunks, not this lane): `test:server` (so the new `controlnet_type_execution_contract` jobs test is written but NOT yet executed), workspace `lint:rs` (routes.rs clippy unverified), `codegen:check`. Commit parked because `routes.rs`/`main.rs` also carry the integration lane's in-flight hunks.
+Verification (all observed 2026-11-18, tree at `cf52aa2`+`3d95265`): `cargo test --locked -p honkbox-server --test jobs controlnet` — 5 passed, 76 filtered, INCLUDING the executed `controlnet_type_execution_contract` (non-zero control type + weights path reach the seam; alias, case-sensitivity, unknown-name, and stray-type branches); `bun run test:server` — 26 suites, 0 failed; `cargo test --locked -p honkbox-sd-core` — 22 passed, 1 ignored (opt-in parity); `bun run lint:rs` — exit 0 (workspace clippy, all targets, `-D warnings`); `bun run codegen:check` — exit 0 after the `openapi.json` regen (`3d95265`; the first run caught the stale document missing the `control_type` schema); `bun scripts/vendor-patches.ts sync` — converges (6 applied / 0 now, `--dry-run` "tree is converged"). Work landed as `cf52aa2` (orchestrator split the lane's hunks out of the shared files).
 Links: `.tmp/research/ReviewedSupport-SD.md` §Partial; `routes.rs` `resolve_controlnet`; `vendor_patches/0005-gen-img-control-type.patch`
 Resources: per-test control image temp files; one opt-in local checkpoint fixture, no CI downloads
 
@@ -34,12 +34,13 @@ Resources: per-test control image temp files; one opt-in local checkpoint fixtur
 
 ## Acceptance detail
 
-CapturingSd contract test (`controlnet_type_execution_contract`) is written
-to prove a cnet-named request reaches the pipeline with a NON-zero control
-type and the weights path; it executes once the tree is green (the jobs
-test target currently aborts on the binary-formats wave's in-flight
-`formats.rs`/`svg.rs` errors — none in this lane's files). The seam-level
-proof that RUNS today: the sd-core staging test asserts the named type on
-the vendor config object (`Config::control_type()` getter) beside the
-weights path and conditioning-image path. A missing weight returns a named
+`controlnet_type_execution_contract` (crates/server/tests/jobs.rs) EXECUTED
+AND PASSING: a cnet-named request reaches the pipeline with a NON-zero
+control type (`sd_control_type_t::SD_CONTROL_TYPE_CANNY`) beside the
+weights path; the engine alias (`lineart`) resolves onto the same type;
+unknown and wrong-case names are 400 `unknown_control_type` pre-slot; a
+stray type without a pair is 400 `controlnet_pair`. Engine-side, the
+d-core staging test asserts the named type on the vendor config object
+(`Config::control_type()` getter) beside the weights path, and that a
+missing weights file is refused by name. A missing weight returns a named
 error, never a 501; structural parity checks stay green.
