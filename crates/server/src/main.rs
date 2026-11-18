@@ -469,6 +469,18 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // TASK-resource-ledger-bounded-queue: install the resolved ledger
     // capacities/bounds before any route can reserve capacity.
     install_resource_ledger(&loaded.ledger, loaded.server.queue_wait);
+    // Mesh proxy (TASK-mesh-client-spike): opt-in via `[mesh]`. Startup
+    // line names upstreams only — bearer tokens are never logged. Route
+    // consumption of the client lands with the reroute ticket.
+    if loaded.mesh.enabled {
+        let names: Vec<&str> = loaded
+            .mesh
+            .upstreams
+            .iter()
+            .map(|upstream| upstream.name.as_str())
+            .collect();
+        info!(upstreams = names.len(), "mesh proxy enabled: {}", names.join(", "));
+    }
     spawn_startup_gc(&cfg.jobs, data_dir.as_deref());
     let (addr, auth) = or_exit(resolve_bind(
         &host,

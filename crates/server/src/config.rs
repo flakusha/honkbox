@@ -67,6 +67,13 @@ use honkbox_residency::ResourceKind;
 
 use crate::jobs::{DEFAULT_GC_MAX_BYTES, DEFAULT_GC_TTL};
 
+// Mesh proxy client + its `[mesh]` config (TASK-mesh-client-spike).
+// Declared HERE with the jobs.rs/determinism.rs `#[path]` precedent: main.rs
+// keeps only `mod config;`, and every test harness that includes this module
+// transitively compiles the mesh config types too.
+#[path = "mesh.rs"]
+pub mod mesh;
+
 /// Model roots handed to `honkbox_registry::scan_roots`: the `[models]`
 /// base roots plus any `[discovery]` extras, merged in that order.
 #[derive(Debug, Clone)]
@@ -508,6 +515,10 @@ pub struct LoadedConfig {
     /// `[artifacts] max_artifact_bytes`: the total size cap for ONE stored
     /// binary artifact (TASK-binary-artifact-api).
     pub artifact_max_bytes: u64,
+    /// `[mesh]` upstream proxy config (TASK-mesh-client-spike): off by
+    /// default; bearer tokens are redacted in `Debug` (which this struct
+    /// derives).
+    pub mesh: mesh::MeshConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
 }
@@ -819,6 +830,8 @@ struct FileStages {
     /// `[ledger]` keys (TASK-resource-ledger-bounded-queue), resolved in
     /// `load`.
     ledger: FileLedger,
+    /// `[mesh]` keys (TASK-mesh-client-spike), resolved in `load`.
+    mesh: mesh::FileMesh,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -878,6 +891,7 @@ fn stage_config_file(
     out.api_key_env = file.auth.api_key_env;
     out.queue_wait = file.server.queue_wait_secs;
     out.ledger = file.ledger;
+    out.mesh = file.mesh;
     out.vram_budget = file.models.vram_budget_bytes;
     out.entries = file
         .models
@@ -984,6 +998,7 @@ pub fn load(
         queue_wait: queue_wait_file,
         ledger: file_ledger,
         artifacts: artifact_cap_file,
+        mesh: file_mesh,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -1063,12 +1078,14 @@ pub fn load(
         artifact_cap_file,
         std::env::var("HONKBOX_ARTIFACT_MAX_BYTES").ok().as_deref(),
     );
+    let mesh = mesh::MeshConfig::resolve(&file_mesh)?;
     Ok(LoadedConfig {
         models,
         auth,
         server,
         ledger,
         artifact_max_bytes,
+        mesh,
         data_dir,
     })
 }
@@ -1256,6 +1273,10 @@ struct FileConfig {
     /// the default (1 GiB total artifact cap).
     #[serde(default)]
     artifacts: FileArtifacts,
+    /// `[mesh]` keys (TASK-mesh-client-spike); absent table keeps the
+    /// default (mesh off, no upstreams).
+    #[serde(default)]
+    mesh: mesh::FileMesh,
 }
 
 /// `[core]` keys: `data_dir` (the one data-dir knob's file stage).
