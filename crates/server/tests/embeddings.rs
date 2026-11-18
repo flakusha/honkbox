@@ -292,6 +292,14 @@ async fn embeddings_model_refused_by_chat_completions() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // The refusal is decided BEFORE the route registers a job or takes the
+    // GPU slot: no `X-Job-Id` header means the request never reached the
+    // ledger. This is why the request needs no slot lock — a gated 400 must
+    // not burn the one shared slot (and must not race a parallel test).
+    assert!(
+        response.headers().get("x-job-id").is_none(),
+        "a gated 400 must not reach the GPU slot"
+    );
     let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
     let parsed: Value = serde_json::from_slice(&bytes).expect("envelope");
     assert_eq!(parsed["error"]["code"], "embeddings_model_for_chat");

@@ -745,7 +745,7 @@ async fn artifact_round_trip_and_unknown_bundle() {
 #[tokio::test]
 async fn cancel_between_units_is_honored() {
     // Hold `OP_LOCK` for the whole test: the registry below is
-    // let _op = OP_LOCK.lock().await; // TEMP repro: lock removed
+    // process-global, so only THIS test's job may be in flight — the
     // request below runs lock-free because this test owns the lock.
     let _op = OP_LOCK.lock().await;
     let data_dir = fresh_data_dir("cancel");
@@ -777,6 +777,14 @@ async fn cancel_between_units_is_honored() {
             }
         }
         if cancelled_id.is_some() {
+            break;
+        }
+        // The batch may finish before any poll sees it (the job leaves the
+        // registry when its guard drops). Stop then — the "already
+        // completed" outcome is accepted, and this test holds `OP_LOCK`,
+        // so spinning the full deadline would block every other test in
+        // this binary for 10s.
+        if work.is_finished() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
