@@ -52,7 +52,7 @@ alias hbx=honkbox
 | `dev:web`       | Vite dev server only (:5173)                        |
 | `dev:server`    | Server under `cargo watch` (`serve --dev`)          |
 | `build`         | Full build (vendor + web + server)                  |
-| `check`         | format + lint + typecheck + lint:rs + codegen:check |
+| `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen:check |
 | `format`        | `dprint check`                                      |
 | `lint`          | oxlint over `scripts packages`                      |
 | `typecheck`     | `tsc --noEmit`                                      |
@@ -60,8 +60,8 @@ alias hbx=honkbox
 | `lint:rs`       | Clippy workspace, warnings denied                   |
 | `deny`          | `cargo deny` licenses/bans/advisories               |
 | `spdx`          | `reuse lint`                                        |
-| `notice`        | Regenerate `NOTICE` via `cargo about`               |
 | `codegen:check` | Generated TS bindings fresh vs `api-types`          |
+| `audit:gpu-slot`| Fails when a server test takes the GPU slot without serializing on a lock |
 | `ci`            | `check` + `test` + `build`                          |
 
 ## Layout

@@ -562,14 +562,36 @@ async fn transcriptions_rejections_are_envelopes() {
 async fn synthesize_input_over_cap_is_rejected() {
     let app = test_app();
     let over_cap = "a".repeat(4097);
-    let (status, _, body) = post_json(
-        app.clone(),
-        "/v1/synthesize",
-        json!({"model": "llm:tts-fake.gguf", "text": over_cap, "voice": "af_heart"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let body = String::from_utf8(body).expect("utf8 error body");
+    // The cap is checked BEFORE the route registers a job or takes the GPU
+    // slot: a gated 400 carries no `X-Job-Id`, so this request never reached
+    // the ledger and needs no slot lock (the GPU-slot audit requires that
+    // pin).
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/synthesize")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "llm:tts-fake.gguf",
+                        "text": over_cap,
+                        "voice": "af_heart"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response.headers().get("x-job-id").is_none(),
+        "a gated 400 must not reach the GPU slot"
+    );
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).expect("utf8 error body");
     assert!(body.contains("cap is 4096"), "{body}");
     assert!(body.contains("rejected, not truncated"), "{body}");
     // Blank text is rejected on the twin too (speech parity). Full valid

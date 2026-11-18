@@ -262,6 +262,14 @@ async fn transcribe_validates_model_first() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // The model gate runs BEFORE the route registers a job or takes the GPU
+    // slot: a gated 400 carries no `X-Job-Id`, so the request never reached
+    // the ledger and needs no slot lock (the GPU-slot audit requires that
+    // pin).
+    assert!(
+        response.headers().get("x-job-id").is_none(),
+        "a gated 400 must not reach the GPU slot"
+    );
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("unknown model"));
 }

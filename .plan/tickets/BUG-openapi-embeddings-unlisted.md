@@ -11,12 +11,13 @@ Resources: no new runtime resources; the gate reads `crates/server/src/routes.rs
 
 ## Problem
 
-`POST /v1/embeddings` was mounted (`routes.rs:367`) and carried a
-`#[utoipa::path]` annotation (`routes.rs:2568`), but it was never listed in
-the derive's `#[openapi(paths(...))]` list. The generated document therefore
-omitted the endpoint entirely: the served API reference (`GET
-/v1/openapi.json`) and the checked-in `packages/web-ui/src/gen/openapi.json`
-both lacked a route that the server actually serves.
+`POST /v1/embeddings` was mounted (the `/v1/embeddings` route in `routes::app`)
+and carried a `#[utoipa::path]` annotation on `post_embeddings`, but it was
+never listed in the derive's `#[openapi(paths(...))]` list. The generated
+document therefore omitted the endpoint entirely: the served API reference
+(`GET /v1/openapi.json`) and the checked-in
+`packages/web-ui/src/gen/openapi.json` both lacked a route that the server
+actually serves.
 
 `codegen:check` could not see this class of defect: it proves the committed
 file matches the generator output, and an unlisted route regenerates
