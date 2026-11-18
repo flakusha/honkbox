@@ -172,6 +172,15 @@ impl SttPipeline for AudioCppStt {
 mod tests {
     use super::*;
 
+    // Resource contract (parallel-safe by construction): every test owns
+    // nothing shared — fixtures under the vendored tree are READ-ONLY, each
+    // test builds its own `Registry`/`Model` handles (the engine tolerates
+    // concurrent separate handles; the binding types are `Send`, the
+    // default cargo harness runs these in parallel), no ports, no fixed
+    // write paths, no ordering dependence. `transcribes_local_asr_model`
+    // is `#[ignore]` + env-gated so CI and parallel runs never touch
+    // network or operator-supplied weights.
+
     /// Repo-root relative default for the vendored tree (sync lands it);
     /// resolved from this crate's manifest dir.
     fn vendored_tree() -> std::path::PathBuf {
