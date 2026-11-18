@@ -9,11 +9,25 @@ publish.workspace = true
 default = ["stt-vulkan"]
 stt-vulkan = ["whisper-rs/vulkan"]
 vad = ["dep:ort"]
+# audio.cpp engine backend (TASK-audiocpp-stt-provider): non-default — the
+# vendored engine is a heavy CMake build (vendor.manifest.toml carries the
+# pins). Core set = engine + bundled silero/marblenet VAD, zero downloads.
+audio-cpp = ["dep:audio-cpp"]
+# Default ASR family loader (`qwen3_asr`, eSpeak-free). Weak-dep `?/` so the
+# family feature never forces the engine in by itself.
+audio-cpp-qwen3-asr = ["audio-cpp?/model-qwen3-asr"]
 
 [dependencies]
 whisper-rs = "0.16"
 any-tts = { version = "0.2", default-features = false, features = ["kokoro"] }
 ort = { version = "=2.0.0-rc.15", optional = true }
+# audio.cpp engine bindings (Apache-2.0; upstream pinned via the
+# `[[vendor.crate]] audio-cpp-sys` + `[[vendor.nested]] audio.cpp` entries in
+# vendor.manifest.toml — the published build script otherwise clones UNPINNED
+# upstream `main`). `core-models` keeps the default build at engine + VAD.
+audio-cpp = { version = "=0.9.0", default-features = false, features = [
+    "core-models",
+], optional = true }
 
 [lints]
 workspace = true

@@ -93,15 +93,24 @@ function isFullSha(s: string): boolean {
   return /^[0-9a-f]{40}$/.test(s);
 }
 
-function parseNested(value: unknown): Nested[] {
+function parseNested(value: unknown, crateDirs: string[]): Nested[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("manifest: [vendor].nested must be a list");
+  // Nested repos may hang off the top diffusion-rs checkout OR inside a
+  // declared [[vendor.crate]] extraction (audio-cpp-sys lands the pinned
+  // audio.cpp tree the crate's build script pre-place-strategy reads).
+  const roots = [TOP_NAME, ...crateDirs];
   return value.map((entry: unknown, i: number) => {
     const where = `manifest: [vendor].nested[${i}]`;
     if (typeof entry !== "object" || entry === null) throw new Error(`${where} must be a table`);
     const { path, url, rev, prune } = entry as Record<string, unknown>;
-    if (typeof path !== "string" || !path.startsWith(`${TOP_NAME}/`)) {
-      throw new Error(`${where}.path must start with "${TOP_NAME}/"`);
+    if (
+      typeof path !== "string"
+      || !roots.some((root) => path === root || path.startsWith(`${root}/`))
+    ) {
+      throw new Error(
+        `${where}.path must start with one of: ${roots.map((r) => `${r}/`).join(", ")}`,
+      );
     }
     if (typeof url !== "string" || url === "") throw new Error(`${where}.url must be a string`);
     if (typeof rev !== "string" || !isFullSha(rev)) {
@@ -171,7 +180,14 @@ function parseManifest(text: string): Manifest {
   if (!Array.isArray(patches) || !patches.every((p: unknown) => typeof p === "string")) {
     throw new Error("manifest: [vendor].patches must be a list of strings");
   }
-  return { url, rev, patches: [...patches], nested: parseNested(nested), crate: parseCrate(crate) };
+  const crates = parseCrate(crate);
+  return {
+    url,
+    rev,
+    patches: [...patches],
+    nested: parseNested(nested, crates.map((c) => c.dir)),
+    crate: crates,
+  };
 }
 
 function readLines(path: string): string[] {
@@ -501,6 +517,27 @@ if (dryRun) {
   process.exit(0);
 }
 
+// crates.io tarball vendoring ([[vendor.crate]]): fetch + extract + patch
+// stack BEFORE the repo landing. ensureCrate's fresh fetch REPLACES its
+// extraction dir (`rmSync` + re-extract), so a nested repo already landed
+// inside that dir (audio-cpp-sys carries the pinned audio.cpp checkout at
+// `<dir>/audio.cpp`) would be wiped by a later crate pass — crates first,
+// then nested repos land into the settled extraction. A diffusion rev move
+// that fails loudly after crate extraction leaves only converged/scratch
+// state behind; a re-run converges everything.
+for (const c of crates) {
+  const state = ensureCrate(c, false);
+  if (state === "created") {
+    console.log(`${NODE}: fetched crate ${c.name}-${c.version} -> ${c.dir}`);
+  }
+  const outcome = applyCratePatches(c, false);
+  if (outcome.applied > 0 || outcome.skipped > 0) {
+    console.log(
+      `${NODE}: ${c.dir}: patches already applied (${outcome.skipped}), applied now (${outcome.applied})`,
+    );
+  }
+}
+
 for (const repo of repos) {
   const state = ensureRepo(repo, false);
   const dir = join(ROOT, repo.dir);
@@ -574,19 +611,3 @@ for (const file of files.slice(skipped)) {
 console.log(
   `${NODE}: patches already applied (${skipped}), applied now (${appliedThisRun.length}), total ${files.length}`,
 );
-
-// crates.io tarball vendoring ([[vendor.crate]]): fetch + extract + patch
-// stack, after the diffusion flow so a diffusion rev move fails loudly
-// before any crate work mutates the tree.
-for (const c of crates) {
-  const state = ensureCrate(c, false);
-  if (state === "created") {
-    console.log(`${NODE}: fetched crate ${c.name}-${c.version} -> ${c.dir}`);
-  }
-  const outcome = applyCratePatches(c, false);
-  if (outcome.applied > 0 || outcome.skipped > 0) {
-    console.log(
-      `${NODE}: ${c.dir}: patches already applied (${outcome.skipped}), applied now (${outcome.applied})`,
-    );
-  }
-}

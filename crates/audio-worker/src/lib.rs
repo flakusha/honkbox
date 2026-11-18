@@ -8,16 +8,34 @@ mod stt;
 mod tts;
 #[cfg(feature = "vad")]
 mod vad;
+// audio.cpp engine backend (TASK-audiocpp-stt-provider): compiled only with
+// the non-default `audio-cpp` feature; the probe const is ALWAYS defined so
+// the capability document cannot drift from the binary (same pattern as
+// `VAD_COMPILED`).
+#[cfg(feature = "audio-cpp")]
+mod audiocpp;
 
 pub use stt::{StubStt, WhisperStt};
 pub use tts::{KOKORO_VOICES, KokoroTts, StubTts};
 #[cfg(feature = "vad")]
 pub use vad::{SileroVad, VadSpan};
+#[cfg(feature = "audio-cpp")]
+pub use audiocpp::{AudioCppStt, BACKEND_ID as AUDIOCPP_BACKEND_ID};
 
 /// `true` when THIS build compiles Silero VAD (`vad` feature) — the same
 /// compile probe the capability advertisement reports as `features.vad`, so
 /// the document cannot drift from the binary.
 pub const VAD_COMPILED: bool = cfg!(feature = "vad");
+
+/// `true` when THIS build compiles the audio.cpp engine (`audio-cpp`
+/// feature) — the compile probe for the capability advertisement
+/// (TASK-audiocpp-capabilities); honest absence in default builds.
+pub const AUDIOCPP_COMPILED: bool = cfg!(feature = "audio-cpp");
+
+/// Default audio.cpp ASR family (eSpeak-free). Unconditional: the CLI seam
+/// names it (clap default + honest error text) even in builds without the
+/// `audio-cpp` feature.
+pub const AUDIOCPP_DEFAULT_FAMILY: &str = "qwen3_asr";
 
 use std::fmt;
 
@@ -277,5 +295,19 @@ mod tests {
         let mut wav = encode_wav(16_000, &[1, 2, 3]);
         wav[22] = 2;
         assert!(decode_wav(&wav).is_err());
+    }
+
+    /// Compile-probe honesty (TASK-audiocpp-stt-provider): the default
+    /// build does NOT compile the audio.cpp engine, so the capability probe
+    /// must read false — flipping `audio-cpp` into default features stops
+    /// being a silent advertisement change.
+    #[cfg(not(feature = "audio-cpp"))]
+    #[test]
+    // The assertion is definitionally constant under `cfg(not)` — that IS
+    // the contract being pinned (the default feature set excludes audio.cpp
+    // and the probe reads false), so the lint is intentionally allowed.
+    #[allow(clippy::assertions_on_constants)]
+    fn audiocpp_probe_is_off_without_the_feature() {
+        assert!(!AUDIOCPP_COMPILED);
     }
 }

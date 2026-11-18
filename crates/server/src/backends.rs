@@ -19,7 +19,7 @@ pub enum LlmBackend {
     LlamaCpp,
 }
 
-/// `--stt-backend` values: instant stub or the real whisper pipeline.
+/// `--stt-backend` values: instant stub or the real pipeline.
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum SttBackend {
     /// Instant deterministic stub (no model, no GPU).
@@ -27,6 +27,11 @@ pub enum SttBackend {
     Stub,
     /// Real transcription via whisper on a registry model.
     Whisper,
+    /// Real transcription via the audio.cpp engine (TASK-audiocpp-stt-provider).
+    /// Requires the server's `audio-cpp` cargo feature; without it the
+    /// constructor arm is a loud named error (honest absence, same posture
+    /// as `controlnet_available` on the SD side).
+    AudioCpp,
 }
 
 /// `--tts-backend` values: instant stub or the real kokoro pipeline.
@@ -104,10 +109,13 @@ pub fn make_sd(
 }
 
 /// Transcription pipeline: stub unit struct, or file backend via slug→path.
+/// `family` selects the audio.cpp family for `SttBackend::AudioCpp` (ignored
+/// by the other arms).
 #[must_use]
 pub fn make_stt(
     backend: SttBackend,
     model: Option<&str>,
+    family: Option<&str>,
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
 ) -> Arc<dyn SttPipeline> {
     match backend {
@@ -119,6 +127,30 @@ pub fn make_stt(
             });
             let path = resolve(slug);
             Arc::new(crate::or_exit(WhisperStt::load(&path)))
+        }
+        SttBackend::AudioCpp => {
+            let family = family.unwrap_or(honkbox_audio_worker::AUDIOCPP_DEFAULT_FAMILY);
+            #[cfg(not(feature = "audio-cpp"))]
+            {
+                eprintln!(
+                    "error: --stt-backend audio-cpp requires the `audio-cpp` cargo feature, \
+                     which is not compiled into this build (family `{family}` requested); \
+                     rebuild with `cargo build -p honkbox-server --features audio-cpp` \
+                     after `bun scripts/vendor-patches.ts sync`"
+                );
+                std::process::exit(1);
+            }
+            #[cfg(feature = "audio-cpp")]
+            {
+                let slug = model.unwrap_or_else(|| {
+                    eprintln!(
+                        "error: --stt-model <slug> is required with --stt-backend audio-cpp"
+                    );
+                    std::process::exit(1);
+                });
+                let path = resolve(slug);
+                Arc::new(crate::or_exit(honkbox_audio_worker::AudioCppStt::load(&path, family)))
+            }
         }
     }
 }

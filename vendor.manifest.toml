@@ -53,6 +53,29 @@ sha256 = "814738cddce0c910aa0f5192fd9d3e2ff7e447453e66326dd2f5df7f1375aea3"
 dir = "llama-cpp-sys-4-0.11.0"
 patches = ["1000-llama-cpp-sys-4-vendor-hash-link.patch"]
 
+[[vendor.crate]]
+name = "audio-cpp-sys"
+version = "0.9.0"
+sha256 = "638ae5556095ba8d044aa4b8234e2e3f1d0addbe1069be2974574bfa8f81401f"
+dir = "audio-cpp-sys-0.9.0"
+patches = []
+
+# audio-cpp-sys 0.9.0's build script (`ensure_audio_src`) clones UNPINNED
+# upstream `main` when the audio.cpp tree is absent (crates.io tarballs carry
+# no submodule content) — landing the pinned checkout at
+# `vendor/audio-cpp-sys-0.9.0/audio.cpp` selects its strategy-1 path
+# (pre-placed tree) instead, so `--features audio-cpp` builds offline and
+# reproducible (TASK-audiocpp-vendor-spike, SPIKE PASS §9 of
+# .tmp/research/ReviewedAudioCpp.md). Family set compiles via cargo features
+# (`core-models` default; eSpeak-free candidates only — the eSpeak consumers
+# in this tree are kokoro_tts/sanotts/inflect_v2/zipvoice/piper_tts/
+# kitten_tts and none is enabled).
+[[vendor.nested]]
+path = "audio-cpp-sys-0.9.0/audio.cpp"
+url = "https://github.com/0xShug0/audio.cpp"
+rev = "61c7838baf1f7f34769b5b7bd369c0d78edf9535"
+prune = ["docs", "tests", "tools", "examples", "Notebooks", "scripts", "ci"]
+
 [[vendor.nested]]
 path = "diffusion-rs/sys/stable-diffusion.cpp"
 url = "https://github.com/leejet/stable-diffusion.cpp"

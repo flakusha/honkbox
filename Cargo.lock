@@ -264,6 +264,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audio-cpp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fc6ac81494ba6589f7c7e0fcaf884b40915d477c5baecabe9f9a4dd7af031db"
+dependencies = [
+ "audio-cpp-sys",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "audio-cpp-sys"
+version = "0.9.0"
+dependencies = [
+ "bindgen 0.72.1",
+ "cc",
+ "cmake",
+ "flate2",
+ "glob",
+ "serde_json",
+ "tar",
+ "ureq 2.12.1",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2278,6 +2304,7 @@ name = "honkbox-audio-worker"
 version = "0.1.0"
 dependencies = [
  "any-tts",
+ "audio-cpp",
  "ort",
  "whisper-rs",
 ]

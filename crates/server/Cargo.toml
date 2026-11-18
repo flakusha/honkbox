@@ -95,4 +95,13 @@ llm-vision = ["honkbox-llm-worker/vision"]
 # backend and flips `capabilities.recognition.barcode`. Default-on:
 # pure-Rust CPU decode, sub-millisecond, no foreign builds.
 barcode = ["honkbox-recognition-worker/barcode"]
+# audio.cpp STT backend (TASK-audiocpp-stt-provider): compiles the worker's
+# audio.cpp engine (core + bundled VAD) plus the default ASR family loader
+# (`qwen3_asr`, eSpeak-free). Non-default — the vendored engine is a heavy
+# CMake build; `--stt-backend audio-cpp` without this feature is a loud
+# named error at the CLI seam (backends.rs), never a silent fallback.
+audio-cpp = [
+    "honkbox-audio-worker/audio-cpp",
+    "honkbox-audio-worker/audio-cpp-qwen3-asr",
+]
 default = ["vulkan", "llm-vision", "barcode"]

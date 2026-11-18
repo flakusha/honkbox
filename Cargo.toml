@@ -117,3 +117,11 @@ diffusion-rs-sys = { path = "vendor/diffusion-rs/sys" }
 # missing build-tree link directive. Landed by `bun scripts/vendor-patches.ts
 # sync`; the [vendor.crate] manifest entry carries the pin.
 llama-cpp-sys-4 = { path = "vendor/llama-cpp-sys-4-0.11.0" }
+# audio-cpp-sys 0.9.0: vendored (crates.io tarball, sha256-pinned in
+# vendor.manifest.toml) for the audio.cpp STT backend (`audio-cpp` feature,
+# TASK-audiocpp-stt-provider). The published build script clones UNPINNED
+# upstream `main` when the audio.cpp tree is absent; pre-placing the pinned
+# checkout at `vendor/audio-cpp-sys-0.9.0/audio.cpp` (the [[vendor.nested]]
+# landing, applied by `bun scripts/vendor-patches.ts sync`) selects the
+# offline, reproducible strategy instead.
+audio-cpp-sys = { path = "vendor/audio-cpp-sys-0.9.0" }
