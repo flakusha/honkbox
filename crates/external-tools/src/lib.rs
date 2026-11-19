@@ -28,8 +28,13 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod blender_addons;
+mod blender_assets;
 
 pub use blender_addons::{AddonInfo, AddonTier, BlenderAddons, OperatorInfo};
+pub use blender_assets::{
+    AssetArtifact, AssetError, AssetJob, AssetManifest, AssetSource, AssetStage, BakeMap,
+    MeshFormat, Primitive, ProgressEvent, RECIPE_VERSION, run as run_asset_job,
+};
 
 /// Default `ComfyUI` base URL (loopback — honkbox is local-first).
 pub const DEFAULT_COMFYUI_URL: &str = "http://127.0.0.1:8188";

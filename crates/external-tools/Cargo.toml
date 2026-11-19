@@ -16,6 +16,10 @@ reqwest = { workspace = true }
 # Cycles device probe).
 serde = { workspace = true }
 serde_json = { workspace = true }
+# sha256 of the Blender recipe source and of every artifact the recipe
+# produces (workspace pin: the same crate the download supervisor uses for
+# the HuggingFace LFS digests).
+sha2 = { workspace = true }
 # The registry probes its tools concurrently (`tokio::join!`), and the blocking
 # subprocess chain runs on `spawn_blocking` so it never occupies a runtime
 # worker. The workspace pin already carries macros + rt-multi-thread.
