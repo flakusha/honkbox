@@ -43,13 +43,13 @@ use honkbox_api_types::{
     MemoryCapacity, MemoryGpu, MemoryInfo, ModelCapabilities, ModelCatalog, ModelCatalogEntry,
     ModelDeleteResult, ModelKind, ModelMetadata, NamedFunction, OpenAiChatCompletion,
     OpenAiChatRequest, OpenAiChoice, OpenAiChunk, OpenAiChunkChoice, OpenAiDelta, OpenAiError,
-    OpenAiUsage, OutputFormatCapability, Pill, QueueCapabilities, QueueKindCapacity,
-    ResidentModel, ResponseFormat, ResponseFormatType, RunningList, RunningModel,
-    SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest, ToolCall, ToolCallType,
-    ToolCallingCapability, ToolChoiceSpec, ToolType, Transcript, TranscriptSegment,
-    TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
-    Voice, VoiceList, RecKind, RecognizeRequest, RecognizeResult, RecognitionEngineMeta,
-    RecognitionFeature, RecognitionPage, RecognitionRegion,
+    OpenAiUsage, OutputFormatCapability, Pill, QueueCapabilities, QueueKindCapacity, RecKind,
+    RecognitionEngineMeta, RecognitionFeature, RecognitionPage, RecognitionRegion,
+    RecognizeRequest, RecognizeResult, ResidentModel, ResponseFormat, ResponseFormatType,
+    RunningList, RunningModel, SafetensorsMetadata, ServerInfo, SpeechRequest, SynthesizeRequest,
+    ToolCall, ToolCallType, ToolCallingCapability, ToolChoiceSpec, ToolType, Transcript,
+    TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult,
+    Version, VisionFeature, Voice, VoiceList,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -69,8 +69,8 @@ use honkbox_llm_worker::{
     ToolCallSpec,
 };
 use honkbox_recognition_worker::{
-    RecError, RecKind as WorkerRecKind, RecognizeRequest as WorkerRecognizeRequest,
-    RecognitionPipeline, BARCODE_COMPILED,
+    BARCODE_COMPILED, RecError, RecKind as WorkerRecKind, RecognitionPipeline,
+    RecognizeRequest as WorkerRecognizeRequest,
 };
 use rust_embed::Embed;
 use serde::Deserialize;
@@ -832,10 +832,8 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
         // `recognition_kind_unsupported` for it), so a client can trust the
         // absence.
         recognition: Some(RecognitionFeature {
-            barcode: BARCODE_COMPILED && config
-                .recognition
-                .kinds()
-                .contains(&WorkerRecKind::Barcode),
+            barcode: BARCODE_COMPILED
+                && config.recognition.kinds().contains(&WorkerRecKind::Barcode),
             ocr: config.recognition.kinds().contains(&WorkerRecKind::Ocr),
         }),
     }
@@ -2060,6 +2058,22 @@ fn with_job_id(mut response: Response, job_id: &str) -> Response {
     response
 }
 
+/// Admission first, registration second: a rejected GPU request must not
+/// enter the registry (no `job_registered`/`job_finished` events and no
+/// `X-Job-Id` on a request that never ran). Every admitted route goes
+/// through this one seam so the ordering cannot drift between them.
+fn admit_then_register(
+    registry: &crate::jobs_registry::Registry,
+    acquired: Result<crate::admission::GpuLease, (StatusCode, String)>,
+    kind: crate::jobs_registry::JobKind,
+    model: Option<String>,
+    interruptible: bool,
+) -> Result<(crate::admission::GpuLease, crate::jobs_registry::JobGuard), (StatusCode, String)> {
+    let lease = acquired?;
+    let job = registry.register(kind, model, interruptible);
+    Ok((lease, job))
+}
+
 /// REQ-8: image content on a model without a projector. Vision capability
 /// is catalog-derived: a sibling mmproj projector next to the weights, or
 /// an explicit operator `capabilities.vision = true`.
@@ -2238,17 +2252,21 @@ async fn post_chat(
         clamp_ttl_seconds(config.swap_max_ttl, req.ttl_seconds),
     )
     .await?;
-    // NEW-3: register the in-flight job (the registry holds it while the
-    // request lives, including an admission-queue wait), then take the GPU
-    // slot through the admission queue (REQ-6 Option A). The blocking FFI
-    // call itself is not interruptible — the cancel token is marked but
-    // never checked here.
-    let job = crate::jobs_registry::global().register(
+    // NEW-3: take the GPU slot first, then register the in-flight job. A
+    // rejected request never enters the registry (no lifecycle events, no
+    // X-Job-Id), and the admission error is returned explicitly rather
+    // than with `?`. The blocking FFI call itself is not interruptible —
+    // the cancel token is marked but never checked here.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Chat,
         Some(slug.clone()),
         false,
-    );
-    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
+    ) {
+        Ok(pair) => pair,
+        Err(error) => return Err(error),
+    };
     let worker_req = worker_request_base(
         slug,
         worker_messages(&req.messages),
@@ -2385,20 +2403,24 @@ async fn post_chat_stream(
     .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
-    // NEW-3: the stream job is registry-visible and interruptible — its
-    // cancel token is checked at every token boundary below (the same
-    // abort-at-next-boundary path an SSE disconnect takes).
-    let job = crate::jobs_registry::global().register(
-        crate::jobs_registry::JobKind::Chat,
-        Some(slug),
-        true,
-    );
     // REQ-6 (Option B): the busy condition must be an HTTP 429, never a 200
     // with an error frame - so the slot is taken HERE through the admission
     // queue (REQ-6 Option A on top: a busy slot grants one bounded wait),
     // before the handler returns the SSE body. A rejection short-circuits
-    // above as a real 429.
-    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
+    // as a plain 429 with no registered job and no X-Job-Id.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
+        crate::jobs_registry::JobKind::Chat,
+        Some(slug),
+        true,
+    ) {
+        Ok(pair) => pair,
+        Err(error) => return Err(error),
+    };
+    // NEW-3: only an admitted stream is registry-visible and
+    // interruptible — its cancel token is checked at every token boundary
+    // below (the same abort-at-next-boundary path an SSE disconnect takes).
     // The lease sits in a slot the token sink can drain: once the client is
     // gone, the next token boundary frees the slot right away. The handler
     // returns the SSE body without awaiting the worker, so tokens stream as
@@ -2458,7 +2480,11 @@ async fn post_chat_stream(
 
 /// OpenAI-shaped error body → JSON response (`/v1/chat/completions` only;
 /// the native route keeps its plain-text errors).
-pub(crate) fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
+pub(crate) fn openai_error_response(
+    status: StatusCode,
+    message: String,
+    code: Option<&str>,
+) -> Response {
     let body = OpenAiError::new(status.as_u16(), message, code.map(str::to_owned));
     (status, Json(body)).into_response()
 }
@@ -2687,21 +2713,20 @@ async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Respon
             );
         }
     };
-    // NEW-3: the embeddings job is registry-visible (never interruptible:
-    // one blocking FFI call), then the slot comes through the admission
-    // queue (REQ-6 Option A) — the 429 paths below keep their envelopes.
-    let job = crate::jobs_registry::global().register(
+    // NEW-3: the slot comes through the admission queue first (REQ-6
+    // Option A); only an admitted request gets a registry-visible job
+    // (never interruptible: one blocking FFI call). A 429 therefore has no
+    // lifecycle events and no X-Job-Id, keeping the shared envelope.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Embed).await,
         crate::jobs_registry::JobKind::Embeddings,
         Some(entry.slug.clone()),
         false,
-    );
-    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Embed).await {
-        Ok(lease) => lease,
+    ) {
+        Ok(pair) => pair,
         Err((status, message)) => {
-            return with_job_id(
-                openai_error_response(status, message, Some("gpu_slot_busy")),
-                job.id(),
-            );
+            return openai_error_response(status, message, Some("gpu_slot_busy"));
         }
     };
     let reply = tokio::task::spawn_blocking(move || {
@@ -3524,7 +3549,7 @@ const IMAGE_SEED_BASE: u64 = 42;
 const IMAGE_STEPS: u32 = 20;
 
 /// Why an image generation stopped: a backend failure (500), or the job's
-/// shared cancel flag interrupted the in-flight render — kept a named
+/// cancel token/flag interrupted the in-flight render — kept a named
 /// variant so the route can answer the honest 409 `job_cancelled` instead
 /// of a generic 500.
 enum GenerateFailure {
@@ -3532,15 +3557,38 @@ enum GenerateFailure {
     Failed(String),
 }
 
+/// One fresh engine-stop flag per image. The job token is the cross-image
+/// cancel state; a flag left set by image 1 must never be inherited by
+/// image 2 before it starts.
+fn new_image_cancel_flag() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
+
+/// 409 body for a cancel that landed before image `index` started. The
+/// wording differs from the mid-generation arm so a client can tell that
+/// no render was in flight.
+fn image_cancel_before_start(job_id: &str, index: u64, total: u64, completed: u64) -> String {
+    format!(
+        "job {job_id} cancelled before image {index} of {total} started ({completed} of {total} image(s) generated)"
+    )
+}
+
+/// 409 body for a cancel that aborted image `index` while it rendered.
+fn image_cancel_mid_generation(job_id: &str, index: u64, total: u64, completed: u64) -> String {
+    format!(
+        "job {job_id} cancelled while generating image {index} of {total} ({completed} of {total} image(s) generated)"
+    )
+}
+
 /// One PNG generation under `spawn_blocking` (GPU work off the async
 /// runtime, like every other GPU route). Returns the encoded container
-/// bytes, or why it stopped. `cancel` is the job's shared cancel flag and
-/// `token` the job's registry token: the cancel endpoint can only reach
-/// the token, so this future bridges the two — the moment the token is
-/// marked the flag is set, and the configured pipeline (polling the flag
-/// mid-sampling) stops the running sd.cpp generation through
-/// `sd_cancel_generation`. The bridge waits for the worker to return so
-/// the 409-vs-500 contract stays with the actual outcome.
+/// bytes, or why it stopped. `cancel` is THIS image's engine-stop flag and
+/// `token` the job's cross-image registry token: the cancel endpoint can
+/// only reach the token, so this future bridges the two — the moment the
+/// token is marked the flag is set, and a pipeline polling the flag stops
+/// the running sd.cpp generation through `sd_cancel_generation`. The bridge
+/// waits for the worker to return, then re-checks the token so a backend
+/// that ignores the flag cannot answer 200 after a cancel.
 async fn generate_image_bytes(
     pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
     txt2img: honkbox_sd_core::Txt2ImgRequest,
@@ -3577,6 +3625,12 @@ async fn generate_image_bytes(
             (&mut worker).await.map_err(join_failure)?
         }
     };
+    // A backend that ignores the flag can still return Ok after the token
+    // was marked. The token is the authority: never hand back a full image
+    // for a cancelled request.
+    if token.is_cancelled() {
+        return Err(GenerateFailure::Cancelled);
+    }
     outcome
 }
 
@@ -3696,18 +3750,18 @@ async fn post_images_generations(
     // NEW-3, engine level: the images job is registry-visible and
     // interruptible — the loop checks the cancel token BETWEEN images, and
     // the running sd.cpp generation itself is aborted mid-flight through
-    // `sd_cancel_generation` (the per-request flag below bridges the job
-    // token into the pipeline seam).
-    let job = crate::jobs_registry::global().register(
+    // `sd_cancel_generation` (a per-image flag bridges the token into the
+    // pipeline seam). Admission comes FIRST: a 429 has no registered job,
+    // no lifecycle events and no X-Job-Id.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await,
         crate::jobs_registry::JobKind::Images,
         Some(slug.clone()),
         true,
-    );
-    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {
-        Ok(lease) => lease,
-        Err((status, message)) => {
-            return with_job_id(openai_error_response(status, message, None), job.id());
-        }
+    ) {
+        Ok(pair) => pair,
+        Err((status, message)) => return openai_error_response(status, message, None),
     };
     let mut images = Vec::with_capacity(n as usize);
     let backend_id = pipeline.backend_id();
@@ -3719,33 +3773,29 @@ async fn post_images_generations(
     let model_sha256 = resolve_model_entry(&slug, &catalog)
         .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
     let engine_version = honkbox_sd_core::engine_version_for(backend_id);
-    // Per-request cancel flag, shared with every `generate` call below: a
-    // cancel marks the job token AND this flag (the token→flag bridge in
-    // `generate_image_bytes`), so the in-flight render stops at the engine
-    // (`sd_cancel_generation`) instead of running to completion. Covers
-    // the n = 1 single-FFI case the token alone cannot reach.
-    let cancel = Arc::new(AtomicBool::new(false));
+    // The token is the cross-image cancel state; the engine-stop flag is
+    // fresh per image (created inside the loop). Reusing one flag would
+    // let a cancel of image 1 be inherited by image 2 before it starts.
     let job_token = job.token().clone();
     for i in 0..u64::from(n) {
-        // Cooperative cancellation (NEW-3): checked BETWEEN images here —
-        // including a cancel that arrived while this request waited in the
-        // admission queue (then 0 images are generated) — and, through the
+        // Cooperative cancellation (NEW-3): the token is checked BETWEEN
+        // images here — a cancel marked while an earlier image rendered is
+        // refused before this one starts — and, through this image's fresh
         // flag, DURING an image: the engine aborts its sampling loop and
         // the worker below answers the same named 409.
         if job.token().is_cancelled() {
             return with_job_id(
                 openai_error_response(
                     StatusCode::CONFLICT,
-                    format!(
-                        "job {} cancelled before completion ({} of {n} image(s) generated)",
-                        job.id(),
-                        i
-                    ),
+                    image_cancel_before_start(job.id(), i + 1, u64::from(n), i),
                     Some("job_cancelled"),
                 ),
                 job.id(),
             );
         }
+        // Fresh engine-stop flag for THIS image only; the token above is
+        // the state shared across the batch.
+        let cancel = new_image_cancel_flag();
         // Per-image seeds keep n>1 outputs distinct while staying
         // deterministic per request (explicit seed base when given).
         let seed = recipe.seed_base.wrapping_add(i);
@@ -3783,18 +3833,14 @@ async fn post_images_generations(
         {
             Ok(bytes) => bytes,
             Err(GenerateFailure::Cancelled) => {
-                // The in-flight render was aborted mid-sampling (or refused
-                // to start): answer the named 409, honestly counting the
-                // interrupted image as NOT generated.
+                // The in-flight render was aborted mid-sampling: answer the
+                // named 409, honestly counting the interrupted image as NOT
+                // generated. A cancel that landed before this image started
+                // takes the pre-start branch above instead.
                 return with_job_id(
                     openai_error_response(
                         StatusCode::CONFLICT,
-                        format!(
-                            "job {} cancelled mid-generation: image {} of {n} interrupted ({} of {n} generated)",
-                            job.id(),
-                            i + 1,
-                            i
-                        ),
+                        image_cancel_mid_generation(job.id(), i + 1, u64::from(n), i),
                         Some("job_cancelled"),
                     ),
                     job.id(),
@@ -4522,23 +4568,22 @@ async fn post_chat_completions(State(config): State<AppConfig>, body: Bytes) -> 
         }
         None => config.llm.clone(),
     };
-    // NEW-3 + REQ-6: register the job (interruptible only on the streaming
-    // path — the sync completion is one blocking FFI call), then take the
-    // GPU slot ONCE through the admission queue for either shape. The busy
-    // rejection keeps the OpenAI envelope + shared `Retry-After` hint.
+    // NEW-3 + REQ-6: take the GPU slot ONCE through the admission queue for
+    // either shape, then register the job (interruptible only on the
+    // streaming path — the sync completion is one blocking FFI call). A
+    // rejection keeps the OpenAI envelope + shared `Retry-After` hint but
+    // creates no job, events or X-Job-Id.
     let streaming = req.stream.is_some_and(|stream| stream);
-    let job = crate::jobs_registry::global().register(
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Chat,
         Some(slug.clone()),
         streaming,
-    );
-    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await {
-        Ok(lease) => lease,
+    ) {
+        Ok(pair) => pair,
         Err((status, message)) => {
-            return with_job_id(
-                openai_error_response(status, message, Some("gpu_slot_busy")),
-                job.id(),
-            );
+            return openai_error_response(status, message, Some("gpu_slot_busy"));
         }
     };
     if streaming {
@@ -5663,18 +5708,18 @@ async fn get_jobs() -> Json<JobList> {
 /// Shared cancel machinery for `POST /v1/jobs/{id}/cancel` and
 /// `DELETE /v1/jobs/{id}` (same semantics, two spellings — the REST-shaped
 /// verb and the explicit action): mark the job's cooperative-stop token
-/// and answer honestly. 200 `{cancelled: bool}` — `true` for jobs that
-/// check the token between work units or interrupt the engine mid-flight
-/// (image generations between images AND mid-sampling via
-/// `sd_cancel_generation`, streaming chat at the next token boundary);
-/// `false` = the job was found but its single blocking FFI call cannot be
-/// interrupted and runs to completion (still true for the whisper/audio
-/// backends). 404: unknown id (never registered, or the request already
-/// ended — the registry holds live work only).
+/// and answer honestly. 200 `{cancelled: bool}` — `true` for EVERY found
+/// id, because the token was marked; whether the work actually stops early
+/// is the separate `interruptible` contract reported by `GET /v1/jobs`
+/// and the job lifecycle events (image generations check between images
+/// AND mid-sampling via `sd_cancel_generation`; streaming chat checks at
+/// the next token boundary; a single blocking FFI call runs to completion).
+/// 404: unknown id (never registered, or the request already ended — the
+/// registry holds live work only).
 fn cancel_job_response(id: &str) -> Response {
     match crate::jobs_registry::global().cancel(id) {
-        Some(interruptible) => Json(JobCancelResult {
-            cancelled: interruptible,
+        Some(outcome) => Json(JobCancelResult {
+            cancelled: outcome.cancelled,
         })
         .into_response(),
         None => (StatusCode::NOT_FOUND, format!("unknown job id {id:?}")).into_response(),
@@ -6527,6 +6572,17 @@ fn settled_without_job(error: ImageOpWorkError) -> ImageOpSettled {
     }
 }
 
+/// A worker crash during pre-admission is an internal 500 (not a hostile
+/// input). No job exists yet, but the replay still gets an id like every
+/// other failure path; that id is deliberately NOT in the registry, so a
+/// cancel against it is a 404.
+fn image_op_pre_admission_join_failure(message: String) -> ImageOpSettled {
+    ImageOpSettled {
+        response: Err((StatusCode::INTERNAL_SERVER_ERROR, message, None)),
+        job_id: Some(format!("job_{}", ulid::Ulid::new())),
+    }
+}
+
 /// Map the blocking-pool work outcome onto units or a settleable failure:
 /// cancel → 409 between units, bad input → named 400, work/join failure →
 /// 500. Every failure stamps the job id so the replay keeps `X-Job-Id`
@@ -6593,14 +6649,9 @@ async fn execute_image_op(
             Ok(Ok(admitted)) => admitted,
             Ok(Err(err)) => return settled_without_job(err),
             Err(join) => {
-                return ImageOpSettled {
-                    response: Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("image-op worker failed: {join}"),
-                        None,
-                    )),
-                    job_id: None,
-                };
+                return image_op_pre_admission_join_failure(format!(
+                    "image-op worker failed: {join}"
+                ));
             }
         };
     let job = crate::jobs_registry::global().register(
@@ -6881,6 +6932,12 @@ async fn post_image_ops(
     }
 }
 
+/// Shared 501 hint for unsupported recognition kinds: `recognition` is a
+/// TOP-LEVEL capabilities field, not a member of `features`.
+fn recognition_501_message(detail: &str) -> String {
+    format!("{detail}; see GET /v1/capabilities recognition")
+}
+
 /// `POST /v1/recognize` (recognition tickets): one image in, recognition
 /// out. Stage 1 is synchronous — barcode-class latency is sub-millisecond,
 /// so the request-response shape needs no job registry entry; the
@@ -6890,8 +6947,8 @@ async fn post_image_ops(
 /// payloads are accepted: nothing is ever fetched, so there is no SSRF
 /// surface (same policy as `/v1/image-ops`). Kinds without a compiled
 /// backend answer the named 501 `recognition_kind_unsupported` — the same
-/// `kinds()` gate `features.recognition` advertises, so honest absence is
-/// observable from both directions.
+/// `kinds()` gate the top-level `recognition` capability advertises, so
+/// honest absence is observable from both directions.
 #[utoipa::path(
     post,
     path = "/v1/recognize",
@@ -6929,8 +6986,8 @@ async fn post_recognize(
     if !config.recognition.kinds().contains(&kind) {
         return openai_error_response(
             StatusCode::NOT_IMPLEMENTED,
-            format!(
-                "recognition kind {:?} is not served by this build (backend {:?} serves {:?}); see GET /v1/capabilities features.recognition",
+            recognition_501_message(&format!(
+                "recognition kind {:?} is not served by this build (backend {:?} serves {:?})",
                 kind.as_str(),
                 config.recognition.backend_id(),
                 config
@@ -6939,7 +6996,7 @@ async fn post_recognize(
                     .iter()
                     .map(|k| k.as_str())
                     .collect::<Vec<_>>()
-            ),
+            )),
             Some("recognition_kind_unsupported"),
         );
     }
@@ -6963,10 +7020,10 @@ async fn post_recognize(
         Err(RecError::Unsupported { kind, backend }) => {
             return openai_error_response(
                 StatusCode::NOT_IMPLEMENTED,
-                format!(
-                    "recognition kind {:?} is not served by backend {backend:?}; see GET /v1/capabilities features.recognition",
+                recognition_501_message(&format!(
+                    "recognition kind {:?} is not served by backend {backend:?}",
                     kind.as_str()
-                ),
+                )),
                 Some("recognition_kind_unsupported"),
             );
         }
@@ -7028,7 +7085,7 @@ fn decode_recognize_image(uri: &str) -> Result<Vec<u8>, (String, &'static str)> 
     };
     let Some((header, payload)) = rest.split_once(',') else {
         return Err(bad(
-            "data URI is missing the `,<base64 payload>` part".to_owned(),
+            "data URI is missing the `,<base64 payload>` part".to_owned()
         ));
     };
     let Some(mime) = header.strip_suffix(";base64") else {
@@ -7474,5 +7531,135 @@ mod tests {
             vec!["text".to_owned()]
         };
         assert_eq!(entry.modalities, expected);
+    }
+
+    /// A backend that ignores the cancel flag must not answer 200 with a
+    /// full image after the token was marked.
+    struct CancelIgnoringPipeline;
+
+    impl honkbox_sd_core::SdPipeline for CancelIgnoringPipeline {
+        fn generate(
+            &self,
+            _req: &honkbox_sd_core::Txt2ImgRequest,
+            _cancel: &AtomicBool,
+        ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+            Ok(honkbox_sd_core::GeneratedImage {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 255],
+            })
+        }
+
+        fn backend_id(&self) -> &'static str {
+            "cancel-ignoring-test"
+        }
+    }
+
+    fn one_pixel_request() -> honkbox_sd_core::Txt2ImgRequest {
+        honkbox_sd_core::Txt2ImgRequest {
+            prompt: String::new(),
+            seed: 1,
+            steps: 1,
+            width: 1,
+            height: 1,
+            model_slug: String::new(),
+            clip: None,
+            vae: None,
+            sampler: None,
+            scheduler: None,
+            cfg_scale: None,
+            negative_prompt: None,
+            loras: None,
+            init_image: None,
+            mask_image: None,
+            strength: None,
+            hires: None,
+            control_net: None,
+            control_image: None,
+            controlnet_strength: None,
+            control_type: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_token_beats_a_backend_that_returns_ok() {
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        let outcome = generate_image_bytes(
+            Arc::new(CancelIgnoringPipeline),
+            one_pixel_request(),
+            honkbox_sd_core::OutputFormat::Png,
+            None,
+            new_image_cancel_flag(),
+            token,
+        )
+        .await;
+        assert!(matches!(outcome, Err(GenerateFailure::Cancelled)));
+    }
+
+    #[test]
+    fn each_image_gets_a_fresh_cancel_flag() {
+        let first = new_image_cancel_flag();
+        let second = new_image_cancel_flag();
+        first.store(true, Ordering::Release);
+        assert!(!second.load(Ordering::Acquire));
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn image_cancel_messages_name_the_phase() {
+        let before = image_cancel_before_start("job_1", 2, 3, 1);
+        let during = image_cancel_mid_generation("job_1", 2, 3, 1);
+        assert!(before.contains("before image 2 of 3 started"), "{before}");
+        assert!(!before.contains("while generating"), "{before}");
+        assert!(during.contains("while generating image 2 of 3"), "{during}");
+        assert!(!during.contains("before image"), "{during}");
+        assert!(before.contains("job_1") && during.contains("job_1"));
+    }
+
+    #[test]
+    fn admission_rejection_registers_no_job_and_has_no_job_header() {
+        let registry = crate::jobs_registry::Registry::default();
+        let mut events = registry.subscribe();
+        let rejection = (StatusCode::TOO_MANY_REQUESTS, "slot busy".to_owned());
+        let result = admit_then_register(
+            &registry,
+            Err(rejection.clone()),
+            crate::jobs_registry::JobKind::Chat,
+            Some("m".to_owned()),
+            true,
+        );
+        let error = result.expect_err("admission rejected");
+        assert_eq!(error, rejection);
+        assert!(registry.list().is_empty());
+        assert!(events.try_recv().is_err(), "no job_registered on a 429");
+        let response: Response = (error.0, error.1).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().get(JOB_ID_HEADER).is_none());
+    }
+
+    #[test]
+    fn pre_admission_join_failure_stamps_a_job_id() {
+        let settled = image_op_pre_admission_join_failure("worker died".to_owned());
+        match settled.response {
+            Err((status, message, code)) => {
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                assert_eq!(message, "worker died");
+                assert_eq!(code, None);
+            }
+            Ok(_) => panic!("join failure must be a 500"),
+        }
+        let id = settled.job_id.expect("id stamped");
+        assert!(id.starts_with("job_"), "{id}");
+    }
+
+    #[test]
+    fn recognition_501_points_at_the_top_level_capability() {
+        let message = recognition_501_message("unsupported kind");
+        assert!(
+            message.contains("GET /v1/capabilities recognition"),
+            "{message}"
+        );
+        assert!(!message.contains("features.recognition"), "{message}");
     }
 }

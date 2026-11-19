@@ -118,6 +118,30 @@ fn external_style_url_is_rejected() {
     }
 }
 
+/// External `url(...)` in a presentation attribute is rejected.
+#[test]
+fn external_presentation_attribute_urls_are_rejected() {
+    for attr in ["fill", "stroke", "filter", "mask", "clip-path"] {
+        let source = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\" {attr}=\"url(http://example.invalid/x.svg)\"/></svg>"
+        );
+        match svg::validate_svg(source.as_bytes(), &limits()) {
+            Err(SvgError::ExternalReference { attr: found, value }) => {
+                assert_eq!(found, attr);
+                assert!(value.contains("example.invalid"));
+            }
+            other => panic!("expected ExternalReference for {attr}, got {other:?}"),
+        }
+    }
+}
+
+/// A same-document `url(#id)` in a presentation attribute is accepted.
+#[test]
+fn local_presentation_attribute_url_is_accepted() {
+    let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><defs><linearGradient id=\"g\"/></defs><rect width=\"10\" height=\"10\" fill=\"url(#g)\"/></svg>";
+    svg::validate_svg(source.as_bytes(), &limits()).expect("a local url is accepted");
+}
+
 /// An external reference inside a `<style>` element is rejected too.
 #[test]
 fn external_style_element_url_is_rejected() {

@@ -76,10 +76,7 @@ use routes::{AppConfig, AuthConfig, app};
 
 /// One test-scoped data dir (unique per test name + pid; pre-cleaned).
 fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "honkbox-artifacts-{}-{name}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("honkbox-artifacts-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create test data dir");
     dir
@@ -126,10 +123,7 @@ fn app_with(data_dir: Option<PathBuf>, max_artifact_bytes: u64) -> Router {
 
 fn default_app(name: &str) -> (Router, PathBuf) {
     let dir = tmp_dir(name);
-    let router = app_with(
-        Some(dir.clone()),
-        crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
-    );
+    let router = app_with(Some(dir.clone()), crate::config::DEFAULT_ARTIFACT_MAX_BYTES);
     (router, dir)
 }
 
@@ -163,7 +157,8 @@ fn multipart_body(parts: &[Chunk]) -> (String, Vec<u8>) {
     let mut body = Vec::new();
     for one in parts {
         body.extend_from_slice(
-            format!("--{boundary}\r\ncontent-disposition: form-data; name=\"chunk\"\r\n").as_bytes(),
+            format!("--{boundary}\r\ncontent-disposition: form-data; name=\"chunk\"\r\n")
+                .as_bytes(),
         );
         if let Some(index) = one.index {
             body.extend_from_slice(format!("x-chunk-index: {index}\r\n").as_bytes());
@@ -173,10 +168,7 @@ fn multipart_body(parts: &[Chunk]) -> (String, Vec<u8>) {
         body.extend_from_slice(b"\r\n");
     }
     body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    (
-        format!("multipart/form-data; boundary={boundary}"),
-        body,
-    )
+    (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
 /// `POST /v1/artifacts` (multipart); returns (status, parsed JSON body).
@@ -258,10 +250,7 @@ async fn upload_single_shot(app: Router, content_type: &str, data: &[u8]) -> Art
         "/v1/artifacts",
         &[
             ("content-type", "application/octet-stream".to_owned()),
-            (
-                "x-artifact-content-type",
-                content_type.to_owned(),
-            ),
+            ("x-artifact-content-type", content_type.to_owned()),
         ],
         data.to_vec(),
     )
@@ -292,9 +281,15 @@ async fn single_shot_roundtrip() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, data);
-    assert_eq!(header(&headers, "etag"), Some(format!("\"{}\"", info.sha256).as_str()));
+    assert_eq!(
+        header(&headers, "etag"),
+        Some(format!("\"{}\"", info.sha256).as_str())
+    );
     assert_eq!(header(&headers, "accept-ranges"), Some("bytes"));
-    assert_eq!(header(&headers, "content-type"), Some("application/x-honkbox"));
+    assert_eq!(
+        header(&headers, "content-type"),
+        Some("application/x-honkbox")
+    );
     assert_eq!(header(&headers, "content-length"), Some("2048"));
 
     let (status, head_headers, body) = raw_request(
@@ -354,12 +349,8 @@ async fn chunked_upload_interrupts_and_resumes() {
     assert_eq!(manifest["status"], "uploading");
     assert_eq!(manifest["received"], serde_json::json!([0, 1]));
 
-    let (status, manifest) = post_chunks(
-        app.clone(),
-        &[("x-upload-id", upload_id)],
-        &[chunk(2, &c2)],
-    )
-    .await;
+    let (status, manifest) =
+        post_chunks(app.clone(), &[("x-upload-id", upload_id)], &[chunk(2, &c2)]).await;
     assert_eq!(status, StatusCode::OK, "final chunk: {manifest}");
     assert_eq!(manifest["status"], "complete");
     let artifact = manifest["artifact"].as_object().expect("artifact present");
@@ -403,7 +394,10 @@ async fn chunk_order_is_irrelevant() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{manifest}");
-    let upload_id = manifest["upload_id"].as_str().expect("upload id").to_owned();
+    let upload_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
 
     // One untagged part fills the lowest hole (1); then the last hole (3).
     let (status, manifest) = post_chunks(
@@ -418,12 +412,8 @@ async fn chunk_order_is_irrelevant() {
     assert_eq!(status, StatusCode::OK, "{manifest}");
     assert_eq!(manifest["received"], serde_json::json!([0, 1, 2]));
 
-    let (status, manifest) = post_chunks(
-        app,
-        &[("x-upload-id", upload_id)],
-        &[chunk(3, &parts[3])],
-    )
-    .await;
+    let (status, manifest) =
+        post_chunks(app, &[("x-upload-id", upload_id)], &[chunk(3, &parts[3])]).await;
     assert_eq!(status, StatusCode::OK, "{manifest}");
     assert_eq!(manifest["status"], "complete");
     assert_eq!(
@@ -446,7 +436,10 @@ async fn conflicting_chunk_is_409() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let upload_id = manifest["upload_id"].as_str().expect("upload id").to_owned();
+    let upload_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
 
     let (status, body) = post_chunks(
         app.clone(),
@@ -475,10 +468,7 @@ async fn unknown_upload_id_is_404() {
     let (app, dir) = default_app("unknown-upload");
     let (status, body) = post_chunks(
         app,
-        &[(
-            "x-upload-id",
-            "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
-        )],
+        &[("x-upload-id", "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned())],
         &[chunk(0, b"x")],
     )
     .await;
@@ -491,10 +481,8 @@ async fn unknown_upload_id_is_404() {
 #[tokio::test]
 async fn oversized_chunk_is_named_413() {
     let (app, dir) = default_app("chunk-cap");
-    let oversized = vec![
-        0u8;
-        usize::try_from(artifacts::CHUNK_MAX_BYTES).expect("chunk cap fits usize") + 1
-    ];
+    let oversized =
+        vec![0u8; usize::try_from(artifacts::CHUNK_MAX_BYTES).expect("chunk cap fits usize") + 1];
     let (status, body) = post_chunks(
         app,
         &[("x-chunk-count", "1".to_owned())],
@@ -538,7 +526,10 @@ async fn artifact_cap_is_enforced_named() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{manifest}");
-    let upload_id = manifest["upload_id"].as_str().expect("upload id").to_owned();
+    let upload_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
     let (status, body) = post_chunks(
         app,
         &[("x-upload-id", upload_id)],
@@ -558,7 +549,11 @@ async fn artifact_cap_is_enforced_named() {
         Vec::new(),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "rejected upload stored nothing");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "rejected upload stored nothing"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -580,7 +575,10 @@ async fn ranged_gets_return_exact_slices() {
     )
     .await;
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(header(&headers, "content-range"), Some("bytes 100-199/1024"));
+    assert_eq!(
+        header(&headers, "content-range"),
+        Some("bytes 100-199/1024")
+    );
     assert_eq!(header(&headers, "content-length"), Some("100"));
     assert_eq!(body, &data[100..200]);
 
@@ -594,7 +592,10 @@ async fn ranged_gets_return_exact_slices() {
     )
     .await;
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(header(&headers, "content-range"), Some("bytes 900-1023/1024"));
+    assert_eq!(
+        header(&headers, "content-range"),
+        Some("bytes 900-1023/1024")
+    );
     assert_eq!(body, &data[900..]);
 
     let (status, headers, body) = raw_request(
@@ -606,7 +607,10 @@ async fn ranged_gets_return_exact_slices() {
     )
     .await;
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(header(&headers, "content-range"), Some("bytes 1000-1023/1024"));
+    assert_eq!(
+        header(&headers, "content-range"),
+        Some("bytes 1000-1023/1024")
+    );
     assert_eq!(body, &data[1000..]);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -677,7 +681,10 @@ async fn if_match_and_if_range() {
             app.clone(),
             "GET",
             &uri,
-            &[("if-match", value.clone()), ("range", "bytes=0-9".to_owned())],
+            &[
+                ("if-match", value.clone()),
+                ("range", "bytes=0-9".to_owned()),
+            ],
             Vec::new(),
         )
         .await;
@@ -801,8 +808,15 @@ async fn range_responses_stay_uncompressed_full_get_may_compress() {
     )
     .await;
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
-    assert_eq!(header(&headers, "content-encoding"), None, "206 must be plain");
-    assert_eq!(header(&headers, "content-range"), Some("bytes 100-199/4096"));
+    assert_eq!(
+        header(&headers, "content-encoding"),
+        None,
+        "206 must be plain"
+    );
+    assert_eq!(
+        header(&headers, "content-range"),
+        Some("bytes 100-199/4096")
+    );
     assert_eq!(body, &data[100..200], "byte-identical slice");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -813,10 +827,7 @@ async fn range_responses_stay_uncompressed_full_get_may_compress() {
 #[tokio::test]
 async fn resume_survives_server_restart() {
     let dir = tmp_dir("restart");
-    let app_before = app_with(
-        Some(dir.clone()),
-        crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
-    );
+    let app_before = app_with(Some(dir.clone()), crate::config::DEFAULT_ARTIFACT_MAX_BYTES);
     let c0 = b"before-restart".to_vec();
     let c1 = b"after-restart".to_vec();
     let (status, manifest) = post_chunks(
@@ -826,14 +837,14 @@ async fn resume_survives_server_restart() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{manifest}");
-    let upload_id = manifest["upload_id"].as_str().expect("upload id").to_owned();
+    let upload_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
     // `app_before` was consumed by the request — the new Registry below IS
     // the restart (its in-memory upload map starts empty; only the on-disk
     // manifest knows about chunk 0).
-    let app_after = app_with(
-        Some(dir.clone()),
-        crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
-    );
+    let app_after = app_with(Some(dir.clone()), crate::config::DEFAULT_ARTIFACT_MAX_BYTES);
     let (status, manifest) = post_chunks(
         app_after.clone(),
         &[("x-upload-id", upload_id)],
@@ -844,7 +855,10 @@ async fn resume_survives_server_restart() {
     assert_eq!(manifest["status"], "complete");
 
     let whole: Vec<u8> = [c0.as_slice(), c1.as_slice()].concat();
-    let id = manifest["artifact"]["id"].as_str().expect("artifact id").to_owned();
+    let id = manifest["artifact"]["id"]
+        .as_str()
+        .expect("artifact id")
+        .to_owned();
     let (status, _, body) = raw_request(
         app_after,
         "GET",
@@ -876,10 +890,16 @@ async fn chunk_count_contract() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let upload_id = manifest["upload_id"].as_str().expect("upload id").to_owned();
+    let upload_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
     let (status, body) = post_chunks(
         app,
-        &[("x-upload-id", upload_id), ("x-chunk-count", "5".to_owned())],
+        &[
+            ("x-upload-id", upload_id),
+            ("x-chunk-count", "5".to_owned()),
+        ],
         &[chunk(1, b"y")],
     )
     .await;
@@ -901,5 +921,259 @@ async fn out_of_bounds_chunk_index_is_400() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error_code(&body), Some("invalid_chunk_index"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Active/declared content types are refused on upload, and every stored
+/// byte response forces download + nosniff so a bad type cannot execute in
+/// the server origin (S1).
+#[tokio::test]
+async fn active_content_types_rejected_and_get_forces_download() {
+    let (app, dir) = default_app("xss-hardening");
+    for bad in [
+        "text/html",
+        "TEXT/HTML",
+        "image/svg+xml",
+        "text/javascript",
+        "application/javascript",
+        "text/xml",
+    ] {
+        let (status, _, body) = raw_request(
+            app.clone(),
+            "POST",
+            "/v1/artifacts",
+            &[
+                ("content-type", "application/octet-stream".to_owned()),
+                ("x-artifact-content-type", bad.to_owned()),
+            ],
+            b"<script>alert(1)</script>".to_vec(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "type {bad}: {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(
+            error_code(&serde_json::from_slice::<Value>(&body).expect("json")),
+            Some("invalid_content_type")
+        );
+    }
+
+    let info = upload_single_shot(app.clone(), "text/plain", b"hello").await;
+    let uri = format!("/v1/artifacts/{}/bytes", info.id);
+    let (status, headers, _) = raw_request(app.clone(), "GET", &uri, &[], Vec::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(header(&headers, "content-disposition"), Some("attachment"));
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
+
+    // Ranged responses carry the stored bytes too: same hardening.
+    let (status, headers, _) = raw_request(
+        app,
+        "GET",
+        &uri,
+        &[("range", "bytes=0-1".to_owned())],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(header(&headers, "content-disposition"), Some("attachment"));
+    assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Storage errors log the full path server-side but return a fixed message
+/// with no absolute `data_dir` path (S2).
+#[tokio::test]
+async fn storage_error_hides_data_dir_path() {
+    let (app, dir) = default_app("storage-error-redaction");
+    let data = b"known payload for a deterministic digest";
+    let sha = sha256_hex(data);
+    // Make the sidecar's atomic-write .part path unwritable so the upload
+    // fails in write_json_atomic, whose error text embeds the absolute path.
+    let sidecar_part = dir
+        .join("artifacts")
+        .join("blobs")
+        .join(&sha[..2])
+        .join(format!("{sha}.json.part"));
+    std::fs::create_dir_all(&sidecar_part).expect("create blocking directory");
+
+    let (status, _, body) = raw_request(
+        app,
+        "POST",
+        "/v1/artifacts",
+        &[("content-type", "application/octet-stream".to_owned())],
+        data.to_vec(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["error"]["code"], "storage_unavailable");
+    assert_eq!(json["error"]["message"], "artifact storage failure");
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        !text.contains(dir.to_string_lossy().as_ref()),
+        "data dir leaked: {text}"
+    );
+    assert!(!text.contains(sha.as_str()), "internal path leaked: {text}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A fresh session that fails (no parts, or a rejected part) leaves no
+/// directory behind; the map entry is dropped too (S3).
+#[tokio::test]
+async fn failed_new_upload_leaves_no_session() {
+    let (app, dir) = default_app("abandoned-upload");
+    let uploads = dir.join("artifacts").join("uploads");
+
+    let (status, body) = post_chunks(app.clone(), &[("x-chunk-count", "2".to_owned())], &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), Some("invalid_chunk_count"));
+    assert!(
+        std::fs::read_dir(&uploads)
+            .expect("uploads dir")
+            .next()
+            .is_none()
+    );
+
+    let empty = Chunk {
+        index: None,
+        data: Vec::new(),
+    };
+    let (status, body) = post_chunks(app, &[("x-chunk-count", "1".to_owned())], &[empty]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), Some("empty_chunk"));
+    assert!(
+        std::fs::read_dir(&uploads)
+            .expect("uploads dir")
+            .next()
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A bad chunk on a RESUMED request must not destroy the session: the client
+/// still owns the upload id and can retry (S3).
+#[tokio::test]
+async fn failed_resumed_upload_stays_resumable() {
+    let (app, dir) = default_app("resume-after-error");
+    let (status, manifest) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "2".to_owned())],
+        &[chunk(0, b"first")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
+
+    let (status, body) = post_chunks(
+        app.clone(),
+        &[("x-upload-id", id.clone())],
+        &[Chunk {
+            index: None,
+            data: Vec::new(),
+        }],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), Some("empty_chunk"));
+
+    let (status, manifest) = post_chunks(app, &[("x-upload-id", id)], &[chunk(1, b"second")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(manifest["status"], "complete");
+    assert_eq!(manifest["artifact"]["size_bytes"], 11);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Chunk count and parts-per-request are bounded, and zero-byte parts are
+/// rejected instead of consuming a manifest slot (S4).
+#[tokio::test]
+async fn chunk_and_part_bounds_are_enforced() {
+    let (app, dir) = default_app("bounds");
+    // MAX_CHUNK_COUNT is 10_000 in artifacts.rs.
+    let (status, body) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "10001".to_owned())],
+        &[chunk(0, b"x")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), Some("invalid_chunk_count"));
+
+    let parts: Vec<Chunk> = (0..1025).map(|i| chunk(i, b"x")).collect();
+    let (status, body) = post_chunks(app, &[("x-chunk-count", "1025".to_owned())], &parts).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), Some("too_many_parts"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Untagged parts fill the lowest free index across resumed requests; the
+/// running byte total is incremented (not re-summed) on each register (S4).
+#[tokio::test]
+async fn untagged_chunks_fill_lowest_index_across_resume() {
+    let (app, dir) = default_app("lowest-free");
+    let untagged = |data: &'static [u8]| Chunk {
+        index: None,
+        data: data.to_vec(),
+    };
+
+    let (status, manifest) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "3".to_owned())],
+        &[untagged(b"a")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
+    let (status, _) = post_chunks(
+        app.clone(),
+        &[("x-upload-id", id.clone())],
+        &[untagged(b"b")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, manifest) = post_chunks(app, &[("x-upload-id", id)], &[untagged(b"c")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(manifest["status"], "complete");
+    let expected = sha256_hex(b"abc");
+    assert_eq!(manifest["artifact"]["id"].as_str(), Some(expected.as_str()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A weak validator never matches the strong `ETag` (S6).
+#[tokio::test]
+async fn weak_if_match_is_rejected() {
+    let (app, dir) = default_app("weak-if-match");
+    let info = upload_single_shot(app.clone(), "application/octet-stream", b"payload").await;
+    let uri = format!("/v1/artifacts/{}/bytes", info.id);
+
+    let (status, _, body) = raw_request(
+        app.clone(),
+        "GET",
+        &uri,
+        &[("if-match", format!("W/\"{}\"", info.sha256))],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    let json: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(error_code(&json), Some("precondition_failed"));
+
+    let (status, _, _) = raw_request(
+        app,
+        "GET",
+        &uri,
+        &[("if-match", format!("\"{}\"", info.sha256))],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     let _ = std::fs::remove_dir_all(dir);
 }

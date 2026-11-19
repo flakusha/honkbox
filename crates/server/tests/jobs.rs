@@ -352,8 +352,11 @@ async fn single_image_cancel_interrupts_mid_generation() {
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["error"]["code"], "job_cancelled");
     let message = parsed["error"]["message"].as_str().expect("message");
-    assert!(message.contains("cancelled mid-generation"), "{body}");
-    assert!(message.contains("image 1 of 1 interrupted"), "{body}");
+    assert!(
+        message.contains("cancelled while generating image 1 of 1"),
+        "{body}"
+    );
+    assert!(message.contains("0 of 1 image(s) generated"), "{body}");
     // Exactly one generate call was entered (and abandoned).
     assert_eq!(sd.calls.load(Ordering::SeqCst), 1);
     // No bundle and no live job: the registry emptied.

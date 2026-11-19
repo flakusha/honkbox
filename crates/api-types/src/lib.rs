@@ -2177,14 +2177,19 @@ pub struct JobList {
     pub data: Vec<JobInfo>,
 }
 
-/// `POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` mirrors the
-/// job's `interruptible` flag: `true` = the job will actually stop at its
-/// next checkpoint; `false` = the job was found and marked, but its single
-/// blocking inference call is not interruptible mid-flight. An unknown id
-/// (finished or never registered) is a plain-text 404.
+/// `POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` is `true`
+/// when a cancel was requested for a found id — the cooperative-stop token
+/// was marked — and is never `false` for a found id; an unknown id
+/// (finished or never registered) is a plain-text 404. Whether the work can
+/// actually stop early is a SEPARATE fact: `interruptible` is reported per
+/// job by [`JobInfo`] (`GET /v1/jobs`) and by the `job_cancelled`
+/// [`JobEvent`] (`GET /v1/events`), not by this response.
 #[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct JobCancelResult {
-    /// Whether the cancel will stop the job at its next work-unit boundary.
+    /// `true` = a cancel was requested and the token was marked (every
+    /// found id); `false` is never returned here — an unknown id is a 404.
+    /// Does NOT say whether the job can stop early; read `interruptible`
+    /// from [`JobInfo`] or the `job_cancelled` [`JobEvent`].
     pub cancelled: bool,
 }
 
@@ -2360,8 +2365,9 @@ pub struct ArtifactManifest {
     pub chunks: Vec<ArtifactChunk>,
     /// `"uploading"` until the final chunk, then `"complete"`.
     pub status: String,
-    /// Present exactly when `status` is `"complete"`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absent until the upload completes; present exactly when `status` is
+    /// `"complete"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<ArtifactInfo>,
 }
 
@@ -2537,6 +2543,29 @@ mod tests {
             let caps = ModelCapabilities::for_kind(kind);
             assert!(!caps.chat && !caps.completion && !caps.embeddings);
         }
+    }
+
+    /// `skip_serializing_if` omits these keys on the wire, so their TS
+    /// declarations must be optional (`?:`) — a required `T | null` field
+    /// makes a client's `!== null` check trip over `undefined`.
+    #[test]
+    fn omitted_wire_fields_are_optional_in_ts() {
+        let config = ts_rs::Config::new();
+        let region = RecognitionRegion::decl(&config);
+        assert!(
+            region.contains("confidence?: number | null"),
+            "confidence must be optional in TS: {region}"
+        );
+        let engine = RecognitionEngineMeta::decl(&config);
+        assert!(
+            engine.contains("version?: string | null"),
+            "version must be optional in TS: {engine}"
+        );
+        let manifest = ArtifactManifest::decl(&config);
+        assert!(
+            manifest.contains("artifact?: ArtifactInfo | null"),
+            "artifact must be optional in TS: {manifest}"
+        );
     }
 }
 
@@ -3006,7 +3035,7 @@ pub struct RecognizeRequest {
 }
 
 /// One located region: axis-aligned pixel bbox + text. `confidence` is
-/// `null` when the engine produces none (rxing does not).
+/// absent when the engine produces none (rxing does not).
 #[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RecognitionRegion {
     /// Pixel bbox `[x_min, y_min, x_max, y_max]` in source-image
@@ -3016,7 +3045,7 @@ pub struct RecognitionRegion {
     /// Recognized text for this region (barcode: the full payload).
     pub text: String,
     /// Engine confidence in `0.0..=1.0`, absent when unknown.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
 }
 
@@ -3035,8 +3064,9 @@ pub struct RecognitionPage {
 pub struct RecognitionEngineMeta {
     /// Stable backend id (`"rxing"`, `"stub-recognition"`, …).
     pub id: String,
-    /// Engine dependency version this build linked; absent for the stub.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Engine dependency version this build linked; absent when unknown
+    /// (the stub has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// `true` only when `regions[].bbox` carries real coordinates — a
     /// client must not treat regions as located otherwise (VLM rule).

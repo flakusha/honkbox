@@ -20,7 +20,7 @@ use metadata::probe;
 pub use metadata::{GgufMetadata, ModelFileMetadata, SafetensorsMetadata};
 
 /// Which kind of root a model file was found under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RootKind {
     /// A language-model directory (HF cache layout).
     Llm,
@@ -288,7 +288,11 @@ fn rel_posix(root: &Path, path: &Path) -> Option<String> {
 #[must_use]
 pub fn scan_roots(roots: &ModelRoots) -> Vec<FoundModel> {
     let mut out = Vec::new();
-    let mut visited: HashSet<PathBuf> = HashSet::new();
+    // The cycle guard is keyed by (root kind, canonical dir): a nested root of
+    // a different kind (e.g. `llm=/models`, `comfy=/models/comfy`) must still
+    // be scanned, while a symlink cycle inside one root stays guarded and a
+    // root repeated under the same kind is scanned once.
+    let mut visited: HashSet<(RootKind, PathBuf)> = HashSet::new();
     for dir in &roots.llm_dirs {
         scan_one(dir, RootKind::Llm, &mut visited, &mut out);
     }
@@ -363,7 +367,7 @@ fn visit(
 fn scan_one(
     root: &Path,
     kind: RootKind,
-    visited: &mut HashSet<PathBuf>,
+    visited: &mut HashSet<(RootKind, PathBuf)>,
     out: &mut Vec<FoundModel>,
 ) {
     if !root.is_dir() {
@@ -372,9 +376,10 @@ fn scan_one(
     // Stack of (dir, depth); root itself is depth 0, its entries depth 1.
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
-        // Symlink-cycle guard: skip dirs already visited by canonical path.
+        // Symlink-cycle guard: skip dirs already visited by canonical path
+        // under the same root kind.
         let canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-        if !visited.insert(canon) {
+        if !visited.insert((kind, canon)) {
             continue;
         }
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -595,5 +600,63 @@ mod tests {
         );
         assert_eq!(sibling_mmproj(Path::new("model.gguf")), None);
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn nested_roots_are_scanned_per_kind() {
+        let base = std::env::temp_dir().join(format!("honkbox-nested-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let models = base.join("models");
+        let comfy = models.join("comfy");
+        std::fs::create_dir_all(comfy.join("checkpoints")).unwrap();
+        std::fs::write(models.join("top.safetensors"), b"m").unwrap();
+        std::fs::write(comfy.join("checkpoints/sdxl.safetensors"), b"s").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: vec![models],
+            comfyui_dirs: vec![comfy],
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        });
+        std::fs::remove_dir_all(&base).unwrap();
+        let kinds: Vec<(String, ModelKind)> =
+            entries.iter().map(|e| (e.slug.clone(), e.kind)).collect();
+        // The nested comfy root is scanned even though it lives under the llm
+        // root; the comfy slug carries the comfy modality.
+        assert!(
+            kinds.contains(&(
+                "comfy:checkpoints/sdxl.safetensors".to_owned(),
+                ModelKind::Sd
+            )),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("llm:top.safetensors".to_owned(), ModelKind::Llm)),
+            "{kinds:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cycle_in_one_root_is_guarded() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("honkbox-cycle-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("cyc");
+        let dir = root.join("dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("m.gguf"), b"x").unwrap();
+        // `dir/loop` points back at the root: a symlink cycle.
+        symlink(&root, dir.join("loop")).unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: vec![root],
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        });
+        std::fs::remove_dir_all(&base).unwrap();
+        let slugs: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
+        // The cycle is cut, the real file is found exactly once.
+        assert_eq!(slugs, ["llm:dir/m.gguf"]);
     }
 }

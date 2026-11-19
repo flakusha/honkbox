@@ -96,6 +96,7 @@ fn catalog_with(entries: &[ModelCatalogEntry]) -> ModelCatalog {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // mirrors the other test helpers' owned-argument style
 fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),

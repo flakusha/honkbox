@@ -8,6 +8,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -35,9 +38,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -482,6 +482,248 @@ async fn resume_without_meta_cold_restarts_unresumable() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// Resume is gated on a saved strong `ETag`: a missing or weak validator must
+/// cold-restart even when a non-empty `.part` exists.
+#[tokio::test]
+async fn resume_requires_strong_saved_etag() {
+    let root = temp_root("resume-etag-gate");
+    let body = b"fresh-whole-body".to_vec();
+    let payload = body.clone();
+    let server = MockServer::new(move |req| {
+        assert_eq!(
+            req.header("range"),
+            None,
+            "no strong saved etag ⇒ no Range request"
+        );
+        MockResponse::once(200, Vec::new(), payload.clone())
+    });
+    let no_etag = target_for(&root, DownloadKind::Llm, "gate-noetag.gguf");
+    let weak_etag = target_for(&root, DownloadKind::Llm, "gate-weak.gguf");
+    let no_url = server.url("gate-noetag.gguf");
+    let weak_url = server.url("gate-weak.gguf");
+    seed_part(&no_etag, b"stale-prefix", &no_url, None);
+    seed_part(
+        &weak_etag,
+        b"stale-prefix",
+        &weak_url,
+        Some("W/\"weak-etag\""),
+    );
+    let mgr = manager(&root);
+    for (target, url) in [(&no_etag, no_url), (&weak_etag, weak_url)] {
+        let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+        let state = wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Done).await;
+        assert_eq!(state.bytes_done, body.len() as u64);
+        assert_eq!(std::fs::read(target).expect("final file"), body);
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A 206 whose `ETag` differs from the saved one is unusable: the poisoned
+/// sidecars are deleted and the file is fetched cold once.
+#[tokio::test]
+async fn resume_206_etag_mismatch_retries_cold() {
+    let root = temp_root("resume-etag-mismatch");
+    let prefix = b"OLD-PREFIX".to_vec();
+    let full = b"brand-new-full-body".to_vec();
+    let calls = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&calls);
+    let full_payload = full.clone();
+    let server = MockServer::new(move |req| {
+        let mut calls = seen.lock().expect("calls lock");
+        *calls += 1;
+        if *calls == 1 {
+            assert_eq!(req.header("range"), Some("bytes=10-"));
+            assert_eq!(req.header("if-range"), Some("\"old-etag\""));
+            MockResponse::once(
+                206,
+                vec![
+                    ("ETag".to_owned(), "\"new-etag\"".to_owned()),
+                    ("Accept-Ranges".to_owned(), "bytes".to_owned()),
+                    ("Content-Range".to_owned(), "bytes 10-28/29".to_owned()),
+                ],
+                b"new-tail-123456789".to_vec(),
+            )
+        } else {
+            assert_eq!(req.header("range"), None, "retry must be cold");
+            MockResponse::once(
+                200,
+                vec![
+                    ("ETag".to_owned(), "\"new-etag\"".to_owned()),
+                    ("Accept-Ranges".to_owned(), "bytes".to_owned()),
+                ],
+                full_payload.clone(),
+            )
+        }
+    });
+    let url = server.url("mismatch.gguf");
+    let target = target_for(&root, DownloadKind::Llm, "mismatch.gguf");
+    seed_part(&target, &prefix, &url, Some("\"old-etag\""));
+    let mgr = manager(&root);
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Done).await;
+    assert_eq!(
+        *calls.lock().expect("calls lock"),
+        2,
+        "one ranged + one cold GET"
+    );
+    assert_eq!(state.bytes_done, full.len() as u64);
+    assert_eq!(std::fs::read(&target).expect("final file"), full);
+    assert!(!with_part(&target).exists());
+    assert!(!with_meta(&target).exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A 416 on a ranged request must not leave the Range in place: drop the
+/// sidecars and retry cold.
+#[tokio::test]
+async fn resume_416_self_heals_cold() {
+    let root = temp_root("resume-416");
+    let full = b"cold-after-416".to_vec();
+    let calls = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&calls);
+    let full_payload = full.clone();
+    let server = MockServer::new(move |req| {
+        let mut calls = seen.lock().expect("calls lock");
+        *calls += 1;
+        if *calls == 1 {
+            assert_eq!(req.header("range"), Some("bytes=5-"));
+            assert_eq!(req.header("if-range"), Some("\"old-etag\""));
+            MockResponse::once(416, Vec::new(), Vec::new())
+        } else {
+            assert_eq!(req.header("range"), None, "retry must be cold");
+            MockResponse::once(200, Vec::new(), full_payload.clone())
+        }
+    });
+    let url = server.url("gone.gguf");
+    let target = target_for(&root, DownloadKind::Llm, "gone.gguf");
+    seed_part(&target, b"OLD-5", &url, Some("\"old-etag\""));
+    let mgr = manager(&root);
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Done).await;
+    assert_eq!(*calls.lock().expect("calls lock"), 2);
+    assert_eq!(state.bytes_done, full.len() as u64);
+    assert_eq!(std::fs::read(&target).expect("final file"), full);
+    assert!(!with_part(&target).exists());
+    assert!(!with_meta(&target).exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Self-healing a bad Range must not drop the checksum saved in the sidecar:
+/// the cold retry still rejects a body that does not match it.
+#[tokio::test]
+async fn resume_self_heal_keeps_saved_checksum() {
+    let root = temp_root("resume-sha-heal");
+    let calls = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&calls);
+    let server = MockServer::new(move |req| {
+        let mut calls = seen.lock().expect("calls lock");
+        *calls += 1;
+        if *calls == 1 {
+            assert!(req.header("range").is_some());
+            MockResponse::once(416, Vec::new(), Vec::new())
+        } else {
+            assert_eq!(req.header("range"), None, "retry must be cold");
+            MockResponse::once(200, Vec::new(), b"wrong-body".to_vec())
+        }
+    });
+    let url = server.url("sha-heal.gguf");
+    let target = target_for(&root, DownloadKind::Llm, "sha-heal.gguf");
+    let meta = format!(
+        "{{\"url\":{url:?},\"etag\":\"\\\"old-etag\\\"\",\"bytes_total\":10,\"sha256\":{:?}}}",
+        sha256_hex(b"expected-body")
+    );
+    std::fs::create_dir_all(target.parent().expect("dir")).expect("dir");
+    std::fs::write(with_part(&target), b"OLD-PREFIX").expect("seed .part");
+    std::fs::write(with_meta(&target), meta).expect("seed meta");
+    let mgr = manager(&root);
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Failed).await;
+    assert!(
+        state
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("checksum"))
+    );
+    assert_eq!(*calls.lock().expect("calls lock"), 2);
+    assert!(!with_part(&target).exists());
+    assert!(!with_meta(&target).exists());
+    assert!(!target.exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A 206 starting at the wrong offset is just as unusable as a 416: self-heal
+/// with one cold retry instead of retrying the same bad Range forever.
+#[tokio::test]
+async fn resume_206_wrong_offset_retries_cold() {
+    let root = temp_root("resume-offset");
+    let full = b"fresh-after-bad-range".to_vec();
+    let calls = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&calls);
+    let full_payload = full.clone();
+    let server = MockServer::new(move |req| {
+        let mut calls = seen.lock().expect("calls lock");
+        *calls += 1;
+        if *calls == 1 {
+            MockResponse::once(
+                206,
+                vec![
+                    ("ETag".to_owned(), "\"same-etag\"".to_owned()),
+                    ("Accept-Ranges".to_owned(), "bytes".to_owned()),
+                    ("Content-Range".to_owned(), "bytes 0-21/22".to_owned()),
+                ],
+                full_payload.clone(),
+            )
+        } else {
+            assert_eq!(req.header("range"), None, "retry must be cold");
+            MockResponse::once(200, Vec::new(), full_payload.clone())
+        }
+    });
+    let url = server.url("offset.gguf");
+    let target = target_for(&root, DownloadKind::Llm, "offset.gguf");
+    seed_part(&target, b"PREFIX", &url, Some("\"same-etag\""));
+    let mgr = manager(&root);
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Done).await;
+    assert_eq!(*calls.lock().expect("calls lock"), 2);
+    assert_eq!(std::fs::read(&target).expect("final file"), full);
+    assert!(!with_part(&target).exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// `Content-Range: bytes N-M/*` leaves the total unknown but the range valid:
+/// the suffix still appends and the DTO keeps `bytes_total: None`.
+#[tokio::test]
+async fn resume_206_unknown_total_appends() {
+    let root = temp_root("resume-unknown-total");
+    let prefix = b"PREFIX".to_vec();
+    let server = MockServer::new(move |req| {
+        assert_eq!(req.header("range"), Some("bytes=6-"));
+        MockResponse::once(
+            206,
+            vec![
+                ("ETag".to_owned(), "\"etag-unknown\"".to_owned()),
+                ("Accept-Ranges".to_owned(), "bytes".to_owned()),
+                ("Content-Range".to_owned(), "bytes 6-13/*".to_owned()),
+            ],
+            b"SUFFIX12".to_vec(),
+        )
+    });
+    let url = server.url("unknown-total.gguf");
+    let target = target_for(&root, DownloadKind::Llm, "unknown-total.gguf");
+    std::fs::create_dir_all(target.parent().expect("dir")).expect("dir");
+    std::fs::write(with_part(&target), &prefix).expect("seed .part");
+    let meta = format!("{{\"url\":{url:?},\"etag\":\"\\\"etag-unknown\\\"\"}}");
+    std::fs::write(with_meta(&target), meta).expect("seed meta");
+    let mgr = manager(&root);
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| s == &DownloadStatus::Done).await;
+    assert_eq!(state.bytes_total, None, "unknown total stays unknown");
+    let mut whole = prefix;
+    whole.extend_from_slice(b"SUFFIX12");
+    assert_eq!(std::fs::read(&target).expect("final file"), whole);
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// Checksum enforced when provided: a matching body completes.
 #[tokio::test]
 async fn checksum_ok_completes() {
@@ -551,7 +793,7 @@ async fn resume_with_checksum_mismatch_fails() {
     let mut meta = String::new();
     let _ = write!(
         meta,
-        "{{\"url\":{url:?},\"etag\":\"etag-sha\",\"bytes_total\":15,\"sha256\":\"{}\"}}",
+        "{{\"url\":{url:?},\"etag\":\"\\\"etag-sha\\\"\",\"bytes_total\":15,\"sha256\":\"{}\"}}",
         sha256_hex(b"not-this")
     );
     std::fs::create_dir_all(target.parent().expect("dir")).expect("dir");
@@ -969,33 +1211,40 @@ async fn post_without_models_root_is_500() {
 /// given download supervisor.
 fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
     AppConfig {
-    auth: AuthConfig::default(),
-    recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(std::sync::RwLock::new(Arc::new(
-        honkbox_api_types::ModelCatalog {
-            object: "list".to_owned(),
-            data: Vec::new(),
+        auth: AuthConfig::default(),
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(std::sync::RwLock::new(Arc::new(
+            honkbox_api_types::ModelCatalog {
+                object: "list".to_owned(),
+                data: Vec::new(),
+            },
+        ))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
         },
-    ))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: None,
-    tts_model: None,
-    llm: Arc::new(honkbox_llm_worker::StubLlm::default()),
-    stt: Arc::new(honkbox_audio_worker::StubStt),
-    tts: Arc::new(honkbox_audio_worker::StubTts),
-    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: None,
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: Some(root.to_path_buf()), artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(Some(root.to_path_buf()).clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: mgr, }
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        llm: Arc::new(honkbox_llm_worker::StubLlm::default()),
+        stt: Arc::new(honkbox_audio_worker::StubStt),
+        tts: Arc::new(honkbox_audio_worker::StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: std::time::Duration::from_hours(24),
+        data_dir: Some(root.to_path_buf()),
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            Some(root.to_path_buf()).clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: mgr,
+    }
 }

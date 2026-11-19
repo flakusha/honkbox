@@ -195,6 +195,10 @@ pub fn write_bundle_into(
         "model={}\nprompt={}\nseed={} steps={} size={} backend={}\ndone elapsed_ms={elapsed_ms}\n",
         inputs.model_slug, inputs.prompt, inputs.seed, inputs.steps, size, inputs.backend_id,
     );
+    // F5: commit the artifact BEFORE any sidecar. A crash mid-bundle then
+    // leaves at most an orphan artifact (swept by GC), never a sidecar set
+    // that makes a half-written bundle look complete.
+    write_atomic(dir, &art, image_bytes)?;
     write_atomic(
         dir,
         "request.json",
@@ -202,7 +206,6 @@ pub fn write_bundle_into(
             .map_err(|e| format!("cannot encode request.json: {e}"))?
             .as_bytes(),
     )?;
-    write_atomic(dir, &art, image_bytes)?;
     write_atomic(
         dir,
         "final_00.json",
@@ -275,6 +278,15 @@ pub fn write_ops_bundle(
     output_bytes: &[&[u8]],
     elapsed_ms: u64,
 ) -> Result<PathBuf, String> {
+    // F4: never let ops.json claim outputs that were not written. Check
+    // before creating any dir so a mismatch leaves no partial bundle.
+    if outputs.len() != output_bytes.len() {
+        return Err(format!(
+            "ops bundle output count mismatch: {} records but {} byte buffers",
+            outputs.len(),
+            output_bytes.len()
+        ));
+    }
     let dir = data_dir.join("jobs").join(ulid::Ulid::new().to_string());
     fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create job dir {}: {e}", dir.display()))?;
@@ -603,8 +615,7 @@ mod tests {
     /// stay explicit nulls (never absent, never fabricated) otherwise.
     #[test]
     fn sidecar_records_provenance() {
-        let dir =
-            std::env::temp_dir().join(format!("honkbox-jobs-prov-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("honkbox-jobs-prov-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("test dir");
 
@@ -799,6 +810,68 @@ mod tests {
         assert!(!root.join("final_00.png.part").exists(), "root part swept");
         assert!(!job.join("run.log.part").exists(), "job part swept");
         assert!(job.exists(), "fresh job kept");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// F5: the artifact is committed before any sidecar. Forcing the
+    /// artifact commit to fail (its target path is a directory) must leave
+    /// NO sidecar behind — under the old request.json-first order a
+    /// complete-looking bundle survived exactly this kind of crash.
+    #[test]
+    fn artifact_is_written_before_sidecars() {
+        let dir = std::env::temp_dir().join(format!("honkbox-jobs-order-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("test dir");
+        fs::create_dir(dir.join("final_00.png")).expect("artifact blocker dir");
+        assert!(write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).is_err());
+        for sidecar in ["request.json", "final_00.json", "metrics.jsonl", "run.log"] {
+            assert!(
+                !dir.join(sidecar).exists(),
+                "{sidecar} must not be written before the artifact"
+            );
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// F4: a short byte vector is rejected before ANY file is written, so
+    /// ops.json can never list a file that has no bytes. Equal lengths still
+    /// succeed.
+    #[test]
+    fn ops_bundle_rejects_output_byte_count_mismatch() {
+        let root = fresh_root("ops-mismatch");
+        let bundle = OpsBundleInputs {
+            op: "resize".to_string(),
+            command_sha256: "a".repeat(64),
+            request_id: "req-1".to_string(),
+            client: None,
+            inputs: Vec::new(),
+            format: honkbox_sd_core::OutputFormat::Png,
+        };
+        let outputs = [
+            OpsOutputRecord {
+                file: "op_00.png".to_string(),
+                sha256: "b".repeat(64),
+            },
+            OpsOutputRecord {
+                file: "op_01.png".to_string(),
+                sha256: "c".repeat(64),
+            },
+        ];
+        let one: [&[u8]; 1] = [&[1u8, 2, 3]];
+        let err = write_ops_bundle(&root, &bundle, &outputs, &one, 1)
+            .expect_err("mismatched byte count rejected");
+        assert!(err.contains("mismatch"), "{err}");
+        assert!(
+            !root.join("jobs").exists(),
+            "no partial job dir on mismatch"
+        );
+
+        let both: [&[u8]; 2] = [&[1u8], &[2u8]];
+        let dir = write_ops_bundle(&root, &bundle, &outputs, &both, 1).expect("matched bundle");
+        let side: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("ops.json")).expect("sidecar"))
+                .expect("sidecar json");
+        assert_eq!(side["outputs"].as_array().map_or(0, Vec::len), 2);
         fs::remove_dir_all(&root).ok();
     }
 }

@@ -143,7 +143,7 @@
           "crate::artifacts"
         ],
         "summary": "`POST /v1/artifacts`: upload one binary artifact.",
-        "description": "Two modes on one route:\n\n**Single-shot** — any non-multipart body (usually\n`application/octet-stream`). The whole body is the artifact; it streams\nto disk (never buffered) and is rejected with a named 413\n`artifact_too_large` past the configured cap. Returns `201` with the\n[`ArtifactInfo`] descriptor — `id` IS the content sha256, and it is the\n`{id}` of the bytes route.\n\n**Chunked/resumable** — `multipart/form-data`. Declare `X-Chunk-Count`\non the first request; each form part is one binary chunk, optionally\ntagged with an `X-Chunk-Index` header (parts without it fill the lowest\nunreceived index, so chunks may arrive in any order). Every response\ncarries the current [`ArtifactManifest`] (`status: \"uploading\"` with the\nreceived-chunk registry). To resume an interrupted upload, re-send ONLY\nthe missing chunks with `X-Upload-Id: <upload_id>` set (the count must\nmatch); a duplicate chunk re-POST with identical bytes is idempotent\n(`200`, no state change), while different bytes for a received index are\n`409 upload_conflict`. The request delivering the last missing chunk\nfinalizes in-line: its manifest flips to `status: \"complete\"` with the\n`artifact` descriptor (content sha256, size, chunk count, id). Chunks\nare capped at 8 MiB each (named 413 `chunk_too_large`), the artifact\ntotal at the configured cap (`artifact_too_large`).\n\nOptional `X-Artifact-Content-Type` (both modes) records the content type\nserved by `GET /v1/artifacts/{id}/bytes` (default\n`application/octet-stream`).",
+        "description": "Two modes on one route:\n\n**Single-shot** — any non-multipart body (usually\n`application/octet-stream`). The whole body is the artifact; it streams\nto disk (never buffered) and is rejected with a named 413\n`artifact_too_large` past the configured cap. Returns `201` with the\n[`ArtifactInfo`] descriptor — `id` IS the content sha256, and it is the\n`{id}` of the bytes route.\n\n**Chunked/resumable** — `multipart/form-data`. Declare `X-Chunk-Count`\non the first request; each form part is one binary chunk, optionally\ntagged with an `X-Chunk-Index` header (parts without it fill the lowest\nunreceived index, so chunks may arrive in any order). Every response\ncarries the current [`ArtifactManifest`] (`status: \"uploading\"` with the\nreceived-chunk registry). To resume an interrupted upload, re-send ONLY\nthe missing chunks with `X-Upload-Id: <upload_id>` set (the count must\nmatch); a duplicate chunk re-POST with identical bytes is idempotent\n(`200`, no state change), while different bytes for a received index are\n`409 upload_conflict`. The request delivering the last missing chunk\nfinalizes in-line: its manifest flips to `status: \"complete\"` with the\n`artifact` descriptor (content sha256, size, chunk count, id). Chunks\nare capped at 8 MiB each (named 413 `chunk_too_large`), the artifact\ntotal at the configured cap (`artifact_too_large`).\n\nOptional `X-Artifact-Content-Type` (both modes) records the content type\nserved by `GET /v1/artifacts/{id}/bytes` (default\n`application/octet-stream`). Active types (HTML, SVG, JavaScript, XML\nmarkup) and parameterised values are rejected. GET always forces\n`Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.",
         "operationId": "post_artifact",
         "requestBody": {
           "description": "raw artifact bytes (single-shot), or multipart/form-data where each part is one binary chunk",
@@ -1333,7 +1333,7 @@
     "/v1/recognize": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/recognize` (recognition tickets): one image in, recognition\nout. Stage 1 is synchronous — barcode-class latency is sub-millisecond,\nso the request-response shape needs no job registry entry; the\nOCR/document pipeline becomes job-based (cancellable, cache-keyed per\nFEAT-ocr-ingest) when the first OCR backend lands, and this route is\nthat shape's already-valid request prefix. Only `data:` URI image\npayloads are accepted: nothing is ever fetched, so there is no SSRF\nsurface (same policy as `/v1/image-ops`). Kinds without a compiled\nbackend answer the named 501 `recognition_kind_unsupported` — the same\n`kinds()` gate `features.recognition` advertises, so honest absence is\nobservable from both directions.",
+        "summary": "`POST /v1/recognize` (recognition tickets): one image in, recognition\nout. Stage 1 is synchronous — barcode-class latency is sub-millisecond,\nso the request-response shape needs no job registry entry; the\nOCR/document pipeline becomes job-based (cancellable, cache-keyed per\nFEAT-ocr-ingest) when the first OCR backend lands, and this route is\nthat shape's already-valid request prefix. Only `data:` URI image\npayloads are accepted: nothing is ever fetched, so there is no SSRF\nsurface (same policy as `/v1/image-ops`). Kinds without a compiled\nbackend answer the named 501 `recognition_kind_unsupported` — the same\n`kinds()` gate the top-level `recognition` capability advertises, so\nhonest absence is observable from both directions.",
         "operationId": "post_recognize",
         "requestBody": {
           "content": {
@@ -1533,7 +1533,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/ArtifactInfo",
-                "description": "Present exactly when `status` is `\"complete\"`."
+                "description": "Absent until the upload completes; present exactly when `status` is\n`\"complete\"`."
               },
               {
                 "type": "null"
@@ -3090,14 +3090,14 @@
       },
       "JobCancelResult": {
         "type": "object",
-        "description": "`POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` mirrors the\njob's `interruptible` flag: `true` = the job will actually stop at its\nnext checkpoint; `false` = the job was found and marked, but its single\nblocking inference call is not interruptible mid-flight. An unknown id\n(finished or never registered) is a plain-text 404.",
+        "description": "`POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` is `true`\nwhen a cancel was requested for a found id — the cooperative-stop token\nwas marked — and is never `false` for a found id; an unknown id\n(finished or never registered) is a plain-text 404. Whether the work can\nactually stop early is a SEPARATE fact: `interruptible` is reported per\njob by [`JobInfo`] (`GET /v1/jobs`) and by the `job_cancelled`\n[`JobEvent`] (`GET /v1/events`), not by this response.",
         "required": [
           "cancelled"
         ],
         "properties": {
           "cancelled": {
             "type": "boolean",
-            "description": "Whether the cancel will stop the job at its next work-unit boundary."
+            "description": "`true` = a cancel was requested and the token was marked (every\nfound id); `false` is never returned here — an unknown id is a 404.\nDoes NOT say whether the job can stop early; read `interruptible`\nfrom [`JobInfo`] or the `job_cancelled` [`JobEvent`]."
           }
         }
       },
@@ -4133,7 +4133,7 @@
               "string",
               "null"
             ],
-            "description": "Engine dependency version this build linked; absent for the stub."
+            "description": "Engine dependency version this build linked; absent when unknown\n(the stub has none)."
           }
         }
       },
@@ -4178,7 +4178,7 @@
       },
       "RecognitionRegion": {
         "type": "object",
-        "description": "One located region: axis-aligned pixel bbox + text. `confidence` is\n`null` when the engine produces none (rxing does not).",
+        "description": "One located region: axis-aligned pixel bbox + text. `confidence` is\nabsent when the engine produces none (rxing does not).",
         "required": [
           "bbox",
           "text"

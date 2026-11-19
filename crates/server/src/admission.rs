@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 use axum::http::{HeaderValue, StatusCode};
 use tokio::sync::Notify;
 
+use crate::config::MAX_QUEUE_WAIT;
 use crate::metrics::{self, BusyReason};
 use honkbox_residency::{AcquireError, EnqueueError, PollOutcome, ResourceKind};
 
@@ -75,6 +76,12 @@ pub(crate) fn queue_wait_secs() -> u64 {
 /// the header and the document can never disagree.
 pub(crate) const RETRY_AFTER_HINT_SECS: u64 = 1;
 
+/// Backstop re-poll interval while waiting for a lease-drop notification:
+/// even if a wake is lost at an iteration boundary, the cost is one short
+/// sleep instead of the whole wait bound. The deadline check still bounds
+/// the total wait.
+const NOTIFY_BACKSTOP: Duration = Duration::from_millis(100);
+
 /// The header value built from [`RETRY_AFTER_HINT_SECS`].
 pub(crate) fn retry_after_header_value() -> HeaderValue {
     HeaderValue::from_str(&RETRY_AFTER_HINT_SECS.to_string())
@@ -109,8 +116,14 @@ pub(crate) async fn acquire(kind: ResourceKind) -> Result<GpuLease, (StatusCode,
         Err(EnqueueError::QueueFull { .. }) => return Err(busy_rejection(BusyReason::QueueFull)),
         Err(EnqueueError::Oversized { what }) => return Err(hard_rejection(kind, what)),
     };
-    let deadline = Instant::now() + wait;
+    let deadline = Instant::now() + wait.min(MAX_QUEUE_WAIT);
     loop {
+        // Create + pin the notification BEFORE polling the ticket:
+        // `notify_waiters` captures a `Notified` from its creation onward,
+        // so a lease dropped between the poll and the select below wakes
+        // this waiter instead of costing the whole wait bound (I7).
+        let notified = LEDGER_NOTIFY.notified();
+        tokio::pin!(notified);
         // Poll first: the ledger owns the TTL, so an expired ticket is
         // counted as a ledger eviction AND returns the queue_timeout 429.
         match ticket.poll() {
@@ -124,13 +137,11 @@ pub(crate) async fn acquire(kind: ResourceKind) -> Result<GpuLease, (StatusCode,
         if now >= deadline {
             return Err(busy_rejection(BusyReason::QueueTimeout));
         }
-        // A lease drop anywhere in the process could free OUR capacity (the
-        // slot pool is shared across kinds), so every waiter wakes on every
-        // notify and re-polls; a missed notify only costs one backstop
-        // sleep, never the slot.
+        // Short backstop: a missed notify is retried in milliseconds, while
+        // the deadline above keeps the overall wait bounded.
         tokio::select! {
-            () = LEDGER_NOTIFY.notified() => {}
-            () = tokio::time::sleep(deadline - now) => {}
+            () = &mut notified => {}
+            () = tokio::time::sleep(NOTIFY_BACKSTOP.min(deadline - now)) => {}
         }
     }
 }
@@ -219,5 +230,26 @@ mod tests {
         let (status, message) = busy_rejection(BusyReason::QueueTimeout);
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
         assert!(message.contains("gave up waiting"), "{message}");
+    }
+
+    /// The deadline clamp keeps even an absurd bound representable.
+    #[test]
+    fn deadline_clamp_is_instant_safe() {
+        let wait = Duration::from_secs(u64::MAX).min(MAX_QUEUE_WAIT);
+        assert!(Instant::now().checked_add(wait).is_some());
+        assert!(NOTIFY_BACKSTOP < wait);
+    }
+
+    /// I7: `notify_waiters` reaches a `Notified` created before the call,
+    /// even before it is first polled — the property the wait loop relies
+    /// on when it creates the future ahead of `ticket.poll()`.
+    #[tokio::test]
+    async fn notified_created_before_release_is_not_lost() {
+        let notified = LEDGER_NOTIFY.notified();
+        tokio::pin!(notified);
+        LEDGER_NOTIFY.notify_waiters();
+        tokio::time::timeout(Duration::from_secs(1), &mut notified)
+            .await
+            .expect("release woke the pre-created Notified");
     }
 }

@@ -28,11 +28,14 @@
 //! payloads travel as multipart binary parts or a raw body — never base64
 //! — so the wire and the disk see the same bytes.
 //!
-//! Caps: [`CHUNK_MAX_BYTES`] bounds one multipart part (8 MiB) and
-//! `max_artifact_bytes` (config `[artifacts] max_artifact_bytes`, default
+//! Caps: [`CHUNK_MAX_BYTES`] bounds one multipart part (8 MiB),
+//! `MAX_CHUNK_COUNT` bounds a session's declared chunks, and
+//! `MAX_PARTS_PER_REQUEST` bounds parts per request; `max_artifact_bytes`
+//! (config `[artifacts] max_artifact_bytes`, default
 //! [`crate::config::DEFAULT_ARTIFACT_MAX_BYTES`]) bounds the total artifact.
-//! Both are reject-not-clamp with named 413 codes (`chunk_too_large` /
-//! `artifact_too_large`).
+//! Byte caps are reject-not-clamp with named 413 codes (`chunk_too_large` /
+//! `artifact_too_large`); count/part bounds and active declared content types
+//! are named 400s.
 //!
 //! Path safety: ids and upload ids are the ONLY client-controlled strings,
 //! and both are validated to closed formats (64 hex chars / canonical ULID)
@@ -69,6 +72,13 @@ use crate::routes::AppConfig;
 /// artifact in one body is a legitimate upload shape.
 pub const CHUNK_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+/// Maximum chunks one upload may declare. Bounds the index space (and the
+/// per-chunk finalize work); the total byte cap applies independently.
+const MAX_CHUNK_COUNT: u32 = 10_000;
+/// Maximum multipart parts accepted in one request, regardless of the
+/// declared chunk count (chunks may arrive across several requests).
+const MAX_PARTS_PER_REQUEST: u32 = 1_024;
+
 /// Fixed streaming buffer (64 KiB): several chunk writes per syscall batch,
 /// small enough that dozens of concurrent transfers stay memory-trivial.
 const STREAM_BUF: usize = 64 * 1024;
@@ -84,6 +94,34 @@ const CONTENT_TYPE_HEADER: &str = "x-artifact-content-type";
 /// Per-part header carrying the chunk index (0-based). Parts without it
 /// fill the lowest unreceived index, in arrival order.
 const CHUNK_INDEX_HEADER: &str = "x-chunk-index";
+
+/// Declared content types that can execute script or markup if a browser
+/// ever renders them. Refused at upload; GET also forces attachment +
+/// nosniff, so no stored type can execute in the server origin regardless.
+const ACTIVE_CONTENT_TYPES: &[&str] = &[
+    "text/html",
+    "text/xhtml",
+    "application/xhtml+xml",
+    "image/svg",
+    "image/svg+xml",
+    "text/javascript",
+    "text/ecmascript",
+    "text/jscript",
+    "text/vbscript",
+    "text/x-javascript",
+    "application/javascript",
+    "application/ecmascript",
+    "application/x-javascript",
+    "application/x-ecmascript",
+    "application/x-vbscript",
+    "text/xml",
+    "application/xml",
+    "application/xslt+xml",
+    "application/xaml+xml",
+    "application/x-shockwave-flash",
+    "application/x-silverlight-app",
+    "message/rfc822",
+];
 
 /// Why an artifact request was rejected; rendered as the OpenAI-style
 /// envelope by [`ArtifactError::into_response`] (named codes per the ticket
@@ -109,6 +147,10 @@ pub(crate) enum ArtifactError {
     InvalidChunkCount(String),
     /// Unusable `X-Artifact-Content-Type` value: 400.
     InvalidContentType(String),
+    /// A multipart part carried zero bytes: 400.
+    EmptyChunk(u32),
+    /// More parts in one request than the bound allows: 400.
+    TooManyParts(u32),
     /// Malformed, multi-range, or unsatisfiable `Range`: 416.
     InvalidRange(String),
     /// `If-Match` does not match the current `ETag`: 412.
@@ -126,7 +168,10 @@ impl fmt::Display for ArtifactError {
             Self::ArtifactNotFound(id) => write!(f, "unknown artifact {id:?}"),
             Self::UploadNotFound(id) => write!(f, "unknown upload id {id:?}"),
             Self::ArtifactTooLarge(cap) => {
-                write!(f, "artifact exceeds the {cap} byte cap: rejected, not clamped")
+                write!(
+                    f,
+                    "artifact exceeds the {cap} byte cap: rejected, not clamped"
+                )
             }
             Self::ChunkTooLarge(cap) => write!(
                 f,
@@ -139,6 +184,15 @@ impl fmt::Display for ArtifactError {
             Self::InvalidChunkCount(msg)
             | Self::InvalidContentType(msg)
             | Self::InvalidRange(msg) => write!(f, "{msg}"),
+            Self::EmptyChunk(index) => {
+                write!(
+                    f,
+                    "chunk {index} carried zero bytes; empty parts are rejected"
+                )
+            }
+            Self::TooManyParts(limit) => {
+                write!(f, "multipart request carried more than {limit} parts")
+            }
             Self::PreconditionFailed => f.write_str("If-Match does not match the current ETag"),
             Self::Storage(msg) => write!(f, "artifact storage failure: {msg}"),
         }
@@ -158,6 +212,8 @@ impl ArtifactError {
             Self::InvalidChunkIndex(_) => "invalid_chunk_index",
             Self::InvalidChunkCount(_) => "invalid_chunk_count",
             Self::InvalidContentType(_) => "invalid_content_type",
+            Self::EmptyChunk(_) => "empty_chunk",
+            Self::TooManyParts(_) => "too_many_parts",
             Self::InvalidRange(_) => "invalid_range",
             Self::PreconditionFailed => "precondition_failed",
         }
@@ -170,8 +226,11 @@ impl ArtifactError {
             Self::ArtifactNotFound(_) | Self::UploadNotFound(_) => StatusCode::NOT_FOUND,
             Self::ArtifactTooLarge(_) | Self::ChunkTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UploadConflict(_) => StatusCode::CONFLICT,
-            Self::InvalidChunkIndex(_) | Self::InvalidChunkCount(_)
-            | Self::InvalidContentType(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidChunkIndex(_)
+            | Self::InvalidChunkCount(_)
+            | Self::InvalidContentType(_)
+            | Self::EmptyChunk(_)
+            | Self::TooManyParts(_) => StatusCode::BAD_REQUEST,
             Self::InvalidRange(_) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
         }
@@ -180,7 +239,17 @@ impl ArtifactError {
     /// Render as the OpenAI-style error envelope.
     fn into_response(self) -> Response {
         let code = self.code();
-        crate::routes::openai_error_response(self.status(), self.to_string(), Some(code))
+        let status = self.status();
+        let message = match &self {
+            // Storage errors carry absolute <data_dir> paths: log the full
+            // detail server-side, never echo it back to the client.
+            Self::Storage(detail) => {
+                tracing::warn!(detail = %detail, "artifact storage failure");
+                "artifact storage failure".to_owned()
+            }
+            _ => self.to_string(),
+        };
+        crate::routes::openai_error_response(status, message, Some(code))
     }
 }
 
@@ -199,6 +268,8 @@ struct UploadState {
     chunks: BTreeMap<u32, ChunkRecord>,
     /// Running byte total (the artifact cap checks against this).
     total_bytes: u64,
+    /// Lowest unreceived index; untagged parts fill this first (O(1) per part).
+    lowest_free: u32,
 }
 
 /// One received chunk's identity (content-addressed, size-accounted).
@@ -291,12 +362,18 @@ impl Registry {
         };
         let saved: SavedManifest = serde_json::from_slice(&raw)
             .map_err(|err| ArtifactError::Storage(format!("corrupt upload manifest: {err}")))?;
+        // Rebuild the free-index cursor once on resume (BTreeMap lookup per
+        // slot); every subsequent append advances it incrementally.
+        let lowest_free = (0..saved.chunk_count)
+            .find(|index| !saved.chunks.contains_key(index))
+            .unwrap_or(saved.chunk_count);
         let state = Arc::new(Mutex::new(UploadState {
             id: saved.upload_id,
             chunk_count: saved.chunk_count,
             content_type: saved.content_type,
             chunks: saved.chunks,
             total_bytes: saved.total_bytes,
+            lowest_free,
         }));
         live.insert(id.to_owned(), Arc::clone(&state));
         Ok(Some(state))
@@ -338,8 +415,7 @@ impl From<&UploadState> for SavedManifest {
 /// filesystem.
 fn normalize_artifact_id(id: &str) -> Option<String> {
     let lowered = id.to_ascii_lowercase();
-    (lowered.len() == 64 && lowered.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then_some(lowered)
+    (lowered.len() == 64 && lowered.bytes().all(|b| b.is_ascii_hexdigit())).then_some(lowered)
 }
 
 /// sha256 digest → 64-char lowercase hex.
@@ -354,7 +430,10 @@ fn hex_lower(digest: &[u8]) -> String {
 
 /// Atomic tiny-JSON write (`.part` + fsync + rename), shared by the upload
 /// manifest and the completed sidecar.
-async fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), ArtifactError> {
+async fn write_json_atomic(
+    path: &Path,
+    value: &impl serde::Serialize,
+) -> Result<(), ArtifactError> {
     let raw = serde_json::to_vec(value)
         .map_err(|err| ArtifactError::Storage(format!("serialize {}: {err}", path.display())))?;
     let part = path.with_extension("json.part");
@@ -371,11 +450,9 @@ async fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result
 /// fsync one file by path (downloads.rs discipline: durable bytes before
 /// the rename makes them visible).
 async fn sync_file(path: &Path) -> Result<(), ArtifactError> {
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|err| {
-            ArtifactError::Storage(format!("open {} for fsync: {err}", path.display()))
-        })?;
+    let file = tokio::fs::File::open(path).await.map_err(|err| {
+        ArtifactError::Storage(format!("open {} for fsync: {err}", path.display()))
+    })?;
     file.sync_all()
         .await
         .map_err(|err| ArtifactError::Storage(format!("fsync {}: {err}", path.display())))
@@ -407,9 +484,7 @@ async fn stream_to_file(
     use tokio::io::AsyncWriteExt as _;
     let mut file = tokio::fs::File::create(part_path)
         .await
-        .map_err(|err| {
-            ArtifactError::Storage(format!("create {}: {err}", part_path.display()))
-        })?;
+        .map_err(|err| ArtifactError::Storage(format!("create {}: {err}", part_path.display())))?;
     let mut hasher = Sha256::new();
     let mut written: u64 = 0;
     let mut failure: Option<ArtifactError> = None;
@@ -427,7 +502,11 @@ async fn stream_to_file(
             failure = Some(ArtifactError::ChunkTooLarge(cap));
             break;
         }
-        if total_base.saturating_add(written).saturating_add(chunk.len() as u64) > total_cap {
+        if total_base
+            .saturating_add(written)
+            .saturating_add(chunk.len() as u64)
+            > total_cap
+        {
             failure = Some(ArtifactError::ArtifactTooLarge(total_cap));
             break;
         }
@@ -448,7 +527,10 @@ async fn stream_to_file(
     }
     let sha256 = hex_lower(&hasher.finalize());
     sync_file(part_path).await?;
-    Ok(Streamed { sha256, bytes: written })
+    Ok(Streamed {
+        sha256,
+        bytes: written,
+    })
 }
 
 /// Register an accepted chunk: dedupe/conflict-check against the manifest,
@@ -476,11 +558,13 @@ async fn accept_chunk(
     }
     tokio::fs::rename(part_path, final_path)
         .await
-        .map_err(|err| {
-            ArtifactError::Storage(format!("rename {}: {err}", part_path.display()))
-        })?;
+        .map_err(|err| ArtifactError::Storage(format!("rename {}: {err}", part_path.display())))?;
+    let bytes = record.bytes;
     state.chunks.insert(index, record);
-    state.total_bytes = state.chunks.values().map(|r| r.bytes).sum();
+    state.total_bytes = state.total_bytes.saturating_add(bytes);
+    while state.lowest_free < state.chunk_count && state.chunks.contains_key(&state.lowest_free) {
+        state.lowest_free += 1;
+    }
     write_json_atomic(manifest_path, &SavedManifest::from(&*state)).await?;
     Ok(true)
 }
@@ -489,7 +573,10 @@ async fn accept_chunk(
 /// content-addressed blob, hashing as it streams; publish the sidecar; then
 /// remove the upload directory. Called with the upload lock held (see
 /// [`Registry`]).
-async fn finalize_upload(reg: &Registry, state: &UploadState) -> Result<ArtifactInfo, ArtifactError> {
+async fn finalize_upload(
+    reg: &Registry,
+    state: &UploadState,
+) -> Result<ArtifactInfo, ArtifactError> {
     debug_assert_eq!(
         state.chunks.values().map(|r| r.bytes).sum::<u64>(),
         state.total_bytes,
@@ -637,7 +724,8 @@ async fn store_single_shot(
 
 /// Declared content type: a single visible-ASCII `type/subtype` value
 /// (commas/parameters rejected — the value is echoed into response headers
-/// later); default `application/octet-stream`.
+/// later); default `application/octet-stream`. Active content types are
+/// refused here, and GET forces attachment + nosniff as a second layer.
 fn declared_content_type(headers: &HeaderMap) -> Result<String, ArtifactError> {
     let Some(value) = headers.get(CONTENT_TYPE_HEADER) else {
         return Ok("application/octet-stream".to_owned());
@@ -656,10 +744,19 @@ fn declared_content_type(headers: &HeaderMap) -> Result<String, ArtifactError> {
             "unusable content type {raw:?}: want a single type/subtype value"
         )));
     }
+    let lowered = raw.to_ascii_lowercase();
+    if ACTIVE_CONTENT_TYPES.contains(&lowered.as_str())
+        || (lowered.starts_with("text/") && lowered.ends_with("+xml"))
+    {
+        return Err(ArtifactError::InvalidContentType(format!(
+            "active content type {raw:?} is not allowed for artifacts"
+        )));
+    }
     Ok(raw.to_owned())
 }
 
-/// Parse `X-Chunk-Count`: required when starting a chunked upload, `>= 1`.
+/// Parse `X-Chunk-Count`: required when starting a chunked upload, in
+/// `1..=MAX_CHUNK_COUNT`. The bound keeps index space and finalize work finite.
 fn declared_chunk_count(headers: &HeaderMap) -> Result<u32, ArtifactError> {
     let raw = headers
         .get(CHUNK_COUNT_HEADER)
@@ -673,10 +770,10 @@ fn declared_chunk_count(headers: &HeaderMap) -> Result<u32, ArtifactError> {
         })?;
     raw.parse::<u32>()
         .ok()
-        .filter(|&count| count >= 1)
+        .filter(|&count| (1..=MAX_CHUNK_COUNT).contains(&count))
         .ok_or_else(|| {
             ArtifactError::InvalidChunkCount(format!(
-                "X-Chunk-Count {raw:?} is not a positive integer"
+                "X-Chunk-Count {raw:?} is not an integer in 1..={MAX_CHUNK_COUNT}"
             ))
         })
 }
@@ -709,7 +806,9 @@ fn declared_chunk_count(headers: &HeaderMap) -> Result<u32, ArtifactError> {
 ///
 /// Optional `X-Artifact-Content-Type` (both modes) records the content type
 /// served by `GET /v1/artifacts/{id}/bytes` (default
-/// `application/octet-stream`).
+/// `application/octet-stream`). Active types (HTML, SVG, JavaScript, XML
+/// markup) and parameterised values are rejected. GET always forces
+/// `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
 #[utoipa::path(
     post,
     path = "/v1/artifacts",
@@ -788,39 +887,42 @@ async fn create_upload_session(
         content_type,
         chunks: BTreeMap::new(),
         total_bytes: 0,
+        lowest_free: 0,
     }));
     reg.uploads.lock().await.insert(id, Arc::clone(&state));
     Ok(state)
 }
 
 /// Resolve (or create) the upload session for a chunked request; everything
-/// downstream serializes on the returned state's lock.
+/// downstream serializes on the returned state's lock. The flag is true only
+/// when THIS request created the session, so only then is cleanup on error
+/// required — a resumed session must stay available for a later retry.
 async fn resolve_upload_session(
     reg: &Registry,
     headers: &HeaderMap,
     content_type: String,
-) -> Result<Arc<Mutex<UploadState>>, ArtifactError> {
+) -> Result<(Arc<Mutex<UploadState>>, bool), ArtifactError> {
     let resume_id = headers
         .get(UPLOAD_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|raw| !raw.is_empty());
     if let Some(id) = resume_id {
-        reg.upload(id)
+        let state = reg
+            .upload(id)
             .await?
-            .ok_or_else(|| ArtifactError::UploadNotFound(id.to_owned()))
+            .ok_or_else(|| ArtifactError::UploadNotFound(id.to_owned()))?;
+        Ok((state, false))
     } else {
         let chunk_count = declared_chunk_count(headers)?;
-        create_upload_session(reg, chunk_count, content_type).await
+        let state = create_upload_session(reg, chunk_count, content_type).await?;
+        Ok((state, true))
     }
 }
 
 /// A resumed request re-declaring a different count is a conflict, not a
 /// silent redefinition.
-fn check_declared_count(
-    state: &UploadState,
-    headers: &HeaderMap,
-) -> Result<(), ArtifactError> {
+fn check_declared_count(state: &UploadState, headers: &HeaderMap) -> Result<(), ArtifactError> {
     if let Some(raw) = headers
         .get(CHUNK_COUNT_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -840,13 +942,10 @@ fn check_declared_count(
 fn chunk_index_for(state: &UploadState, explicit: Option<u32>) -> Result<u32, ArtifactError> {
     match explicit {
         Some(index) => Ok(index),
-        None => (0..state.chunk_count)
-            .find(|candidate| !state.chunks.contains_key(candidate))
-            .ok_or_else(|| {
-                ArtifactError::UploadConflict(
-                    "all chunks received; no free index for an untagged part".to_owned(),
-                )
-            }),
+        None if state.lowest_free < state.chunk_count => Ok(state.lowest_free),
+        None => Err(ArtifactError::UploadConflict(
+            "all chunks received; no free index for an untagged part".to_owned(),
+        )),
     }
 }
 
@@ -872,6 +971,12 @@ async fn store_one_chunk(
         reg.max_artifact_bytes,
     )
     .await?;
+    if streamed.bytes == 0 {
+        // stream_to_file only cleans up its .part on cap/IO failure; an
+        // empty part is a client error and must leave no debris behind.
+        let _ = tokio::fs::remove_file(&part_path).await;
+        return Err(ArtifactError::EmptyChunk(index));
+    }
     let chunk_suffix = streamed.sha256.get(..8).unwrap_or("chunk").to_owned();
     let final_path = dir.join(format!("{index}-{chunk_suffix}.chunk"));
     accept_chunk(
@@ -896,19 +1001,46 @@ async fn store_multipart(reg: &Registry, request: Request) -> Result<Response, A
     let mut multipart = Multipart::from_request(request, &())
         .await
         .map_err(|err| ArtifactError::Storage(format!("multipart parse: {err}")))?;
-    let upload = resolve_upload_session(reg, &headers, content_type).await?;
+    let (upload, created_here) = resolve_upload_session(reg, &headers, content_type).await?;
+    let session_id = upload.lock().await.id.clone();
 
+    let result = receive_chunks(reg, &headers, upload, &mut multipart).await;
+    if result.is_err() && created_here {
+        // A fresh session whose request failed was never handed to the
+        // client, so nobody can resume it: drop its dir and live entry.
+        if let Some(dir) = reg.upload_dir(&session_id) {
+            let _ = tokio::fs::remove_dir_all(dir).await;
+        }
+        reg.forget(&session_id).await;
+    }
+    result
+}
+
+/// Consume every part of an already-resolved upload. Errors on a resumed
+/// session leave it intact for a later retry; fresh-session cleanup is the
+/// caller's job.
+async fn receive_chunks(
+    reg: &Registry,
+    headers: &HeaderMap,
+    upload: Arc<Mutex<UploadState>>,
+    multipart: &mut Multipart,
+) -> Result<Response, ArtifactError> {
     {
         let state = upload.lock().await;
-        check_declared_count(&state, &headers)?;
+        check_declared_count(&state, headers)?;
     }
 
     let mut last_manifest: Option<ArtifactManifest> = None;
+    let mut parts = 0u32;
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|err| ArtifactError::Storage(format!("multipart read: {err}")))?
     {
+        parts += 1;
+        if parts > MAX_PARTS_PER_REQUEST {
+            return Err(ArtifactError::TooManyParts(MAX_PARTS_PER_REQUEST));
+        }
         let explicit = field
             .headers()
             .get(CHUNK_INDEX_HEADER)
@@ -947,8 +1079,9 @@ async fn store_multipart(reg: &Registry, request: Request) -> Result<Response, A
 /// was lost between the blob rename and its write).
 async fn read_sidecar(root: &Path, id: &str, size: u64) -> ArtifactInfo {
     match tokio::fs::read(Registry::sidecar_path(root, id)).await {
-        Ok(raw) => serde_json::from_slice::<ArtifactInfo>(&raw)
-            .unwrap_or_else(|_| metadata_info(id, size)),
+        Ok(raw) => {
+            serde_json::from_slice::<ArtifactInfo>(&raw).unwrap_or_else(|_| metadata_info(id, size))
+        }
         Err(_) => metadata_info(id, size),
     }
 }
@@ -1035,12 +1168,8 @@ fn if_match_matches(headers: &HeaderMap, id: &str) -> bool {
     };
     raw.split(',').any(|candidate| {
         let candidate = candidate.trim();
-        candidate == "*"
-            || candidate
-                .strip_prefix("W/")
-                .unwrap_or(candidate)
-                .trim_matches('"')
-                == id
+        // A weak validator never matches a strong ETag (RFC 9110 §13.1.2).
+        candidate == "*" || candidate.trim_matches('"') == id
     })
 }
 
@@ -1157,6 +1286,16 @@ pub async fn get_artifact_bytes(
             out.insert(header::CONTENT_TYPE, value);
         }
         out.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        // Stored bytes must never execute in the server origin: force a
+        // download and block sniffing even if a bad type slipped in.
+        out.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment"),
+        );
+        out.insert(
+            "x-content-type-options",
+            HeaderValue::from_static("nosniff"),
+        );
         if let Ok(value) = HeaderValue::from_str(&etag) {
             out.insert(header::ETAG, value);
         }
@@ -1204,11 +1343,8 @@ impl Stream for BlobStream {
             return std::task::Poll::Ready(None);
         }
         let mut read_buf = ReadBuf::new(&mut this.buf);
-        match <tokio::fs::File as AsyncRead>::poll_read(
-            Pin::new(&mut this.file),
-            cx,
-            &mut read_buf,
-        ) {
+        match <tokio::fs::File as AsyncRead>::poll_read(Pin::new(&mut this.file), cx, &mut read_buf)
+        {
             std::task::Poll::Pending => std::task::Poll::Pending,
             std::task::Poll::Ready(Ok(())) => {
                 let filled = read_buf.filled().len();
@@ -1223,9 +1359,7 @@ impl Stream for BlobStream {
                     .unwrap_or(usize::MAX)
                     .min(filled);
                 this.remaining -= take as u64;
-                std::task::Poll::Ready(Some(Ok(Bytes::copy_from_slice(
-                    &read_buf.filled()[..take],
-                ))))
+                std::task::Poll::Ready(Some(Ok(Bytes::copy_from_slice(&read_buf.filled()[..take]))))
             }
             std::task::Poll::Ready(Err(err)) => {
                 this.remaining = 0;

@@ -1368,7 +1368,10 @@ export type JobList = {
 };
 export type JobCancelResult = {
   /**
-   * Whether the cancel will stop the job at its next work-unit boundary.
+   * `true` = a cancel was requested and the token was marked (every
+   * found id); `false` is never returned here — an unknown id is a 404.
+   * Does NOT say whether the job can stop early; read `interruptible`
+   * from [`JobInfo`] or the `job_cancelled` [`JobEvent`].
    */
   cancelled: boolean;
 };
@@ -1540,9 +1543,10 @@ export type ArtifactManifest = {
    */
   status: string;
   /**
-   * Present exactly when `status` is `"complete"`.
+   * Absent until the upload completes; present exactly when `status` is
+   * `"complete"`.
    */
-  artifact: ArtifactInfo | null;
+  artifact?: ArtifactInfo | null;
 };
 export type Capabilities = {
   /**
@@ -1859,7 +1863,7 @@ export type RecognitionRegion = {
   /**
    * Engine confidence in `0.0..=1.0`, absent when unknown.
    */
-  confidence: number | null;
+  confidence?: number | null;
 };
 export type RecognitionPage = {
   /**
@@ -1878,9 +1882,10 @@ export type RecognitionEngineMeta = {
    */
   id: string;
   /**
-   * Engine dependency version this build linked; absent for the stub.
+   * Engine dependency version this build linked; absent when unknown
+   * (the stub has none).
    */
-  version: string | null;
+  version?: string | null;
   /**
    * `true` only when `regions[].bbox` carries real coordinates — a
    * client must not treat regions as located otherwise (VLM rule).

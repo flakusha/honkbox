@@ -41,9 +41,9 @@ mod ora;
 #[path = "../src/raster.rs"]
 mod raster;
 #[allow(dead_code)]
-#[allow(dead_code)]
 #[path = "../src/artifacts.rs"]
 mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]

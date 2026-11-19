@@ -264,7 +264,7 @@ fn read_inner(bytes: &[u8], limits: &OraLimits) -> Result<(OraDocument, Vec<Vec<
     let stack_xml = std::str::from_utf8(&stack.bytes).map_err(|err| OraError::StackInvalid {
         detail: format!("`{STACK_ENTRY}` is not UTF-8: {err}"),
     })?;
-    let stack = parse_stack(stack_xml)?;
+    let stack = parse_stack(stack_xml, limits.max_layers)?;
 
     // The canvas.
     let (width, height) = stack.canvas;
@@ -273,15 +273,6 @@ fn read_inner(bytes: &[u8], limits: &OraLimits) -> Result<(OraDocument, Vec<Vec<
         return Err(OraError::CanvasTooLarge {
             limit: limits.max_pixels,
             found: canvas_pixels,
-        });
-    }
-
-    // The layer count.
-    let found = stack.layers.len() as u64;
-    if found > limits.max_layers {
-        return Err(OraError::TooManyLayers {
-            limit: limits.max_layers,
-            found,
         });
     }
 
@@ -467,7 +458,7 @@ struct LayerSpec {
 
 /// Parse `stack.xml` (streaming, no entity expansion: attribute values are
 /// read raw).
-fn parse_stack(xml: &str) -> Result<ParsedStack, OraError> {
+fn parse_stack(xml: &str, max_layers: u64) -> Result<ParsedStack, OraError> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
@@ -478,7 +469,16 @@ fn parse_stack(xml: &str) -> Result<ParsedStack, OraError> {
             Ok(Event::Start(element) | Event::Empty(element)) => {
                 match element.local_name().as_ref() {
                     b"image" => canvas = Some(parse_canvas(&element)?),
-                    b"layer" => layers.push(parse_layer(&element)?),
+                    b"layer" => {
+                        layers.push(parse_layer(&element)?);
+                        let found = layers.len() as u64;
+                        if found > max_layers {
+                            return Err(OraError::TooManyLayers {
+                                limit: max_layers,
+                                found,
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }

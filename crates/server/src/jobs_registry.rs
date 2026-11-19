@@ -20,9 +20,9 @@
 //!   takes);
 //! - single-shot calls that have no engine stop (sync chat/completions,
 //!   embeddings, transcribe, synthesize, translations) run to completion.
-//!   `cancel` answers honestly: `cancelled: true` for jobs that check the
-//!   token between work units or bridge it into an engine stop
-//!   (`interruptible`).
+//!   `cancel` reports both facts separately: `cancelled` (the token was
+//!   marked — true for every found id) and `interruptible` (whether the
+//!   work can actually stop early). They are never conflated.
 //!
 //! The registry is process-global like the residency ledger. Entries are
 //! removed when the route handler's [`JobGuard`] drops, so the registry
@@ -147,6 +147,17 @@ impl JobEntry {
     }
 }
 
+/// The two independent facts a cancel establishes, kept separate so no
+/// caller mistakes "the token was marked" for "the work can stop".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CancelOutcome {
+    /// The id was live and its cancel token was marked (`job_cancelled`
+    /// emitted). Always `true` for a found id.
+    pub cancelled: bool,
+    /// The route honors the token and can stop before the work completes.
+    pub interruptible: bool,
+}
+
 /// Registry of live GPU jobs: id → entry. The map lives behind an `Arc` so
 /// each [`JobGuard`] unregisters from ITS OWN registry on drop (a locally
 /// built registry in tests behaves exactly like the global one). The
@@ -215,25 +226,31 @@ impl Registry {
         }
     }
 
-    /// Mark a live job's token. `Some(interruptible)` = the id was found
-    /// (freshly marked or already cancelled while still in flight); `None`
-    /// = unknown id (never registered, or its request already ended).
-    /// Emits `job_cancelled` — a cancel was REQUESTED, not a completion —
-    /// on the lifecycle channel when the id was found.
-    pub(crate) fn cancel(&self, id: &str) -> Option<bool> {
+    /// Mark a live job's token and return BOTH facts separately. `Some` =
+    /// the id was found (freshly marked or already cancelled in flight):
+    /// `cancelled` says the token was marked, `interruptible` says the route
+    /// can actually stop early. `None` = unknown id (never registered, or
+    /// its request already ended). Emits `job_cancelled` — a cancel was
+    /// REQUESTED, not a completion — when the id was found.
+    pub(crate) fn cancel(&self, id: &str) -> Option<CancelOutcome> {
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = entries.get_mut(id)?;
         entry.token.cancel();
+        let cancelled = entry.token.is_cancelled();
+        let interruptible = entry.interruptible;
         // Fire-and-forget (same contract as `register`); the send touches
         // only the broadcast channel, never the entries map, so holding the
         // entries lock here cannot invert any lock order.
         let _ = self
             .events
-            .send(entry.to_event(JobEventType::Cancelled, true));
-        Some(entry.interruptible)
+            .send(entry.to_event(JobEventType::Cancelled, cancelled));
+        Some(CancelOutcome {
+            cancelled,
+            interruptible,
+        })
     }
 
     /// Live jobs, oldest first (registration order; deterministic even for
@@ -340,24 +357,49 @@ mod tests {
     }
 
     #[test]
-    fn cancel_marks_token_and_reports_interruptible() {
+    fn cancel_marks_token_and_reports_both_facts() {
         let registry = fresh();
         let job = registry.register(JobKind::Images, None, true);
         let token = job.token().clone();
-        assert_eq!(registry.cancel(job.id()), Some(true));
+        let both = CancelOutcome {
+            cancelled: true,
+            interruptible: true,
+        };
+        assert_eq!(registry.cancel(job.id()), Some(both));
         assert!(token.is_cancelled());
         // Idempotent: a second cancel still finds the live job.
-        assert_eq!(registry.cancel(job.id()), Some(true));
+        assert_eq!(registry.cancel(job.id()), Some(both));
         drop(job);
         // After the request ends the id is gone → the 404 path.
         assert_eq!(registry.cancel("job_unknown"), None);
     }
 
-    #[test]
-    fn non_interruptible_jobs_report_honestly() {
+    /// F6 regression: a non-interruptible job still answers `cancelled:
+    /// true` because its token WAS marked; `interruptible: false` is the
+    /// separate fact. The old `Some(false)` answer made routes report
+    /// `cancelled: false` for a job it had just cancelled.
+    #[tokio::test]
+    async fn non_interruptible_cancel_reports_token_marked_separately() {
         let registry = fresh();
+        let mut events = registry.subscribe();
         let job = registry.register(JobKind::Transcribe, None, false);
-        assert_eq!(registry.cancel(job.id()), Some(false));
+        assert_eq!(
+            next_event(&mut events).await.event,
+            JobEventType::Registered
+        );
+        assert_eq!(
+            registry.cancel(job.id()),
+            Some(CancelOutcome {
+                cancelled: true,
+                interruptible: false,
+            })
+        );
+        assert!(job.token().is_cancelled());
+        let cancelled = next_event(&mut events).await;
+        assert_eq!(cancelled.event, JobEventType::Cancelled);
+        assert!(cancelled.cancelled, "job_cancelled marks the token");
+        assert!(!cancelled.interruptible, "work cannot stop early");
+        drop(job);
     }
 
     #[test]
@@ -407,7 +449,13 @@ mod tests {
         assert!(!registered.cancelled);
         assert!(registered.started_at_ms > 0);
 
-        assert_eq!(registry.cancel(job.id()), Some(true));
+        assert_eq!(
+            registry.cancel(job.id()),
+            Some(CancelOutcome {
+                cancelled: true,
+                interruptible: true,
+            })
+        );
         let cancelled = next_event(&mut receiver).await;
         assert_eq!(cancelled.event, JobEventType::Cancelled);
         assert_eq!(cancelled.event.label(), "job_cancelled");

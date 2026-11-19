@@ -321,6 +321,43 @@ fn too_many_layers_are_rejected() {
     }
 }
 
+/// The layer cap is enforced while parsing `stack.xml`: a fifth layer
+/// followed by malformed XML must report `TooManyLayers`, not `StackInvalid`.
+#[test]
+fn layer_cap_is_enforced_while_parsing_the_stack() {
+    let mut stack = stack_xml(
+        2,
+        2,
+        &[
+            ("Layer 1", "data/layer1.png"),
+            ("Layer 2", "data/layer2.png"),
+            ("Layer 3", "data/layer3.png"),
+            ("Layer 4", "data/layer4.png"),
+            ("Layer 5", "data/layer5.png"),
+        ],
+    );
+    let end = stack.find("</stack>").expect("the stack is closed");
+    stack.truncate(end);
+    stack.push_str("<layer src=\"data/truncated.png\"");
+
+    let bytes = zip_bytes(&[
+        ("mimetype", zip::CompressionMethod::Stored, MIMETYPE),
+        (
+            "stack.xml",
+            zip::CompressionMethod::Deflated,
+            stack.as_bytes(),
+        ),
+    ]);
+
+    match crate::ora::read_ora(&bytes, &limits()) {
+        Err(OraError::TooManyLayers { limit, found }) => {
+            assert_eq!(limit, 4);
+            assert_eq!(found, 5);
+        }
+        other => panic!("expected TooManyLayers, got {other:?}"),
+    }
+}
+
 /// A layer that references a missing file is rejected.
 #[test]
 fn missing_layer_file_is_rejected() {

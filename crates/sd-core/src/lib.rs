@@ -21,6 +21,18 @@ use diffusion_rs::api::{
 /// Longest image edge in pixels accepted by the stub backend.
 pub const MAX_EDGE: u32 = 2048;
 
+/// Reject zero-width or zero-height requests at the pipeline seam.
+/// A zero edge has no pixels: the stub's row chunking would panic on an
+/// empty chunk, and the vendor backend cannot render an empty frame.
+fn check_dimensions(width: u32, height: u32) -> Result<(), SdError> {
+    if width == 0 || height == 0 {
+        return Err(SdError::Backend(
+            "image dimensions must be positive".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Default sampler recorded in bundle sidecars when a request omits one.
 pub const SAMPLER: &str = "euler";
 /// Default scheduler recorded in bundle sidecars when a request omits one.
@@ -462,11 +474,16 @@ impl SdPipeline for StubPipeline {
         "stub"
     }
 
-    fn generate(&self, req: &Txt2ImgRequest, cancel: &AtomicBool) -> Result<GeneratedImage, SdError> {
+    fn generate(
+        &self,
+        req: &Txt2ImgRequest,
+        cancel: &AtomicBool,
+    ) -> Result<GeneratedImage, SdError> {
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
             return Err(SdError::TooLarge { edge });
         }
+        check_dimensions(req.width, req.height)?;
         if cancel.load(Ordering::Acquire) {
             return Err(SdError::Cancelled);
         }
@@ -799,12 +816,30 @@ fn wire_model(req: &Txt2ImgRequest, model: &mut ModelConfigBuilder) -> Result<()
     Ok(())
 }
 
+/// Read the rendered PNG and remove every temp output, even when generation
+/// failed. Called unconditionally before the generation error is applied.
+fn read_and_remove_outputs(
+    out: &std::path::Path,
+    control: Option<&std::path::Path>,
+) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(out).ok();
+    let _ = std::fs::remove_file(out);
+    if let Some(path) = control {
+        let _ = std::fs::remove_file(path);
+    }
+    bytes
+}
+
 impl SdPipeline for SdCppPipeline {
     fn backend_id(&self) -> &'static str {
         SD_CPP_BACKEND_ID
     }
 
-    fn generate(&self, req: &Txt2ImgRequest, cancel: &AtomicBool) -> Result<GeneratedImage, SdError> {
+    fn generate(
+        &self,
+        req: &Txt2ImgRequest,
+        cancel: &AtomicBool,
+    ) -> Result<GeneratedImage, SdError> {
         #[cfg(feature = "vulkan")]
         use diffusion_rs::api::{BackendDevice, Module};
 
@@ -812,6 +847,7 @@ impl SdPipeline for SdCppPipeline {
         if edge > MAX_EDGE {
             return Err(SdError::TooLarge { edge });
         }
+        check_dimensions(req.width, req.height)?;
         // A cancel that arrived while this request waited (admission queue,
         // prior batch images) cancels without touching the model at all.
         if cancel.load(Ordering::Acquire) {
@@ -911,16 +947,15 @@ impl SdPipeline for SdCppPipeline {
             let _ = relay.join();
             rendered
         });
-        gen_result.map_err(|err| match err {
+        let rendered = gen_result.map_err(|err| match err {
             diffusion_rs::api::DiffusionError::Cancelled => SdError::Cancelled,
             other => SdError::Backend(other.to_string()),
+        });
+        let bytes = read_and_remove_outputs(&out, control_path.as_deref());
+        rendered?;
+        let bytes = bytes.ok_or_else(|| {
+            SdError::Backend(format!("generated image missing at {}", out.display()))
         })?;
-        let bytes = std::fs::read(&out);
-        let _ = std::fs::remove_file(&out);
-        if let Some(path) = &control_path {
-            let _ = std::fs::remove_file(path);
-        }
-        let bytes = bytes.map_err(|e| SdError::Backend(e.to_string()))?;
         let img = image::load_from_memory(&bytes)
             .map_err(|e| SdError::Encode(e.to_string()))?
             .to_rgba8();
@@ -1065,8 +1100,15 @@ mod tests {
 
     #[test]
     fn engine_version_maps_by_backend_id() {
-        assert_eq!(engine_version_for(SD_CPP_BACKEND_ID), Some(SD_CPP_ENGINE_VERSION));
-        assert_eq!(engine_version_for("stub"), None, "stub has no separate engine");
+        assert_eq!(
+            engine_version_for(SD_CPP_BACKEND_ID),
+            Some(SD_CPP_ENGINE_VERSION)
+        );
+        assert_eq!(
+            engine_version_for("stub"),
+            None,
+            "stub has no separate engine"
+        );
         assert_eq!(engine_version_for(""), None);
     }
 
@@ -1263,8 +1305,12 @@ mod tests {
 
     #[test]
     fn stub_is_byte_deterministic() {
-        let a = StubPipeline.generate(&req(42, 32, 32), &AtomicBool::new(false)).expect("gen");
-        let b = StubPipeline.generate(&req(42, 32, 32), &AtomicBool::new(false)).expect("gen");
+        let a = StubPipeline
+            .generate(&req(42, 32, 32), &AtomicBool::new(false))
+            .expect("gen");
+        let b = StubPipeline
+            .generate(&req(42, 32, 32), &AtomicBool::new(false))
+            .expect("gen");
         assert_eq!(a.rgba, b.rgba);
         let pa = encode_image(a, OutputFormat::Png).expect("png");
         let pb = encode_image(b, OutputFormat::Png).expect("png");
@@ -1274,9 +1320,45 @@ mod tests {
 
     #[test]
     fn stub_honors_size() {
-        let img = StubPipeline.generate(&req(7, 8, 6), &AtomicBool::new(false)).expect("gen");
+        let img = StubPipeline
+            .generate(&req(7, 8, 6), &AtomicBool::new(false))
+            .expect("gen");
         assert_eq!((img.width, img.height), (8, 6));
         assert_eq!(img.rgba.len(), 8 * 6 * 4);
+    }
+
+    #[test]
+    fn stub_rejects_zero_dimensions() {
+        for (w, h) in [(0, 16), (16, 0), (0, 0)] {
+            let err = StubPipeline
+                .generate(&req(1, w, h), &AtomicBool::new(false))
+                .expect_err("zero dimension must be rejected");
+            assert!(matches!(err, SdError::Backend(_)), "{err:?}");
+        }
+    }
+
+    #[test]
+    fn temp_outputs_removed_even_when_generation_failed() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("honkbox-cleanup-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let out = dir.join("out.png");
+        let control = dir.join("control.png");
+        std::fs::write(&out, b"png").expect("out");
+        std::fs::write(&control, b"ctl").expect("control");
+        assert_eq!(
+            read_and_remove_outputs(&out, Some(&control)),
+            Some(b"png".to_vec())
+        );
+        assert!(
+            !out.exists() && !control.exists(),
+            "temp files must be gone"
+        );
+        std::fs::remove_dir_all(&dir).expect("remove test dir");
     }
 
     /// Cancel contract at the seam: a set flag answers the NAMED
@@ -1317,15 +1399,31 @@ mod tests {
 
     #[test]
     fn stub_caps_longest_edge() {
-        assert!(StubPipeline.generate(&req(1, 2049, 16), &AtomicBool::new(false)).is_err());
-        assert!(StubPipeline.generate(&req(1, 16, 2049), &AtomicBool::new(false)).is_err());
-        assert!(StubPipeline.generate(&req(1, 2048, 2048), &AtomicBool::new(false)).is_ok());
+        assert!(
+            StubPipeline
+                .generate(&req(1, 2049, 16), &AtomicBool::new(false))
+                .is_err()
+        );
+        assert!(
+            StubPipeline
+                .generate(&req(1, 16, 2049), &AtomicBool::new(false))
+                .is_err()
+        );
+        assert!(
+            StubPipeline
+                .generate(&req(1, 2048, 2048), &AtomicBool::new(false))
+                .is_ok()
+        );
     }
 
     #[test]
     fn different_seeds_differ() {
-        let a = StubPipeline.generate(&req(1, 16, 16), &AtomicBool::new(false)).expect("gen");
-        let b = StubPipeline.generate(&req(2, 16, 16), &AtomicBool::new(false)).expect("gen");
+        let a = StubPipeline
+            .generate(&req(1, 16, 16), &AtomicBool::new(false))
+            .expect("gen");
+        let b = StubPipeline
+            .generate(&req(2, 16, 16), &AtomicBool::new(false))
+            .expect("gen");
         assert_ne!(a.rgba, b.rgba);
     }
 
@@ -1354,8 +1452,12 @@ mod tests {
             controlnet_strength: Some(0.5),
             ..req(9, 16, 16)
         };
-        let a = StubPipeline.generate(&plain, &AtomicBool::new(false)).expect("gen");
-        let b = StubPipeline.generate(&with, &AtomicBool::new(false)).expect("gen");
+        let a = StubPipeline
+            .generate(&plain, &AtomicBool::new(false))
+            .expect("gen");
+        let b = StubPipeline
+            .generate(&with, &AtomicBool::new(false))
+            .expect("gen");
         assert_eq!(a.rgba, b.rgba);
         // The stub ignores the hires pass, so the output stays at the base
         // size (the real backend would land at the hires target).
@@ -1435,7 +1537,9 @@ mod tests {
     #[test]
     fn formats_roundtrip_dims_and_pixels() {
         for format in [OutputFormat::Png, OutputFormat::Jpeg, OutputFormat::Webp] {
-            let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
+            let img = StubPipeline
+                .generate(&req(42, 16, 16), &AtomicBool::new(false))
+                .expect("gen");
             let bytes = encode_image(img, format).expect("encode");
             assert!(!bytes.is_empty(), "{format:?}");
             let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
@@ -1443,14 +1547,18 @@ mod tests {
         }
         // Lossless containers preserve every pixel.
         for format in [OutputFormat::Png, OutputFormat::Webp] {
-            let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
+            let img = StubPipeline
+                .generate(&req(42, 16, 16), &AtomicBool::new(false))
+                .expect("gen");
             let want = img.rgba.clone();
             let bytes = encode_image(img, format).expect("encode");
             let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
             assert_eq!(decoded.as_raw(), &want, "{format:?}");
         }
         // JPEG quality 90 on noise: small mean error, not garbage.
-        let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
+        let img = StubPipeline
+            .generate(&req(42, 16, 16), &AtomicBool::new(false))
+            .expect("gen");
         let want = img.rgba.clone();
         let bytes = encode_image(img, OutputFormat::Jpeg).expect("encode");
         let decoded = image::load_from_memory(&bytes).expect("decode").to_rgba8();
@@ -1485,7 +1593,9 @@ mod tests {
 
     #[test]
     fn jpeg_quality_knob_changes_bytes_and_default_matches_90() {
-        let img = StubPipeline.generate(&req(42, 16, 16), &AtomicBool::new(false)).expect("gen");
+        let img = StubPipeline
+            .generate(&req(42, 16, 16), &AtomicBool::new(false))
+            .expect("gen");
         let default_bytes = encode_image(img.clone(), OutputFormat::Jpeg).expect("encode");
         let q90 = encode_image_with_quality(img.clone(), OutputFormat::Jpeg, 90).expect("encode");
         assert_eq!(default_bytes, q90, "default = quality 90");

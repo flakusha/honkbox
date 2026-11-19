@@ -313,7 +313,7 @@ fn scan(text: &str, limits: &SvgLimits) -> Result<RootShape, SvgError> {
                 depth -= 1;
                 if in_style && element.local_name().as_ref().eq_ignore_ascii_case(b"style") {
                     in_style = false;
-                    check_style_urls(&style_text, "style")?;
+                    check_style_urls(&style_text, b"style")?;
                     style_text.clear();
                 }
             }
@@ -387,17 +387,16 @@ fn check_attributes(element: &quick_xml::events::BytesStart<'_>) -> Result<(), S
         }
         let value = String::from_utf8_lossy(&attribute.value);
         let trimmed = value.trim();
-        if local == b"href" || local == b"src" || local == b"data" {
-            if !is_local_reference(trimmed) {
-                return Err(SvgError::ExternalReference {
-                    attr: String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
-                    value: trimmed.to_owned(),
-                });
-            }
-        } else if local == b"style" {
-            let name = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
-            check_style_urls(trimmed, &name)?;
+        if (local == b"href" || local == b"src" || local == b"data") && !is_local_reference(trimmed)
+        {
+            return Err(SvgError::ExternalReference {
+                attr: String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
+                value: trimmed.to_owned(),
+            });
         }
+        // Presentation attributes (`fill`, `stroke`, `filter`, ...) accept
+        // `url(...)`, so scan every value, not only `style`.
+        check_style_urls(trimmed, attribute.key.as_ref())?;
     }
     Ok(())
 }
@@ -411,8 +410,8 @@ fn is_local_reference(value: &str) -> bool {
     value.starts_with('#') || value.to_ascii_lowercase().starts_with("data:")
 }
 
-/// Check the `url(...)` references of a style value.
-fn check_style_urls(value: &str, attr: &str) -> Result<(), SvgError> {
+/// Check the `url(...)` references of an attribute value.
+fn check_style_urls(value: &str, attr: &[u8]) -> Result<(), SvgError> {
     let lowered = value.to_ascii_lowercase();
     let mut cursor = 0usize;
     while let Some(found) = lowered[cursor..].find("url(") {
@@ -425,7 +424,7 @@ fn check_style_urls(value: &str, attr: &str) -> Result<(), SvgError> {
             .trim_matches(|c| c == '\'' || c == '"');
         if !url.is_empty() && !is_local_reference(url) {
             return Err(SvgError::ExternalReference {
-                attr: attr.to_owned(),
+                attr: String::from_utf8_lossy(attr).into_owned(),
                 value: url.to_owned(),
             });
         }

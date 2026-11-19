@@ -403,6 +403,23 @@ fn rejects_a_glb_with_an_external_buffer() {
     }
 }
 
+/// A later `uri` must be checked: the first buffer is embedded but the
+/// second one points outside the container.
+#[test]
+fn rejects_a_glb_with_a_data_uri_then_an_external_uri() {
+    let json = br#"{"buffers":[{"uri":"data:application/octet-stream;base64,AAAA","byteLength":3},{"uri":"file:///etc/passwd","byteLength":4}]}"#;
+    let bytes = glb(json, None);
+
+    let err = validate_glb(&bytes, limits()).expect_err("the container must be rejected");
+    match err {
+        ContainerError::UnsafePath { name, reason } => {
+            assert_eq!(reason, "external_buffer");
+            assert_eq!(name, "<glb json chunk>");
+        }
+        other => panic!("expected an external buffer rejection, got {other:?}"),
+    }
+}
+
 #[test]
 fn rejects_a_glb_bin_chunk_over_the_entry_limit() {
     let bin = vec![0u8; 2 * 1024 * 1024];

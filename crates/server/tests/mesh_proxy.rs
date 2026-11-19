@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -27,11 +28,11 @@ use tower::ServiceExt as _;
 // (house pattern: per-mod allow(dead_code); this harness does not mount the
 // full app, only the config/mesh/jobs slice it exercises).
 #[allow(dead_code)]
-#[path = "../src/jobs.rs"]
-mod jobs;
-#[allow(dead_code)]
 #[path = "../src/config.rs"]
 mod config;
+#[allow(dead_code)]
+#[path = "../src/jobs.rs"]
+mod jobs;
 
 use config::mesh::{MeshConfig, MeshError, MeshProxy, MeshUpstream};
 
@@ -41,7 +42,9 @@ where
     F: FnOnce(TcpListener, TcpStream) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("mock upstream bind");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock upstream bind");
     let addr = listener.local_addr().expect("mock upstream addr");
     // Accept in the background: awaiting accept here would deadlock (the
     // caller connects only after this fn returns the address).
@@ -62,7 +65,11 @@ async fn read_request(stream: &mut TcpStream) -> (Vec<u8>, Vec<u8>) {
         assert!(n > 0, "upstream closed before request head completed");
         buf.extend_from_slice(&chunk[..n]);
     }
-    let split = buf.windows(4).position(|w| w == b"\r\n\r\n").expect("head terminator") + 4;
+    let split = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("head terminator")
+        + 4;
     let mut head = buf[..split].to_vec();
     let mut body = buf[split..].to_vec();
     // Content-length body (the mock never speaks chunked requests).
@@ -116,21 +123,35 @@ fn poisoned_inbound_headers() -> HeaderMap {
     let mut inbound = HeaderMap::new();
     inbound.insert("accept", HeaderValue::from_static("text/event-stream"));
     inbound.insert("accept-encoding", HeaderValue::from_static("gzip"));
-    inbound.insert("authorization", HeaderValue::from_static("Bearer caller-secret"));
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer caller-secret"),
+    );
     inbound.insert("cookie", HeaderValue::from_static("session=caller"));
     inbound.insert("x-api-key", HeaderValue::from_static("sk-caller"));
     inbound.insert("x-forwarded-for", HeaderValue::from_static("10.9.8.7"));
-    inbound.insert("x-honkbox-internal", HeaderValue::from_static("scope:secret"));
-    inbound.insert("x-request-id", HeaderValue::from_static("caller-request-id"));
+    inbound.insert(
+        "x-honkbox-internal",
+        HeaderValue::from_static("scope:secret"),
+    );
+    inbound.insert(
+        "x-request-id",
+        HeaderValue::from_static("caller-request-id"),
+    );
     inbound.insert("user-agent", HeaderValue::from_static("evil-client/9"));
-    inbound.insert("proxy-authorization", HeaderValue::from_static("Basic proxy"));
+    inbound.insert(
+        "proxy-authorization",
+        HeaderValue::from_static("Basic proxy"),
+    );
     inbound.insert("te", HeaderValue::from_static("trailers"));
     inbound
 }
 
 /// Inbound body for the chat turn.
 fn chat_body() -> axum::body::Bytes {
-    json!({"model": "remote-model", "stream": true}).to_string().into()
+    json!({"model": "remote-model", "stream": true})
+        .to_string()
+        .into()
 }
 
 /// Read the relayed body to a string (bounded).
@@ -169,7 +190,7 @@ async fn header_allowlist_upstream_wire_pin() {
         .forward(
             upstream,
             Method::POST,
-            "/v1/chat/completions",
+            "/mesh/echo",
             &poisoned_inbound_headers(),
             chat_body(),
         )
@@ -185,8 +206,14 @@ async fn header_allowlist_upstream_wire_pin() {
         .collect();
 
     // Allowlisted values pass through unchanged.
-    assert_eq!(wire.get("accept").map(String::as_str), Some("text/event-stream"));
-    assert_eq!(wire.get("accept-encoding").map(String::as_str), Some("gzip"));
+    assert_eq!(
+        wire.get("accept").map(String::as_str),
+        Some("text/event-stream")
+    );
+    assert!(
+        !wire.contains_key("accept-encoding"),
+        "accept-encoding is never forwarded: this client cannot decode a compressed response"
+    );
     // Rewritten identity headers.
     assert_eq!(
         wire.get("user-agent").map(String::as_str),
@@ -207,6 +234,7 @@ async fn header_allowlist_upstream_wire_pin() {
     // Everything else is stripped — credentials, spoofing vectors,
     // hop-by-hop, the x-honkbox-* namespace.
     for forbidden in [
+        "accept-encoding",
         "cookie",
         "x-api-key",
         "x-forwarded-for",
@@ -248,7 +276,7 @@ async fn response_headers_allowlisted_and_retry_after_mapped() {
         .forward(
             upstream,
             Method::POST,
-            "/v1/chat/completions",
+            "/mesh/echo",
             &HeaderMap::new(),
             chat_body(),
         )
@@ -256,7 +284,10 @@ async fn response_headers_allowlisted_and_retry_after_mapped() {
         .expect("forward succeeds");
     assert_eq!(response.status, 429);
     assert_eq!(response.headers.len(), 1, "only content-type is relayed");
-    assert_eq!(response.headers.get("content-type").unwrap(), "application/json");
+    assert_eq!(
+        response.headers.get("content-type").unwrap(),
+        "application/json"
+    );
     assert!(
         response.headers.get("x-request-id").is_none(),
         "upstream x-request-id echoes are stripped, never relayed"
@@ -281,7 +312,13 @@ async fn relay(State(proxy): State<Arc<MeshProxy>>, request: Request) -> Respons
         .await
         .expect("request body");
     let forwarded = proxy
-        .forward(upstream, Method::POST, "/v1/chat/completions", &headers, body)
+        .forward(
+            upstream,
+            Method::POST,
+            "/mesh/echo",
+            &headers,
+            body,
+        )
         .await
         .expect("forward succeeds");
     let mut builder = axum::http::Response::builder().status(forwarded.status);
@@ -357,7 +394,9 @@ async fn sse_frames_arrive_incrementally_through_relay() {
         "frame 1 chunk arrives incrementally (got {first:?})"
     );
     // Frame 1 is consumed; the upstream is now free to send frame 2.
-    frame1_seen_tx.send(()).expect("upstream still holds the gate");
+    frame1_seen_tx
+        .send(())
+        .expect("upstream still holds the gate");
     let second = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
         .expect("frame 2 arrives")
@@ -390,7 +429,7 @@ async fn dropping_relayed_body_aborts_upstream() {
         let outcome = loop {
             match stream.read(&mut sink).await {
                 Ok(0) => break "eof",
-                Ok(_) => {}, // ignore any late client bytes
+                Ok(_) => {} // ignore any late client bytes
                 Err(_) => break "reset",
             }
         };
@@ -403,7 +442,7 @@ async fn dropping_relayed_body_aborts_upstream() {
         .forward(
             upstream,
             Method::POST,
-            "/v1/chat/completions",
+            "/mesh/echo",
             &HeaderMap::new(),
             chat_body(),
         )
@@ -455,7 +494,7 @@ async fn size_cap_rejects_mid_stream() {
         .forward(
             upstream,
             Method::POST,
-            "/v1/chat/completions",
+            "/mesh/echo",
             &HeaderMap::new(),
             chat_body(),
         )
@@ -474,10 +513,13 @@ async fn size_cap_rejects_mid_stream() {
                 assert!(saw_error, "cap error names the limit, got: {err}");
                 break;
             }
-            Ok(Some(Ok(_))) => {},
+            Ok(Some(Ok(_))) => {}
         }
     }
-    assert!(saw_error, "the mid-stream cap must surface as a named error");
+    assert!(
+        saw_error,
+        "the mid-stream cap must surface as a named error"
+    );
 }
 
 /// No lease for a remote-only turn (TASK-proxy-stream-safety): a pure proxy
@@ -505,14 +547,17 @@ async fn remote_turn_holds_no_residency_lease() {
         .forward(
             upstream,
             Method::POST,
-            "/v1/chat/completions",
+            "/mesh/echo",
             &HeaderMap::new(),
             chat_body(),
         )
         .await
         .expect("forward succeeds");
     let text = body_text(response.body).await;
-    assert!(text.contains("assistant"), "a complete remote turn finished");
+    assert!(
+        text.contains("assistant"),
+        "a complete remote turn finished"
+    );
     let after = ledger.stats(honkbox_residency::ResourceKind::Llm);
     assert_eq!(
         after.running, before.running,
@@ -539,7 +584,10 @@ async fn disabled_mesh_resolves_no_upstream_and_errors_have_codes() {
         message: "connect refused".to_owned(),
     };
     assert_eq!(transport.code(), "upstream_unavailable");
-    assert_eq!(config::mesh::MeshError::status(), axum::http::StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        config::mesh::MeshError::status(),
+        axum::http::StatusCode::BAD_GATEWAY
+    );
     let cap = MeshError::StreamLimitExceeded(64);
     assert_eq!(cap.code(), "upstream_stream_limit");
     assert_eq!(MeshError::status(), axum::http::StatusCode::BAD_GATEWAY);
@@ -565,14 +613,18 @@ async fn request_ids_are_regenerated_per_hop() {
             for _ in 0..2 {
                 let (head, _body) = read_request(&mut conn).await;
                 let headers = parse_head(&head);
-                ids.lock().expect("ids lock").push(headers.get("x-request-id").cloned());
+                ids.lock()
+                    .expect("ids lock")
+                    .push(headers.get("x-request-id").cloned());
                 let response = "HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}";
                 conn.write_all(response.as_bytes()).await.ok();
                 conn.flush().await.ok();
                 // `Connection: close` semantics: the next hop arrives on a
                 // fresh connection.
                 drop(conn);
-                let Ok((next, _)) = listener.accept().await else { return };
+                let Ok((next, _)) = listener.accept().await else {
+                    return;
+                };
                 conn = next;
             }
         }
@@ -585,7 +637,7 @@ async fn request_ids_are_regenerated_per_hop() {
             .forward(
                 upstream,
                 Method::POST,
-                "/v1/chat/completions",
+                "/mesh/echo",
                 &HeaderMap::new(),
                 chat_body(),
             )
@@ -598,5 +650,97 @@ async fn request_ids_are_regenerated_per_hop() {
     let second = ids[1].as_deref().expect("id 2 present");
     assert_ne!(first, second, "ids are regenerated per hop");
     assert_eq!(first.len(), 26, "ULID canonical width");
-    assert!(first.chars().all(|c| c.is_ascii_alphanumeric()), "header-safe id");
+    assert!(
+        first.chars().all(|c| c.is_ascii_alphanumeric()),
+        "header-safe id"
+    );
+}
+
+/// PATH-ONLY TARGETS: a plain absolute-path reference joins onto the
+/// configured origin and the upstream sees that exact path.
+#[tokio::test]
+async fn path_only_target_stays_on_configured_origin() {
+    let addr = spawn_upstream(|_listener, mut stream| async move {
+        let (head, _body) = read_request(&mut stream).await;
+        let request_line = String::from_utf8_lossy(&head)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            request_line.len(),
+            request_line
+        );
+        stream.write_all(response.as_bytes()).await.ok();
+        stream.flush().await.ok();
+    })
+    .await;
+    let proxy = proxy_at(addr, 8 * 1024 * 1024);
+    let upstream = proxy.upstream("peer").expect("peer resolves");
+    let response = proxy
+        .forward(
+            upstream,
+            Method::POST,
+            "/mesh/echo?x=1",
+            &HeaderMap::new(),
+            chat_body(),
+        )
+        .await
+        .expect("path-only target forwards");
+    assert_eq!(response.status, 200);
+    let line = body_text(response.body).await;
+    assert!(
+        line.starts_with("POST /mesh/echo?x=1 HTTP/1.1"),
+        "path-only target must join the configured origin, got {line:?}"
+    );
+}
+
+/// ORIGIN ESCAPE: absolute URLs, network-path (`//host`) references, and
+/// backslash/newline tricks must be rejected BEFORE any request is sent —
+/// this is where the config bearer is attached, so it can never reach a host
+/// other than the one configured.
+#[tokio::test]
+async fn hostile_targets_are_rejected_before_any_request() {
+    let saw_request = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&saw_request);
+    let addr = spawn_upstream(move |_listener, mut stream| async move {
+        flag.store(true, Ordering::SeqCst);
+        let _ = read_request(&mut stream).await;
+    })
+    .await;
+    let proxy = proxy_at(addr, 8 * 1024 * 1024);
+    let upstream = proxy.upstream("peer").expect("peer resolves");
+
+    for target in [
+        "http://evil.example/mesh/echo", // absolute URL
+        "https://evil.example/x",                  // absolute URL, other scheme
+        "//evil.example/x",                        // network-path reference
+        "///evil.example/x",                       // network-path reference
+        "\\evil.example/x",                        // backslash authority trick
+        "/\\evil.example/x",                       // backslash after the leading slash
+        "/\n\\evil.example/x",                     // newline stripped, then `\` becomes `/`
+        "http:/\\evil.example/x",                  // scheme-ish form with no leading slash
+    ] {
+        let Err(err) = proxy
+            .forward(
+                upstream,
+                Method::POST,
+                target,
+                &HeaderMap::new(),
+                chat_body(),
+            )
+            .await
+        else {
+            panic!("hostile target {target:?} must be rejected")
+        };
+        assert!(
+            matches!(err, MeshError::UpstreamUnreachable { .. }),
+            "target {target:?} must fail as UpstreamUnreachable, got {err:?}"
+        );
+    }
+    assert!(
+        !saw_request.load(Ordering::SeqCst),
+        "no hostile target may reach ANY upstream: the config bearer must never leave the configured origin"
+    );
 }

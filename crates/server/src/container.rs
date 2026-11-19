@@ -582,8 +582,9 @@ fn has_external_buffer(json: &str) -> bool {
     while index + 5 <= bytes.len() {
         if bytes[index..index + 5] == *b"\"uri\""
             && let Some(value) = json_uri_value(bytes, index + 5)
+            && !value.starts_with("data:")
         {
-            return !value.starts_with("data:");
+            return true;
         }
         index = index.saturating_add(1);
     }

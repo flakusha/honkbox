@@ -50,7 +50,12 @@ use tokio_stream::StreamExt as _;
 /// stripped by construction (the outbound request is built fresh from this
 /// table, never by copying the inbound map). `user-agent` and `x-request-id`
 /// are NOT taken from here: they are always rewritten locally.
-pub(crate) const FORWARDED_REQUEST_HEADERS: &[&str] = &["accept", "accept-encoding"];
+///
+/// `accept-encoding` is deliberately excluded: this client is built without
+/// reqwest's decompression features, so a compressed upstream body would
+/// arrive undecodable with `content-encoding` stripped by the response
+/// allowlist.
+pub(crate) const FORWARDED_REQUEST_HEADERS: &[&str] = &["accept"];
 
 /// Response headers relayed to the honkbox caller, by exact name. Everything
 /// else — response `authorization`/`set-cookie`, upstream `x-request-id`
@@ -244,7 +249,10 @@ impl MeshConfig {
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
                 .ok_or_else(|| format!("[[mesh.upstreams]] #{index} is missing `name`"))?;
-            if upstreams.iter().any(|upstream: &MeshUpstream| upstream.name == name) {
+            if upstreams
+                .iter()
+                .any(|upstream: &MeshUpstream| upstream.name == name)
+            {
                 return Err(format!("[[mesh.upstreams]] declares {name:?} twice"));
             }
             let raw = entry.base_url.as_deref().map(str::trim).unwrap_or_default();
@@ -263,7 +271,9 @@ impl MeshConfig {
             });
         }
         if enabled && upstreams.is_empty() {
-            return Err("[mesh] enabled = true but no [[mesh.upstreams]] are configured".to_owned());
+            return Err(
+                "[mesh] enabled = true but no [[mesh.upstreams]] are configured".to_owned(),
+            );
         }
         if !enabled && !upstreams.is_empty() {
             tracing::warn!("[mesh] upstreams are configured but enabled = false; mesh stays off");
@@ -323,8 +333,9 @@ impl MeshProxy {
     /// propagation). Headers follow the module trust boundary exactly.
     ///
     /// # Errors
-    /// [`MeshError::UpstreamUnreachable`] for transport failures; body-read
-    /// failures and the size cap surface as stream items, not here.
+    /// [`MeshError::UpstreamUnreachable`] for a non-path target, an origin
+    /// mismatch, or a transport failure; body-read failures and the size cap
+    /// surface as stream items, not here.
     pub(crate) async fn forward(
         &self,
         upstream: &MeshUpstream,
@@ -334,6 +345,20 @@ impl MeshProxy {
         body: Bytes,
     ) -> Result<UpstreamResponse, MeshError> {
         let request_id = new_request_id();
+        // Trust boundary: `target` must be a plain absolute-path reference.
+        // An absolute URL, a network-path reference (`//host`), or a
+        // backslash variant can replace the configured authority — and this
+        // is exactly where the per-upstream bearer gets attached. Reject
+        // every non-path form before the URL is even parsed.
+        if !target.starts_with('/')
+            || target.starts_with("//")
+            || target.as_bytes().get(1).is_some_and(|b| *b == b'\\')
+        {
+            return Err(MeshError::UpstreamUnreachable {
+                name: upstream.name.clone(),
+                message: format!("target {target:?} is not a path-only reference"),
+            });
+        }
         let url = upstream
             .base_url
             .join(target)
@@ -341,6 +366,19 @@ impl MeshProxy {
                 name: upstream.name.clone(),
                 message: format!("target path {target:?} does not join the configured base_url"),
             })?;
+        // Belt and suspenders: URL normalization (e.g. a stripped newline
+        // before a backslash) can still turn a path into a foreign authority.
+        // Assert the origin here, before the bearer is attached, and fail
+        // closed with the named unreachable error.
+        if url.scheme() != upstream.base_url.scheme()
+            || url.host_str() != upstream.base_url.host_str()
+            || url.port_or_known_default() != upstream.base_url.port_or_known_default()
+        {
+            return Err(MeshError::UpstreamUnreachable {
+                name: upstream.name.clone(),
+                message: format!("target {target:?} resolves outside the configured origin"),
+            });
+        }
         let mut request = self
             .client
             .request(method, url)
@@ -368,9 +406,9 @@ impl MeshProxy {
         let headers = filter_response_headers(response.headers());
         let retry_after = parse_retry_after(response.headers());
         let stream = CappedStream::new(
-            response.bytes_stream().map(|item| {
-                item.map_err(|e| MeshError::UpstreamRead(e.to_string()))
-            }),
+            response
+                .bytes_stream()
+                .map(|item| item.map_err(|e| MeshError::UpstreamRead(e.to_string()))),
             self.max_response_bytes,
         );
         Ok(UpstreamResponse {
@@ -402,12 +440,13 @@ fn new_request_id() -> String {
 }
 
 /// Build the outbound header set from the static allowlist. PURE — the pin
-/// tests call this directly. Copies `accept`/`accept-encoding` VALUES from
-/// the inbound request, rewrites `user-agent` and `x-request-id`, and lets
+/// tests call this directly. Copies `accept` VALUE from the inbound request,
+/// rewrites `user-agent` and `x-request-id`, and lets
 /// the caller set `connection: close` (one framed connection per request).
-/// Every other inbound header — credentials, `x-honkbox-*`,
-/// `x-forwarded-for`, hop-by-hop — never reaches the returned map because
-/// the map is built fresh from [`FORWARDED_REQUEST_HEADERS`], not copied.
+/// Every other inbound header — `accept-encoding`, credentials,
+/// `x-honkbox-*`, `x-forwarded-for`, hop-by-hop — never reaches the returned
+/// map because the map is built fresh from [`FORWARDED_REQUEST_HEADERS`],
+/// not copied.
 pub(crate) fn build_request_headers(inbound: &HeaderMap, request_id: &str) -> HeaderMap {
     let mut out = HeaderMap::new();
     for name in FORWARDED_REQUEST_HEADERS {
@@ -522,8 +561,8 @@ mod tests {
     fn header_tables_pin_exact_sets() {
         assert_eq!(
             FORWARDED_REQUEST_HEADERS,
-            ["accept", "accept-encoding"],
-            "request allowlist is exactly {{accept, accept-encoding}}; user-agent/x-request-id are rewritten, not forwarded"
+            ["accept"],
+            "request allowlist is exactly {{accept}}; accept-encoding is excluded (no reqwest decoder), user-agent/x-request-id are rewritten, not forwarded"
         );
         assert_eq!(
             FORWARDED_RESPONSE_HEADERS,
@@ -590,7 +629,10 @@ mod tests {
 
         let out = build_request_headers(&inbound, "fresh-id");
         assert_eq!(out.get("accept").unwrap(), "text/event-stream");
-        assert_eq!(out.get("accept-encoding").unwrap(), "gzip");
+        assert!(
+            out.get("accept-encoding").is_none(),
+            "accept-encoding is never forwarded: reqwest here cannot decode a compressed body"
+        );
         assert_eq!(
             out.get("user-agent").unwrap(),
             concat!("honkbox/", env!("CARGO_PKG_VERSION")),
@@ -598,6 +640,7 @@ mod tests {
         );
         assert_eq!(out.get("x-request-id").unwrap(), "fresh-id", "regenerated");
         for name in [
+            "accept-encoding",
             "authorization",
             "cookie",
             "x-api-key",
@@ -626,7 +669,10 @@ mod tests {
     #[test]
     fn filter_response_headers_allowlist_only() {
         let mut upstream = HeaderMap::new();
-        upstream.insert("content-type", HeaderValue::from_static("text/event-stream"));
+        upstream.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
         upstream.insert("x-request-id", HeaderValue::from_static("upstream-echo"));
         upstream.insert("retry-after", HeaderValue::from_static("7"));
         upstream.insert("set-cookie", HeaderValue::from_static("a=b"));
@@ -669,8 +715,7 @@ mod tests {
         assert!(resolved.enabled);
         assert_eq!(resolved.upstreams.len(), 1);
         assert_eq!(
-            resolved.max_response_bytes,
-            DEFAULT_MAX_RESPONSE_BYTES,
+            resolved.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES,
             "absent cap keeps the default"
         );
 

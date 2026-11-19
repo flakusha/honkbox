@@ -331,10 +331,10 @@ async fn main() {
                 serde_json::to_string_pretty(&doc).expect("serialize openapi")
             );
         }
-        Command::Generate(args) => generate(args, data_dir),
-        Command::Chat(args) => chat(args, data_dir),
-        Command::Transcribe(args) => transcribe(args, data_dir),
-        Command::Synthesize(args) => synthesize(args, data_dir),
+        Command::Generate(args) => generate(args, config, data_dir),
+        Command::Chat(args) => chat(args, config, data_dir),
+        Command::Transcribe(args) => transcribe(args, config, data_dir),
+        Command::Synthesize(args) => synthesize(args, config, data_dir),
         Command::Gc {
             max_age_secs,
             max_bytes,
@@ -479,7 +479,11 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
             .iter()
             .map(|upstream| upstream.name.as_str())
             .collect();
-        info!(upstreams = names.len(), "mesh proxy enabled: {}", names.join(", "));
+        info!(
+            upstreams = names.len(),
+            "mesh proxy enabled: {}",
+            names.join(", ")
+        );
     }
     spawn_startup_gc(&cfg.jobs, data_dir.as_deref());
     let (addr, auth) = or_exit(resolve_bind(
@@ -664,7 +668,8 @@ fn or_exit<T, E: std::fmt::Display>(result: Result<T, E>) -> T {
 /// `generate`: slug check, single-slot reserve, sample, bundle write.
 ///
 /// Every failure is a loud exit-1 naming the cause; success prints the job dir.
-fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
+#[allow(clippy::too_many_lines)] // one linear CLI pipeline: load → reserve → sample → bundle
+fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
     let GenerateArgs {
         model,
         prompt,
@@ -676,7 +681,7 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
         clip,
         vae,
     } = args;
-    let loaded = or_exit(config::load(None, data_dir_flag));
+    let loaded = or_exit(config::load(config, data_dir_flag));
     let data_dir = loaded.data_dir;
     let cfg = loaded.models;
     logging::init(None, data_dir.as_deref());
@@ -711,31 +716,31 @@ fn generate(args: GenerateArgs, data_dir_flag: Option<PathBuf>) {
     };
     let img = or_exit(pipeline.generate(
         &honkbox_sd_core::Txt2ImgRequest {
-        prompt: prompt.clone(),
-        seed,
-        steps,
-        width,
-        height,
-        model_slug: model.clone(),
-        clip,
-        vae,
-        // CLI keeps the fixed recipe (no recipe flags on `generate`).
-        sampler: None,
-        scheduler: None,
-        cfg_scale: None,
-        negative_prompt: None,
-        loras: None,
-        init_image: None,
-        mask_image: None,
-        strength: None,
-        hires: None,
-        control_net: None,
-        control_image: None,
-        controlnet_strength: None,
-        control_type: None,
-    },
-    // CLI `generate` has nobody to cancel it: a fresh false flag.
-    &AtomicBool::new(false),
+            prompt: prompt.clone(),
+            seed,
+            steps,
+            width,
+            height,
+            model_slug: model.clone(),
+            clip,
+            vae,
+            // CLI keeps the fixed recipe (no recipe flags on `generate`).
+            sampler: None,
+            scheduler: None,
+            cfg_scale: None,
+            negative_prompt: None,
+            loras: None,
+            init_image: None,
+            mask_image: None,
+            strength: None,
+            hires: None,
+            control_net: None,
+            control_image: None,
+            controlnet_strength: None,
+            control_type: None,
+        },
+        // CLI `generate` has nobody to cancel it: a fresh false flag.
+        &AtomicBool::new(false),
     ));
     let format = honkbox_sd_core::OutputFormat::from(format);
     let bytes = or_exit(honkbox_sd_core::encode_image(img, format));
@@ -791,8 +796,8 @@ fn scan_models(cfg: config::ModelConfig) -> Vec<honkbox_registry::FoundModel> {
 /// `chat`: one prompt through the chat pipeline; prints `ChatResponse` JSON.
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
-    let loaded = or_exit(config::load(None, data_dir_flag));
+fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
     let ChatArgs {
@@ -840,8 +845,8 @@ fn chat(args: ChatArgs, data_dir_flag: Option<PathBuf>) {
 /// `Transcript` JSON (`--out` also writes it to a file).
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
-    let loaded = or_exit(config::load(None, data_dir_flag));
+fn transcribe(args: TranscribeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
     let TranscribeArgs {
@@ -857,11 +862,10 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
         or_exit(std::fs::read(&input).map_err(|err| format!("read {}: {err}", input.display())));
     let (sample_rate, pcm) = or_exit(honkbox_audio_worker::decode_wav(&bytes));
     let found = match stt_backend {
-        SttBackend::Stub => Vec::new(),
-        SttBackend::Whisper => scan_models(cfg),
         // `audio-cpp` serves the model by direct path (a registry scan adds
         // nothing); the engine's own registry validates the family at load.
-        SttBackend::AudioCpp => Vec::new(),
+        SttBackend::Stub | SttBackend::AudioCpp => Vec::new(),
+        SttBackend::Whisper => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_stt(
@@ -911,8 +915,8 @@ fn transcribe(args: TranscribeArgs, data_dir_flag: Option<PathBuf>) {
 /// `synthesize`: run the TTS pipeline, write WAV to `--out`, print a JSON summary.
 ///
 /// Every failure is a loud exit-1 naming the cause.
-fn synthesize(args: SynthesizeArgs, data_dir_flag: Option<PathBuf>) {
-    let loaded = or_exit(config::load(None, data_dir_flag));
+fn synthesize(args: SynthesizeArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>) {
+    let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
     let SynthesizeArgs {
@@ -954,4 +958,52 @@ fn synthesize(args: SynthesizeArgs, data_dir_flag: Option<PathBuf>) {
             "out": out,
         })
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The global `--config` flag must be parsed for the four subcommands
+    /// that load model config (the ones that used to hard-code `None`).
+    #[test]
+    fn global_config_flag_is_parsed_by_config_loading_subcommands() {
+        let path = "/tmp/honkbox-cli-test.toml";
+        let cases: [Vec<&str>; 4] = [
+            vec![
+                "honkbox", "--config", path, "generate", "--model", "m", "--prompt", "p",
+            ],
+            vec![
+                "honkbox", "chat", "--config", path, "--model", "m", "--prompt", "p",
+            ],
+            vec![
+                "honkbox",
+                "--config",
+                path,
+                "transcribe",
+                "--model",
+                "m",
+                "--input",
+                "in.wav",
+            ],
+            vec![
+                "honkbox",
+                "synthesize",
+                "--config",
+                path,
+                "--model",
+                "m",
+                "--text",
+                "hi",
+            ],
+        ];
+        for args in cases {
+            let cli = Cli::try_parse_from(args.clone()).expect("parse CLI");
+            assert_eq!(
+                cli.config.as_deref(),
+                Some(std::path::Path::new(path)),
+                "{args:?}"
+            );
+        }
+    }
 }

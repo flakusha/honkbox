@@ -664,12 +664,14 @@ pub(crate) fn image_ops_extensions() -> impl Iterator<Item = &'static str> {
 pub(crate) const MODEL_EXPORT_FORMATS: [&str; 4] = ["glb", "ply", "splat", "spz"];
 
 /// Registry rows in the model export allowlist, in table order.
+#[cfg(test)]
 pub(crate) fn exportable_model_rows() -> impl Iterator<Item = &'static FormatInfo> {
     FORMATS.iter().filter(|row| row.model_export)
 }
 
 /// The allowlist names (see [`MODEL_EXPORT_FORMATS`]), derived from the
 /// rows — never a second hand-maintained list.
+#[cfg(test)]
 pub(crate) fn exportable_model_names() -> impl Iterator<Item = &'static str> {
     exportable_model_rows().map(|row| row.name)
 }

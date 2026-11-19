@@ -13,11 +13,11 @@
 //! the registry never classifies `.part` — its extension tables list real
 //! weight extensions only), fsync, `rename`. A sidecar
 //! `<final>.part.meta.json` `{url, etag, bytes_total, sha256?}` makes a
-//! crash mid-download resumable: the next pull of the same URL resumes with
-//! `Range: bytes=<done>-` + `If-Range: <etag>` — 206 appends; 200 means the
-//! range was ignored or the content changed → truncate + restart; without a
-//! resumable source the pull cold-restarts and the DTO advertises
-//! `resumable: false` (no `Accept-Ranges` + strong `ETag` from the server).
+//! crash mid-download resumable only under a saved strong `ETag`: the next pull
+//! resumes with `Range: bytes=<done>-` + `If-Range: <etag>`; a 206 must echo
+//! that `ETag` and start at the saved offset, else the bad range is discarded
+//! (sidecars deleted) and the pull retries cold. A 200 truncates + restarts;
+//! without a resumable source the DTO advertises `resumable: false`.
 //!
 //! Checksum policy: enforced when the source provides one (HF LFS sha256,
 //! fetched from the repo API for `repo`+`file` requests and persisted in
@@ -674,6 +674,13 @@ enum Outcome {
         /// False only after a checksum mismatch deleted the sidecars.
         keep_part: bool,
     },
+    /// Resume response unusable (416 / wrong offset / wrong `ETag`). Resolved
+    /// inside `fetch` by deleting sidecars and retrying cold once; the saved
+    /// checksum is carried over so the retry still enforces it.
+    RetryCold {
+        /// sha256 recorded by the sidecar, if any.
+        saved_sha: Option<String>,
+    },
 }
 
 impl Outcome {
@@ -715,6 +722,10 @@ async fn run_download(manager: Arc<DownloadManager>, job: Job) {
         Outcome::Cancelled => finish_cancelled(&manager, &job).await,
         Outcome::Failed { error, keep_part } => {
             finish_failed(&manager, &job, &error, keep_part).await;
+        }
+        // Defensive: `fetch` resolves this internally; it never reaches here.
+        Outcome::RetryCold { .. } => {
+            finish_failed(&manager, &job, "unusable resume response", false).await;
         }
     }
 }
@@ -792,15 +803,23 @@ async fn resume_state(part: &Path, meta_path: &Path, url: &str) -> (Option<PartM
     (saved, size)
 }
 
+/// Weak validators cannot guarantee the `.part` prefix identity, so only a
+/// strong `ETag` may gate a ranged resume.
+fn strong_etag(value: Option<&str>) -> Option<&str> {
+    value.filter(|etag| !etag.starts_with("W/"))
+}
+
 /// What a resume attempt carries into the negotiation: the requested
 /// offset and the sidecar values still trusted for this url.
 struct ResumeInputs {
-    /// Was a resume attempted (matching meta + non-empty `.part`)?
+    /// Was a resume attempted (matching meta, non-empty `.part`, strong `ETag`)?
     resume: bool,
     /// Byte offset requested (`Range: bytes=<resumed_size>-`).
     resumed_size: u64,
     /// Total the sidecar recorded (fallback when 206 lacks a total).
     saved_total: Option<u64>,
+    /// Strong `ETag` the saved prefix was fetched under; a 206 must echo it.
+    saved_etag: Option<String>,
     /// sha the sidecar recorded (fallback when the fresh lookup is none).
     saved_sha: Option<String>,
     /// sha from the fresh repo lookup (wins over the persisted one).
@@ -824,7 +843,14 @@ fn negotiate_response(
         .get(reqwest::header::ACCEPT_RANGES)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == "bytes");
-    let can_resume = etag.is_some() && accept_ranges;
+    let can_resume = strong_etag(etag.as_deref()).is_some() && accept_ranges;
+    // 416 means the saved prefix no longer describes this source: stop
+    // asking for that Range — `fetch` drops the sidecars and retries cold.
+    if inputs.resume && status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        return Err(Outcome::RetryCold {
+            saved_sha: inputs.saved_sha.clone(),
+        });
+    }
     // Resume negotiation: 206 appends; a 200 after a ranged request means
     // the range was ignored or the content changed → truncate + restart.
     let ranged_ok = inputs.resume && status == reqwest::StatusCode::PARTIAL_CONTENT;
@@ -839,14 +865,18 @@ fn negotiate_response(
         .and_then(|value| value.to_str().ok())
         .and_then(parse_content_range);
     if ranged_ok {
-        match content_range {
-            // A 206 that does not start exactly where we asked is unusable.
-            Some((start, _, _)) if start == inputs.resumed_size => {}
-            _ => {
-                return Err(Outcome::failed(
-                    "server returned a 206 that does not match the resume offset".to_owned(),
-                ));
-            }
+        // Append only when the exact offset was honored AND the server
+        // echoes the validator the prefix was fetched under; otherwise the
+        // tail would be spliced onto bytes from a different version.
+        let offset_ok = content_range.is_some_and(|(start, _, _)| start == inputs.resumed_size);
+        let etag_ok = inputs
+            .saved_etag
+            .as_deref()
+            .is_some_and(|saved| etag.as_deref() == Some(saved));
+        if !offset_ok || !etag_ok {
+            return Err(Outcome::RetryCold {
+                saved_sha: inputs.saved_sha.clone(),
+            });
         }
     }
     let total = if ranged_ok {
@@ -875,9 +905,10 @@ async fn send_get(
     token: &CancellationToken,
     saved: Option<&PartMeta>,
     resumed_size: u64,
+    resume: bool,
 ) -> Result<reqwest::Response, Outcome> {
     let mut request = client.get(&job.url);
-    if resumed_size > 0 {
+    if resume {
         request = request.header(reqwest::header::RANGE, format!("bytes={resumed_size}-"));
         if let Some(etag) = saved.and_then(|meta| meta.etag.as_deref()) {
             request = request.header(reqwest::header::IF_RANGE, etag);
@@ -993,7 +1024,10 @@ pub fn artifact_sha256(target: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(with_suffix(target, ARTIFACT_META_SUFFIX)).ok()?;
     let meta: ArtifactMeta = serde_json::from_str(&raw).ok()?;
     let looks_like_sha = meta.sha256.len() == 64
-        && meta.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        && meta
+            .sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
     looks_like_sha.then_some(meta.sha256)
 }
 
@@ -1045,19 +1079,67 @@ async fn open_part(
     Ok((file, hasher))
 }
 
-/// The actual ranged fetch: resume negotiation, streamed writes with
-/// cancel-at-chunk-boundary, checksum verification, fsync + rename.
+/// The actual ranged fetch: ETag-gated resume negotiation, streamed writes
+/// with cancel-at-chunk-boundary, checksum verification, fsync + rename. An
+/// unusable resume response (416 / wrong offset / wrong `ETag`) self-heals:
+/// sidecars are dropped and the fetch is retried cold once.
 async fn fetch(client: &reqwest::Client, job: &Job, token: &CancellationToken) -> Outcome {
     let part = with_suffix(&job.target, PART_SUFFIX);
     let meta_path = with_suffix(&job.target, META_SUFFIX);
+    let mut cold_sha = None;
+    for cold_retry in [false, true] {
+        let outcome = fetch_attempt(
+            client,
+            job,
+            token,
+            &part,
+            &meta_path,
+            cold_retry,
+            cold_sha.clone(),
+        )
+        .await;
+        match outcome {
+            Outcome::RetryCold { saved_sha } => {
+                // Drop the poisoned prefix; carry its checksum into the cold
+                // retry so verification cannot silently disappear.
+                remove_sidecars(&job.target).await;
+                cold_sha = saved_sha;
+            }
+            terminal => return terminal,
+        }
+    }
+    // Unreachable: without a resume there is no Range to reject.
+    Outcome::failed("cold retry after unusable resume failed".to_owned())
+}
 
+/// One fetch attempt; `cold_retry` ignores the sidecar entirely.
+// Setup → negotiate → stream → finalize stays in one function so cancel
+// handling and sidecar state cannot drift apart.
+#[allow(clippy::too_many_lines)]
+async fn fetch_attempt(
+    client: &reqwest::Client,
+    job: &Job,
+    token: &CancellationToken,
+    part: &Path,
+    meta_path: &Path,
+    cold_retry: bool,
+    cold_sha: Option<String>,
+) -> Outcome {
     // Another pull (or process) committed the file while we waited.
     if job.target.is_file() {
         remove_sidecars(&job.target).await;
         return Outcome::AlreadyPresent;
     }
-    let (saved, resumed_size) = resume_state(&part, &meta_path, &job.url).await;
-    let resume = resumed_size > 0;
+    let (saved, resumed_size) = if cold_retry {
+        (None, 0)
+    } else {
+        resume_state(part, meta_path, &job.url).await
+    };
+    let resume = resumed_size > 0
+        && saved
+            .as_ref()
+            .and_then(|meta| strong_etag(meta.etag.as_deref()))
+            .is_some();
 
     patch_entry(&job.entry, |e| {
         e.state = if resume {
@@ -1073,7 +1155,7 @@ async fn fetch(client: &reqwest::Client, job: &Job, token: &CancellationToken) -
         };
     });
 
-    let response = match send_get(client, job, token, saved.as_ref(), resumed_size).await {
+    let response = match send_get(client, job, token, saved.as_ref(), resumed_size, resume).await {
         Ok(response) => response,
         Err(outcome) => return outcome,
     };
@@ -1085,7 +1167,11 @@ async fn fetch(client: &reqwest::Client, job: &Job, token: &CancellationToken) -
             resume,
             resumed_size,
             saved_total: saved.as_ref().and_then(|meta| meta.bytes_total),
-            saved_sha: saved.as_ref().and_then(|meta| meta.sha256.clone()),
+            saved_sha: saved
+                .as_ref()
+                .and_then(|meta| meta.sha256.clone())
+                .or(cold_sha),
+            saved_etag: saved.as_ref().and_then(|meta| meta.etag.clone()),
             fresh_sha: job.expected_sha.clone(),
         },
     ) {
@@ -1098,10 +1184,10 @@ async fn fetch(client: &reqwest::Client, job: &Job, token: &CancellationToken) -
         e.bytes_total = negotiated.total;
         e.resumable = negotiated.can_resume;
     });
-    record_meta(&meta_path, job, &negotiated);
+    record_meta(meta_path, job, &negotiated);
 
     let (mut file, mut hasher) = match open_part(
-        &part,
+        part,
         negotiated.append,
         resumed_size,
         negotiated.expected_sha.as_ref(),
@@ -1147,7 +1233,7 @@ async fn fetch(client: &reqwest::Client, job: &Job, token: &CancellationToken) -
     }
     finalize(
         job,
-        &part,
+        part,
         file,
         hasher,
         negotiated.expected_sha.clone(),
@@ -1202,7 +1288,16 @@ fn parse_content_range(value: &str) -> Option<(u64, u64, Option<u64>)> {
     let rest = value.strip_prefix("bytes ")?;
     let (range, total) = rest.split_once('/')?;
     let (first, last) = range.split_once('-')?;
-    Some((first.parse().ok()?, last.parse().ok()?, total.parse().ok()))
+    let first = first.parse().ok()?;
+    let last = last.parse().ok()?;
+    // `*` means "total unknown": keep the valid range instead of dropping
+    // the whole header, which would trap every later resume attempt.
+    let total = if total == "*" {
+        None
+    } else {
+        total.parse().ok()
+    };
+    Some((first, last, total))
 }
 
 /// sha256 digest → 64-char lowercase hex.

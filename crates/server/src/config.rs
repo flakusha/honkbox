@@ -168,6 +168,12 @@ impl ModelCapabilitiesOverride {
 /// admission-queue waiter may wait for the GPU slot before the 429. `0`
 /// disables queueing (immediate 429, the pre-REQ-6 behavior).
 pub const DEFAULT_QUEUE_WAIT_SECS: u64 = 10;
+
+/// Upper bound for `[server] queue_wait_secs`: the admission waiter adds the
+/// bound to an `Instant` (which panics on overflow for `u64::MAX` seconds),
+/// and a day already exceeds any real queue wait, so both config stages clamp
+/// to this value.
+pub const MAX_QUEUE_WAIT: Duration = Duration::from_hours(24);
 /// Default `[swap]` idle TTL: 10 minutes (llama-swap defaults to never
 /// unload; a bounded default is the safer choice for a single-GPU studio).
 pub const DEFAULT_SWAP_TTL_SECS: u64 = 600;
@@ -526,18 +532,19 @@ pub struct LoadedConfig {
 /// Resolve the `[server] queue_wait_secs` knob (REQ-6 Option A): defaults
 /// → file key → env override (`HONKBOX_QUEUE_WAIT_SECS`, seconds). Invalid
 /// env values warn-and-keep the previous stage, matching the GC/swap
-/// knobs; `0` disables queueing (immediate 429). Pure (env as args) so
-/// tests stay thread-safe.
+/// knobs; `0` disables queueing (immediate 429). Huge values are clamped to
+/// [`MAX_QUEUE_WAIT`] so the admission deadline cannot overflow. Pure (env
+/// as args) so tests stay thread-safe.
 fn server_settings(file: Option<u64>, env: Option<&str>) -> ServerConfig {
     let mut cfg = ServerConfig::default();
     if let Some(secs) = file {
-        cfg.queue_wait = Duration::from_secs(secs);
+        cfg.queue_wait = Duration::from_secs(secs).min(MAX_QUEUE_WAIT);
     }
     if let Some(v) = env
         && !v.is_empty()
         && let Ok(secs) = v.parse::<u64>()
     {
-        cfg.queue_wait = Duration::from_secs(secs);
+        cfg.queue_wait = Duration::from_secs(secs).min(MAX_QUEUE_WAIT);
     }
     cfg
 }
@@ -564,7 +571,9 @@ fn artifact_settings(file: Option<u64>, env: Option<&str>) -> u64 {
                 "HONKBOX_ARTIFACT_MAX_BYTES = 0 would reject every artifact; keeping {cap}"
             ),
             Ok(bytes) => cap = bytes,
-            Err(_) => tracing::warn!("HONKBOX_ARTIFACT_MAX_BYTES {raw:?} is not a number; keeping {cap}"),
+            Err(_) => {
+                tracing::warn!("HONKBOX_ARTIFACT_MAX_BYTES {raw:?} is not a number; keeping {cap}");
+            }
         }
     }
     cap
@@ -2029,6 +2038,21 @@ mod tests {
         assert_eq!(kept.queue_wait, Duration::from_secs(3));
         let empty = server_settings(Some(3), Some(""));
         assert_eq!(empty.queue_wait, Duration::from_secs(3));
+    }
+
+    /// A `u64::MAX` bound must clamp before it reaches an `Instant` in the
+    /// admission waiter (both the file and env stages).
+    #[test]
+    fn server_queue_wait_clamps_to_an_instant_safe_bound() {
+        let from_file = server_settings(Some(u64::MAX), None);
+        assert_eq!(from_file.queue_wait, MAX_QUEUE_WAIT);
+        let from_env = server_settings(None, Some("18446744073709551615"));
+        assert_eq!(from_env.queue_wait, MAX_QUEUE_WAIT);
+        assert!(
+            std::time::Instant::now()
+                .checked_add(from_file.queue_wait)
+                .is_some()
+        );
     }
 
     /// `[ledger]` defaults keep the single-tenant dev flow: one GPU slot,
