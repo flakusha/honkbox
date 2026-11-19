@@ -1,6 +1,6 @@
 # EPIC: External tool registry and process supervision
 
-Status: proposed
+Status: done (2026-11-19 — both tickets landed: `a86fcb6` registry, `fa0fefb` supervisor)
 Priority: P0
 Owner: unassigned
 Research: `.tmp/research/ReviewedFullCycle-Tool-Management.md`,
