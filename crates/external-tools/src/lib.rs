@@ -297,7 +297,9 @@ fn probe_blender(config: &Config) -> (Status, BlenderAddons) {
     let mut addons = BlenderAddons::default();
     if let Ok(found) = blender_addons::probe(bin, config.timeout) {
         for addon in &found.addons {
-            if addon.enabled {
+            // A detect-only add-on (unreadable license) is recorded, never
+            // offered: honkbox must not run code whose license it cannot read.
+            if addon.enabled && addon.tier.is_callable() {
                 capabilities.push(Capability::addon(&addon.id));
             }
         }
@@ -542,6 +544,18 @@ fi
 echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
 "#;
 
+    /// A fake Blender that also reports three installed add-ons: a built-in,
+    /// a free-OSS one and a paid one with an unreadable license.
+    #[cfg(unix)]
+    const FAKE_BLENDER_WITH_ADDONS: &str = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "Blender 4.2.1 LTS"
+  exit 0
+fi
+echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
+echo 'HONKBOX_ADDONS={"scripts":"/opt/blender/4.5/scripts","addons":[{"id":"cycles","file":"/opt/blender/4.5/scripts/addons_core/cycles/__init__.py","version":"4.5.0","license":null,"enabled":true},{"id":"honkbox_free","file":"/home/u/.config/blender/4.5/scripts/addons/honkbox_free/__init__.py","version":"1.2.3","license":"GPL-3.0-or-later","enabled":true},{"id":"paid_tool","file":"/home/u/.config/blender/4.5/scripts/addons/paid_tool/__init__.py","version":"2.0","license":"Commercial","enabled":true}],"operators":[]}'
+"#;
+
     /// A fake Blender whose version output is unusable.
     #[cfg(unix)]
     const GARBAGE_BLENDER: &str = "#!/bin/sh\necho 'not blender at all'\n";
@@ -702,6 +716,36 @@ echo 'no cycles here'
             vec![Capability::Render, Capability::Cycles]
         );
         assert_eq!(status.devices, vec!["CUDA: NVIDIA RTX 4090".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn detect_only_addons_are_recorded_but_never_offered() {
+        let bin = write_fake_blender("blender-addons", FAKE_BLENDER_WITH_ADDONS);
+        let config = Config {
+            blender_path: Some(bin),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::Blender).expect("blender status");
+        assert!(status.is_available());
+        assert_eq!(
+            status.capabilities,
+            vec![
+                Capability::Render,
+                Capability::Cycles,
+                Capability::addon("cycles"),
+                Capability::addon("honkbox_free"),
+            ]
+        );
+        let paid = registry
+            .blender_addons()
+            .iter()
+            .find(|addon| addon.id == "paid_tool")
+            .expect("paid add-on record");
+        assert_eq!(paid.tier, AddonTier::PaidDetectOnly);
+        assert!(paid.enabled, "the add-on is installed and enabled");
+        assert!(!paid.tier.is_callable());
     }
 
     #[cfg(unix)]

@@ -74,6 +74,14 @@ impl AddonTier {
             Self::PaidDetectOnly => "paid_detect_only",
         }
     }
+
+    /// Whether honkbox may offer the add-on as a callable capability.
+    ///
+    /// A third-party add-on whose license honkbox cannot read stays
+    /// detect-only: it is recorded, never run.
+    pub const fn is_callable(self) -> bool {
+        !matches!(self, Self::PaidDetectOnly)
+    }
 }
 
 /// One installed Blender add-on.

@@ -38,8 +38,11 @@ headless job; the probe is deterministic for a given Blender install.
   its `poll()` passes with a prepared scene in object or edit mode. UI-only
   operators (`view3d.*`) fail both polls and are never offered. Operators are
   never executed — execution can write files, and a probe must not.
-- Advertisement: enabled add-ons and headless operators become capabilities
-  (`addon:<id>`, `op:<id>`). The EXISTING
+- Advertisement: enabled add-ons honkbox MAY RUN (built-in or free-OSS
+  license) and headless operators become capabilities (`addon:<id>`,
+  `op:<id>`). A detect-only add-on - third-party, license unreadable - is
+  RECORDED but never offered: honkbox must not run code whose license it
+  cannot read. The EXISTING
   `GET /v1/external-tools/blender?capability=addon:quadriflow` check then
   answers 501 naming the missing add-on, and a UI-only operator is never in the
   list. No route file and no `routes.rs` registration was touched.
