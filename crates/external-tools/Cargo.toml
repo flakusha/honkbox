@@ -1,0 +1,23 @@
+[package]
+name = "honkbox-external-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# HTTP probe for the ComfyUI `/system_stats` endpoint (workspace pin:
+# rustls only, no native-tls; the same client the download supervisor uses).
+reqwest = { workspace = true }
+# JSON payloads of the tool probes (ComfyUI `/system_stats`, the Blender
+# Cycles device probe).
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# `#[tokio::test]` runtime for the async probes (workspace pin already
+# carries macros + rt-multi-thread).
+tokio = { workspace = true }

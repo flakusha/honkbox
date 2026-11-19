@@ -2310,6 +2310,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "honkbox-external-tools"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "honkbox-llm-worker"
 version = "0.1.0"
 dependencies = [
