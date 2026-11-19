@@ -12,7 +12,7 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,17 @@ use tokio_stream::{
 use tower_http::compression::predicate::SizeAbove;
 use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate as _};
 use utoipa::OpenApi;
+
+#[path = "routes/external_tools.rs"]
+mod external_tools;
+
+#[allow(unused_imports)] // main.rs is the only caller; #[path] test harnesses omit it
+pub(crate) use self::external_tools::init_external_tools;
+#[allow(unused_imports)] // referenced by the OpenApi derive's generated types
+use self::external_tools::{
+    __path_get_external_tool, __path_get_external_tools, __path_post_external_tools_reload,
+    get_external_tool, get_external_tools, post_external_tools_reload,
+};
 
 /// Compile-time UI bundle (release always embeds; dev serves from disk instead).
 #[derive(Embed)]
@@ -413,12 +424,18 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/catalog", get(get_catalog))
         .route("/v1/memory", get(get_memory))
         .route("/v1/openapi.json", get(openapi_json))
-        .route("/v1/external-tools", get(get_external_tools))
+        .route(
+            "/v1/external-tools",
+            get(external_tools::get_external_tools),
+        )
         .route(
             "/v1/external-tools/reload",
-            post(post_external_tools_reload),
+            post(external_tools::post_external_tools_reload),
         )
-        .route("/v1/external-tools/{id}", get(get_external_tool))
+        .route(
+            "/v1/external-tools/{id}",
+            get(external_tools::get_external_tool),
+        )
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/chat/completions", post(post_chat_completions))
@@ -875,138 +892,10 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
                 && config.recognition.kinds().contains(&WorkerRecKind::Barcode),
             ocr: config.recognition.kinds().contains(&WorkerRecKind::Ocr),
         }),
-        external_tools: Some(external_tools_capability()),
+        external_tools: Some(external_tools::external_tools_capability()),
     }
 }
 
-/// Cached external-engine registry. `None` until startup discovery runs;
-/// read-only test harnesses get a deterministic "not installed" snapshot
-/// instead of spawning probes.
-static EXTERNAL_TOOLS: OnceLock<Arc<tokio::sync::RwLock<honkbox_external_tools::Registry>>> =
-    OnceLock::new();
-
-type ToolStatus = honkbox_external_tools::Status;
-
-/// Probe every configured tool once at startup; reloads reuse this cache.
-#[allow(dead_code)] // main.rs is the only caller; #[path] test harnesses omit it
-pub(crate) async fn init_external_tools(config: crate::config::ExternalToolsConfig) {
-    let registry = honkbox_external_tools::Registry::discover(config.into_probe_config()).await;
-    let _ = EXTERNAL_TOOLS.set(Arc::new(tokio::sync::RwLock::new(registry)));
-}
-
-fn missing_tool_status(id: honkbox_external_tools::ToolId) -> ToolStatus {
-    ToolStatus {
-        id,
-        version: None,
-        capabilities: Vec::new(),
-        devices: Vec::new(),
-        unavailable: Some(honkbox_external_tools::Unavailable::NotInstalled),
-    }
-}
-
-fn external_tool_status(id: honkbox_external_tools::ToolId) -> ToolStatus {
-    EXTERNAL_TOOLS
-        .get()
-        .and_then(|registry| registry.try_read().ok())
-        .and_then(|registry| registry.status(id).cloned())
-        .unwrap_or_else(|| missing_tool_status(id))
-}
-
-fn external_tool_dto(status: &ToolStatus) -> ExternalTool {
-    ExternalTool {
-        id: status.id.as_str().to_owned(),
-        version: status.version.clone(),
-        capabilities: status
-            .capabilities
-            .iter()
-            .map(|capability| capability.as_str().to_owned())
-            .collect(),
-        devices: status.devices.clone(),
-        available: status.is_available(),
-        unavailable: status.unavailable.as_ref().map(ToString::to_string),
-    }
-}
-
-fn external_tools_capability() -> ExternalToolsCapability {
-    ExternalToolsCapability {
-        tools: honkbox_external_tools::ToolId::ALL
-            .iter()
-            .copied()
-            .map(|id| external_tool_dto(&external_tool_status(id)))
-            .collect(),
-    }
-}
-
-/// A missing tool or unproven capability is a named 501, never a panic or a
-/// leaked probe error chain.
-fn external_tool_501(tool: &str, missing: &str) -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        format!("external tool {tool} unavailable: {missing}"),
-    )
-        .into_response()
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ExternalToolQuery {
-    capability: Option<String>,
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/external-tools",
-    responses((status = 200, description = "Discovered external engines", body = ExternalToolsCapability))
-)]
-async fn get_external_tools() -> Json<ExternalToolsCapability> {
-    Json(external_tools_capability())
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/external-tools/{id}",
-    params(("id" = String, Path, description = "Stable tool id")),
-    responses(
-        (status = 200, description = "Probed tool status", body = ExternalTool),
-        (status = 404, description = "Unknown tool id"),
-        (status = 501, description = "Tool or requested capability is unavailable")
-    )
-)]
-async fn get_external_tool(
-    AxumPath(id): AxumPath<String>,
-    Query(query): Query<ExternalToolQuery>,
-) -> Response {
-    let Some(tool_id) = honkbox_external_tools::ToolId::ALL
-        .into_iter()
-        .find(|tool| tool.as_str() == id.as_str())
-    else {
-        return (StatusCode::NOT_FOUND, format!("unknown external tool {id}")).into_response();
-    };
-    let status = external_tool_status(tool_id);
-    if let Some(reason) = &status.unavailable {
-        return external_tool_501(tool_id.as_str(), &reason.to_string());
-    }
-    if let Some(capability) = query.capability.as_deref()
-        && !status
-            .capabilities
-            .iter()
-            .any(|cap| cap.as_str() == capability)
-    {
-        return external_tool_501(tool_id.as_str(), &format!("capability {capability}"));
-    }
-    Json(external_tool_dto(&status)).into_response()
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/external-tools/reload",
-    responses((status = 200, description = "Re-probed external engines", body = ExternalToolsCapability))
-)]
-async fn post_external_tools_reload() -> Json<ExternalToolsCapability> {
-    if let Some(registry) = EXTERNAL_TOOLS.get() {
-        registry.write().await.reload().await;
-    }
-    Json(external_tools_capability())
-}
 /// `OpenAPI` 3.1 document as JSON.
 #[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, description = "OpenAPI document")))]
 async fn openapi_json() -> impl IntoResponse {
@@ -7829,36 +7718,5 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("features.recognition"), "{message}");
-    }
-
-    #[test]
-    fn external_tool_dto_keeps_probe_truth() {
-        use honkbox_external_tools::{Capability, ToolId, Unavailable};
-
-        let status = ToolStatus {
-            id: ToolId::Blender,
-            version: Some("4.5.15".to_owned()),
-            capabilities: vec![Capability::Render, Capability::Cycles],
-            devices: vec!["CPU".to_owned()],
-            unavailable: None,
-        };
-        let dto = external_tool_dto(&status);
-        assert_eq!(dto.id, "blender");
-        assert_eq!(dto.version.as_deref(), Some("4.5.15"));
-        assert_eq!(dto.capabilities, ["render", "cycles"]);
-        assert_eq!(dto.devices, ["CPU"]);
-        assert!(dto.available);
-        assert!(dto.unavailable.is_none());
-
-        let broken = ToolStatus {
-            id: ToolId::ComfyUi,
-            unavailable: Some(Unavailable::ProbeFailed("http 500".to_owned())),
-            ..status
-        };
-        let dto = external_tool_dto(&broken);
-        assert_eq!(dto.unavailable.as_deref(), Some("probe failed: http 500"));
-        assert!(!dto.available);
-        let response = external_tool_501("comfyui", "capability workflow");
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
 }
