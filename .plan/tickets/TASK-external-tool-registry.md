@@ -32,6 +32,15 @@ linked into the Rust workspace.
   explicit `reload`. `Unavailable::NotInstalled` stays distinct from
   `Unavailable::ProbeFailed(reason)`, and a capability is claimed only after
   the probe that proves it succeeded.
+- Gates observed: `cargo test -p honkbox-external-tools` -> 15 passed (2 suites);
+  `cargo clippy -p honkbox-external-tools --all-targets -- -D warnings` -> no
+  issues; `cargo fmt -p honkbox-external-tools -- --check` -> clean. Commits
+  `b01de24` (the crate) + `45be1f0` (error-path coverage added by the
+  self-review: probe timeout, non-zero exit, missing Cycles marker, HTTP
+  500, invalid JSON, missing version, trailing-slash base URL, invalid URL).
+- Known limitation, stated in the crate docs: a timed-out probe kills the
+  direct child only, not a process group (`killpg` is `libc`, and the
+  workspace forbids `unsafe` everywhere).
 - Server half still open: the DTO in `crates/api-types`, the capabilities
   surface and the 501 for a missing tool need `api-types` + `routes.rs`, both
   owned by the review-fixes lane (IN PROGRESS, 2026-11-19). The ticket stays
