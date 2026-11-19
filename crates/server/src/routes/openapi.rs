@@ -1,3 +1,5 @@
+// The derive consumes every handler's generated `__path_*` symbol.
+#[allow(clippy::wildcard_imports)]
 use super::*;
 use honkbox_api_types::{
     ArtifactChunk, ArtifactInfo, ArtifactManifest, AuthCapabilities, BlenderBakeMap, BlenderEngine,
@@ -77,7 +79,9 @@ pub struct EmbeddedUi;
         get_external_tool,
         post_external_tools_reload,
         crate::artifacts::post_artifact,
-        crate::artifacts::get_artifact_bytes
+        crate::artifacts::get_artifact_bytes,
+        get_job_bundle,
+        get_job_content
     ),
     components(schemas(
         Health,

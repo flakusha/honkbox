@@ -34,6 +34,7 @@
 import { readdirSync } from "node:fs";
 
 const ROUTES_SRC = "crates/server/src/routes.rs";
+const ROUTES_DIR = "crates/server/src/routes";
 const TESTS_DIR = "crates/server/tests";
 
 /**
@@ -50,6 +51,13 @@ const GATED_BEFORE_SLOT: Record<string, string> = {
   "models.rs:transcribe_validates_model_first": "x-job-id",
   // The synthesize route checks the input cap before it registers a job.
   "audio.rs:synthesize_input_over_cap_is_rejected": "x-job-id",
+  // The blender route refuses a malformed manifest, an unstored mesh, a
+  // wrong digest and a missing engine BEFORE it registers a job, so the
+  // request never reaches the ledger.
+  "blender_jobs.rs:the_request_shape_is_checked_before_the_store": "x-job-id",
+  "blender_jobs.rs:an_unstored_mesh_is_a_404": "x-job-id",
+  "blender_jobs.rs:a_digest_mismatch_is_a_400": "x-job-id",
+  "blender_jobs.rs:without_an_engine_the_route_is_a_named_501": "x-job-id",
 };
 
 const FN_RE = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/gm;
@@ -195,8 +203,13 @@ function callees(clean: string): Set<string> {
  * GPU slot. `Rag` demand is `gpu_slots: 0` (`Demand::for_kind`), so it never
  * contends with the shared slot.
  */
-function gpuRoutes(routesSrc: string): { uris: string[]; handlers: string[]; } {
-  const fns = fnItems(routesSrc);
+function gpuRoutes(sources: string[]): { uris: string[]; handlers: string[]; } {
+  // Handlers live in `routes/*.rs` after the size-lint split; registrations
+  // stay in routes.rs. Merge every module so `fns.has(handler)` still holds.
+  const fns = new Map<string, FnItem>();
+  for (const src of sources) {
+    for (const [name, item] of fnItems(src)) fns.set(name, item);
+  }
   const acquiresGpu = new Map<string, boolean>();
   const resolves = (name: string, seen: Set<string>): boolean => {
     const cached = acquiresGpu.get(name);
@@ -224,8 +237,10 @@ function gpuRoutes(routesSrc: string): { uris: string[]; handlers: string[]; } {
     return gpu;
   };
 
-  const uris: string[] = [];
-  const handlers: string[] = [];
+  // The handler travels WITH its route: the two lists are printed as
+  // pairs, so de-duplicating and sorting them apart would print a route
+  // next to the wrong handler.
+  const byUri = new Map<string, string>();
   ROUTE_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = ROUTE_RE.exec(routesSrc)) !== null) {
@@ -237,13 +252,16 @@ function gpuRoutes(routesSrc: string): { uris: string[]; handlers: string[]; } {
       const name = h[2]!;
       if (!fns.has(name)) continue;
       if (resolves(name, new Set())) {
-        uris.push(uri);
-        handlers.push(name);
+        byUri.set(uri, name);
         break;
       }
     }
   }
-  return { uris: [...new Set(uris)].sort(), handlers: [...new Set(handlers)].sort() };
+  const pairs = [...byUri.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  return {
+    uris: pairs.map(([uri]) => uri),
+    handlers: pairs.map(([, handler]) => handler),
+  };
 }
 
 /** Findings for one test file. */
@@ -287,7 +305,14 @@ async function auditFile(path: string, uris: readonly string[]): Promise<string[
 }
 
 const routesSrc = await Bun.file(ROUTES_SRC).text();
-const { uris, handlers } = gpuRoutes(routesSrc);
+const routeFiles = readdirSync(ROUTES_DIR)
+  .filter((file) => file.endsWith(".rs"))
+  .sort();
+const routeSources = [
+  routesSrc,
+  ...(await Promise.all(routeFiles.map((file) => Bun.file(`${ROUTES_DIR}/${file}`).text()))),
+];
+const { uris, handlers } = gpuRoutes(routeSources);
 if (uris.length === 0) {
   console.error("honkbox gpu-slot audit: no GPU-contending route derived — the parser is broken");
   process.exit(1);
