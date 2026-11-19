@@ -251,14 +251,16 @@ mod tests {
         ));
     }
 
-    /// The version pin matches the workspace dependency (rot check).
+    /// The version pin matches the crate's own dependency (rot check). The pin
+    /// lives in THIS crate's manifest — the workspace root manifest never
+    /// declared `rxing`.
     #[test]
     fn version_pin_matches_workspace_dep() {
-        let manifest = include_str!("../../../Cargo.toml");
+        let manifest = include_str!("../Cargo.toml");
         let line = manifest
             .lines()
             .find(|l| l.trim_start().starts_with("rxing = "))
-            .expect("rxing workspace dep line");
+            .expect("rxing dependency line");
         assert!(
             line.contains(RXING_VERSION),
             "pin drift: {line} vs {RXING_VERSION}"
