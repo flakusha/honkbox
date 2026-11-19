@@ -254,7 +254,8 @@ fn probe_blender(config: &Config) -> Status {
     }
 }
 
-/// Probe a `ComfyUI` server through its `/system_stats` endpoint.
+/// Probe a `ComfyUI` server through `/system_stats` (version + devices) and
+/// `/object_info` (the node catalog that proves workflows can run).
 async fn probe_comfyui(config: &Config, client: &reqwest::Client) -> Status {
     let base = config
         .comfyui_url
@@ -306,6 +307,34 @@ async fn probe_comfyui(config: &Config, client: &reqwest::Client) -> Status {
                 .collect()
         })
         .unwrap_or_default();
+
+    // A version alone does not prove workflows: `/object_info` must expose
+    // the node catalog before `Capability::Workflow` can be claimed.
+    let object_url = format!("{base}/object_info");
+    let Ok(object_response) = client.get(&object_url).send().await else {
+        return unavailable_status(
+            ToolId::ComfyUi,
+            Unavailable::ProbeFailed(format!("{object_url}: unreachable")),
+        );
+    };
+    if !object_response.status().is_success() {
+        return unavailable_status(
+            ToolId::ComfyUi,
+            Unavailable::ProbeFailed(format!("{object_url}: HTTP {}", object_response.status())),
+        );
+    }
+    let Ok(nodes) = object_response.json::<serde_json::Value>().await else {
+        return unavailable_status(
+            ToolId::ComfyUi,
+            Unavailable::ProbeFailed(format!("{object_url}: invalid JSON body")),
+        );
+    };
+    if nodes.as_object().is_none_or(serde_json::Map::is_empty) {
+        return unavailable_status(
+            ToolId::ComfyUi,
+            Unavailable::ProbeFailed(format!("{object_url}: no workflow nodes")),
+        );
+    }
 
     Status {
         id: ToolId::ComfyUi,
@@ -501,6 +530,40 @@ echo 'no cycles here'
                 let Ok(mut stream) = stream else { break };
                 let mut buf = [0_u8; 1024];
                 let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), stop_tx)
+    }
+
+    /// Healthy `/system_stats`, broken `/object_info`: the version is known
+    /// but no workflow node catalog can be proven.
+    fn spawn_comfy_without_object_info() -> (String, mpsc::Sender<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stop_rx.try_recv() {
+                    Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+                let Ok(mut stream) = stream else { break };
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf);
+                let request = String::from_utf8_lossy(&buf);
+                let (status_line, body) = if request.contains("GET /object_info") {
+                    ("500 Internal Server Error", "object info unavailable")
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"system":{"comfyui_version":"0.3.40"},"devices":[]}"#,
+                    )
+                };
                 let response = format!(
                     "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
@@ -759,5 +822,22 @@ echo 'no cycles here'
             status.unavailable,
             Some(Unavailable::ProbeFailed(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn comfyui_without_object_info_never_claims_workflow() {
+        let (url, _stop) = spawn_comfy_without_object_info();
+        let config = Config {
+            comfyui_url: Some(url),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(!status.is_available());
+        assert_eq!(status.capabilities, [] as [Capability; 0]);
+        assert!(
+            matches!(&status.unavailable, Some(Unavailable::ProbeFailed(reason)) if reason.contains("object_info")),
+            "{status:?}"
+        );
     }
 }

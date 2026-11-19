@@ -28,6 +28,8 @@ CLI (clap) / HTTP (axum)
 | `crates/residency` | GPU-slot ledger (`LazyLock` global, `Mutex` slot, RAII) |
 | `crates/api-types` | DTOs shared Rust↔TS via ts-rs codegen |
 | `crates/llm-worker`, `crates/audio-worker` | Zero-dep doc stubs |
+| `crates/recognition-worker` | Recognition pipelines (stub + barcode) behind `POST /v1/recognize` |
+| `crates/external-tools` | Blender/ComfyUI probe-once registry; server reports it at `GET /v1/external-tools` and in `Capabilities` |
 | `packages/web-ui` | Bun/Vite frontend; `src/gen/` is generated |
 | `scripts/` | Bun helpers: `dev.ts` (Vite :5173 + cargo-watch :8080), `vendor-patches.ts` (fetches `vendor/` from `vendor.manifest.toml` pins, then applies the `vendor_patches/` stack), `codegen-openapi-check.ts` |
 | `vendor/` | Fetched scratch (gitignored, never committed) — run `bun scripts/vendor-patches.ts sync` before any cargo command; edit only via `vendor_patches/` + `vendor.manifest.toml` |

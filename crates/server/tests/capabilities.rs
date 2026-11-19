@@ -231,6 +231,18 @@ async fn get_capabilities(app: &Router) -> Value {
     body
 }
 
+/// Text bodies (named 501s) are deliberately not JSON.
+async fn get_text(app: &Router, uri: &str) -> (StatusCode, String) {
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .expect("infallible");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// 1x1 transparent PNG (smallest valid container bytes).
 const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -657,4 +669,51 @@ async fn queue_knobs_read_live_ledger_and_admission() {
     // Reset the process globals for any remaining tests.
     admission::configure(Duration::ZERO);
     honkbox_residency::global().configure(honkbox_residency::LedgerConfig::new());
+}
+
+/// With no startup probe installed, the capability document still reports
+/// both known tools — honestly marked missing — in registry order.
+#[tokio::test]
+async fn capabilities_report_external_tools_without_probing() {
+    let doc = get_capabilities(&app_with(catalog_with(&[]))).await;
+    let tools = doc["external_tools"]["tools"]
+        .as_array()
+        .expect("external tools");
+    let ids: Vec<&str> = tools.iter().map(|tool| tool["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["blender", "comfyui"]);
+    for tool in tools {
+        assert_eq!(tool["available"], false);
+        assert_eq!(tool["unavailable"], "not installed");
+        assert_eq!(&tool["capabilities"], &json!([]));
+    }
+}
+
+#[tokio::test]
+async fn external_tool_routes_name_missing_tools() {
+    let app = app_with(catalog_with(&[]));
+    let (status, body) = get_json(&app, "/v1/external-tools").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+
+    let (status, body) = get_text(&app, "/v1/external-tools/blender").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(body.contains("blender"), "{body}");
+    assert!(body.contains("not installed"), "{body}");
+
+    let (status, _) = get_text(&app, "/v1/external-tools/unknown").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // No registry installed: reloading is a cheap no-op, never a probe.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/external-tools/reload")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("infallible");
+    assert_eq!(response.status(), StatusCode::OK);
 }

@@ -2369,6 +2369,7 @@ dependencies = [
  "home",
  "honkbox-api-types",
  "honkbox-audio-worker",
+ "honkbox-external-tools",
  "honkbox-llm-worker",
  "honkbox-recognition-worker",
  "honkbox-registry",

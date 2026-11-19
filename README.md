@@ -72,6 +72,8 @@ alias hbx=honkbox
 - `crates/audio-worker` — whisper STT, Kokoro TTS, Silero VAD.
 - `crates/residency` — VRAM ledger + tier presets, `/v1/memory` backing types.
 - `crates/registry` — model-dir scan, weight metadata, SQLite catalog cache.
+- `crates/recognition-worker` — recognition pipelines (stub + barcode) behind `POST /v1/recognize`.
+- `crates/external-tools` — Blender/ComfyUI discovery probes; probed once at startup, `GET /v1/external-tools`.
 - `crates/server` — Axum REST+SSE binary, clap CLI, queue, embedded UI, TOML
   config.
 - `packages/web-ui` — tabbed frontend (Vite + TS).

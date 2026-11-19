@@ -1599,6 +1599,12 @@ export type Capabilities = {
    */
   recognition: RecognitionFeature | null;
   /**
+   * Externally discovered engines (`GET /v1/external-tools`): versions,
+   * probed capabilities and honest availability reasons. Additive optional
+   * field per the version policy above.
+   */
+  external_tools: ExternalToolsCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1808,6 +1814,38 @@ export type ToolCallingCapability = {
    * parallel-`true` clients are not rejected.
    */
   parallel_tool_calls: boolean;
+};
+export type ExternalTool = {
+  /**
+   * Stable lowercase tool id (`"blender"` / `"comfyui"`).
+   */
+  id: string;
+  /**
+   * Version the tool reported; absent when it never reported one.
+   */
+  version?: string | null;
+  /**
+   * Capabilities the probe actually proved (bounded closed vocabulary).
+   */
+  capabilities: Array<string>;
+  /**
+   * Probed device names; never credentials or paths.
+   */
+  devices: Array<string>;
+  /**
+   * Whether the tool can serve work right now.
+   */
+  available: boolean;
+  /**
+   * Why it cannot serve work; absent when available.
+   */
+  unavailable?: string | null;
+};
+export type ExternalToolsCapability = {
+  /**
+   * Every known tool, in the registry's stable order, available or not.
+   */
+  tools: Array<ExternalTool>;
 };
 export type RecKind = "barcode" | "ocr";
 export type RecognitionFeature = {

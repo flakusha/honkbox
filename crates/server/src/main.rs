@@ -469,6 +469,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // TASK-resource-ledger-bounded-queue: install the resolved ledger
     // capacities/bounds before any route can reserve capacity.
     install_resource_ledger(&loaded.ledger, loaded.server.queue_wait);
+    // TASK-external-tool-registry: probe once at startup. The capabilities
+    // document and `/v1/external-tools*` read this cached snapshot.
+    routes::init_external_tools(loaded.tools).await;
     // Mesh proxy (TASK-mesh-client-spike): opt-in via `[mesh]`. Startup
     // line names upstreams only — bearer tokens are never logged. Route
     // consumption of the client lands with the reroute ticket.

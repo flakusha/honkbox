@@ -505,6 +505,29 @@ fn resolve_data_dir(
     default_data_dir(xdg, home)
 }
 
+/// `[tools]` external-engine discovery settings (TASK-external-tool-registry).
+/// `None` paths/URLs let the probe crate use `PATH` / its loopback default.
+#[derive(Debug, Clone)]
+pub struct ExternalToolsConfig {
+    /// Blender executable; `None` resolves `blender` on `PATH`.
+    pub blender_path: Option<PathBuf>,
+    /// `ComfyUI` base URL; `None` uses the crate's loopback default.
+    pub comfyui_url: Option<String>,
+    /// Probe timeout; bounded so a hung binary never blocks startup.
+    pub timeout: Duration,
+}
+
+impl ExternalToolsConfig {
+    /// Hand the resolved settings to the discovery crate.
+    pub fn into_probe_config(self) -> honkbox_external_tools::Config {
+        honkbox_external_tools::Config {
+            blender_path: self.blender_path,
+            comfyui_url: self.comfyui_url,
+            timeout: self.timeout,
+        }
+    }
+}
+
 /// Load result: model/job/swap/server config plus the final data dir (after
 /// the `[core] data_dir` refinement).
 #[derive(Debug)]
@@ -525,6 +548,8 @@ pub struct LoadedConfig {
     /// default; bearer tokens are redacted in `Debug` (which this struct
     /// derives).
     pub mesh: mesh::MeshConfig,
+    /// `[tools]` external-engine discovery settings.
+    pub tools: ExternalToolsConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
 }
@@ -841,6 +866,8 @@ struct FileStages {
     ledger: FileLedger,
     /// `[mesh]` keys (TASK-mesh-client-spike), resolved in `load`.
     mesh: mesh::FileMesh,
+    /// `[tools]` keys (TASK-external-tool-registry), resolved in `load`.
+    tools: FileTools,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -901,6 +928,7 @@ fn stage_config_file(
     out.queue_wait = file.server.queue_wait_secs;
     out.ledger = file.ledger;
     out.mesh = file.mesh;
+    out.tools = file.tools;
     out.vram_budget = file.models.vram_budget_bytes;
     out.entries = file
         .models
@@ -1008,6 +1036,7 @@ pub fn load(
         ledger: file_ledger,
         artifacts: artifact_cap_file,
         mesh: file_mesh,
+        tools: file_tools,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -1088,6 +1117,11 @@ pub fn load(
         std::env::var("HONKBOX_ARTIFACT_MAX_BYTES").ok().as_deref(),
     );
     let mesh = mesh::MeshConfig::resolve(&file_mesh)?;
+    let tools = ExternalToolsConfig {
+        blender_path: file_tools.blender_path.map(|p| expand_home(&p)),
+        comfyui_url: file_tools.comfyui_url,
+        timeout: Duration::from_secs(file_tools.timeout_secs.unwrap_or(5).clamp(1, 3600)),
+    };
     Ok(LoadedConfig {
         models,
         auth,
@@ -1095,6 +1129,7 @@ pub fn load(
         ledger,
         artifact_max_bytes,
         mesh,
+        tools,
         data_dir,
     })
 }
@@ -1286,6 +1321,10 @@ struct FileConfig {
     /// default (mesh off, no upstreams).
     #[serde(default)]
     mesh: mesh::FileMesh,
+    /// `[tools]` keys (TASK-external-tool-registry); absent table uses PATH
+    /// / the loopback `ComfyUI` default and a 5 s probe timeout.
+    #[serde(default)]
+    tools: FileTools,
 }
 
 /// `[core]` keys: `data_dir` (the one data-dir knob's file stage).
@@ -1418,6 +1457,14 @@ struct FileSwap {
 struct FileArtifacts {
     #[serde(default)]
     max_artifact_bytes: Option<u64>,
+}
+
+/// `[tools]` keys: explicit engine locations + probe timeout.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileTools {
+    blender_path: Option<String>,
+    comfyui_url: Option<String>,
+    timeout_secs: Option<u64>,
 }
 
 impl Default for SwapConfig {

@@ -91,6 +91,11 @@ pub struct Capabilities {
     /// today) — additive optional field per the version policy above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recognition: Option<RecognitionFeature>,
+    /// Externally discovered engines (`GET /v1/external-tools`): versions,
+    /// probed capabilities and honest availability reasons. Additive optional
+    /// field per the version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_tools: Option<ExternalToolsCapability>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
@@ -2506,6 +2511,8 @@ mod tests {
             QueueCapabilities::decl(&config),
             QueueKindCapacity::decl(&config),
             ToolCallingCapability::decl(&config),
+            ExternalTool::decl(&config),
+            ExternalToolsCapability::decl(&config),
             RecKind::decl(&config),
             RecognitionFeature::decl(&config),
             RecognizeRequest::decl(&config),
@@ -2991,6 +2998,34 @@ pub enum RecKind {
     /// (`.plan/tickets/TASK-ocr-ocrs-backend.md` and siblings); requests
     /// answer the named 501 `recognition_kind_unsupported` meanwhile.
     Ocr,
+}
+
+/// One externally discovered engine (TASK-external-tool-registry). Every
+/// field is derived from the startup/reload probe; nothing is user-supplied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ExternalTool {
+    /// Stable lowercase tool id (`"blender"` / `"comfyui"`).
+    pub id: String,
+    /// Version the tool reported; absent when it never reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Capabilities the probe actually proved (bounded closed vocabulary).
+    pub capabilities: Vec<String>,
+    /// Probed device names; never credentials or paths.
+    pub devices: Vec<String>,
+    /// Whether the tool can serve work right now.
+    pub available: bool,
+    /// Why it cannot serve work; absent when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
+}
+
+/// Externally discovered engines reported by `GET /v1/external-tools` and
+/// the top-level capabilities document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ExternalToolsCapability {
+    /// Every known tool, in the registry's stable order, available or not.
+    pub tools: Vec<ExternalTool>,
 }
 
 /// Recognition capability (`Capabilities::recognition`): probe-driven flags

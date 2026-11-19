@@ -886,6 +886,77 @@
         }
       }
     },
+    "/v1/external-tools": {
+      "get": {
+        "tags": [],
+        "operationId": "get_external_tools",
+        "responses": {
+          "200": {
+            "description": "Discovered external engines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalToolsCapability"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/external-tools/reload": {
+      "post": {
+        "tags": [],
+        "operationId": "post_external_tools_reload",
+        "responses": {
+          "200": {
+            "description": "Re-probed external engines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalToolsCapability"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/external-tools/{id}": {
+      "get": {
+        "tags": [],
+        "operationId": "get_external_tool",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stable tool id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Probed tool status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalTool"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown tool id"
+          },
+          "501": {
+            "description": "Tool or requested capability is unavailable"
+          }
+        }
+      }
+    },
     "/v1/image-ops": {
       "post": {
         "tags": [],
@@ -1607,6 +1678,17 @@
             "$ref": "#/components/schemas/AuthCapabilities",
             "description": "Auth mode in effect (`\"none\"` or `\"bearer\"`); the key VALUE is never\nexposed."
           },
+          "external_tools": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExternalToolsCapability",
+                "description": "Externally discovered engines (`GET /v1/external-tools`): versions,\nprobed capabilities and honest availability reasons. Additive optional\nfield per the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "features": {
             "$ref": "#/components/schemas/FeatureFlags",
             "description": "Feature flags derived from compile features, runtime config, and the\nlive catalog."
@@ -2306,6 +2388,70 @@
             "format": "int64",
             "description": "`prompt_tokens` (embeddings generate nothing).",
             "minimum": 0
+          }
+        }
+      },
+      "ExternalTool": {
+        "type": "object",
+        "description": "One externally discovered engine (TASK-external-tool-registry). Every\nfield is derived from the startup/reload probe; nothing is user-supplied.",
+        "required": [
+          "id",
+          "capabilities",
+          "devices",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether the tool can serve work right now."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capabilities the probe actually proved (bounded closed vocabulary)."
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Probed device names; never credentials or paths."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable lowercase tool id (`\"blender\"` / `\"comfyui\"`)."
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it cannot serve work; absent when available."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version the tool reported; absent when it never reported one."
+          }
+        }
+      },
+      "ExternalToolsCapability": {
+        "type": "object",
+        "description": "Externally discovered engines reported by `GET /v1/external-tools` and\nthe top-level capabilities document.",
+        "required": [
+          "tools"
+        ],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExternalTool"
+            },
+            "description": "Every known tool, in the registry's stable order, available or not."
           }
         }
       },

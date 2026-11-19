@@ -32,6 +32,7 @@ ulid = { workspace = true }
 honkbox-llm-worker = { path = "../llm-worker" }
 honkbox-audio-worker = { path = "../audio-worker" }
 honkbox-recognition-worker = { path = "../recognition-worker" }
+honkbox-external-tools = { path = "../external-tools" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
 reqwest = { workspace = true }

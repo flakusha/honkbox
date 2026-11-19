@@ -1,6 +1,6 @@
 # TASK: External tool registry
 
-Status: in progress
+Status: done
 Priority: P0
 Epic: epic-external-tools
 Owner: honkbox-external-tools lane (2026-11-19)
@@ -28,7 +28,8 @@ linked into the Rust workspace.
 - Discovery half landed as the new crate `crates/external-tools`
   (`honkbox-external-tools`): `ToolId` / `Capability` / `Status` /
   `Unavailable`, a Blender CLI probe (`--version` plus the headless Cycles
-  device probe), a ComfyUI `/system_stats` probe, probe-once caching and an
+  device probe), ComfyUI `/system_stats` + `/object_info` probes (workflow is
+  claimed only when the node catalog is present), probe-once caching and an
   explicit `reload`. `Unavailable::NotInstalled` stays distinct from
   `Unavailable::ProbeFailed(reason)`, and a capability is claimed only after
   the probe that proves it succeeded.
@@ -41,13 +42,15 @@ linked into the Rust workspace.
 - Known limitation, stated in the crate docs: a timed-out probe kills the
   direct child only, not a process group (`killpg` is `libc`, and the
   workspace forbids `unsafe` everywhere).
-- Server half still open: the DTO in `crates/api-types`, the capabilities
-  surface and the 501 for a missing tool need `api-types` + `routes.rs`, both
-  owned by the review-fixes lane (IN PROGRESS, 2026-11-19). The ticket stays
-  `in progress` until that wiring lands.
-- Wiring point for the follow-up: `Registry::discover(config).await` at
-  startup, `Registry::reload().await` behind the explicit reload path;
-  `Config` carries the configured Blender path and ComfyUI base URL.
+- Server half landed: `[tools]` config (`blender_path`, `comfyui_url`,
+  `timeout_secs`) feeds `Registry::discover` at startup; `ExternalTool` /
+  `ExternalToolsCapability` DTOs are exported to TS/OpenAPI; the documented
+  `external_tools` block appears in `Capabilities`; `GET /v1/external-tools`,
+  `GET /v1/external-tools/{id}` and `POST /v1/external-tools/reload` read and
+  refresh the cached snapshot. A missing tool or unproven capability returns
+  a named 501 (`external tool {id} unavailable: …`), never a stack trace.
+- Read-only test harnesses that do not start the server see both known tools
+  marked `not installed` — no probe is spawned from a test process.
 - The process supervisor (`TASK-process-supervisor`) is the other half of
   this epic; it needs a process-group kill design that the workspace-wide
   `unsafe_code = "forbid"` rules out (`killpg` lives in `libc`).
