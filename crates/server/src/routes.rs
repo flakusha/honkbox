@@ -97,9 +97,17 @@ mod blender_stages;
 #[path = "routes/blender_exec.rs"]
 mod blender_exec;
 
+#[path = "routes/job_content.rs"]
+pub(super) mod job_content;
+
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
 use self::blender::{__path_post_blender_job, post_blender_job};
+#[allow(unused_imports)]
+// handler names are used by .route() and the OpenApi derive's generated types
+use self::job_content::{
+    __path_get_job_bundle, __path_get_job_content, get_job_bundle, get_job_content,
+};
 
 // Supervised external processes (TASK-process-supervisor): the process
 // group teardown is a unix mechanism, so the module is unix-only. It is
@@ -208,7 +216,6 @@ mod middleware;
 
 #[allow(unused_imports)] // re-exported for integration tests
 #[cfg(test)]
-#[allow(unused_imports)]
 pub use self::middleware::set_env_var;
 pub use self::openapi::{ApiDoc, EmbeddedUi};
 pub use self::state::AppConfig;
@@ -327,6 +334,8 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/jobs/{id}/cancel", post(post_job_cancel))
         .route("/v1/jobs/{id}", delete(delete_job))
         .route("/v1/jobs/blender", post(post_blender_job))
+        .route("/v1/jobs/{id}/bundle.zip", get(get_job_bundle))
+        .route("/v1/jobs/{id}/content/{name}", get(get_job_content))
         .route("/v1/events", get(get_events))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))

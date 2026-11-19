@@ -1316,6 +1316,62 @@
         }
       }
     },
+    "/v1/jobs/{id}/bundle.zip": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/jobs/{id}/bundle.zip`: rebuild a deterministic ZIP of the job\nbundle. Missing/unreadable job directories are 404; count and byte caps\nare reject-not-clamp 413s.",
+        "operationId": "get_job_bundle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "26-character Crockford ULID of the job bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deterministic ZIP of the job bundle",
+            "content": {
+              "application/zip": {}
+            }
+          },
+          "400": {
+            "description": "Malformed job id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job bundle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Bundle exceeds the entry or byte caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/jobs/{id}/cancel": {
       "post": {
         "tags": [],
@@ -1334,6 +1390,71 @@
           },
           "404": {
             "description": "Unknown job id"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{id}/content/{name}": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/jobs/{id}/content/{name}`: stream one allowlisted bundle file.\nMissing files are 404, oversized files are 413; nothing is buffered whole.",
+        "operationId": "get_job_content",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "26-character Crockford ULID of the job bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "One of manifest.json, output.glb, output_turntable.webp",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested bundle file",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Malformed job id or disallowed name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job bundle or file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "File exceeds the byte cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
           }
         }
       }
@@ -1984,7 +2105,7 @@
         "properties": {
           "asset_id": {
             "type": "string",
-            "description": "The stored artifact id (its sha256) or an object key."
+            "description": "The stored artifact id: the 64-hex sha256 of the content."
           },
           "format": {
             "$ref": "#/components/schemas/BlenderMeshFormat",

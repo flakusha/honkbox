@@ -1,8 +1,8 @@
 # EPIC: Output formats and bounded payloads
 
-Status: proposed
+Status: in progress
 Priority: P1
-Owner: unassigned
+Owner: main session
 Research: `.tmp/research/ReviewedOutput-Formats.md`
 
 ## Scope
@@ -16,7 +16,7 @@ RGBA pixels and PCM16, so only video is vendor-blocked.
 - `FEAT-image-output-formats.md` — JPEG/WebP over HTTP + quality knob (S).
 - `FEAT-audio-output-formats.md` — Opus/FLAC; MP3 blocked (S–M).
 - `TASK-speech-input-cap.md` — cap `SpeechRequest.input` (blocking-grade).
-- `FEAT-job-bundle-zip.md` — downloadable job zip (S).
+- `FEAT-job-bundle-zip.md` — downloadable job zip (S, LANDED 2026-11-19: `GET /v1/jobs/{id}/bundle.zip` + allowlisted `GET /v1/jobs/{id}/content/{name}`, deterministic bytes, explicit response caps).
 - `FEAT-response-compression.md` — gzip/brotli layer, SSE excluded (S).
 - `TASK-texture-postprocess-oiio.md` — OIIO mip/tile/colorspace/ORM post-process + per-map sidecar (P0).
 
@@ -26,7 +26,8 @@ leave already-implemented routes.
 ## Acceptance
 
 All format additions keep `codegen:check` green and preserve the reject-not-clamp
-policy; no unbounded text → response multiplier remains.
+policy; no unbounded text → response multiplier remains. Bundle ZIPs pin
+entry order and metadata, cap entries/bytes, and never traverse host paths.
 
 ## Verification
 
