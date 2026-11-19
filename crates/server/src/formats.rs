@@ -682,10 +682,7 @@ pub(crate) fn exportable_model_names() -> impl Iterator<Item = &'static str> {
 pub(crate) fn model_row_for_extension(extension: &str) -> Option<&'static FormatInfo> {
     FORMATS
         .iter()
-        .find(|row| {
-            (row.model_export || row.external_only)
-                && row.extensions.contains(&extension)
-        })
+        .find(|row| (row.model_export || row.external_only) && row.extensions.contains(&extension))
 }
 
 #[cfg(test)]
