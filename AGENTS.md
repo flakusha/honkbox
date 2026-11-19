@@ -54,7 +54,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 - **Safety**: workspace-wide `unsafe_code = "forbid"`; clippy `all + pedantic`, warnings denied in CI.
 - **Errors**: hand-rolled enums with `Display` + `Error` (e.g. `SdError`, residency `Busy`); CLI paths return `Result<_, String>` + exit(1). No anyhow/thiserror.
-- **Async**: tokio only inside `crates/server`; worker crates deliberately sync.
+- **Async**: the compute workers (`crates/llm-worker`, `crates/audio-worker`, `crates/recognition-worker`) stay deliberately sync. Crates that are async by nature may use tokio directly (workspace pin: macros + rt-multi-thread) — `crates/server`, and async registry/probe crates such as `crates/external-tools` (HTTP client + subprocess probes). Blocking work inside an async fn goes on `tokio::task::spawn_blocking`.
 - **State**: `LazyLock` global singletons (residency), axum `with_state(AppConfig)`.
 - **Formatting**: dprint (width 100, double quotes) for TS/JSON; `cargo fmt` for Rust; TS strict + `noUncheckedIndexedAccess` + `verbatimModuleSyntax`; oxlint correctness=error.
 - **Stub discipline**: unbuilt features (registry SQLite, llm/audio workers, `.plan/`) exist as zero-dep crates/docs — check what's actually implemented before assuming README scope.
