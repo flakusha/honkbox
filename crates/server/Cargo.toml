@@ -38,6 +38,10 @@ base64 = "0.22"
 reqwest = { workspace = true }
 tokio-util = { workspace = true }
 sha2 = { workspace = true }
+# Supervised external processes (TASK-process-supervisor): the process-group
+# teardown (rustix) and the artifact globs (glob).
+rustix = { workspace = true }
+glob = { workspace = true }
 tower-http = { workspace = true }
 # Pixel ops (`POST /v1/image-ops`): the same workspace-pinned `image` the
 # sd-core encoders use (png/jpeg/webp features, no new codecs).
