@@ -10,6 +10,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -39,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -203,36 +203,44 @@ fn swap_app(
     max_ttl: Duration,
 ) -> Router {
     app(AppConfig {
-        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: None,
-    tts_model: None,
-    // The static pipeline is inert while a swap manager is present —
-    // exactly the wiring `main.rs` produces.
-    llm: Arc::new(StubLlm::default()),
-    stt: Arc::new(StubStt),
-    tts: Arc::new(StubTts),
-    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: Some(manager_with(
-        settings(ttl, max_loaded, max_ttl, &[]),
-        loader,
-    )),
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: max_ttl, data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: std::sync::Arc::new(
-        downloads::DownloadManager::new(None).expect("download manager"),
-    ), })
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        // The static pipeline is inert while a swap manager is present —
+        // exactly the wiring `main.rs` produces.
+        llm: Arc::new(StubLlm::default()),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: Some(manager_with(
+            settings(ttl, max_loaded, max_ttl, &[]),
+            loader,
+        )),
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: max_ttl,
+        data_dir: None,
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            None.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
+    })
 }
 
 /// `POST /v1/chat` with `model` + optional `ttl_seconds`; status + body.
@@ -752,31 +760,39 @@ async fn chat_stream_resolves_through_swap_manager() {
 async fn stub_path_unaffected_without_swap_manager() {
     let _slot_guard = SLOT_LOCK.lock().await;
     let app = app(AppConfig {
-        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(RwLock::new(Arc::new(catalog_with(&[])))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: None,
-    tts_model: None,
-    llm: Arc::new(StubLlm::default()),
-    stt: Arc::new(StubStt),
-    tts: Arc::new(StubTts),
-    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: None,
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: std::sync::Arc::new(
-        downloads::DownloadManager::new(None).expect("download manager"),
-    ), });
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog_with(&[])))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        llm: Arc::new(StubLlm::default()),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: std::time::Duration::from_hours(24),
+        data_dir: None,
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            None.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
+    });
     let (status, body) = chat(app, "", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("\"stub-llm\""), "stub reply: {body}");

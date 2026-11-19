@@ -55,6 +55,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -84,9 +87,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]

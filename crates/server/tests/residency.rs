@@ -10,6 +10,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -39,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -191,29 +191,37 @@ fn residency_app(catalog: ModelCatalog, swap_settings: SwapSettings) -> Router {
 
 fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
     app(AppConfig {
-        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: None,
-    tts_model: None,
-    llm: Arc::new(StubLlm::default()),
-    stt: Arc::new(StubStt),
-    tts: Arc::new(StubTts),
-    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: Some(Arc::new(manager)),
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: Duration::from_hours(24), data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")), })
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        llm: Arc::new(StubLlm::default()),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: Some(Arc::new(manager)),
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: Duration::from_hours(24),
+        data_dir: None,
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            None.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
+    })
 }
 
 /// `POST` a control route with no body; returns (status, body).

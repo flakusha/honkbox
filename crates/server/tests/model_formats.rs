@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::formats::{exportable_model_names, model_row_for_extension, sniff};
 use crate::model_formats::{
-    validate_model, ModelReject, SIDECAR_SUFFIX, VALIDATOR_VERSION, ValidatedModel,
+    ModelReject, SIDECAR_SUFFIX, VALIDATOR_VERSION, ValidatedModel, validate_model,
 };
 
 /// Lowercase-hex SHA-256 — the digest form the sidecar must record.
@@ -53,13 +53,25 @@ fn glb(json: &[u8], bin: Option<&[u8]>) -> Vec<u8> {
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"glTF");
     out.extend_from_slice(&2u32.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(total).expect("fixture fits u32").to_le_bytes());
-    out.extend_from_slice(&u32::try_from(json_len).expect("fixture fits u32").to_le_bytes());
+    out.extend_from_slice(
+        &u32::try_from(total)
+            .expect("fixture fits u32")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(
+        &u32::try_from(json_len)
+            .expect("fixture fits u32")
+            .to_le_bytes(),
+    );
     out.extend_from_slice(b"JSON");
     out.extend_from_slice(json);
     out.extend(vec![0u8; pad(json.len())]);
     if let Some(bin) = bin {
-        out.extend_from_slice(&u32::try_from(bin_len).expect("fixture fits u32").to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(bin_len)
+                .expect("fixture fits u32")
+                .to_le_bytes(),
+        );
         out.extend_from_slice(b"BIN\0");
         out.extend_from_slice(bin);
         out.extend(vec![0u8; pad(bin.len())]);
@@ -72,10 +84,8 @@ const GLB_JSON: &[u8] = br#"{"asset":{"version":"2.0"}}"#;
 /// A binary-PLY header (format line + element/property lines) plus raw
 /// payload bytes.
 fn ply(header_elements: &str, payload: &[u8]) -> Vec<u8> {
-    let mut out = format!(
-        "ply\nformat binary_little_endian 1.0\n{header_elements}end_header\n"
-    )
-    .into_bytes();
+    let mut out =
+        format!("ply\nformat binary_little_endian 1.0\n{header_elements}end_header\n").into_bytes();
     out.extend_from_slice(payload);
     out
 }
@@ -109,7 +119,10 @@ fn minimal_glb_passes() {
     assert_eq!(validated.format, "glb");
     assert_eq!(validated.format_version, Some(2));
     assert_eq!(validated.sha256, sha256_hex(&bytes));
-    assert_eq!(validated.size, u64::try_from(bytes.len()).expect("usize fits"));
+    assert_eq!(
+        validated.size,
+        u64::try_from(bytes.len()).expect("usize fits")
+    );
 
     // The same bytes pass under an uppercase or dotted extension claim.
     let validated = validate_model(&bytes, ".GLB").expect("extension normalization");
@@ -130,8 +143,7 @@ fn truncated_glb_fails_model_truncated() {
     assert!(err.detail().contains("declares"), "got {:?}", err.detail());
 
     // Header itself cut short.
-    let err = validate_model(&b"glTF\x02\x00"[..], "glb")
-        .expect_err("the header is cut short");
+    let err = validate_model(&b"glTF\x02\x00"[..], "glb").expect_err("the header is cut short");
     assert_eq!(err.code(), "model_truncated");
 
     // Empty bytes with a glb claim: no header at all is truncation.
@@ -293,7 +305,11 @@ fn fbx_usd_obj_are_external_only() {
             other => panic!("expected ExternalOnly for {extension}, got {other:?}"),
         }
         assert_eq!(err.code(), "model_external_only");
-        assert!(err.detail().contains("external-only"), "got {:?}", err.detail());
+        assert!(
+            err.detail().contains("external-only"),
+            "got {:?}",
+            err.detail()
+        );
     }
 
     // Even bytes carrying the REAL Kaydara FBX binary magic are refused on
@@ -392,7 +408,10 @@ fn spz_ngsp_headers_are_validated() {
     bytes.resize(150_000, 0);
     let err = validate_model(&bytes, "spz").expect_err("above the point budget");
     assert_eq!(err.code(), "model_too_large");
-    assert_eq!(err.detail(), "the model declares or holds 16777217, exceeding the limit of 16777216");
+    assert_eq!(
+        err.detail(),
+        "the model declares or holds 16777217, exceeding the limit of 16777216"
+    );
 }
 
 #[test]
@@ -456,7 +475,10 @@ fn sidecar_records_provenance() {
     assert_eq!(sidecar["format_version"], 2);
     assert_eq!(sidecar["validator_version"], VALIDATOR_VERSION);
     assert_eq!(sidecar["sha256"], sha256_hex(&bytes));
-    assert_eq!(sidecar["size_bytes"], u64::try_from(bytes.len()).expect("usize fits"));
+    assert_eq!(
+        sidecar["size_bytes"],
+        u64::try_from(bytes.len()).expect("usize fits")
+    );
     assert_eq!(SIDECAR_SUFFIX, ".validation.json");
 
     // A headerless format records a null version, honestly.

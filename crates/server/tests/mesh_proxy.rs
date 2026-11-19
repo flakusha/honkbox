@@ -312,13 +312,7 @@ async fn relay(State(proxy): State<Arc<MeshProxy>>, request: Request) -> Respons
         .await
         .expect("request body");
     let forwarded = proxy
-        .forward(
-            upstream,
-            Method::POST,
-            "/mesh/echo",
-            &headers,
-            body,
-        )
+        .forward(upstream, Method::POST, "/mesh/echo", &headers, body)
         .await
         .expect("forward succeeds");
     let mut builder = axum::http::Response::builder().status(forwarded.status);
@@ -714,13 +708,13 @@ async fn hostile_targets_are_rejected_before_any_request() {
 
     for target in [
         "http://evil.example/mesh/echo", // absolute URL
-        "https://evil.example/x",                  // absolute URL, other scheme
-        "//evil.example/x",                        // network-path reference
-        "///evil.example/x",                       // network-path reference
-        "\\evil.example/x",                        // backslash authority trick
-        "/\\evil.example/x",                       // backslash after the leading slash
-        "/\n\\evil.example/x",                     // newline stripped, then `\` becomes `/`
-        "http:/\\evil.example/x",                  // scheme-ish form with no leading slash
+        "https://evil.example/x",        // absolute URL, other scheme
+        "//evil.example/x",              // network-path reference
+        "///evil.example/x",             // network-path reference
+        "\\evil.example/x",              // backslash authority trick
+        "/\\evil.example/x",             // backslash after the leading slash
+        "/\n\\evil.example/x",           // newline stripped, then `\` becomes `/`
+        "http:/\\evil.example/x",        // scheme-ish form with no leading slash
     ] {
         let Err(err) = proxy
             .forward(

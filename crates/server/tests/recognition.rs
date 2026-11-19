@@ -10,6 +10,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -39,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -106,7 +106,10 @@ fn base_config() -> AppConfig {
         vram_budget: None,
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
-        artifacts: Arc::new(artifacts::Registry::new(None, config::DEFAULT_ARTIFACT_MAX_BYTES)),
+        artifacts: Arc::new(artifacts::Registry::new(
+            None,
+            config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
     }
 }
 
@@ -188,7 +191,9 @@ async fn barcode_round_trip_recovers_payload() {
     assert_eq!(body["pages"][0]["text"], payload);
     assert_eq!(body["pages"][0]["regions"][0]["text"], payload);
     assert!(body["pages"][0]["regions"][0].get("confidence").is_none());
-    let bbox = body["pages"][0]["regions"][0]["bbox"].as_array().expect("bbox");
+    let bbox = body["pages"][0]["regions"][0]["bbox"]
+        .as_array()
+        .expect("bbox");
     let x_min = bbox[0].as_f64().expect("x_min");
     let y_min = bbox[1].as_f64().expect("y_min");
     let x_max = bbox[2].as_f64().expect("x_max");
@@ -314,7 +319,12 @@ async fn unserved_kind_is_named_501_matching_capabilities() {
     // block per the API version policy, like `image_ops`/`tools`).
     let response = app
         .clone()
-        .oneshot(Request::builder().uri("/v1/capabilities").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .expect("infallible");
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();

@@ -256,7 +256,7 @@ async fn without_an_engine_the_route_is_a_named_501() {
     assert_eq!(jobs["data"].as_array().map(Vec::len), Some(0));
 }
 
-/// The OpenAPI document serves the route.
+/// The `OpenAPI` document serves the route.
 #[tokio::test]
 async fn the_openapi_document_serves_the_route() {
     let app = app_with(Some(tmp_dir("openapi")));

@@ -758,7 +758,7 @@ fn probe_status(id: ToolId, available: bool) -> Status {
 /// branches: no startup probe (or a probe that found nothing) → `false` —
 /// the same truth the job route's named 501 enforces — and a probed,
 /// available engine → `true`, reported with its version. The injection
-/// swaps the shared registry cache, so it holds SLOT_LOCK and restores
+/// swaps the shared registry cache, so it holds `SLOT_LOCK` and restores
 /// the unprobed state before returning.
 #[tokio::test]
 async fn blender_flag_agrees_with_the_probe_registry() {
