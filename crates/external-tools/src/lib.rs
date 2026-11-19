@@ -33,7 +33,8 @@ mod blender_assets;
 pub use blender_addons::{AddonInfo, AddonTier, BlenderAddons, OperatorInfo};
 pub use blender_assets::{
     AssetArtifact, AssetError, AssetJob, AssetManifest, AssetSource, AssetStage, BakeMap,
-    MeshFormat, Primitive, ProgressEvent, RECIPE_VERSION, run as run_asset_job,
+    MeshFormat, Primitive, ProgressEvent, RECIPE_VERSION, RecipeFiles, build_manifest, prepare,
+    recipe_sha256, run as run_asset_job,
 };
 
 /// Default `ComfyUI` base URL (loopback — honkbox is local-first).
@@ -206,6 +207,18 @@ impl Registry {
         registry
     }
 
+    /// A registry with fixed probe results, cached verbatim and in order —
+    /// deterministic construction for test harnesses; nothing is probed.
+    #[must_use]
+    pub fn from_statuses(config: Config, statuses: Vec<Status>) -> Self {
+        Self {
+            config,
+            client: reqwest::Client::new(),
+            statuses,
+            blender_addons: BlenderAddons::default(),
+        }
+    }
+
     /// Re-probe every tool, replacing the cached statuses.
     ///
     /// The tools are independent - the Blender chain is a local subprocess
@@ -264,6 +277,18 @@ impl Registry {
     /// Whether one tool can serve work.
     pub fn is_available(&self, id: ToolId) -> bool {
         self.status(id).is_some_and(Status::is_available)
+    }
+
+    /// The Blender executable the probe used: the configured path, or
+    /// `blender` resolved on `PATH`. The job route runs THIS binary, so
+    /// the version the capabilities document reports and the binary that
+    /// runs the job are the same one.
+    #[must_use]
+    pub fn blender_binary(&self) -> PathBuf {
+        self.config
+            .blender_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("blender"))
     }
 }
 
