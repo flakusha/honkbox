@@ -11,20 +11,77 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{OpenAiError, SpeechRequest};
-use honkbox_audio_worker::{SynthesizeRequest as WorkerSynthRequest, encode_wav};
+use honkbox_audio_worker::{
+    SynthesizeRequest as WorkerSynthRequest, encode_flac, encode_opus, encode_wav,
+};
 
 use super::audio_upload::run_synthesis;
 use super::chat_prep::with_job_id;
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, SPEECH_INPUT_MAX_CHARS, validate_model};
 
+/// Output container for `POST /v1/audio/speech`. Every variant encodes the
+/// same worker PCM16 — the choice is container only, never a re-synthesis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechFormat {
+    /// RIFF/WAVE container (default).
+    Wav,
+    /// Raw little-endian s16 mono, no container (`OpenAI` pcm semantics).
+    Pcm,
+    /// Lossless FLAC (pure-Rust encoder, any worker rate passes through).
+    Flac,
+    /// Ogg-encapsulated Opus, RFC 7845 gapless (Opus-native worker rates).
+    Opus,
+}
+
+/// Resolves `response_format` and validates `input` caps; `Err` is the
+/// `(status, message, code)` triple for an OpenAI-style error response.
+type SpeechRequestError = (StatusCode, String, Option<&'static str>);
+
+fn parse_speech_request(req: &SpeechRequest) -> Result<SpeechFormat, SpeechRequestError> {
+    let format = match req.response_format.as_deref() {
+        None | Some("wav") => SpeechFormat::Wav,
+        Some("pcm") => SpeechFormat::Pcm,
+        Some("flac") => SpeechFormat::Flac,
+        Some("opus") => SpeechFormat::Opus,
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unsupported response_format {other:?}: only \"wav\", \"pcm\", \"flac\" and \"opus\" are produced"
+                ),
+                None,
+            ));
+        }
+    };
+    if req.input.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "input is required: the text to synthesize".to_owned(),
+            None,
+        ));
+    }
+    // TASK-speech-input-cap: unbounded `input` means unbounded PCM growth;
+    // reject-not-clamp (no silent truncation, no derived clamp).
+    let input_chars = req.input.chars().count();
+    if input_chars > SPEECH_INPUT_MAX_CHARS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "input is {input_chars} characters; the cap is {SPEECH_INPUT_MAX_CHARS} — rejected, not truncated"
+            ),
+            Some("input_too_long"),
+        ));
+    }
+    Ok(format)
+}
+
 /// `POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as
 /// `/v1/synthesize`. `model` optional (server default TTS), `voice` passed
-/// through; `response_format` is `"wav"` (default, RIFF/WAVE container) or
-/// `"pcm"` — raw little-endian signed 16-bit mono samples with **no**
-/// container: the worker already returns mono PCM16, so the pcm path
-/// serializes the exact same samples minus the 44-byte RIFF header (`OpenAI`
-/// pcm semantics). `response_format` accepts `wav` (default) or `pcm`.
+/// through; `response_format` is `"wav"` (default, RIFF/WAVE container),
+/// `"pcm"` (raw s16le, no container), `"flac"` (lossless), or `"opus"`
+/// (Ogg-encapsulated, gapless). Applies to every TTS backend (stub + Kokoro):
+/// encoding runs on the worker's PCM16, never in the voice model.
 #[utoipa::path(
     post,
     path = "/v1/audio/speech",
@@ -32,47 +89,23 @@ use super::{AppConfig, SPEECH_INPUT_MAX_CHARS, validate_model};
     responses(
         (status = 200, description = "WAV audio (RIFF container)", content_type = "audio/wav"),
         (status = 200, description = "Raw s16le mono PCM (pcm response_format; no container)", content_type = "audio/pcm-s16le"),
+        (status = 200, description = "Lossless FLAC (flac response_format)", content_type = "audio/flac"),
+        (status = 200, description = "Ogg-encapsulated Opus, gapless (opus response_format)", content_type = "audio/ogg"),
         (status = 400, description = "Empty input, oversized input (over 4096 characters), unknown model, or unsupported response_format", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
-        (status = 500, description = "Synthesis failed", body = OpenAiError)
+        (status = 500, description = "Synthesis or audio encoding failed", body = OpenAiError)
     )
 )]
 pub(super) async fn post_audio_speech(
     State(config): State<AppConfig>,
     Json(req): Json<SpeechRequest>,
 ) -> Response {
-    let pcm_out = match req.response_format.as_deref() {
-        None | Some("wav") => false,
-        Some("pcm") => true,
-        Some(other) => {
-            return openai_error_response(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "unsupported response_format {other:?}: only \"wav\" and \"pcm\" are produced"
-                ),
-                None,
-            );
+    let format = match parse_speech_request(&req) {
+        Ok(format) => format,
+        Err((code, message, err_code)) => {
+            return openai_error_response(code, message, err_code);
         }
     };
-    if req.input.trim().is_empty() {
-        return openai_error_response(
-            StatusCode::BAD_REQUEST,
-            "input is required: the text to synthesize".to_owned(),
-            None,
-        );
-    }
-    // TASK-speech-input-cap: unbounded `input` means unbounded PCM growth;
-    // reject-not-clamp (no silent truncation, no derived clamp).
-    let input_chars = req.input.chars().count();
-    if input_chars > SPEECH_INPUT_MAX_CHARS {
-        return openai_error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "input is {input_chars} characters; the cap is {SPEECH_INPUT_MAX_CHARS} — rejected, not truncated"
-            ),
-            Some("input_too_long"),
-        );
-    }
     let catalog = config.catalog_snapshot();
     if let Err(message) =
         validate_model(req.model.as_deref(), config.tts_model.as_deref(), &catalog)
@@ -106,7 +139,7 @@ pub(super) async fn post_audio_speech(
         }
         Err((code, message)) => return openai_error_response(code, message, None),
     };
-    if pcm_out {
+    if format == SpeechFormat::Pcm {
         // Raw s16le: the exact samples the wav path wraps, header omitted.
         let mut raw = Vec::with_capacity(audio.pcm16.len() * 2);
         for sample in &audio.pcm16 {
@@ -117,9 +150,45 @@ pub(super) async fn post_audio_speech(
             job.id(),
         );
     }
-    let wav = encode_wav(audio.sample_rate, &audio.pcm16);
+    if format == SpeechFormat::Wav {
+        let wav = encode_wav(audio.sample_rate, &audio.pcm16);
+        return with_job_id(
+            ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response(),
+            job.id(),
+        );
+    }
+    // FLAC/Opus are CPU-bound encodes: off the async executor, same
+    // spawn_blocking discipline as synthesis. The encoder input is the
+    // worker's PCM16, so stub and Kokoro (24 kHz native) share the path.
+    let (mime, bytes) = match tokio::task::spawn_blocking(move || match format {
+        SpeechFormat::Flac => {
+            encode_flac(audio.sample_rate, &audio.pcm16).map(|bytes| ("audio/flac", bytes))
+        }
+        SpeechFormat::Opus => {
+            encode_opus(audio.sample_rate, &audio.pcm16).map(|bytes| ("audio/ogg", bytes))
+        }
+        SpeechFormat::Wav | SpeechFormat::Pcm => unreachable!("handled above"),
+    })
+    .await
+    {
+        Err(err) => {
+            return openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("encode task failed: {err}"),
+                None,
+            );
+        }
+        Ok(Err(err)) => {
+            return openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("encode failed: {err}"),
+                None,
+            );
+        }
+        Ok(Ok((mime, bytes))) => (mime, bytes),
+    };
     with_job_id(
-        ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response(),
+        ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
         job.id(),
     )
 }
