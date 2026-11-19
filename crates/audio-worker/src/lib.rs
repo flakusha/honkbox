@@ -15,12 +15,12 @@ mod vad;
 #[cfg(feature = "audio-cpp")]
 mod audiocpp;
 
+#[cfg(feature = "audio-cpp")]
+pub use audiocpp::{AudioCppStt, BACKEND_ID as AUDIOCPP_BACKEND_ID};
 pub use stt::{StubStt, WhisperStt};
 pub use tts::{KOKORO_VOICES, KokoroTts, StubTts};
 #[cfg(feature = "vad")]
 pub use vad::{SileroVad, VadSpan};
-#[cfg(feature = "audio-cpp")]
-pub use audiocpp::{AudioCppStt, BACKEND_ID as AUDIOCPP_BACKEND_ID};
 
 /// `true` when THIS build compiles Silero VAD (`vad` feature) — the same
 /// compile probe the capability advertisement reports as `features.vad`, so
@@ -167,29 +167,62 @@ pub trait TtsPipeline: Send + Sync {
     fn backend_id(&self) -> &'static str;
 }
 
-/// Naive linear resampler for mono f32 PCM (whisper/vad downmix + TTS rate
-/// honors; replace with a proper filter only if quality measurably matters).
-// ponytail: O(n) lerp, no anti-aliasing; add rubato/sinc if aliasing shows up.
-// Indices are derived from `i < out_len`, so every float→int value here is
-// bounded by `input.len()` and cannot truncate or go negative.
+/// Lanczos-windowed sinc resampler for mono f32 PCM (STT/VAD downmix and TTS
+/// rate honors). The tap count is fixed, so work per output sample is bounded.
+const RESAMPLE_HALF_TAPS: usize = 32;
+
+// Anti-alias cutoff = `min(from_rate, to_rate)/2`; the 0.8 guard leaves a
+// Lanczos transition band so near-Nyquist tones cannot fold into 16 kHz output.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-pub(crate) fn resample_linear_f32(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+pub(crate) fn resample_f32(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     if input.is_empty() || from_rate == 0 || to_rate == 0 || from_rate == to_rate {
         return input.to_vec();
     }
-    let out_len = (input.len() as u64 * u64::from(to_rate) / u64::from(from_rate)) as usize;
+    let out_len = (u64::try_from(input.len()).unwrap_or(u64::MAX) * u64::from(to_rate)
+        / u64::from(from_rate)) as usize;
+    let step = f64::from(from_rate) / f64::from(to_rate);
+    let cutoff_cycles = f64::from(from_rate.min(to_rate)) * 0.4 / f64::from(from_rate);
+    let last = input.len() - 1;
+    // Fixed DC norm: local per-sample sums approach zero for out-of-band input,
+    // which would amplify that band instead of filtering it.
+    let kernel = |offset: f64| {
+        let arg = 2.0 * cutoff_cycles * offset * std::f64::consts::PI;
+        let window_arg = offset * std::f64::consts::PI / RESAMPLE_HALF_TAPS as f64;
+        let sinc = if arg.abs() < f64::EPSILON {
+            1.0
+        } else {
+            arg.sin() / arg
+        };
+        let window = if window_arg.abs() < f64::EPSILON {
+            1.0
+        } else {
+            window_arg.sin() / window_arg
+        };
+        sinc * window
+    };
+    let norm: f64 = (0..=2 * RESAMPLE_HALF_TAPS)
+        .map(|tap| kernel(tap as f64 - RESAMPLE_HALF_TAPS as f64))
+        .sum();
     (0..out_len.max(1))
         .map(|i| {
-            let pos = i as f64 * f64::from(from_rate) / f64::from(to_rate);
-            let j = pos.floor() as usize;
-            let frac = (pos - j as f64) as f32;
-            let a = input[j.min(input.len() - 1)];
-            let b = input[(j + 1).min(input.len() - 1)];
-            a + (b - a) * frac
+            let pos = i as f64 * step;
+            let center = pos as usize;
+            let first = center.saturating_sub(RESAMPLE_HALF_TAPS);
+            let end = center.saturating_add(RESAMPLE_HALF_TAPS).min(last);
+            let acc: f64 = input[first..=end]
+                .iter()
+                .enumerate()
+                .map(|(tap, &sample)| kernel(pos - (first + tap) as f64) * f64::from(sample))
+                .sum();
+            if norm.abs() < f64::EPSILON {
+                0.0
+            } else {
+                (acc / norm) as f32
+            }
         })
         .collect()
 }
@@ -309,5 +342,86 @@ mod tests {
     #[allow(clippy::assertions_on_constants)]
     fn audiocpp_probe_is_off_without_the_feature() {
         assert!(!AUDIOCPP_COMPILED);
+    }
+
+    fn tone(len: usize, rate: f32, freq: f32) -> Vec<f32> {
+        let step = 2.0 * std::f32::consts::PI * freq / rate;
+        let mut phase = 0.0f32;
+        (0..len)
+            .map(|_| {
+                let sample = phase.sin();
+                phase += step;
+                sample
+            })
+            .collect()
+    }
+
+    fn peak(samples: &[f32]) -> f32 {
+        samples.iter().copied().map(f32::abs).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn resample_8k_to_16k_preserves_tone_length_and_finiteness() {
+        let input = tone(400, 8_000.0, 1_000.0);
+        let out = resample_f32(&input, 8_000, 16_000);
+        assert_eq!(out.len(), input.len() * 2);
+        assert!(out.iter().all(|s| s.is_finite()));
+        let core = &out[128..out.len() - 128];
+        let amplitude = peak(core);
+        assert!((0.85..=1.05).contains(&amplitude));
+    }
+
+    #[test]
+    fn resample_44k1_to_16k_attenuates_near_nyquist_tone() {
+        let in_band = tone(2_205, 44_100.0, 1_000.0);
+        let high = tone(2_205, 44_100.0, 7_000.0);
+        let low_out = resample_f32(&in_band, 44_100, 16_000);
+        let high_out = resample_f32(&high, 44_100, 16_000);
+        assert_eq!(low_out.len(), 800);
+        assert_eq!(high_out.len(), low_out.len());
+        assert!(low_out.iter().chain(&high_out).all(|s| s.is_finite()));
+        let low_peak = peak(&low_out[64..low_out.len() - 64]);
+        let high_peak = peak(&high_out[64..high_out.len() - 64]);
+        assert!((0.85..=1.05).contains(&low_peak));
+        assert!(high_peak < low_peak * 0.25, "{high_peak} vs {low_peak}");
+    }
+
+    #[test]
+    fn resample_equal_rate_is_identity() {
+        let input = [0.0, 0.5, -0.5, 1.0];
+        assert_eq!(resample_f32(&input, 16_000, 16_000), input.to_vec());
+    }
+
+    #[test]
+    fn resample_zero_and_empty_inputs_are_identity() {
+        assert_eq!(resample_f32(&[], 8_000, 16_000), Vec::<f32>::new());
+        let input = [0.25, -0.75];
+        assert_eq!(resample_f32(&input, 0, 16_000), input.to_vec());
+        assert_eq!(resample_f32(&input, 8_000, 0), input.to_vec());
+    }
+
+    #[test]
+    fn resample_adversarial_inputs_stay_finite_and_bounded() {
+        let single = [1.0];
+        let dc = [1.0; 64];
+        let alternating: Vec<f32> = (0usize..64)
+            .map(|i| if i.is_multiple_of(2) { 1.0 } else { -1.0 })
+            .collect();
+        let cases = [
+            (&single[..], 44_100, 16_000),
+            (&dc[..], 44_100, 16_000),
+            (&alternating[..], 8_000, 16_000),
+        ];
+        for (input, from, to) in cases {
+            let out = resample_f32(input, from, to);
+            let expected = usize::try_from(
+                u64::try_from(input.len()).unwrap_or(u64::MAX) * u64::from(to) / u64::from(from),
+            )
+            .unwrap_or(usize::MAX)
+            .max(1);
+            assert_eq!(out.len(), expected);
+            assert!(out.iter().all(|s| s.is_finite()));
+            assert!(peak(&out) <= 1.1, "overshoot: {}", peak(&out));
+        }
     }
 }

@@ -60,7 +60,7 @@ impl SileroVad {
             return Err(VadError::Format("sample rate must be non-zero".into()));
         }
         let mono: Vec<f32> = pcm16.iter().map(|s| f32::from(*s) / 32768.0).collect();
-        let audio = super::resample_linear_f32(&mono, sample_rate, SAMPLE_RATE);
+        let audio = super::resample_f32(&mono, sample_rate, SAMPLE_RATE);
         let mut session = self
             .session
             .lock()

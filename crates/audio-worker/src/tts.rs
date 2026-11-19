@@ -1,6 +1,6 @@
 //! TTS backends: deterministic [`StubTts`] sine + any-tts [`KokoroTts`].
 
-use super::{SynthesizeRequest, SynthesizedAudio, TtsError, TtsPipeline, resample_linear_f32};
+use super::{SynthesizeRequest, SynthesizedAudio, TtsError, TtsPipeline, resample_f32};
 use std::f32::consts::PI;
 use std::path::Path;
 
@@ -169,7 +169,7 @@ impl TtsPipeline for KokoroTts {
         let native = audio.sample_rate;
         let (pcm16, sample_rate) = match req.sample_rate {
             Some(want) if want != native && (want % native == 0 || native % want == 0) => (
-                f32_to_i16(&resample_linear_f32(&audio.samples, native, want)),
+                f32_to_i16(&resample_f32(&audio.samples, native, want)),
                 want,
             ),
             _ => (f32_to_i16(&audio.samples), native),

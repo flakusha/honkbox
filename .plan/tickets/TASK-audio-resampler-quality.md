@@ -1,17 +1,17 @@
 # TASK: Resampler quality
 
-Status: proposed
+Status: done (windowed-sinc resampler, fixed DC norm, 14 tests green)
 Priority: P2
 Epic: epic-audio-streaming
 Owner: unassigned
 Acceptance: audio resampling uses a windowed-sinc or audited crate with anti-alias filtering, verified at 8k→16k and 44.1k→16k.
 Verification: `cargo test --locked -p honkbox-audio-worker`, `bun run lint:rs`, `bun run deny`
-Links: `.tmp/research/ReviewedSupport-Audio.md` §Current; `audio-worker/src/lib.rs:129-210`
+Links: `.tmp/research/ReviewedSupport-Audio.md` §Current; `crates/audio-worker/src/lib.rs:170-223`
 Resources: per-test generated sine/sweep fixtures in runner tmp; no shared audio device
 
 ## Change
 
-- Replace the linear resampler at `audio-worker/src/lib.rs:129-210` with a
+- Replace the linear resampler at `crates/audio-worker/src/lib.rs:170-223` with a
   bounded windowed-sinc implementation or a vetted MIT/Apache crate.
 - Keep the worker crate zero-heavy-dep where possible; any dep must pass
   `deny.toml` license/advisory gates.

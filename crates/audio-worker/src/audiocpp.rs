@@ -22,7 +22,7 @@ use audio_cpp::options::request as opts;
 use audio_cpp::{Backend, Model, ModelFamily, Registry, Request, RunMode, TaskKind, WavAudio};
 
 use super::{
-    resample_linear_f32, SttError, SttPipeline, Transcript, TranscriptSegment, TranscribeRequest,
+    SttError, SttPipeline, TranscribeRequest, Transcript, TranscriptSegment, resample_f32,
 };
 
 /// Whisper.cpp owns 16 kHz mono; audio.cpp ASR families expect the same.
@@ -42,7 +42,9 @@ pub struct AudioCppStt {
 
 impl std::fmt::Debug for AudioCppStt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AudioCppStt").field("family", &self.family).finish_non_exhaustive()
+        f.debug_struct("AudioCppStt")
+            .field("family", &self.family)
+            .finish_non_exhaustive()
     }
 }
 
@@ -72,7 +74,11 @@ impl AudioCppStt {
             )));
         }
         let model = registry
-            .load(&model_path.to_string_lossy(), Some(ModelFamily::from(family)), None)
+            .load(
+                &model_path.to_string_lossy(),
+                Some(ModelFamily::from(family)),
+                None,
+            )
             .map_err(|e| SttError::Model(format!("audio.cpp load failed ({family}): {e}")))?;
         Ok(Self {
             model: Mutex::new(model),
@@ -88,7 +94,7 @@ impl AudioCppStt {
     /// Mono PCM16 at `sample_rate` → engine buffer at 16 kHz mono f32.
     fn engine_audio(pcm16: &[i16], sample_rate: u32) -> WavAudio {
         let f32_pcm: Vec<f32> = pcm16.iter().map(|&s| f32::from(s) / 32_768.0).collect();
-        let samples = resample_linear_f32(&f32_pcm, sample_rate, TARGET_RATE);
+        let samples = resample_f32(&f32_pcm, sample_rate, TARGET_RATE);
         WavAudio {
             sample_rate: i32::try_from(TARGET_RATE).unwrap_or(i32::MAX),
             channels: 1,
@@ -124,7 +130,9 @@ impl SttPipeline for AudioCppStt {
         // so the honest MVP contract is one full-audio segment; per-word
         // segmentation upgrades later behind `RETURN_TIMESTAMPS`.
         let duration_ms = u32::try_from(
-            u64::try_from(wav.samples.len()).unwrap_or(u64::MAX).saturating_mul(1_000)
+            u64::try_from(wav.samples.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(1_000)
                 / u64::from(TARGET_RATE),
         )
         .unwrap_or(u32::MAX);
@@ -145,10 +153,7 @@ impl SttPipeline for AudioCppStt {
         let text = result
             .text_output
             .ok_or_else(|| {
-                SttError::Inference(format!(
-                    "family `{}` produced no text output",
-                    self.family
-                ))
+                SttError::Inference(format!("family `{}` produced no text output", self.family))
             })?
             .text;
         Ok(Transcript {
@@ -199,14 +204,23 @@ mod tests {
             // Feature-on compile probe without the vendored tree (sync not
             // run on this machine): the engine itself built, nothing to
             // validate — skip instead of failing the gate.
-            eprintln!("skip: vendored audio.cpp tree not present at {}", tree.display());
+            eprintln!(
+                "skip: vendored audio.cpp tree not present at {}",
+                tree.display()
+            );
             return;
         }
         let err = AudioCppStt::load(&weights, "definitely_not_a_family")
             .expect_err("unknown family must fail");
         let msg = err.to_string();
-        assert!(msg.contains("definitely_not_a_family"), "names the family: {msg}");
-        assert!(msg.contains("not compiled into this build"), "honest absence: {msg}");
+        assert!(
+            msg.contains("definitely_not_a_family"),
+            "names the family: {msg}"
+        );
+        assert!(
+            msg.contains("not compiled into this build"),
+            "honest absence: {msg}"
+        );
         assert!(
             msg.contains("silero_vad") && msg.contains("marblenet_vad"),
             "lists the compiled core families: {msg}"

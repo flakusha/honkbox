@@ -1,7 +1,7 @@
 //! STT backends: deterministic [`StubStt`] + whisper.cpp [`WhisperStt`].
 
 use super::{
-    SttError, SttPipeline, TranscribeRequest, Transcript, TranscriptSegment, resample_linear_f32,
+    SttError, SttPipeline, TranscribeRequest, Transcript, TranscriptSegment, resample_f32,
 };
 use std::path::Path;
 use std::sync::Mutex;
@@ -91,7 +91,7 @@ impl SttPipeline for WhisperStt {
         let mut float = vec![0.0f32; pcm16.len()];
         convert_integer_to_float_audio(pcm16, &mut float)
             .map_err(|e| SttError::Format(e.to_string()))?;
-        let audio = resample_linear_f32(&float, sample_rate, 16_000); // whisper wants 16 kHz mono
+        let audio = resample_f32(&float, sample_rate, 16_000); // whisper wants 16 kHz mono
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(
             std::thread::available_parallelism()
