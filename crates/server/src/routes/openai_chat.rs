@@ -17,13 +17,13 @@ use honkbox_api_types::{
     ModelCatalogEntry, OpenAiChatCompletion, OpenAiChatRequest, OpenAiChoice, OpenAiError,
     OpenAiUsage, ToolCall, ToolCallType,
 };
-use honkbox_llm_worker::{ChatRequest as WorkerChatRequest, LlmError, LlmPipeline};
+use honkbox_llm_worker::{ChatRequest as WorkerChatRequest, LlmPipeline};
 
 use super::AppConfig;
 use super::chat_prep::{
     admit_then_register, clamp_ttl_seconds, completions_request_gates, with_job_id, worker_messages,
 };
-use super::openai_constraints::{openai_error_response, resolve_constraints};
+use super::openai_constraints::{llm_error_class, openai_error_response, resolve_constraints};
 use super::openai_stream::{completions_stream, id_frame};
 
 /// Owning catalog entry for a request `model` value (the alias `id` or the
@@ -237,30 +237,8 @@ pub(super) async fn completions_json(
 ) -> Response {
     let reply = tokio::task::spawn_blocking(move || {
         let _lease = lease;
-        pipe.complete(&worker_req).map_err(|err| {
-            // `REQ-3`: unusable constraints (unparseable grammar, non-
-            // convertible schema) and `REQ-8`: image content the loaded
-            // pipeline cannot serve (worker-side vision gate, defense in
-            // depth behind the route gate) are client errors, not server
-            // ones; the envelope code names the class.
-            match &err {
-                LlmError::InvalidRequest(_) => (
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    format!("chat failed: {err}"),
-                ),
-                LlmError::Vision(_) => (
-                    StatusCode::BAD_REQUEST,
-                    "vision_unsupported",
-                    format!("chat failed: {err}"),
-                ),
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal",
-                    format!("chat failed: {err}"),
-                ),
-            }
-        })
+        pipe.complete(&worker_req)
+            .map_err(|err| llm_error_class(&err))
     })
     .await
     .map_err(|err| format!("chat task failed: {err}"));

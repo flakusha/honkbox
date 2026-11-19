@@ -12,6 +12,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -41,9 +44,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -53,6 +53,7 @@ mod svg;
 #[path = "../src/swap.rs"]
 mod swap;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
 use axum::{
@@ -62,7 +63,9 @@ use axum::{
 };
 use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
 use honkbox_audio_worker::{StubStt, StubTts};
-use honkbox_llm_worker::StubLlm;
+use honkbox_llm_worker::{
+    ChatRequest as WorkerChatRequest, ChatResponse, LlmError, LlmPipeline, StubLlm,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -101,32 +104,44 @@ fn catalog_with(ids: &[&str]) -> ModelCatalog {
 }
 
 fn test_app(catalog: ModelCatalog) -> Router {
+    test_app_with_llm(catalog, Arc::new(StubLlm::default()))
+}
+
+fn test_app_with_llm(catalog: ModelCatalog, llm: Arc<dyn LlmPipeline>) -> Router {
     app(AppConfig {
-        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(RwLock::new(Arc::new(catalog))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: None,
-    tts_model: None,
-    llm: Arc::new(StubLlm::default()),
-    stt: Arc::new(StubStt),
-    tts: Arc::new(StubTts),
-    sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: None,
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: std::sync::Arc::new(
-        downloads::DownloadManager::new(None).expect("download manager"),
-    ), })
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
+        llm,
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: std::time::Duration::from_hours(24),
+        data_dir: None,
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            None.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: std::sync::Arc::new(
+            downloads::DownloadManager::new(None).expect("download manager"),
+        ),
+    })
 }
 
 /// `POST /v1/chat/completions` with a JSON body; returns (status,
@@ -171,6 +186,114 @@ fn completion_body(model: &str, extra: &Value) -> Value {
 
 /// Acceptance 133: `JSON.parse(body).choices[0].message.content` and
 /// `.usage.total_tokens > 0`; exact `OpenAI` envelope keys; `finish_reason`.
+/// A normal stream end must not leave the shared pipeline aborted: loop-lore
+/// reuses the process-wide pipeline across requests.
+struct AbortCountingLlm {
+    aborts: Arc<AtomicUsize>,
+}
+
+impl LlmPipeline for AbortCountingLlm {
+    fn complete(&self, req: &WorkerChatRequest) -> Result<ChatResponse, LlmError> {
+        self.complete_stream(req, &mut |_| {})
+    }
+
+    fn complete_stream(
+        &self,
+        _req: &WorkerChatRequest,
+        sink: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse, LlmError> {
+        sink("hi");
+        Ok(ChatResponse {
+            backend_id: self.backend_id().to_owned(),
+            text: "hi".to_owned(),
+            tokens: 1,
+            prompt_tokens: 0,
+            tool_calls: Vec::new(),
+            millis: 0,
+        })
+    }
+
+    fn abort(&self) {
+        self.aborts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "abort-counting-test"
+    }
+}
+
+struct FailingLlm;
+
+impl LlmPipeline for FailingLlm {
+    fn complete(&self, _req: &WorkerChatRequest) -> Result<ChatResponse, LlmError> {
+        Err(LlmError::Context("prompt does not fit n_ctx".to_owned()))
+    }
+
+    fn complete_stream(
+        &self,
+        req: &WorkerChatRequest,
+        _sink: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse, LlmError> {
+        self.complete(req)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "failing-test"
+    }
+}
+
+#[tokio::test]
+async fn completion_stream_normal_end_does_not_abort_pipeline() {
+    let _slot = SLOT_LOCK.lock().await;
+    let aborts = Arc::new(AtomicUsize::new(0));
+    let app = test_app_with_llm(
+        catalog_with(&["llm:fake.gguf"]),
+        Arc::new(AbortCountingLlm {
+            aborts: Arc::clone(&aborts),
+        }),
+    );
+    let (status, _, body) = completions(
+        app,
+        completion_body("llm:fake.gguf", &json!({"stream": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.ends_with("data: [DONE]\n\n"), "tail: {body:?}");
+    assert_eq!(
+        aborts.load(Ordering::Relaxed),
+        0,
+        "normal end aborted: {body}"
+    );
+}
+
+#[tokio::test]
+async fn context_overflow_is_400_and_sse_error_is_data_only() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app_with_llm(catalog_with(&["llm:fake.gguf"]), Arc::new(FailingLlm));
+    let (status, _, body) = completions(
+        app.clone(),
+        completion_body("llm:fake.gguf", &json!({"stream": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("event:"),
+        "event frame dropped by loop-lore: {body}"
+    );
+    assert!(!body.contains("[DONE]"), "error must be terminal: {body}");
+    let frame = body
+        .strip_prefix("data: ")
+        .and_then(|s| s.strip_suffix("\n\n"))
+        .expect("one JSON data frame");
+    let error: Value = serde_json::from_str(frame).expect("parseable error frame");
+    assert_eq!(error["error"]["code"], "context_length_exceeded");
+    assert_eq!(error["error"]["type"], "invalid_request_error");
+
+    let (status, _, body) = completions(app, completion_body("llm:fake.gguf", &json!({}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let error: Value = serde_json::from_str(&body).expect("parseable error envelope");
+    assert_eq!(error["error"]["code"], "context_length_exceeded");
+}
 #[tokio::test]
 async fn completion_json_shape_and_usage() {
     let _slot = SLOT_LOCK.lock().await;

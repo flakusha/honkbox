@@ -12,13 +12,41 @@ use axum::{
 use honkbox_api_types::{
     OpenAiChatRequest, OpenAiError, ResponseFormat, ResponseFormatType, ToolChoiceSpec,
 };
-use honkbox_llm_worker::SamplerParams;
+use honkbox_llm_worker::{LlmError, SamplerParams};
 
 /// OpenAI-shaped error body → JSON response (`/v1/chat/completions` only;
 /// the native route keeps its plain-text errors).
 pub fn openai_error_response(status: StatusCode, message: String, code: Option<&str>) -> Response {
     let body = OpenAiError::new(status.as_u16(), message, code.map(str::to_owned));
     (status, Json(body)).into_response()
+}
+
+/// Classify one worker failure the same way on the sync and SSE paths.
+/// `Context` is a client input failure (prompt does not fit `n_ctx`), so a
+/// loop-lore SDK sees 400 `context_length_exceeded`, never a misleading 500.
+pub(super) fn llm_error_class(err: &LlmError) -> (StatusCode, &'static str, String) {
+    match err {
+        LlmError::InvalidRequest(_) => (
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            format!("chat failed: {err}"),
+        ),
+        LlmError::Vision(_) => (
+            StatusCode::BAD_REQUEST,
+            "vision_unsupported",
+            format!("chat failed: {err}"),
+        ),
+        LlmError::Context(_) => (
+            StatusCode::BAD_REQUEST,
+            "context_length_exceeded",
+            format!("chat failed: {err}"),
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            format!("chat failed: {err}"),
+        ),
+    }
 }
 
 /// Resolved `REQ-3` constraint fields for one completions request.

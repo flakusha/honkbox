@@ -145,6 +145,8 @@ pub(super) struct CancelOnDrop<S> {
     pub(super) inner: S,
     /// Set on drop; checked by the worker at each token boundary.
     pub(super) cancelled: Arc<AtomicBool>,
+    /// Set when the worker emitted its terminal frame.
+    pub(super) done: Arc<AtomicBool>,
     /// Pipeline `abort` hook (atomics-only state: cannot deadlock with the
     /// blocking worker, which holds no lock across `complete_stream`).
     pub(super) pipe: Arc<dyn LlmPipeline>,
@@ -162,6 +164,9 @@ impl<S: Stream + Unpin> Stream for CancelOnDrop<S> {
 
 impl<S> Drop for CancelOnDrop<S> {
     fn drop(&mut self) {
+        if self.done.load(Ordering::Relaxed) {
+            return;
+        }
         self.cancelled.store(true, Ordering::Relaxed);
         self.pipe.abort();
     }
@@ -226,6 +231,9 @@ pub(super) async fn post_chat_stream(
     .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    // Set by the worker after the terminal frame: a normal end must not
+    // abort the shared pipeline when the SSE body is dropped.
+    let done = Arc::new(AtomicBool::new(false));
     // REQ-6 (Option B): the busy condition must be an HTTP 429, never a 200
     // with an error frame - so the slot is taken HERE through the admission
     // queue (REQ-6 Option A on top: a busy slot grants one bounded wait),
@@ -254,6 +262,7 @@ pub(super) async fn post_chat_stream(
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
     let job_token = job.token().clone();
+    let worker_done = done.clone();
     let job_id = job.id().to_owned();
     let worker = tokio::task::spawn_blocking(move || {
         // The job guard rides with the worker: the registry entry lives
@@ -280,19 +289,24 @@ pub(super) async fn post_chat_stream(
                 free_gpu_lease(&lease_slot);
             }
         });
+        // Set before terminal frames: the body can drop as `[DONE]` is read.
+        worker_done.store(true, Ordering::Relaxed);
         // A disconnect between the last token and completion frees here.
         free_gpu_lease(&lease_slot);
         if let Err(err) = result {
-            let _ = tx.send(Ok(Event::default()
-                .event("error")
-                .data(format!("chat failed: {err}"))));
+            // loop-lore's parser reads `data:` only: a terminal error must
+            // be a JSON data frame with no `[DONE]` after it.
+            let payload = serde_json::json!({ "error": format!("chat failed: {err}") }).to_string();
+            let _ = tx.send(Ok(Event::default().data(payload)));
+        } else {
+            let _ = tx.send(Ok(Event::default().data("[DONE]")));
         }
-        let _ = tx.send(Ok(Event::default().data("[DONE]")));
     });
     Ok(with_job_id(
         Sse::new(CancelOnDrop {
             inner: UnboundedReceiverStream::new(rx),
             cancelled,
+            done,
             pipe: abort_pipe,
             _worker: worker,
         })

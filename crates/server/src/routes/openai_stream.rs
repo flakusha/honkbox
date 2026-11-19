@@ -20,6 +20,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use super::chat::{CancelOnDrop, free_gpu_lease};
 use super::chat_prep::with_job_id;
 use super::openai_chat::{epoch_secs, finish_reason, usage_of};
+use super::openai_constraints::llm_error_class;
 
 /// Fresh completion id + creation timestamp (shared by every SSE frame).
 pub(super) fn id_frame() -> (String, u64) {
@@ -34,10 +35,10 @@ pub(super) fn chunk_frame(frame: &OpenAiChunk) -> Event {
 
 /// `OpenAI` SSE translation of `complete_stream` (REQ-1): role+first-token
 /// frame, one content frame per token, a final frame with `finish_reason`
-/// and `usage`, then a literal `data: [DONE]`. No `event:` frames on the
-/// success path — they are reserved for inference failures, which arrive
-/// as an `event: error` data frame before `[DONE]` (the SSE body is
-/// already 200 by then). The GPU-slot busy condition is NOT one of them:
+/// success path — inference failures are one terminal `data:` frame with
+/// the `OpenAI` error envelope and no `[DONE]` after it. loop-lore's SSE
+/// parser ignores `event:` lines, so framing an error that way would drop
+/// it. The GPU-slot busy condition is NOT one of them:
 /// REQ-6 (Option B) reserves the slot in the handler, so a busy slot
 /// becomes a real HTTP 429 before this function runs — the `lease` here is
 /// already held and handed to the worker.
@@ -55,9 +56,12 @@ pub(super) fn completions_stream(
 ) -> Response {
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    // Normal end must not abort the shared pipeline when the body drops.
+    let done = Arc::new(AtomicBool::new(false));
     let lease_slot = Arc::new(Mutex::new(None::<crate::admission::GpuLease>));
     let abort_pipe = Arc::clone(&pipe);
     let worker_cancelled = cancelled.clone();
+    let worker_done = done.clone();
     let job_token = job.token().clone();
     let job_id = job.id().to_owned();
     let frame_model = served_id.to_owned();
@@ -98,8 +102,12 @@ pub(super) fn completions_stream(
                 free_gpu_lease(&lease_slot);
             }
         });
+        // Mark the run finished before sending terminal frames: the SSE
+        // body can drop the instant `[DONE]` is consumed.
+        worker_done.store(true, Ordering::Relaxed);
         // A disconnect between the last token and completion frees here.
         free_gpu_lease(&lease_slot);
+        let mut failed = false;
         match result {
             Ok(reply) => {
                 let usage = usage_of(&reply);
@@ -140,18 +148,23 @@ pub(super) fn completions_stream(
                 let _ = tx.send(Ok(chunk_frame(&final_frame)));
             }
             Err(err) => {
-                let body = OpenAiError::new(500, format!("chat failed: {err}"), None);
-                let _ = tx.send(Ok(Event::default()
-                    .event("error")
-                    .data(serde_json::to_string(&body).unwrap_or_default())));
+                failed = true;
+                let (status, code, message) = llm_error_class(&err);
+                let body = OpenAiError::new(status.as_u16(), message, Some(code.to_owned()));
+                let _ = tx.send(Ok(
+                    Event::default().data(serde_json::to_string(&body).unwrap_or_default())
+                ));
             }
         }
-        let _ = tx.send(Ok(Event::default().data("[DONE]")));
+        if !failed {
+            let _ = tx.send(Ok(Event::default().data("[DONE]")));
+        }
     });
     with_job_id(
         Sse::new(CancelOnDrop {
             inner: UnboundedReceiverStream::new(rx),
             cancelled,
+            done,
             pipe: abort_pipe,
             _worker: worker,
         })
