@@ -7,6 +7,14 @@
 //!
 //! Operators are never executed - only `poll()` is consulted, which has no
 //! side effects. Executing an operator can write files, and a probe must not.
+//!
+//! Size: the payload is one JSON line, bounded by the installed add-ons; it
+//! is read whole and never truncated. No cap is declared: the bytes come
+//! from the local Blender install, not from user-supplied input.
+//!
+//! Extensibility: the capability vocabulary this feeds is OPEN
+//! (`addon:<id>`, `op:<id>`), so a new kind is additive - there is no closed
+//! enum to widen, and the `api_version` contract does not change.
 
 use std::path::Path;
 use std::time::Duration;
@@ -383,5 +391,30 @@ echo 'HONKBOX_ADDONS={"scripts":"/opt/blender/scripts","addons":[{"id":"honkbox_
         let found = probe(Path::new("blender"), Duration::from_secs(120)).expect("blender probe");
         assert_ne!(found.addons.len(), 0);
         assert!(found.operators.iter().any(|operator| operator.headless));
+        // Blender's own add-ons must classify as built-in: the capability
+        // filter drops every add-on whose license honkbox cannot read.
+        let cycles = found
+            .addons
+            .iter()
+            .find(|addon| addon.id == "cycles")
+            .expect("the cycles add-on");
+        assert_eq!(cycles.tier, AddonTier::BuiltIn);
+        // The whole advertisement path on the real install.
+        let config = crate::Config {
+            blender_path: Some(PathBuf::from("blender")),
+            comfyui_url: Some("http://127.0.0.1:1".to_string()),
+            timeout: Duration::from_secs(120),
+        };
+        let (status, _) = crate::probe_blender(&config);
+        let advertised: Vec<&str> = status
+            .capabilities
+            .iter()
+            .map(crate::Capability::as_str)
+            .collect();
+        assert!(advertised.contains(&"addon:cycles"), "{advertised:?}");
+        assert!(
+            advertised.contains(&"op:uv.smart_project"),
+            "{advertised:?}"
+        );
     }
 }
