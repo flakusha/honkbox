@@ -16,6 +16,10 @@ reqwest = { workspace = true }
 # Cycles device probe).
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The registry probes its tools concurrently (`tokio::join!`), and the blocking
+# subprocess chain runs on `spawn_blocking` so it never occupies a runtime
+# worker. The workspace pin already carries macros + rt-multi-thread.
+tokio = { workspace = true }
 
 [dev-dependencies]
 # `#[tokio::test]` runtime for the async probes (workspace pin already

@@ -202,19 +202,35 @@ impl Registry {
     }
 
     /// Re-probe every tool, replacing the cached statuses.
+    ///
+    /// The tools are independent - the Blender chain is a local subprocess
+    /// chain, `ComfyUI` is an HTTP call - so they are probed CONCURRENTLY: a
+    /// tool that hangs until the probe timeout must not serialize the other.
+    /// The blocking chain runs on `spawn_blocking`, so it never occupies a
+    /// runtime worker.
     pub async fn reload(&mut self) {
+        let blender = tokio::task::spawn_blocking({
+            let config = self.config.clone();
+            move || probe_blender(&config)
+        });
+        let comfyui = probe_comfyui(&self.config, &self.client);
+        let (blender, comfyui) = tokio::join!(blender, comfyui);
+        let (blender_status, blender_addons) = match blender {
+            Ok(probed) => probed,
+            Err(join_error) => (
+                unavailable_status(
+                    ToolId::Blender,
+                    Unavailable::ProbeFailed(join_error.to_string()),
+                ),
+                BlenderAddons::default(),
+            ),
+        };
         let mut statuses = Vec::with_capacity(ToolId::ALL.len());
-        let mut blender_addons = BlenderAddons::default();
         for id in ToolId::ALL {
-            let status = match id {
-                ToolId::Blender => {
-                    let (status, addons) = probe_blender(&self.config);
-                    blender_addons = addons;
-                    status
-                }
-                ToolId::ComfyUi => probe_comfyui(&self.config, &self.client).await,
-            };
-            statuses.push(status);
+            statuses.push(match id {
+                ToolId::Blender => blender_status.clone(),
+                ToolId::ComfyUi => comfyui.clone(),
+            });
         }
         self.statuses = statuses;
         self.blender_addons = blender_addons;
@@ -625,6 +641,36 @@ echo 'no cycles here'
         (format!("http://{addr}"), stop_tx)
     }
 
+    /// A `ComfyUI` mock that marks the request as SERVED before answering.
+    ///
+    /// The marker is the rendezvous point for the concurrency test: a peer
+    /// that waits for it can only be released while this probe is in flight.
+    #[cfg(unix)]
+    fn spawn_comfy_mock_marking_served(marker: &Path) -> (String, mpsc::Sender<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let marker = marker.to_path_buf();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                let Ok(mut stream) = stream else { break };
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf);
+                std::fs::write(&marker, b"served").expect("served marker");
+                let body = r#"{"system":{"comfyui_version":"0.3.40"}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), stop_tx)
+    }
+
     /// Healthy `/system_stats`, broken `/object_info`: the version is known
     /// but no workflow node catalog can be proven.
     fn spawn_comfy_without_object_info() -> (String, mpsc::Sender<()>) {
@@ -720,6 +766,37 @@ echo 'no cycles here'
 
     /// Owns only its tag-scoped scratch directory (the fake Blender script):
     /// no port, no shared global, no order dependence.
+    /// The two tool probes must OVERLAP: the fake Blender refuses to finish
+    /// its probes until the `ComfyUI` mock has served a request, and that can
+    /// only happen while both probes are in flight. A sequential
+    /// implementation would time the fake out and report Blender as
+    /// unavailable.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_tool_probes_run_concurrently() {
+        let dir = scratch_dir("concurrent");
+        let gate = dir.join("served");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo \"Blender 4.2.1 LTS\"\n  exit 0\nfi\ni=0\nwhile [ $i -lt 100 ]; do\n  [ -f \"{0}\" ] && break\n  i=$((i+1))\n  sleep 0.1\ndone\n[ -f \"{0}\" ] || exit 1\necho 'HONKBOX_CYCLES=[{{\"name\":\"NVIDIA RTX 4090\",\"type\":\"CUDA\"}}]'\n",
+            gate.display()
+        );
+        let bin = write_fake_blender("gated", &script);
+        let (url, _stop) = spawn_comfy_mock_marking_served(&gate);
+        let config = Config {
+            blender_path: Some(bin),
+            comfyui_url: Some(url),
+            timeout: Duration::from_secs(30),
+        };
+        let registry = Registry::discover(config).await;
+        let blender = registry.status(ToolId::Blender).expect("blender status");
+        assert!(blender.is_available(), "{blender:?}");
+        // The payload only exists once the gate opened, so a sequential probe
+        // pair (which never overlaps) leaves the device list empty.
+        assert_eq!(blender.devices, vec!["CUDA: NVIDIA RTX 4090".to_string()]);
+        let comfy = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(comfy.is_available(), "{comfy:?}");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn detect_only_addons_are_recorded_but_never_offered() {
