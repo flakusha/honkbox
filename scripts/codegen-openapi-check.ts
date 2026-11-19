@@ -40,7 +40,9 @@ if (missing.length > 0) {
       missing.join(", ")
     }`,
   );
-  console.error("add them to the `#[openapi(paths(...))]` list in crates/server/src/routes/openapi.rs");
+  console.error(
+    "add them to the `#[openapi(paths(...))]` list in crates/server/src/routes/openapi.rs",
+  );
   process.exit(1);
 }
 console.log(`openapi covers all ${new Set(mounted).size} mounted routes`);
