@@ -28,6 +28,12 @@ ort = { version = "=2.0.0-rc.15", optional = true }
 audio-cpp = { version = "=0.9.0", default-features = false, features = [
     "core-models",
 ], optional = true }
+# FLAC speech output (FEAT-audio-output-formats): pure-Rust encoder (Apache-2.0),
+# no default features (no log/par/serde) — in-process, no system library.
+flacenc = { version = "0.5.1", default-features = false }
+# Opus-in-Ogg speech output: pure-Rust RFC 6716 + RFC 7845 (BSD-3-Clause),
+# zero transitive deps. Young (0.2.x) — structural + round-trip tests in lib.rs.
+opus-pure = "0.2.3"
 
 [lints]
 workspace = true
