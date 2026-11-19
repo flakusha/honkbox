@@ -55,3 +55,16 @@ A queued job reaches a terminal state with `output.glb`, `manifest.json` and `tu
   OpenAPI path, the capability row) + the inline unit tests of the request
   validation. The recipe itself is exercised by the real-Blender fixture
   (`cargo test --locked -p honkbox-external-tools -- --ignored`).
+
+## Verification (2026-11-19, takeover)
+
+- `cargo fmt --all -- --check` — clean; dprint check of both generated files — clean.
+- `cargo test --locked -p honkbox-server` (project-local CARGO_TARGET_DIR):
+  2907 passed, 32 suites.
+- Live HTTP fixture `bash .tmp/e2e-job.sh` against local Blender 4.5.15:
+  `202` accepted, job reached `status.json: done` with `output.glb`,
+  `output_turntable.webp` and a path-free `manifest.json` (sha256 per artifact).
+- `bun run codegen:check` — 16 api-types tests passed, OpenAPI covers all 40
+  mounted routes; the first run hit a full `/tmp` zram device (environmental),
+  rerun with the project-local target dir. Final diff check runs after the
+  generated files are staged.
