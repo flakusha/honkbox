@@ -4229,7 +4229,8 @@
         "required": [
           "kind",
           "queue_cap",
-          "ttl_secs"
+          "ttl_secs",
+          "reserved"
         ],
         "properties": {
           "kind": {
@@ -4241,6 +4242,10 @@
             "format": "int64",
             "description": "Bounded queue length for the kind.",
             "minimum": 0
+          },
+          "reserved": {
+            "type": "boolean",
+            "description": "The kind is RESERVED: the ledger carries capacity for it, but no\nroute admits a job of that kind — the row is capacity only, never a\ncallable job kind. Additive field: `api_version` is unchanged (a\nreserved row hides a job class, it does not change one)."
           },
           "ttl_secs": {
             "type": "integer",

@@ -708,6 +708,30 @@ async fn get_capabilities(State(config): State<AppConfig>) -> Json<Capabilities>
     Json(capabilities_document(&config))
 }
 
+/// The route that admits a job of each admission kind. A kind WITHOUT an
+/// entry has no admitting route: the ledger still carries its queue
+/// capacity, so `/v1/capabilities` advertises it as a RESERVED row
+/// (`reserved: true`) — capacity for a job class that does not exist yet.
+/// The contract test cross-checks every entry against the generated
+/// `OpenAPI` document, so a row can never claim a route the server does
+/// not serve.
+pub const ADMITTING_ROUTES: &[(&str, &str)] = &[
+    ("sd", "/v1/images/generations"),
+    ("llm", "/v1/chat/completions"),
+    ("embed", "/v1/embeddings"),
+    // The CPU-only bucket: image ops and the audio routes take the `rag`
+    // bucket (0 GPU slots) — the fixed 8-kind vocabulary has no CPU kind.
+    ("rag", "/v1/image-ops"),
+];
+
+/// The route that admits a job of `kind`, if any (see [`ADMITTING_ROUTES`]).
+pub fn admitting_route(kind: honkbox_residency::ResourceKind) -> Option<&'static str> {
+    let label = kind.label();
+    ADMITTING_ROUTES
+        .iter()
+        .find_map(|(candidate, path)| (*candidate == label).then_some(*path))
+}
+
 /// Build the capability document (see [`get_capabilities`]). `pub(crate)`
 /// so the contract tests can assert on the exact structure the route
 /// serves.
@@ -818,6 +842,10 @@ pub(crate) fn capabilities_document(config: &AppConfig) -> Capabilities {
                     kind: kind.label().to_owned(),
                     queue_cap: u64::try_from(cap).unwrap_or(u64::MAX),
                     ttl_secs: ledger.queue_ttl.as_secs(),
+                    // A kind with no admitting route is RESERVED capacity:
+                    // the ledger carries the queue, but no route accepts a
+                    // job of that kind (the closed job registry has none).
+                    reserved: admitting_route(kind).is_none(),
                 })
                 .collect(),
         },

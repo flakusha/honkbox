@@ -678,6 +678,43 @@ async fn queue_knobs_read_live_ledger_and_admission() {
     honkbox_residency::global().configure(honkbox_residency::LedgerConfig::new());
 }
 
+/// The queue rows agree with the MOUNTED routes: a kind whose capacity a
+/// route admits is advertised as callable, a kind with no admitting route
+/// is a RESERVED row (capacity only — the closed job registry has no job
+/// of that kind). The test fails when a reserved row is advertised as
+/// callable, and when a row claims a route the generated `OpenAPI`
+/// document does not serve.
+#[tokio::test]
+async fn reserved_rows_agree_with_the_admitting_routes() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    let (_, openapi) = get_json(&app, "/v1/openapi.json").await;
+    let paths = openapi["paths"].as_object().expect("openapi paths");
+    let rows = doc["queue"]["kinds"].as_array().expect("kind rows");
+    assert_eq!(rows.len(), ResourceKind::ALL.len());
+    for row in rows {
+        let label = row["kind"].as_str().expect("kind label");
+        let reserved = row["reserved"].as_bool().expect("reserved flag");
+        let kind = ResourceKind::from_label(label).expect("known kind");
+        match routes::admitting_route(kind) {
+            Some(path) => {
+                assert!(
+                    !reserved,
+                    "{label} has the admitting route {path} but is advertised as reserved"
+                );
+                assert!(
+                    paths.contains_key(path),
+                    "{label} claims {path}, which the openapi document does not serve"
+                );
+            }
+            None => assert!(
+                reserved,
+                "{label} has no admitting route but is advertised as callable"
+            ),
+        }
+    }
+}
+
 /// With no startup probe installed, the capability document still reports
 /// both known tools — honestly marked missing — in registry order.
 #[tokio::test]

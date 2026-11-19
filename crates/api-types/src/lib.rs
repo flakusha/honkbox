@@ -252,6 +252,11 @@ pub struct QueueKindCapacity {
     /// Queue TTL in seconds (a waiter un-admitted after this long is
     /// evicted); `0` = never expires.
     pub ttl_secs: u64,
+    /// The kind is RESERVED: the ledger carries capacity for it, but no
+    /// route admits a job of that kind — the row is capacity only, never a
+    /// callable job kind. Additive field: `api_version` is unchanged (a
+    /// reserved row hides a job class, it does not change one).
+    pub reserved: bool,
 }
 
 /// Chat role.

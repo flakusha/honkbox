@@ -1789,6 +1789,13 @@ export type QueueKindCapacity = {
    * evicted); `0` = never expires.
    */
   ttl_secs: bigint;
+  /**
+   * The kind is RESERVED: the ledger carries capacity for it, but no
+   * route admits a job of that kind — the row is capacity only, never a
+   * callable job kind. Additive field: `api_version` is unchanged (a
+   * reserved row hides a job class, it does not change one).
+   */
+  reserved: boolean;
 };
 export type ToolCallingCapability = {
   /**
