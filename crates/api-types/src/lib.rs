@@ -2296,7 +2296,7 @@ pub struct BlenderJobRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobInput {
-    /// The stored artifact id (its sha256) or an object key.
+    /// The stored artifact id: the 64-hex sha256 of the content.
     pub asset_id: String,
     /// The format the stored mesh is in.
     pub format: BlenderMeshFormat,

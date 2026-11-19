@@ -95,6 +95,21 @@ const KIND_LABELS: [&str; 8] = [
     "stt",
     "tts",
 ];
+/// Job-kind labels for `honkbox_jobs_total`, one per closed `JobKind`
+/// (`crates/server/src/jobs_registry.rs`). The vocabulary is fixed at
+/// compile time, so the series count never grows with the traffic and no
+/// user data (ids, paths, prompts) can reach the label.
+const JOB_KIND_LABELS: [&str; 8] = [
+    "chat",
+    "embeddings",
+    "images",
+    "transcribe",
+    "synthesize",
+    "translations",
+    "image_ops",
+    "blender",
+];
+
 /// Load reasons (`request` = load-on-demand, `preload` = startup seed,
 /// `manual` = reserved for a future explicit load endpoint).
 const LOAD_REASONS: [&str; 3] = ["request", "preload", "manual"];
@@ -164,6 +179,10 @@ type CodeCells = [AtomicU64; CODE_SLOTS];
 /// `requests_total` cells: `[route][code]`, zero-initialized at first use.
 static REQUESTS: LazyLock<[CodeCells; ROUTE_SLOTS]> =
     LazyLock::new(|| [const { [const { AtomicU64::new(0) }; CODE_SLOTS] }; ROUTE_SLOTS]);
+
+/// `jobs_total` cells: one per job kind.
+static JOBS: LazyLock<[AtomicU64; JOB_KIND_LABELS.len()]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; JOB_KIND_LABELS.len()]);
 
 /// Hand-rolled cumulative histogram over `BUCKET_EDGES_NS`.
 struct Histogram {
@@ -324,6 +343,15 @@ pub(crate) fn note_model_unload(kind: ModelKind, reason: UnloadReason) {
 /// Count one capacity-driven eviction (call at the LRU swap-out site).
 pub(crate) fn note_swap_eviction(kind: ModelKind) {
     SWAP_EVICTIONS[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one admitted job of the given kind. The label is the closed
+/// `JobKind` vocabulary; an unknown label is ignored, so the series set
+/// stays bounded whatever the caller passes.
+pub(crate) fn note_job_started(label: &str) {
+    if let Some(slot) = JOB_KIND_LABELS.iter().position(|known| *known == label) {
+        JOBS[slot].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Count one cache hit (call when a request is served from a resident
@@ -542,6 +570,20 @@ pub(crate) fn exposition() -> String {
     );
     let _ = writeln!(out, "honkbox_request_duration_seconds_count {count}");
 
+    push_family(
+        &mut out,
+        "honkbox_jobs_total",
+        "Admitted jobs by kind (closed vocabulary; no user data).",
+        "counter",
+    );
+    for (kind, cell) in JOB_KIND_LABELS.iter().zip(JOBS.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_jobs_total{{kind=\"{kind}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
+
     push_swap_families(&mut out);
     out
 }
@@ -609,6 +651,42 @@ mod tests {
                 "honkbox_gpu_slot_busy_rejections_total{reason=\"no_wait\"}"
             ) >= 1
         );
+    }
+
+    /// The closed job-kind vocabulary the exposition must render (kept
+    /// local: `metrics` must not depend on `jobs_registry`).
+    const EXPECTED_JOB_KINDS: [&str; 8] = [
+        "chat",
+        "embeddings",
+        "images",
+        "transcribe",
+        "synthesize",
+        "translations",
+        "image_ops",
+        "blender",
+    ];
+
+    #[test]
+    fn jobs_total_renders_bounded_grid() {
+        note_job_started("blender");
+        note_job_started("not_a_job_kind");
+        let body = exposition();
+
+        assert!(body.contains("# TYPE honkbox_jobs_total counter"));
+        // Counters are process-global: assert >=, never ==.
+        assert!(series_value(&body, "honkbox_jobs_total{kind=\"blender\"}") >= 1);
+        // The full bounded grid renders (unpopulated kinds expose their `0`).
+        for kind in EXPECTED_JOB_KINDS {
+            let prefix = format!("honkbox_jobs_total{{kind=\"{kind}\"}}");
+            assert!(body.contains(&prefix), "missing job series: {prefix}");
+        }
+        // An unknown label adds no series.
+        assert!(!body.contains("not_a_job_kind"));
+        let series = body
+            .lines()
+            .filter(|line| line.starts_with("honkbox_jobs_total{"))
+            .count();
+        assert_eq!(series, EXPECTED_JOB_KINDS.len());
     }
 
     #[test]

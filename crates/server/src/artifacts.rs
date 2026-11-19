@@ -330,6 +330,19 @@ impl Registry {
         self.max_artifact_bytes
     }
 
+    /// The stored blob for an artifact id (its sha256) with its size.
+    /// `None` when the id is malformed or nothing is stored under it — the
+    /// only way a job route can hand a file to an external engine without
+    /// ever accepting a filesystem path from the caller.
+    #[must_use]
+    pub fn stored_blob(&self, id: &str) -> Option<(PathBuf, u64)> {
+        let id = normalize_artifact_id(id)?;
+        let root = self.root.as_ref()?;
+        let path = Self::blob_path(root, &id);
+        let size = std::fs::metadata(&path).ok()?.len();
+        Some((path, size))
+    }
+
     /// Content-addressed blob path for a digest (`blobs/<aa>/<sha256>`).
     fn blob_path(root: &Path, sha256: &str) -> PathBuf {
         root.join("blobs").join(&sha256[..2]).join(sha256)

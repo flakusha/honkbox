@@ -344,7 +344,10 @@ pub fn write_ops_bundle(
 }
 
 /// Write `bytes` to `dir/name` via `<name>.part` + best-effort fsync + rename.
-fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+/// Public: every bundle writer commits the same way (the artifact first,
+/// the sidecars after), so a crash never leaves a half-written file that
+/// looks complete.
+pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     let tmp = dir.join(format!("{name}.part"));
     fs::write(&tmp, bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
     if let Ok(f) = fs::File::open(&tmp) {
@@ -352,6 +355,18 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     }
     fs::rename(&tmp, dir.join(name)).map_err(|e| format!("cannot commit {name}: {e}"))?;
     Ok(())
+}
+
+/// Copy `src` into `dir/name` via `<name>.part` + fsync + rename; returns the
+/// copied byte count. Streamed, so a large artifact never lands in memory.
+pub fn copy_file_atomic(dir: &Path, name: &str, src: &Path) -> Result<u64, String> {
+    let tmp = dir.join(format!("{name}.part"));
+    let bytes = fs::copy(src, &tmp).map_err(|e| format!("cannot copy {}: {e}", src.display()))?;
+    if let Ok(f) = fs::File::open(&tmp) {
+        let _ = f.sync_all();
+    }
+    fs::rename(&tmp, dir.join(name)).map_err(|e| format!("cannot commit {name}: {e}"))?;
+    Ok(bytes)
 }
 
 /// Startup garbage collection over `<data_dir>/jobs` and the temp dir.

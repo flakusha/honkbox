@@ -2,7 +2,7 @@
 
 Status: in progress
 Priority: P1
-Owner: unassigned
+Owner: main session
 Research: `.tmp/research/ReviewedFullCycle-Blender-Workstream.md`,
 `ReviewedFullCycle-Blender-Addons.md`, `ReviewedFullCycle-Blender-Rigging.md`
 
@@ -23,16 +23,18 @@ and are never incorporated into honkbox.
 
 ## Acceptance
 
-- One bake fixture job produces PNG maps + JSON sidecar in the job bundle with
-  progress events and working cancel.
+- One bake fixture job produces GLB, turntable and a `manifest.json` with a
+  sha256 + size per artifact in the job bundle, with progress events and
+  working stage-boundary cancel.
 - Retopology records `seed` and Blender/addon versions; automatic rigs are
   labelled base-rig-only (no hero-character promise).
 - External tools stay outside `Cargo.lock`; `deny.toml` policy unchanged.
 
 ## Verification
 
-`cargo test --locked -p honkbox-server`, `bun run codegen:check`, headless
-fixture run: `blender -b -P <script> --python-exit-code 1`.
+`cargo check --locked -p honkbox-server`, `cargo test --locked -p honkbox-server`,
+`bun run codegen:check`, headless fixture run:
+`blender --background --factory-startup -noaudio --python <recipe.py> --python-exit-code 1 -- <job.json> <result.json>`.
 
 ## Non-goals
 

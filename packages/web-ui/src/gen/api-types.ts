@@ -1987,7 +1987,7 @@ export type BlenderJobRequest = {
 };
 export type BlenderJobInput = {
   /**
-   * The stored artifact id (its sha256) or an object key.
+   * The stored artifact id: the 64-hex sha256 of the content.
    */
   asset_id: string;
   /**

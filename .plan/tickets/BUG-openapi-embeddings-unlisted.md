@@ -37,9 +37,20 @@ identically every time.
 
 ## Verification
 
-- `bun run codegen:check` — reports `openapi covers all 33 mounted routes`
-  and the committed file matches the generator output.
-- Negative control (`.tmp/intercom/scripts/codegen-coverage-control.sh`):
-  unlisting `post_embeddings` from the derive makes the gate fail with
-  `1 mounted route(s) missing from the OpenAPI document: /v1/embeddings`.
+- `bun run codegen:check` — reports that OpenAPI covers every mounted route
+  (the count moves with the route table) and the committed file matches the
+  generator output.
+- Negative control (manual, no gitignored helper): locally unlist
+  `post_embeddings` from the derive's `paths(...)` in `routes.rs`, run
+  `bun run codegen:check`, confirm it fails with
+  `1 mounted route(s) missing from the OpenAPI document: /v1/embeddings`,
+  then restore the file.
 - `bun run check` exit 0; `bun run lint:rs` exit 0; `bun run test` exit 0.
+
+## Verification Notes (2026-11-19)
+
+Reconciled against committed HEAD `5ff1b03`: `packages/web-ui/src/gen/openapi.json`
+carries 13 `embeddings` references including the `/v1/embeddings` path item with
+`EmbeddingsRequest`/`EmbeddingsResponse` schemas (`git show HEAD:<path> | grep -c`).
+Counts in the verification line were pinned to a stale route total; the
+negative control now works from a clean checkout.

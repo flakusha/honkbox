@@ -93,6 +93,10 @@ pub(crate) enum JobKind {
     /// on the blocking pool — no GPU slot; cancel is honored between
     /// inputs (one op batch = many work units).
     ImageOps,
+    /// Blender asset jobs (`POST /v1/jobs/blender`): an external Blender
+    /// process; cancel is honored at the next STAGE boundary (the recipe
+    /// checks a marker file between stages, never mid-bake).
+    Blender,
 }
 
 impl JobKind {
@@ -106,6 +110,7 @@ impl JobKind {
             Self::Synthesize => "synthesize",
             Self::Translations => "translations",
             Self::ImageOps => "image_ops",
+            Self::Blender => "blender",
         }
     }
 }
@@ -207,6 +212,8 @@ impl Registry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), entry);
+        // The bounded job-kind counter (no user data reaches the label).
+        crate::metrics::note_job_started(kind.label());
         // Fire-and-forget: no live subscriber is a normal idle state, not
         // an error (observability never back-pressures GPU work).
         let _ = self.events.send(JobEvent {
