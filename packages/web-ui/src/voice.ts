@@ -1,20 +1,7 @@
 const MODEL_KEY = "honkbox.voice.model";
-// ONE-RELEASE compat: fall back to the old `sd-rip.*` key once, then rewrite
-// under `honkbox.*`.
-const LEGACY_MODEL_KEY = "sd-rip.voice.model";
 
 function loadModel(): string {
-  const current = localStorage.getItem(MODEL_KEY);
-  if (current !== null) {
-    return current;
-  }
-  const legacy = localStorage.getItem(LEGACY_MODEL_KEY);
-  if (legacy === null) {
-    return "";
-  }
-  localStorage.setItem(MODEL_KEY, legacy);
-  localStorage.removeItem(LEGACY_MODEL_KEY);
-  return legacy;
+  return localStorage.getItem(MODEL_KEY) ?? "";
 }
 const RATE = 16000;
 
