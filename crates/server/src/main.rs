@@ -28,7 +28,7 @@ use std::time::Duration;
 use backends::{LlmBackend, SdBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
 use routes::{ApiDoc, AppConfig, app};
-use tracing::info;
+use tracing::{info, warn};
 use utoipa::OpenApi as _;
 
 /// `gc` TTL default: 7 days in seconds.
@@ -108,9 +108,10 @@ struct ServeArgs {
     /// Directory served in dev mode.
     #[arg(long, default_value = "web-dist")]
     web_dist_dir: PathBuf,
-    /// Log file (JSONL); falls back to `HONKBOX_LOG_FILE`, then
-    /// `<data-dir>/logs/honkbox.log`.
-    #[arg(long, env = "HONKBOX_LOG_FILE")]
+    /// Log file (JSONL); `--log-file` beats `HONKBOX_LOG_FILE`, which beats
+    /// `<data-dir>/logs/honkbox.log`. The env is read in one place
+    /// (`logging::init`); clap leaves it alone so `--log-file` always wins.
+    #[arg(long)]
     log_file: Option<PathBuf>,
     /// Chat backend (`stub` needs no model/GPU).
     #[arg(long, value_enum, default_value = "stub")]
@@ -343,6 +344,7 @@ async fn main() {
             let loaded = or_exit(config::load(config, data_dir));
             let data_dir = loaded.data_dir;
             logging::init(None, data_dir.as_deref());
+            emit_config_warnings(&loaded.warnings);
             if let Some(dir) = data_dir.as_deref() {
                 info!("honkbox data dir: {}", dir.display());
             }
@@ -458,6 +460,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let loaded = or_exit(config::load(config, data_dir_flag));
     let data_dir = loaded.data_dir;
     logging::init(log_file, data_dir.as_deref());
+    emit_config_warnings(&loaded.warnings);
     if let Some(dir) = data_dir.as_deref() {
         info!("honkbox data dir: {}", dir.display());
     } else {
@@ -619,9 +622,23 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         .expect("serve app");
 }
 
+/// Emit the non-fatal notices `config::load` collected, now that the
+/// subscriber exists (so they land in `honkbox.log` too). `load` runs before
+/// `logging::init` — installing a second global subscriber afterwards would
+/// fail, so the warnings travel on `LoadedConfig` instead.
+fn emit_config_warnings(warnings: &[String]) {
+    for warning in warnings {
+        warn!("{warning}");
+    }
+}
+
 /// `models show`: load config (loud exit-1 on error), scan, print table/`--json`.
 fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
     let loaded = or_exit(config::load(config, data_dir));
+    // No subscriber here (stdout is the product); warnings go to stderr.
+    for warning in &loaded.warnings {
+        eprintln!("warn: {warning}");
+    }
     let cfg = loaded.models;
     let mut found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
         llm_dirs: cfg.llm_dirs,
@@ -714,6 +731,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let data_dir = loaded.data_dir;
     let cfg = loaded.models;
     logging::init(None, data_dir.as_deref());
+    emit_config_warnings(&loaded.warnings);
     if let Some(dir) = data_dir.as_deref() {
         info!("honkbox data dir: {}", dir.display());
     }
@@ -829,6 +847,7 @@ fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>)
     let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
+    emit_config_warnings(&loaded.warnings);
     let ChatArgs {
         model,
         prompt,
@@ -889,6 +908,7 @@ fn transcribe(args: TranscribeArgs, config: Option<PathBuf>, data_dir_flag: Opti
     let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
+    emit_config_warnings(&loaded.warnings);
     let TranscribeArgs {
         model,
         input,
@@ -959,6 +979,7 @@ fn synthesize(args: SynthesizeArgs, config: Option<PathBuf>, data_dir_flag: Opti
     let loaded = or_exit(config::load(config, data_dir_flag));
     let cfg = loaded.models;
     logging::init(None, loaded.data_dir.as_deref());
+    emit_config_warnings(&loaded.warnings);
     let SynthesizeArgs {
         model,
         text,

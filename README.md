@@ -187,7 +187,8 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
   Fail-closed startup: `auth = "none"` with a non-loopback `--host`
   (`127.0.0.0/8`, `::1`, `localhost` are loopback) refuses to start unless
   `honkbox serve --allow-unauthenticated-bind` is passed.
-- Logs: `RUST_LOG` (default `info`); `--log-file <path>` > `HONKBOX_LOG_FILE` >
+- Logs: `RUST_LOG` (default `info,honkbox_registry=warn`); `--log-file <path>` >
+  `HONKBOX_LOG_FILE` (empty counts as unset; read once, in `logging::init`) >
   `<data_dir>/logs/honkbox.log` (stderr human-readable, file JSONL).
 - Registry cache: `HONKBOX_REGISTRY_DB` (path; `off`/empty disables) >
   `<data_dir>/registry.sqlite3`.
@@ -204,9 +205,9 @@ api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
 
 ## Migrating from sd-rip
 
-The binary is now `honkbox` (`sd-rip` is gone); the sd-rip compat release is
-over — old paths and `SD_RIP_*` vars are no longer read. Move your state by hand
-to the new default location:
+The binary is now `honkbox` (`sd-rip` is gone); old paths and `SD_RIP_*`
+vars are no longer read. Move your state by hand to the new default
+location:
 
 ```bash
 D="${XDG_STATE_HOME:-$HOME/.local/state}/honkbox"
@@ -216,12 +217,12 @@ mv ~/.honkbox/logs "$D/logs"
 mv ~/.honkbox/models "$D/models"              # if present
 mv ~/.honkbox/registry.sqlite3 "$D/"           # if present
 mv ~/.honkbox/honkbox.toml "$D/"
-# legacy sd-rip users first: same layout under ~/.sd-rip
+# pre-rename installs used the same layout under ~/.sd-rip — move those
+# files instead if that is where your state lives.
 ```
 
 Or set `--data-dir`/`HONKBOX_DATA_DIR` to an existing `~/.honkbox` instead of
-moving anything. Browser model picks keep migrating themselves: `sd-rip.*`
-localStorage keys are read once, then rewritten under `honkbox.*`.
+moving anything.
 
 ## Docs
 

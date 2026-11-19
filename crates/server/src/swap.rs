@@ -1,7 +1,7 @@
 //! LLM swap manager (P1 of the llama-swap parity plan): load-on-demand +
 //! idle-TTL/LRU eviction for chat pipelines.
 //!
-//! sd-rip loads pipelines in-process behind `Arc<dyn LlmPipeline>`, so the
+//! Pipelines load in-process behind `Arc<dyn LlmPipeline>`, so the
 //! llama-swap process/proxy machinery collapses to a cache map: an entry is
 //! the loaded pipeline plus its idle bookkeeping. Semantics ported from
 //! llama-swap §1.4 (`.tmp/research/ReviewedLlamaSwap-Parity.md`):

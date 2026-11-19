@@ -69,8 +69,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use tracing::warn;
-
 use honkbox_residency::ResourceKind;
 
 use crate::jobs::{DEFAULT_GC_MAX_BYTES, DEFAULT_GC_TTL};
@@ -591,6 +589,11 @@ pub struct LoadedConfig {
     pub tools: ExternalToolsConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
+    /// Non-fatal config notices (invalid values that kept a previous stage):
+    /// collected because `load` runs before `logging::init`, so the caller
+    /// emits them (via `tracing::warn!`) right after installing the
+    /// subscriber — that way they land in `honkbox.log`, not the void.
+    pub warnings: Vec<String>,
 }
 
 /// Resolve the `[server] queue_wait_secs` knob (REQ-6 Option A): defaults
@@ -617,26 +620,31 @@ fn server_settings(file: Option<u64>, env: Option<&str>) -> ServerConfig {
 /// (TASK-binary-artifact-api): defaults → file key → env override
 /// (`HONKBOX_ARTIFACT_MAX_BYTES`). A `0` would reject every artifact, so it
 /// warns and keeps the previous stage (a misconfigured cap should be loud,
-/// not a silent full stop). Pure (env as args) so tests stay thread-safe.
-fn artifact_settings(file: Option<u64>, env: Option<&str>) -> u64 {
+/// not a silent full stop). Pure (env as args) so tests stay thread-safe;
+/// warnings are returned for the caller to emit after `logging::init` (a
+/// `tracing::warn!` here would fire before the subscriber exists).
+fn artifact_settings(file: Option<u64>, env: Option<&str>, warnings: &mut Vec<String>) -> u64 {
     let mut cap = DEFAULT_ARTIFACT_MAX_BYTES;
     if let Some(bytes) = file {
         if bytes > 0 {
             cap = bytes;
         } else {
-            tracing::warn!(
+            warnings.push(
                 "[artifacts] max_artifact_bytes = 0 would reject every artifact; keeping the default"
+                    .to_owned(),
             );
         }
     }
     if let Some(raw) = env.filter(|raw| !raw.is_empty()) {
         match raw.parse::<u64>() {
-            Ok(0) => tracing::warn!(
+            Ok(0) => warnings.push(format!(
                 "HONKBOX_ARTIFACT_MAX_BYTES = 0 would reject every artifact; keeping {cap}"
-            ),
+            )),
             Ok(bytes) => cap = bytes,
             Err(_) => {
-                tracing::warn!("HONKBOX_ARTIFACT_MAX_BYTES {raw:?} is not a number; keeping {cap}");
+                warnings.push(format!(
+                    "HONKBOX_ARTIFACT_MAX_BYTES {raw:?} is not a number; keeping {cap}"
+                ));
             }
         }
     }
@@ -847,12 +855,14 @@ fn auth_settings(
 /// Final data dir: flag > env > `[core] data_dir` file key > located default
 /// (pure-env chain). The file key is skipped whenever the flag or env already
 /// decided (they outrank it); an empty or relative file key is ignored with a
-/// `warn!` (absolute paths only). Pure (args, not process env).
+/// returned warning (absolute paths only). Pure (args, not process env); the
+/// warning is returned because `load` runs before `logging::init`.
 fn finalize_data_dir(
     cli_dir: Option<PathBuf>,
     env_dir: Option<OsString>,
     file: &FileCore,
     located: Option<PathBuf>,
+    warnings: &mut Vec<String>,
 ) -> Option<PathBuf> {
     let explicit = cli_dir.or_else(|| clean(env_dir));
     explicit.or_else(|| {
@@ -863,7 +873,9 @@ fn finalize_data_dir(
                 if expanded.is_absolute() {
                     Some(expanded)
                 } else {
-                    warn!("ignoring relative [core] data_dir {raw:?}; use an absolute path");
+                    warnings.push(format!(
+                        "ignoring relative [core] data_dir {raw:?}; use an absolute path"
+                    ));
                     None
                 }
             })
@@ -1143,7 +1155,9 @@ pub fn load(
         &mut stt_from_file,
         &mut tts_from_file,
     )?;
-    let data_dir = finalize_data_dir(cli_dir, env_dir, &file_core, located);
+    // Non-fatal notices for the caller to emit after `logging::init`.
+    let mut warnings: Vec<String> = Vec::new();
+    let data_dir = finalize_data_dir(cli_dir, env_dir, &file_core, located, &mut warnings);
     // Starter model dirs derive from the final data dir (rebasing here keeps
     // a file-refined `[core] data_dir` authoritative for them too); explicit
     // `[models] stt_dirs`/`tts_dirs` file keys win over the derived starters.
@@ -1216,6 +1230,7 @@ pub fn load(
     let artifact_max_bytes = artifact_settings(
         artifact_cap_file,
         std::env::var("HONKBOX_ARTIFACT_MAX_BYTES").ok().as_deref(),
+        &mut warnings,
     );
     let mesh = mesh::MeshConfig::resolve(&file_mesh)?;
     let tools = ExternalToolsConfig {
@@ -1232,6 +1247,7 @@ pub fn load(
         mesh,
         tools,
         data_dir,
+        warnings,
     })
 }
 
