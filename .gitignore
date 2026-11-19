@@ -41,6 +41,10 @@ weights/
 coverage/
 lcov.info
 
+# Python bytecode from the embedded Blender recipes (probe/test scratch)
+__pycache__/
+*.py[cod]
+
 # Re-include repo dirs shadowed by global `.*/` dot-dir ignores (core.excludesFile).
 # .github/ (CI) and .githooks/ (hooks) MUST be tracked; repo .gitignore wins
 # over the global file by precedence, and negating the dir re-includes it.
