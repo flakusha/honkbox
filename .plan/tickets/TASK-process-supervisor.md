@@ -54,14 +54,27 @@ still writes its log and sidecar; no fixed temp path is shared between tests.
 
 ## Verification (observed 2026-11-19, commit fa0fefb)
 
-- `cargo test --locked -p honkbox-server --test supervisor` -> 8 passed
-  (logs survive a failed run, a missing program is a spawn error, the timeout
-  kills the group, a cancel leaves no orphan, the RSS cap kills the group,
-  artifacts are collected by glob, the log cap never blocks the child, a
-  cancelled job releases its lease).
+- `cargo test --locked -p honkbox-server` -> 2681 passed (31 suites) at HEAD.
+- `cargo test --locked -p honkbox-server --test supervisor` -> 58 passed (1
+  suite: the 8 supervisor contracts below plus the 50 inline unit tests of the
+  `#[path]`-included `src/{config,jobs,metrics}.rs` modules): logs survive a
+  failed run, a missing program is a spawn error, the timeout kills the
+  group, a cancel leaves no orphan, the RSS cap kills the group, artifacts
+  are collected by glob, the log cap never blocks the child, a cancelled job
+  releases its lease.
 - `cargo clippy --locked -p honkbox-server --all-targets -- -D warnings` ->
   clean (whole package, every test target included).
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` -> 0 errors
+  at HEAD (the only warning line is the llama-cpp-sys build script's patch
+  notice).
 - `rustfmt --edition 2024 --check crates/server/src/supervisor.rs
   crates/server/tests/supervisor.rs` -> clean. The workspace-wide fmt check
   still reports pre-existing drift in `backends.rs` / `model_formats.rs` and
   the size-lint lane's in-flight `routes/*.rs` — outside this ticket.
+- The shared working tree does NOT compile while the size-lint lane's
+  `routes/` split is in flight: 9 compile errors, all in
+  `crates/server/src/routes.rs`, `crates/server/src/routes/*.rs` and the
+  `main.rs:530` use of `routes::refresh_catalog` (re-export privacy E0364 x6,
+  the not-yet-moved `refresh_models` E0432, `ApiDoc::openapi` E0599). None of
+  them is in this slice, so the runs above were taken at HEAD in a scratch
+  worktree (`git worktree add --detach`) to prove the COMMITTED tree.
