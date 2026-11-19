@@ -718,6 +718,8 @@ echo 'no cycles here'
         assert_eq!(status.devices, vec!["CUDA: NVIDIA RTX 4090".to_string()]);
     }
 
+    /// Owns only its tag-scoped scratch directory (the fake Blender script):
+    /// no port, no shared global, no order dependence.
     #[cfg(unix)]
     #[tokio::test]
     async fn detect_only_addons_are_recorded_but_never_offered() {
