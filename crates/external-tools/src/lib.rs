@@ -15,6 +15,11 @@
 //! Probes are startup/reload work, never per-request work: the Blender probe
 //! spawns a process and the `ComfyUI` probe is an HTTP call, both bounded by
 //! [`Config::timeout`].
+//!
+//! Limitation, stated plainly: a timed-out probe kills the direct child only,
+//! not a process group — `killpg` lives in `libc` and the workspace forbids
+//! `unsafe` everywhere. Process-group lifecycle is the job of
+//! `TASK-process-supervisor`; the Blender probe itself spawns no helpers.
 
 use std::fmt;
 use std::io::Read;
@@ -441,6 +446,24 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
     #[cfg(unix)]
     const GARBAGE_BLENDER: &str = "#!/bin/sh\necho 'not blender at all'\n";
 
+    /// A fake Blender that never exits (`exec` so the kill reaches the sleep).
+    #[cfg(unix)]
+    const HANGING_BLENDER: &str = "#!/bin/sh\nexec sleep 30\n";
+
+    /// A fake Blender that fails with a message on stderr.
+    #[cfg(unix)]
+    const FAILING_BLENDER: &str = "#!/bin/sh\necho 'blender: fatal error' >&2\nexit 3\n";
+
+    /// A fake Blender that answers the version probe but prints no device list.
+    #[cfg(unix)]
+    const VERSION_ONLY_BLENDER: &str = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "Blender 4.2.1 LTS"
+  exit 0
+fi
+echo 'no cycles here'
+"#;
+
     /// Per-test scratch directory (unique per test tag and process).
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir =
@@ -461,8 +484,11 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
         path
     }
 
-    /// Serve one canned JSON body on loopback; returns the base URL.
-    fn spawn_comfy_mock(body: &'static str) -> (String, mpsc::Sender<()>) {
+    /// Serve one canned response on loopback; returns the base URL.
+    fn spawn_comfy_mock(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, mpsc::Sender<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -476,7 +502,7 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
                 let mut buf = [0_u8; 1024];
                 let _ = stream.read(&mut buf);
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = stream.write_all(response.as_bytes());
@@ -565,6 +591,9 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
     #[tokio::test]
     async fn reload_picks_up_a_newly_installed_tool() {
         let path = scratch_dir("reload").join("blender");
+        // A recycled pid can hand us a scratch dir that still holds the tool
+        // from an earlier run; the test asserts the "missing" state first.
+        let _ = std::fs::remove_file(&path);
         let config = Config {
             blender_path: Some(path.clone()),
             ..empty_config()
@@ -587,6 +616,7 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
     #[tokio::test]
     async fn comfyui_probe_reports_version_and_devices() {
         let (url, _stop) = spawn_comfy_mock(
+            "200 OK",
             r#"{"system":{"comfyui_version":"0.3.40"},"devices":[{"name":"cuda:0 (NVIDIA RTX 4090)"}]}"#,
         );
         let config = Config {
@@ -599,5 +629,135 @@ echo 'HONKBOX_CYCLES=[{"name":"NVIDIA RTX 4090","type":"CUDA"}]'
         assert_eq!(status.version.as_deref(), Some("0.3.40"));
         assert_eq!(status.capabilities, vec![Capability::Workflow]);
         assert_eq!(status.devices, vec!["cuda:0 (NVIDIA RTX 4090)".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blender_probe_times_out_on_a_hanging_tool() {
+        let bin = write_fake_blender("blender-hang", HANGING_BLENDER);
+        let config = Config {
+            blender_path: Some(bin),
+            timeout: Duration::from_millis(200),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::Blender).expect("blender status");
+        assert!(!status.is_available());
+        let Some(Unavailable::ProbeFailed(reason)) = status.unavailable.clone() else {
+            panic!("expected a probe failure, got {:?}", status.unavailable);
+        };
+        assert!(reason.contains("timed out"), "reason was {reason:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blender_probe_reports_a_failing_exit_status() {
+        let bin = write_fake_blender("blender-fail", FAILING_BLENDER);
+        let config = Config {
+            blender_path: Some(bin),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::Blender).expect("blender status");
+        assert!(!status.is_available());
+        let Some(Unavailable::ProbeFailed(reason)) = status.unavailable.clone() else {
+            panic!("expected a probe failure, got {:?}", status.unavailable);
+        };
+        assert!(
+            reason.contains("blender: fatal error"),
+            "the stderr detail must survive, reason was {reason:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blender_without_a_device_probe_stays_available_without_cycles() {
+        let bin = write_fake_blender("blender-no-cycles", VERSION_ONLY_BLENDER);
+        let config = Config {
+            blender_path: Some(bin),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::Blender).expect("blender status");
+        assert!(status.is_available());
+        assert_eq!(status.version.as_deref(), Some("4.2.1"));
+        assert_eq!(status.capabilities, vec![Capability::Render]);
+        assert_eq!(status.devices, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn comfyui_server_error_is_reported_as_probe_failed() {
+        let (url, _stop) = spawn_comfy_mock("500 Internal Server Error", "{}");
+        let config = Config {
+            comfyui_url: Some(url),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(!status.is_available());
+        assert!(matches!(
+            status.unavailable,
+            Some(Unavailable::ProbeFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn comfyui_invalid_body_is_reported_as_probe_failed() {
+        let (url, _stop) = spawn_comfy_mock("200 OK", "not json at all");
+        let config = Config {
+            comfyui_url: Some(url),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(!status.is_available());
+        assert!(matches!(
+            status.unavailable,
+            Some(Unavailable::ProbeFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn comfyui_payload_without_a_version_is_reported_as_probe_failed() {
+        let (url, _stop) = spawn_comfy_mock("200 OK", r#"{"system":{}}"#);
+        let config = Config {
+            comfyui_url: Some(url),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(!status.is_available());
+        assert!(matches!(
+            status.unavailable,
+            Some(Unavailable::ProbeFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn comfyui_base_url_with_a_trailing_slash_is_probed_once() {
+        let (url, _stop) = spawn_comfy_mock("200 OK", r#"{"system":{"comfyui_version":"0.3.40"}}"#);
+        let config = Config {
+            comfyui_url: Some(format!("{url}/")),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(status.is_available());
+        assert_eq!(status.version.as_deref(), Some("0.3.40"));
+    }
+
+    #[tokio::test]
+    async fn comfyui_misconfigured_url_is_reported_as_probe_failed() {
+        let config = Config {
+            comfyui_url: Some("not-a-url".to_string()),
+            ..empty_config()
+        };
+        let registry = Registry::discover(config).await;
+        let status = registry.status(ToolId::ComfyUi).expect("comfyui status");
+        assert!(!status.is_available());
+        assert!(matches!(
+            status.unavailable,
+            Some(Unavailable::ProbeFailed(_))
+        ));
     }
 }
