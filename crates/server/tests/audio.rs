@@ -15,6 +15,9 @@
 #[path = "../src/admission.rs"]
 mod admission;
 #[allow(dead_code)]
+#[path = "../src/artifacts.rs"]
+mod artifacts;
+#[allow(dead_code)]
 #[path = "../src/catalog.rs"]
 mod catalog;
 #[allow(dead_code)]
@@ -44,9 +47,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/artifacts.rs"]
-mod artifacts;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -106,32 +106,40 @@ fn catalog_with(ids: &[&str]) -> ModelCatalog {
 
 fn test_app() -> Router {
     app(AppConfig {
-        recognition: Arc::new(honkbox_recognition_worker::StubRecognition), auth: AuthConfig::default(),
-    dev: false,
-    web_dist_dir: "web-dist".into(),
-    catalog: Arc::new(RwLock::new(Arc::new(catalog_with(&[
-        "llm:stt-fake.gguf",
-        "llm:tts-fake.gguf",
-    ])))),
-    roots: honkbox_registry::ModelRoots {
-        llm_dirs: Vec::new(),
-        comfyui_dirs: Vec::new(),
-        stt_dirs: Vec::new(),
-        tts_dirs: Vec::new(),
-    },
-    llm_model: None,
-    stt_model: Some("llm:stt-fake.gguf".to_owned()),
-    tts_model: Some("llm:tts-fake.gguf".to_owned()),
-    llm: Arc::new(StubLlm::default()),
-    stt: Arc::new(StubStt),
-    tts: Arc::new(StubTts),
-    sd: Arc::new(honkbox_sd_core::StubPipeline),
-    sd_model: None,
-    swap: None,
-    embed: Arc::new(swap::stub_embed_cache()),
-    swap_max_ttl: std::time::Duration::from_hours(24), data_dir: None, artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(None.clone(), crate::config::DEFAULT_ARTIFACT_MAX_BYTES)), vram_budget: None,
-    model_entries: Vec::new(),
-    downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")), })
+        recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
+        auth: AuthConfig::default(),
+        dev: false,
+        web_dist_dir: "web-dist".into(),
+        catalog: Arc::new(RwLock::new(Arc::new(catalog_with(&[
+            "llm:stt-fake.gguf",
+            "llm:tts-fake.gguf",
+        ])))),
+        roots: honkbox_registry::ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+        },
+        llm_model: None,
+        stt_model: Some("llm:stt-fake.gguf".to_owned()),
+        tts_model: Some("llm:tts-fake.gguf".to_owned()),
+        llm: Arc::new(StubLlm::default()),
+        stt: Arc::new(StubStt),
+        tts: Arc::new(StubTts),
+        sd: Arc::new(honkbox_sd_core::StubPipeline),
+        sd_model: None,
+        swap: None,
+        embed: Arc::new(swap::stub_embed_cache()),
+        swap_max_ttl: std::time::Duration::from_hours(24),
+        data_dir: None,
+        artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
+            None.clone(),
+            crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
+        vram_budget: None,
+        model_entries: Vec::new(),
+        downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
+    })
 }
 
 /// One multipart form part.
@@ -741,6 +749,31 @@ async fn speech_pcm_is_raw_s16le() {
     assert!(wav.starts_with(b"RIFF"), "wav path keeps the container");
     assert_eq!(pcm.len() + 44, wav.len(), "44-byte header difference");
     assert_eq!(&wav[44..], &pcm[..], "same samples, container omitted");
+}
+
+/// Speech `response_format: "flac"` / `"opus"`: container magic + MIME.
+/// Same stub PCM as the wav path — only the container differs, so magic
+/// bytes plus the content type are the contract (sample accuracy is pinned
+/// in the worker's own round-trip tests).
+#[tokio::test]
+async fn speech_flac_and_opus_containers() {
+    let _slot = SLOT_LOCK.lock().await;
+    let cases = [
+        ("flac", "audio/flac", b"fLaC".as_slice()),
+        ("opus", "audio/ogg", b"OggS".as_slice()),
+    ];
+    for (format, want_type, magic) in cases {
+        let (status, ct, bytes) = post_json(
+            test_app(),
+            "/v1/audio/speech",
+            json!({"input": "hi", "response_format": format}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "({format})");
+        assert_eq!(ct, want_type, "({format})");
+        assert!(bytes.starts_with(magic), "({format}) wrong magic");
+        assert!(!bytes.is_empty(), "({format}) empty payload");
+    }
 }
 
 /// `GET /v1/audio/voices`: the statically documented supported Kokoro set,
