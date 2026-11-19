@@ -37,6 +37,8 @@ pub const AUDIOCPP_COMPILED: bool = cfg!(feature = "audio-cpp");
 /// `audio-cpp` feature.
 pub const AUDIOCPP_DEFAULT_FAMILY: &str = "qwen3_asr";
 
+use flacenc::error::Verify as _;
+
 use std::fmt;
 
 macro_rules! audio_error {
@@ -302,6 +304,103 @@ pub fn decode_wav(bytes: &[u8]) -> Result<(u32, Vec<i16>), SttError> {
     ))
 }
 
+audio_error!(EncodeError, "Audio encoding failure.");
+
+/// Fixed FLAC block size (frames); 4096 is the encoder's own default scale.
+const FLAC_BLOCK_SIZE: usize = 4096;
+/// Opus frame length: 20 ms, the crate's documented sweet spot.
+const OPUS_FRAME_MS: u32 = 20;
+/// Default Opus bitrate for mono speech (matches the crate's own example).
+const OPUS_BITRATE_BPS: i32 = 64_000;
+
+/// Encode mono PCM16 as FLAC (lossless) via pure-Rust `flacenc`.
+///
+/// No system codecs, no shared state: the config is verified per call and the
+/// sink is call-local. Kokoro's native 24 kHz (and the stub's 8 kHz) pass
+/// through untouched — FLAC stores any rate.
+pub fn encode_flac(sample_rate: u32, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
+    use flacenc::component::BitRepr;
+    if pcm.is_empty() {
+        return Err(EncodeError::Empty);
+    }
+    let signal: Vec<i32> = pcm.iter().map(|&s| i32::from(s)).collect();
+    let source = flacenc::source::MemSource::from_samples(&signal, 1, 16, sample_rate as usize);
+    let config = flacenc::config::Encoder::default()
+        .into_verified()
+        .map_err(|err| EncodeError::Format(format!("bad flac config: {err:?}")))?;
+    let stream = flacenc::encode_with_fixed_block_size(&config, source, FLAC_BLOCK_SIZE)
+        .map_err(|err| EncodeError::Format(format!("flac encode failed: {err:?}")))?;
+    let mut sink = flacenc::bitsink::ByteSink::with_capacity(stream.count_bits());
+    stream
+        .write(&mut sink)
+        .map_err(|err| EncodeError::Format(format!("flac sink failed: {err:?}")))?;
+    Ok(sink.into_inner())
+}
+
+/// Samples the last Opus packet must cover so the stream trims exactly to
+/// the input length (RFC 7845 §4.4 end-trim).
+fn opus_final_duration(final_granule: u64, written_granule: i64) -> Result<u32, EncodeError> {
+    let lag = final_granule.saturating_sub(written_granule.unsigned_abs());
+    u32::try_from(lag)
+        .map_err(|_| EncodeError::Format(format!("opus final granule out of range: {lag}")))
+}
+
+/// Encode mono PCM16 as Ogg-encapsulated Opus (RFC 7845, gapless) via
+/// pure-Rust `opus-pure`.
+///
+/// Same honesty contract as the crate's own `encode` example: the encoder's
+/// real `pre_skip` flushes the tail, and the last packet carries the exact
+/// final granule so a decoder trims back to precisely `pcm.len()` samples.
+/// Only the five Opus-native rates are accepted; anything else is a `Format`
+/// error (the rate is server-side data, never user input).
+pub fn encode_opus(sample_rate: u32, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
+    if pcm.is_empty() {
+        return Err(EncodeError::Empty);
+    }
+    let rate = i32::try_from(sample_rate)
+        .map_err(|_| EncodeError::Format(format!("opus rate out of range: {sample_rate}")))?;
+    let mut encoder = opus_pure::OpusEncoder::new(rate, 1, opus_pure::Application::Audio)
+        .map_err(|err| EncodeError::Format(format!("opus rejects rate {sample_rate}: {err:?}")))?;
+    encoder.bitrate_bps = OPUS_BITRATE_BPS;
+    let frame = sample_rate as usize * OPUS_FRAME_MS as usize / 1_000;
+    let head = opus_pure::OpusHead::for_encoder(&encoder, sample_rate);
+    let mut tags = opus_pure::OpusTags::new();
+    tags.push("ENCODER", "honkbox")
+        .map_err(|err| EncodeError::Format(format!("opus tags failed: {err:?}")))?;
+    // Every Opus rate divides 48 kHz, so granule conversions are exact.
+    let ticks = 48_000 / sample_rate as usize;
+    let lookahead = (head.pre_skip as usize).div_ceil(ticks);
+    let frames = (pcm.len() + lookahead).div_ceil(frame);
+    let tail = u64::try_from(pcm.len() * ticks).unwrap_or(u64::MAX);
+    let final_granule = u64::from(head.pre_skip) + tail;
+    let mut writer = opus_pure::OggOpusWriter::with_tags(Vec::new(), head, tags)
+        .map_err(|err| EncodeError::Format(format!("opus ogg failed: {err:?}")))?;
+    let mut packet = vec![0u8; opus_pure::MAX_PACKET_BYTES];
+    let mut block = vec![0i16; frame];
+    for i in 0..frames {
+        let start = (i * frame).min(pcm.len());
+        let end = (start + frame).min(pcm.len());
+        block[..end - start].copy_from_slice(&pcm[start..end]);
+        block[end - start..].fill(0);
+        let n = encoder
+            .encode_s16(&block, frame, &mut packet)
+            .map_err(|err| EncodeError::Format(format!("opus packet failed: {err:?}")))?;
+        if i + 1 == frames {
+            let duration = opus_final_duration(final_granule, writer.granule())?;
+            writer
+                .write_packet_with_duration(&packet[..n], duration)
+                .map_err(|err| EncodeError::Format(format!("opus last packet failed: {err:?}")))?;
+        } else {
+            writer
+                .write_packet(&packet[..n])
+                .map_err(|err| EncodeError::Format(format!("opus packet write failed: {err:?}")))?;
+        }
+    }
+    writer
+        .finish()
+        .map_err(|err| EncodeError::Format(format!("opus finish failed: {err:?}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +427,129 @@ mod tests {
         let mut wav = encode_wav(16_000, &[1, 2, 3]);
         wav[22] = 2;
         assert!(decode_wav(&wav).is_err());
+    }
+
+    /// FLAC STREAMINFO field reader (big-endian bit layout, no decoder dep).
+    /// Returns `(sample_rate, channels, bits_per_sample, total_samples)`.
+    fn flac_streaminfo(bytes: &[u8]) -> (u32, u32, u32, u64) {
+        assert_eq!(&bytes[0..4], b"fLaC");
+        assert_eq!(bytes[4] & 0x7F, 0); // STREAMINFO block type
+        // 3-byte big-endian length at bytes 5..8; pad to u32 for the compare.
+        let len = u32::from_be_bytes([0, bytes[5], bytes[6], bytes[7]]);
+        assert_eq!(len, 34, "STREAMINFO is always 34 bytes");
+        let body = u64::from_be_bytes(bytes[18..26].try_into().unwrap());
+        let field = |shift: u32, mask: u64| {
+            u32::try_from((body >> shift) & mask).expect("masked bitfield fits u32")
+        };
+        (
+            field(44, 0xF_FFFF),
+            field(41, 7) + 1,
+            field(36, 31) + 1,
+            body & 0xF_FFFF_FFFF,
+        )
+    }
+
+    #[test]
+    fn flac_streaminfo_matches_input() {
+        for rate in [8_000, 24_000] {
+            let pcm: Vec<i16> = (0..5_000)
+                .map(|i| i16::try_from(i * 37 % 2000 - 1000).expect("fits i16"))
+                .collect();
+            let bytes = encode_flac(rate, &pcm).unwrap();
+            let total = u64::try_from(pcm.len()).expect("test vec fits u64");
+            assert_eq!(flac_streaminfo(&bytes), (rate, 1, 16, total));
+        }
+    }
+
+    #[test]
+    fn flac_rejects_empty_input() {
+        assert!(matches!(encode_flac(24_000, &[]), Err(EncodeError::Empty)));
+    }
+
+    /// `OpusHead` field reader: returns `(channels, pre_skip, input_rate)`.
+    fn opus_head(bytes: &[u8]) -> (u8, u16, u32) {
+        let at = bytes
+            .windows(8)
+            .position(|w| w == b"OpusHead")
+            .expect("OpusHead present");
+        (
+            bytes[at + 9],
+            u16::from_le_bytes(bytes[at + 10..at + 12].try_into().unwrap()),
+            u32::from_le_bytes(bytes[at + 12..at + 16].try_into().unwrap()),
+        )
+    }
+
+    fn speech_like(len: usize) -> Vec<i16> {
+        (0..len)
+            .map(|i| {
+                i16::try_from(i32::try_from(i).expect("fits i32") * 53 % 3000 - 1500)
+                    .expect("fits i16")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn opus_head_matches_input_and_is_ogg() {
+        let pcm = speech_like(4_800);
+        let bytes = encode_opus(24_000, &pcm).unwrap();
+        assert_eq!(&bytes[0..4], b"OggS");
+        assert!(bytes.windows(8).any(|w| w == b"OpusTags"));
+        let (channels, _pre_skip, rate) = opus_head(&bytes);
+        assert_eq!((channels, rate), (1, 24_000));
+    }
+
+    #[test]
+    fn opus_roundtrip_preserves_sample_count() {
+        let pcm = speech_like(4_800);
+        let bytes = encode_opus(24_000, &pcm).unwrap();
+        let mut reader = opus_pure::OggOpusReader::new(bytes.as_slice()).unwrap();
+        let head = reader.head().clone();
+        let mut decoder = head.decoder(24_000).unwrap();
+        let mut trim = opus_pure::Trim::new(&head, 24_000, 1).unwrap();
+        let mut block = vec![0.0f32; opus_pure::MAX_PACKET_SAMPLES];
+        for packet in reader.packets() {
+            let packet = packet.unwrap();
+            let n = decoder
+                .decode(&packet.data, opus_pure::MAX_PACKET_SAMPLES, &mut block)
+                .unwrap();
+            let kept = trim.keep(&packet, &block[..n]);
+            assert!(kept.iter().all(|s| s.is_finite()));
+        }
+        let total = u64::try_from(pcm.len()).expect("test vec fits u64");
+        assert_eq!(trim.samples_emitted(), total);
+    }
+
+    #[test]
+    fn opus_single_packet_stays_decodable() {
+        // One frame at most: exercises the end-trim path when the pre-final
+        // granule is still the writer's initial value.
+        let pcm = speech_like(100);
+        let bytes = encode_opus(24_000, &pcm).unwrap();
+        let mut reader = opus_pure::OggOpusReader::new(bytes.as_slice()).unwrap();
+        let head = reader.head().clone();
+        let mut decoder = head.decoder(24_000).unwrap();
+        let mut trim = opus_pure::Trim::new(&head, 24_000, 1).unwrap();
+        let mut block = vec![0.0f32; opus_pure::MAX_PACKET_SAMPLES];
+        for packet in reader.packets() {
+            let packet = packet.unwrap();
+            let n = decoder
+                .decode(&packet.data, opus_pure::MAX_PACKET_SAMPLES, &mut block)
+                .unwrap();
+            let kept = trim.keep(&packet, &block[..n]);
+            assert!(kept.iter().all(|s| s.is_finite()));
+        }
+        let total = u64::try_from(pcm.len()).expect("test vec fits u64");
+        assert_eq!(trim.samples_emitted(), total);
+    }
+
+    #[test]
+    fn opus_rejects_empty_and_non_native_rates() {
+        assert!(matches!(encode_opus(24_000, &[]), Err(EncodeError::Empty)));
+        let pcm = vec![0i16; 480];
+        assert!(matches!(
+            encode_opus(44_100, &pcm),
+            Err(EncodeError::Format(_))
+        ));
     }
 
     /// Compile-probe honesty (TASK-audiocpp-stt-provider): the default
