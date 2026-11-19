@@ -68,6 +68,7 @@ use axum::{
 use base64::Engine as _;
 use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
 use honkbox_audio_worker::{StubStt, StubTts};
+use honkbox_external_tools::{Config as ProbeConfig, Registry, Status, ToolId, Unavailable};
 use honkbox_llm_worker::StubLlm;
 use honkbox_residency::ResourceKind;
 use serde_json::{Value, json};
@@ -75,8 +76,11 @@ use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, AuthMode, app};
 
-/// Serializes admission/ledger (process-global) config across this binary's
-/// tests; only `queue_knobs_read_live_ledger_and_admission` mutates them.
+/// Serializes process-global state across this binary's tests: admission/
+/// ledger config and the external-tools registry cache. Tests that mutate
+/// them (`queue_knobs_read_live_ledger_and_admission`, the blender-flag
+/// probe-registry injection) hold the lock; tests that read the same
+/// state take it too, so execution order never matters.
 static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// One LLM catalog entry with a chosen vision flag.
@@ -719,6 +723,7 @@ async fn reserved_rows_agree_with_the_admitting_routes() {
 /// both known tools — honestly marked missing — in registry order.
 #[tokio::test]
 async fn capabilities_report_external_tools_without_probing() {
+    let _slot = SLOT_LOCK.lock().await;
     let doc = get_capabilities(&app_with(catalog_with(&[]))).await;
     let tools = doc["external_tools"]["tools"]
         .as_array()
@@ -728,6 +733,9 @@ async fn capabilities_report_external_tools_without_probing() {
         .map(|tool| tool["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["blender", "comfyui"]);
+    // No probed Blender → the feature flag is false (the same truth the
+    // job route's named 501 enforces).
+    assert_eq!(doc["features"]["blender"], false);
     for tool in tools {
         assert_eq!(tool["available"], false);
         assert_eq!(tool["unavailable"], "not installed");
@@ -735,8 +743,67 @@ async fn capabilities_report_external_tools_without_probing() {
     }
 }
 
+/// One probed-or-missing tool status in registry order.
+fn probe_status(id: ToolId, available: bool) -> Status {
+    Status {
+        id,
+        version: available.then(|| "4.5.15".to_owned()),
+        capabilities: Vec::new(),
+        devices: Vec::new(),
+        unavailable: (!available).then_some(Unavailable::NotInstalled),
+    }
+}
+
+/// The `blender` feature flag agrees with the probe registry on BOTH
+/// branches: no startup probe (or a probe that found nothing) → `false` —
+/// the same truth the job route's named 501 enforces — and a probed,
+/// available engine → `true`, reported with its version. The injection
+/// swaps the shared registry cache, so it holds SLOT_LOCK and restores
+/// the unprobed state before returning.
+#[tokio::test]
+async fn blender_flag_agrees_with_the_probe_registry() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[]));
+
+    // False: this binary never ran the startup probe.
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["blender"], false);
+
+    // Still false when a registry exists but its Blender probe found
+    // nothing: presence without a proven engine is not availability.
+    routes::set_registry_for_tests(Some(Registry::from_statuses(
+        ProbeConfig::default(),
+        vec![
+            probe_status(ToolId::Blender, false),
+            probe_status(ToolId::ComfyUi, false),
+        ],
+    )))
+    .await;
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["blender"], false);
+
+    // True: a probed, available engine.
+    routes::set_registry_for_tests(Some(Registry::from_statuses(
+        ProbeConfig::default(),
+        vec![
+            probe_status(ToolId::Blender, true),
+            probe_status(ToolId::ComfyUi, false),
+        ],
+    )))
+    .await;
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["blender"], true);
+    let tools = doc["external_tools"]["tools"].as_array().expect("tools");
+    assert_eq!(tools[0]["available"], true);
+    assert_eq!(tools[0]["version"], "4.5.15");
+
+    // Restore the unprobed cache for the other tests in this binary.
+    routes::set_registry_for_tests(None).await;
+}
+
 #[tokio::test]
 async fn external_tool_routes_name_missing_tools() {
+    let _slot = SLOT_LOCK.lock().await;
     let app = app_with(catalog_with(&[]));
     let (status, body) = get_json(&app, "/v1/external-tools").await;
     assert_eq!(status, StatusCode::OK, "{body}");

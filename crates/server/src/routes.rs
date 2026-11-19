@@ -33,6 +33,9 @@ mod external_tools;
 
 #[allow(unused_imports)] // main.rs is the only caller; #[path] test harnesses omit it
 pub(crate) use self::external_tools::init_external_tools;
+#[cfg(test)] // the fn itself is test-gated; the plain bin build must not see this
+#[allow(unused_imports)] // the capabilities contract test is the only caller
+pub(crate) use self::external_tools::set_registry_for_tests;
 #[allow(unused_imports)] // referenced by the OpenApi derive's generated types
 use self::external_tools::{
     __path_get_external_tool, __path_get_external_tools, __path_post_external_tools_reload,
@@ -84,6 +87,28 @@ mod downloads;
 
 #[path = "routes/ui.rs"]
 mod ui;
+
+#[path = "routes/blender.rs"]
+mod blender;
+
+#[path = "routes/blender_stages.rs"]
+mod blender_stages;
+
+#[path = "routes/blender_exec.rs"]
+mod blender_exec;
+
+#[allow(unused_imports)]
+// handler names are used by .route() and the OpenApi derive's generated types
+use self::blender::{__path_post_blender_job, post_blender_job};
+
+// Supervised external processes (TASK-process-supervisor): the process
+// group teardown is a unix mechanism, so the module is unix-only. It is
+// declared HERE (not at the crate root) because the `#[path]`-included
+// test harnesses pull in `routes.rs`, and the Blender job route is the
+// supervisor's first caller.
+#[cfg(unix)]
+#[path = "supervisor.rs"]
+mod supervisor;
 
 #[allow(unused_imports)] // main.rs and in-file tests use these via routes::
 pub use self::bindings::{ModelBindings, bind_entries, build_catalog};
@@ -301,6 +326,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/jobs", get(get_jobs))
         .route("/v1/jobs/{id}/cancel", post(post_job_cancel))
         .route("/v1/jobs/{id}", delete(delete_job))
+        .route("/v1/jobs/blender", post(post_blender_job))
         .route("/v1/events", get(get_events))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))

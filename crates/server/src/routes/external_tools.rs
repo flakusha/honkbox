@@ -4,6 +4,7 @@
 //! scans that file for `.route()` calls. Only handlers, cache and DTO mapping
 //! live here.
 
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use axum::{
@@ -15,16 +16,31 @@ use axum::{
 use honkbox_api_types::{ExternalTool, ExternalToolsCapability};
 use honkbox_external_tools::{Registry, Status as ToolStatus, ToolId, Unavailable};
 
-/// Cached external-engine registry. `None` until startup discovery runs;
-/// read-only test harnesses get a deterministic "not installed" snapshot
-/// instead of spawning probes.
-static EXTERNAL_TOOLS: OnceLock<Arc<tokio::sync::RwLock<Registry>>> = OnceLock::new();
+/// Cached external-engine registry slot: `None` until startup discovery
+/// runs; read-only test harnesses get a deterministic "not installed"
+/// snapshot instead of spawning probes (or inject one via
+/// [`set_registry_for_tests`]).
+static EXTERNAL_TOOLS: OnceLock<Arc<tokio::sync::RwLock<Option<Registry>>>> = OnceLock::new();
+
+/// The shared registry slot, created on first use.
+fn cache() -> &'static Arc<tokio::sync::RwLock<Option<Registry>>> {
+    EXTERNAL_TOOLS.get_or_init(|| Arc::new(tokio::sync::RwLock::new(None)))
+}
 
 /// Probe every configured tool once at startup; reloads reuse this cache.
 #[allow(dead_code)] // main.rs is the only caller; #[path] test harnesses omit it
 pub(crate) async fn init_external_tools(config: crate::config::ExternalToolsConfig) {
     let registry = Registry::discover(config.into_probe_config()).await;
-    let _ = EXTERNAL_TOOLS.set(Arc::new(tokio::sync::RwLock::new(registry)));
+    *cache().write().await = Some(registry);
+}
+
+/// Test-only cache swap: a harness installs its deterministic snapshot (or
+/// restores the unprobed `None`). Callers must serialize against the
+/// slot's other readers and undo the swap before the test ends.
+#[cfg(test)]
+#[allow(dead_code)] // each #[path] test binary compiles this; not all call it
+pub(crate) async fn set_registry_for_tests(registry: Option<Registry>) {
+    *cache().write().await = registry;
 }
 
 fn missing_tool_status(id: ToolId) -> ToolStatus {
@@ -38,10 +54,14 @@ fn missing_tool_status(id: ToolId) -> ToolStatus {
 }
 
 fn external_tool_status(id: ToolId) -> ToolStatus {
-    EXTERNAL_TOOLS
-        .get()
-        .and_then(|registry| registry.try_read().ok())
-        .and_then(|registry| registry.status(id).cloned())
+    cache()
+        .try_read()
+        .ok()
+        .and_then(|registry| {
+            registry
+                .as_ref()
+                .and_then(|registry| registry.status(id).cloned())
+        })
         .unwrap_or_else(|| missing_tool_status(id))
 }
 
@@ -58,6 +78,32 @@ fn external_tool_dto(status: &ToolStatus) -> ExternalTool {
         available: status.is_available(),
         unavailable: status.unavailable.as_ref().map(ToString::to_string),
     }
+}
+
+/// The Blender engine the job route drives: the probed version and the
+/// binary the probe used.
+#[derive(Debug, Clone)]
+pub(super) struct BlenderEngine {
+    /// The probed Blender version (e.g. `4.5.15`).
+    pub version: String,
+    /// The executable the probe ran.
+    pub binary: PathBuf,
+}
+
+/// The Blender engine, when one is installed and probed. `None` before the
+/// startup probe ran, when Blender is not installed, or when the probe
+/// could not prove a version.
+pub(super) fn blender_engine() -> Option<BlenderEngine> {
+    let registry = cache().try_read().ok()?;
+    let registry = registry.as_ref()?;
+    let status = registry.status(ToolId::Blender)?;
+    if !status.is_available() {
+        return None;
+    }
+    Some(BlenderEngine {
+        version: status.version.clone()?,
+        binary: registry.blender_binary(),
+    })
 }
 
 pub(super) fn external_tools_capability() -> ExternalToolsCapability {
@@ -135,8 +181,8 @@ pub(super) async fn get_external_tool(
     responses((status = 200, description = "Re-probed external engines", body = ExternalToolsCapability))
 )]
 pub(super) async fn post_external_tools_reload() -> Json<ExternalToolsCapability> {
-    if let Some(registry) = EXTERNAL_TOOLS.get() {
-        registry.write().await.reload().await;
+    if let Some(registry) = cache().write().await.as_mut() {
+        registry.reload().await;
     }
     Json(external_tools_capability())
 }
