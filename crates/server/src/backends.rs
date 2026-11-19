@@ -145,13 +145,13 @@ pub fn make_stt(
             #[cfg(feature = "audio-cpp")]
             {
                 let slug = model.unwrap_or_else(|| {
-                    eprintln!(
-                        "error: --stt-model <slug> is required with --stt-backend audio-cpp"
-                    );
+                    eprintln!("error: --stt-model <slug> is required with --stt-backend audio-cpp");
                     std::process::exit(1);
                 });
                 let path = resolve(slug);
-                Arc::new(crate::or_exit(honkbox_audio_worker::AudioCppStt::load(&path, family)))
+                Arc::new(crate::or_exit(honkbox_audio_worker::AudioCppStt::load(
+                    &path, family,
+                )))
             }
         }
     }

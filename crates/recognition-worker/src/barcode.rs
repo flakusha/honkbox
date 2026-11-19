@@ -14,8 +14,8 @@
 //! - empty input → [`RecError::Invalid`] before any decode.
 
 use super::{
-    RecEngine, RecError, RecKind, RecPage, RecRegion, RecognizeOutput, RecognizeRequest,
-    RecognitionPipeline,
+    RecEngine, RecError, RecKind, RecPage, RecRegion, RecognitionPipeline, RecognizeOutput,
+    RecognizeRequest,
 };
 
 /// Stable backend id (sd-core `SD_CPP_BACKEND_ID` pattern).

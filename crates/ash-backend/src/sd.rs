@@ -112,7 +112,8 @@ mod tests {
             controlnet_strength: None,
             control_type: None,
         };
-        let err = pipeline.generate(&req, &AtomicBool::new(false))
+        let err = pipeline
+            .generate(&req, &AtomicBool::new(false))
             .expect_err("skeleton must not render");
         let SdError::Backend(msg) = err else {
             panic!("expected Backend variant, got {err:?}")

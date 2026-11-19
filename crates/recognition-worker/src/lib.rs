@@ -141,7 +141,11 @@ impl fmt::Display for RecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported { kind, backend } => {
-                write!(f, "backend {backend:?} does not serve kind {:?}", kind.as_str())
+                write!(
+                    f,
+                    "backend {backend:?} does not serve kind {:?}",
+                    kind.as_str()
+                )
             }
             Self::Invalid(e) => write!(f, "invalid recognition input: {e}"),
             Self::Engine(e) => write!(f, "recognition engine failure: {e}"),

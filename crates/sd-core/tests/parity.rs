@@ -97,7 +97,9 @@ fn stub_is_structurally_valid() {
     let stub = StubPipeline;
     for (w, h) in [(64, 64), (256, 128), (1, 1), (7, 13)] {
         let req = request(w, h, 42);
-        let img = stub.generate(&req, &AtomicBool::new(false)).expect("stub generate failed");
+        let img = stub
+            .generate(&req, &AtomicBool::new(false))
+            .expect("stub generate failed");
         structural_checks(&stub, &img, &req);
     }
 }
@@ -106,17 +108,20 @@ fn stub_is_structurally_valid() {
 /// real backend's identical cap check is covered in the ignored parity test).
 #[test]
 fn max_edge_cap_is_enforced() {
-    let err = StubPipeline.generate(&request(MAX_EDGE + 1, 64, 42), &AtomicBool::new(false))
+    let err = StubPipeline
+        .generate(&request(MAX_EDGE + 1, 64, 42), &AtomicBool::new(false))
         .expect_err("edge above MAX_EDGE must fail");
     assert!(
         matches!(err, SdError::TooLarge { edge } if edge == MAX_EDGE + 1),
         "expected TooLarge, got {err:?}"
     );
-    let err = StubPipeline.generate(&request(64, MAX_EDGE + 1, 42), &AtomicBool::new(false))
+    let err = StubPipeline
+        .generate(&request(64, MAX_EDGE + 1, 42), &AtomicBool::new(false))
         .expect_err("edge above MAX_EDGE must fail");
     assert!(matches!(err, SdError::TooLarge { .. }), "got {err:?}");
     // Exactly MAX_EDGE passes.
-    StubPipeline.generate(&request(MAX_EDGE, MAX_EDGE, 42), &AtomicBool::new(false))
+    StubPipeline
+        .generate(&request(MAX_EDGE, MAX_EDGE, 42), &AtomicBool::new(false))
         .expect("MAX_EDGE exactly must succeed");
 }
 
@@ -126,12 +131,25 @@ fn max_edge_cap_is_enforced() {
 #[test]
 fn stub_fixed_seed_is_byte_identical() {
     let req = request(128, 96, 0xDEAD_BEEF);
-    let a = encode_image(StubPipeline.generate(&req, &AtomicBool::new(false)).unwrap(), OutputFormat::Png).unwrap();
-    let b = encode_image(StubPipeline.generate(&req, &AtomicBool::new(false)).unwrap(), OutputFormat::Png).unwrap();
+    let a = encode_image(
+        StubPipeline
+            .generate(&req, &AtomicBool::new(false))
+            .unwrap(),
+        OutputFormat::Png,
+    )
+    .unwrap();
+    let b = encode_image(
+        StubPipeline
+            .generate(&req, &AtomicBool::new(false))
+            .unwrap(),
+        OutputFormat::Png,
+    )
+    .unwrap();
     assert_eq!(a, b, "same seed + same input must give byte-identical PNG");
     // Different seed gives different pixels (seed actually feeds the output).
     let other = encode_image(
-        StubPipeline.generate(&request(128, 96, 0xDEAD_BEEF + 1), &AtomicBool::new(false))
+        StubPipeline
+            .generate(&request(128, 96, 0xDEAD_BEEF + 1), &AtomicBool::new(false))
             .unwrap(),
         OutputFormat::Png,
     )
@@ -144,10 +162,22 @@ fn stub_fixed_seed_is_byte_identical() {
 #[test]
 fn stub_depends_only_on_seed_and_geometry() {
     let mut req = request(96, 96, 7);
-    let a = encode_image(StubPipeline.generate(&req, &AtomicBool::new(false)).unwrap(), OutputFormat::Png).unwrap();
+    let a = encode_image(
+        StubPipeline
+            .generate(&req, &AtomicBool::new(false))
+            .unwrap(),
+        OutputFormat::Png,
+    )
+    .unwrap();
     req.prompt = "something else entirely".to_owned();
     req.steps = 50;
-    let b = encode_image(StubPipeline.generate(&req, &AtomicBool::new(false)).unwrap(), OutputFormat::Png).unwrap();
+    let b = encode_image(
+        StubPipeline
+            .generate(&req, &AtomicBool::new(false))
+            .unwrap(),
+        OutputFormat::Png,
+    )
+    .unwrap();
     assert_eq!(a, b, "stub output changed when only prompt/steps changed");
 }
 
@@ -177,19 +207,24 @@ fn sd_cpp_parity_with_stub_structure() {
     // the full pipeline (sampling + VAE decode + PNG round-trip).
     for (w, h) in [(64, 64), (256, 128)] {
         let req = request(w, h, 42);
-        let real_img = real.generate(&req, &AtomicBool::new(false)).expect("sd-cpp generate failed");
+        let real_img = real
+            .generate(&req, &AtomicBool::new(false))
+            .expect("sd-cpp generate failed");
         structural_checks(&real, &real_img, &req);
         // Structural agreement: the stub produces the same shape for the same
         // request (never pixel-equal — that's the documented GPU-nondeterminism
         // boundary this harness is honest about).
-        let stub_img = stub.generate(&req, &AtomicBool::new(false)).expect("stub generate failed");
+        let stub_img = stub
+            .generate(&req, &AtomicBool::new(false))
+            .expect("stub generate failed");
         assert_eq!(
             (stub_img.width, stub_img.height),
             (real_img.width, real_img.height)
         );
     }
     // Cap enforcement on the real path too.
-    let err = real.generate(&request(MAX_EDGE + 1, 64, 42), &AtomicBool::new(false))
+    let err = real
+        .generate(&request(MAX_EDGE + 1, 64, 42), &AtomicBool::new(false))
         .expect_err("real backend must enforce MAX_EDGE");
     assert!(
         matches!(err, SdError::TooLarge { .. }),

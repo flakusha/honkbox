@@ -90,7 +90,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::container::{validate_glb, ContainerError, ContainerLimits};
+use crate::container::{ContainerError, ContainerLimits, validate_glb};
 use crate::formats::{self, FormatInfo};
 
 /// Version of THIS validator, recorded in every sidecar so a consumer can
@@ -218,9 +218,9 @@ impl ModelReject {
             Self::Truncated { detail } => {
                 format!("the model container is truncated: {detail}")
             }
-            Self::TooLarge { limit, found } => format!(
-                "the model declares or holds {found}, exceeding the limit of {limit}"
-            ),
+            Self::TooLarge { limit, found } => {
+                format!("the model declares or holds {found}, exceeding the limit of {limit}")
+            }
         }
     }
 }
@@ -233,7 +233,9 @@ pub(crate) fn validate_model(
     bytes: &[u8],
     claimed_extension: &str,
 ) -> Result<ValidatedModel, ModelReject> {
-    let extension = claimed_extension.trim_start_matches('.').to_ascii_lowercase();
+    let extension = claimed_extension
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
     let Some(row) = formats::model_row_for_extension(&extension) else {
         return Err(ModelReject::UnsupportedExtension);
     };
@@ -345,12 +347,8 @@ fn validate_glb_artifact(
 fn map_container_error(err: ContainerError) -> ModelReject {
     match err {
         ContainerError::TooManyEntries { limit, found }
-        | ContainerError::EntryTooLarge {
-            limit, found, ..
-        }
-        | ContainerError::TotalTooLarge { limit, found } => {
-            ModelReject::TooLarge { limit, found }
-        }
+        | ContainerError::EntryTooLarge { limit, found, .. }
+        | ContainerError::TotalTooLarge { limit, found } => ModelReject::TooLarge { limit, found },
         other => ModelReject::HeaderInvalid {
             detail: other.to_string(),
         },
@@ -535,7 +533,7 @@ fn parse_ply_header(
                             detail: "binary_big_endian ply is not accepted (only ascii and \
                                      binary_little_endian)"
                                 .to_owned(),
-                        })
+                        });
                     }
                     other => {
                         return Err(ModelReject::HeaderInvalid {
@@ -543,7 +541,7 @@ fn parse_ply_header(
                                 "unknown ply encoding {}",
                                 String::from_utf8_lossy(other)
                             ),
-                        })
+                        });
                     }
                 });
             }
@@ -573,9 +571,7 @@ fn parse_ply_header(
                 }
                 if elements.len() >= PLY_MAX_ELEMENTS {
                     return Err(ModelReject::HeaderInvalid {
-                        detail: format!(
-                            "the ply declares more than {PLY_MAX_ELEMENTS} elements"
-                        ),
+                        detail: format!("the ply declares more than {PLY_MAX_ELEMENTS} elements"),
                     });
                 }
                 elements.push(PlyElement {
@@ -595,8 +591,7 @@ fn parse_ply_header(
                     // row becomes variable-width; its MINIMUM carries the
                     // count field's width.
                     Some(b"list") => {
-                        let [_prop, _list, count_type, _item_type, _name] =
-                            tokens.as_slice()
+                        let [_prop, _list, count_type, _item_type, _name] = tokens.as_slice()
                         else {
                             return Err(ModelReject::HeaderInvalid {
                                 detail: "malformed ply list property line".to_owned(),
@@ -631,7 +626,7 @@ fn parse_ply_header(
                     _ => {
                         return Err(ModelReject::HeaderInvalid {
                             detail: "malformed ply property line".to_owned(),
-                        })
+                        });
                     }
                 }
             }
@@ -642,7 +637,7 @@ fn parse_ply_header(
                         "unrecognized ply header directive {}",
                         String::from_utf8_lossy(other)
                     ),
-                })
+                });
             }
         }
     }
@@ -708,7 +703,10 @@ fn validate_splat(bytes: &[u8], row: &'static FormatInfo) -> Result<Option<u32>,
     if let Some(limit) = row.budget.entries
         && count > limit
     {
-        return Err(ModelReject::TooLarge { limit, found: count });
+        return Err(ModelReject::TooLarge {
+            limit,
+            found: count,
+        });
     }
     Ok(None)
 }
