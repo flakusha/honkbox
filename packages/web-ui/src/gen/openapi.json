@@ -889,6 +889,7 @@
     "/v1/external-tools": {
       "get": {
         "tags": [],
+        "summary": "List discovered external engines and their capabilities.",
         "operationId": "get_external_tools",
         "responses": {
           "200": {
@@ -907,6 +908,7 @@
     "/v1/external-tools/reload": {
       "post": {
         "tags": [],
+        "summary": "Re-probe all external engines and refresh the capability cache.",
         "operationId": "post_external_tools_reload",
         "responses": {
           "200": {
@@ -925,6 +927,7 @@
     "/v1/external-tools/{id}": {
       "get": {
         "tags": [],
+        "summary": "Probe one external tool, optionally requiring a capability.",
         "operationId": "get_external_tool",
         "parameters": [
           {

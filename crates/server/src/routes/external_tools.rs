@@ -131,6 +131,7 @@ pub(super) struct ExternalToolQuery {
     capability: Option<String>,
 }
 
+/// List discovered external engines and their capabilities.
 #[utoipa::path(
     get,
     path = "/v1/external-tools",
@@ -140,6 +141,7 @@ pub(super) async fn get_external_tools() -> Json<ExternalToolsCapability> {
     Json(external_tools_capability())
 }
 
+/// Probe one external tool, optionally requiring a capability.
 #[utoipa::path(
     get,
     path = "/v1/external-tools/{id}",
@@ -175,6 +177,7 @@ pub(super) async fn get_external_tool(
     Json(external_tool_dto(&status)).into_response()
 }
 
+/// Re-probe all external engines and refresh the capability cache.
 #[utoipa::path(
     post,
     path = "/v1/external-tools/reload",

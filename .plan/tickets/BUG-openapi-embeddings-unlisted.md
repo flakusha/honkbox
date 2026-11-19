@@ -6,8 +6,8 @@ Epic: epic-capabilities-contract
 Owner: honkbox-openapi-coverage
 Acceptance: every mounted route appears in the generated OpenAPI document served at `GET /v1/openapi.json`, and a route that drops out of the derive's `paths(...)` list fails the codegen gate instead of silently shrinking the reference.
 Verification: `bun run codegen:check`, `bun run check`, `bun run lint:rs`
-Links: `crates/server/src/routes.rs` (`#[openapi(paths(...))]`, `post_embeddings`), `scripts/codegen-openapi-check.ts`, `packages/web-ui/src/gen/openapi.json`
-Resources: no new runtime resources; the gate reads `crates/server/src/routes.rs` and the generated document
+Links: `crates/server/src/routes/openapi.rs` (`#[openapi(paths(...))]`, `post_embeddings`), `crates/server/src/routes.rs` (mounted routes), `scripts/codegen-openapi-check.ts`, `packages/web-ui/src/gen/openapi.json`
+Resources: no new runtime resources; the gate reads `crates/server/src/routes.rs` and `routes/openapi.rs`, plus the generated document
 
 ## Problem
 
@@ -25,7 +25,7 @@ identically every time.
 
 ## Change
 
-- `crates/server/src/routes.rs`: added `post_embeddings` to the
+- `crates/server/src/routes/openapi.rs`: added `post_embeddings` to the
   `#[openapi(paths(...))]` list. The document now carries the endpoint with
   its request body, `EmbeddingsRequest`/`EmbeddingsResponse` schemas, and its
   400/404/429/500 responses.
@@ -41,7 +41,7 @@ identically every time.
   (the count moves with the route table) and the committed file matches the
   generator output.
 - Negative control (manual, no gitignored helper): locally unlist
-  `post_embeddings` from the derive's `paths(...)` in `routes.rs`, run
+  `post_embeddings` from the derive's `paths(...)` in `routes/openapi.rs`, run
   `bun run codegen:check`, confirm it fails with
   `1 mounted route(s) missing from the OpenAPI document: /v1/embeddings`,
   then restore the file.
