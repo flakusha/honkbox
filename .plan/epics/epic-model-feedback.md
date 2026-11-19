@@ -15,6 +15,7 @@ agent loop; honkbox owns artifacts, renders, and capability truth.
 ## Tickets
 
 - `TASK-bake-job-contract.md` — bake inputs/outputs/log contract (P2).
+- `TASK-blender-bake-extended-maps.md` — metallic/AO/height + thumbnail delta on the bake contract (P0).
 - `TASK-model-bundle-validation.md` — `gltf-transform` gate + extension allowlist (P2).
 - `TASK-lod-naming-contract.md` — deterministic LOD names/metadata (P3).
 - `TASK-scene-spec-schema.md` — versioned JSON scene spec (P2).
