@@ -131,7 +131,7 @@ pub(super) async fn post_blender_job(
     // Admission first, registration second (the shared seam): a rejected
     // request never enters the registry.
     let (lease, guard) = match admit_then_register(
-        &crate::jobs_registry::global(),
+        crate::jobs_registry::global(),
         crate::admission::acquire(honkbox_residency::ResourceKind::Blender).await,
         crate::jobs_registry::JobKind::Blender,
         None,
@@ -142,9 +142,6 @@ pub(super) async fn post_blender_job(
             return openai_error_response(status, message, Some("blender_busy"));
         }
     };
-    // The metric label is the closed job-kind vocabulary (`blender`), never
-    // an id, a path or a prompt.
-    crate::metrics::note_job_started("blender");
     let job_id = guard.id().to_string();
     let bundle_id = ulid::Ulid::new().to_string();
     let bundle = data_dir.join("jobs").join(&bundle_id);
@@ -171,6 +168,7 @@ pub(super) async fn post_blender_job(
 /// The engine gate: no Blender installed is a 501, a version or a recipe
 /// digest the caller did not expect is a 409. Both are checked BEFORE the
 /// process starts.
+#[allow(clippy::result_large_err)] // axum Response is a fixed-size request-path type
 fn engine_gate(req: &BlenderJobRequest) -> Result<super::external_tools::BlenderEngine, Response> {
     let Some(engine) = blender_engine() else {
         return Err(openai_error_response(
@@ -196,14 +194,14 @@ fn engine_gate(req: &BlenderJobRequest) -> Result<super::external_tools::Blender
     // loop-lore's `scriptDigest` computes) can never match and earns the
     // same 409; callers without the byte digest simply omit the field.
     let recipe = recipe_sha256();
-    if let Some(expected) = req.engine.script_version.as_deref() {
-        if expected != recipe {
-            return Err(openai_error_response(
-                StatusCode::CONFLICT,
-                format!("engine.script_version does not match the installed recipe ({recipe})"),
-                Some("blender_script_version_mismatch"),
-            ));
-        }
+    if let Some(expected) = req.engine.script_version.as_deref()
+        && expected != recipe
+    {
+        return Err(openai_error_response(
+            StatusCode::CONFLICT,
+            format!("engine.script_version does not match the installed recipe ({recipe})"),
+            Some("blender_script_version_mismatch"),
+        ));
     }
     Ok(engine)
 }

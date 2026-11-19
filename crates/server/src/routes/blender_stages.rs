@@ -33,6 +33,7 @@ const MAX_VOXEL_SIZE: f64 = 1000.0;
 
 /// Map one typed stage onto the recipe's own stage vocabulary, resolving
 /// the artifacts it names.
+#[allow(clippy::too_many_lines)] // one closed stage per branch, by design
 pub(super) fn map_stage(
     stage: &BlenderStage,
     artifacts: &crate::artifacts::Registry,

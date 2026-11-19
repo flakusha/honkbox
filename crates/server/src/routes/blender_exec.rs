@@ -71,6 +71,7 @@ mod unix {
     const CANCEL_POLL: Duration = Duration::from_millis(100);
 
     /// What one run produced.
+    #[allow(clippy::large_enum_variant)] // the manifest is the normal outcome
     enum Outcome {
         /// The recipe finished; the manifest describes what it wrote.
         Done(AssetManifest),
@@ -82,6 +83,7 @@ mod unix {
 
     /// Run one job: the recipe files, the supervised process, and the
     /// bundle the artifacts land in.
+    #[allow(clippy::needless_pass_by_value)] // owned inputs cross the spawned-run boundary
     pub(super) fn run(
         plan: JobPlan,
         bundle: PathBuf,
@@ -239,7 +241,7 @@ mod unix {
         }
         // The bundle manifest is path-free: the bundle's own file names,
         // never the staging paths the recipe wrote.
-        let bytes = serde_json::to_vec_pretty(&manifest_record(plan, manifest, artifacts))
+        let bytes = serde_json::to_vec_pretty(&manifest_record(plan, manifest, &artifacts))
             .map_err(|err| format!("cannot encode the manifest: {err}"))?;
         crate::jobs::write_atomic(bundle, "manifest.json", &bytes)
     }
@@ -252,7 +254,7 @@ mod unix {
     fn manifest_record(
         plan: &JobPlan,
         manifest: &AssetManifest,
-        artifacts: Vec<serde_json::Value>,
+        artifacts: &[serde_json::Value],
     ) -> serde_json::Value {
         json!({
             "manifest": manifest.manifest,
@@ -458,7 +460,7 @@ mod unix {
             };
             assert_eq!(
                 serde_json::to_value(&dto).expect("the completion DTO serializes"),
-                manifest_record(&plan, &manifest, artifacts)
+                manifest_record(&plan, &manifest, &artifacts)
             );
         }
     }
