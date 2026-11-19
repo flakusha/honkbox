@@ -27,6 +27,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod blender_addons;
+
+pub use blender_addons::{AddonInfo, AddonTier, BlenderAddons, OperatorInfo};
+
 /// Default `ComfyUI` base URL (loopback — honkbox is local-first).
 pub const DEFAULT_COMFYUI_URL: &str = "http://127.0.0.1:8188";
 
@@ -65,7 +69,7 @@ impl fmt::Display for ToolId {
 }
 
 /// A capability a tool is known to provide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Capability {
     /// Headless rendering.
     Render,
@@ -73,16 +77,31 @@ pub enum Capability {
     Cycles,
     /// Workflow execution.
     Workflow,
+    /// A probed add-on (`"addon:<id>"`).
+    Addon(String),
+    /// A probed operator that runs headless (`"op:<id>"`).
+    Operator(String),
 }
 
 impl Capability {
     /// Stable lowercase identifier (never user data).
-    pub const fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Render => "render",
             Self::Cycles => "cycles",
             Self::Workflow => "workflow",
+            Self::Addon(id) | Self::Operator(id) => id.as_str(),
         }
+    }
+
+    /// A probed add-on capability (`"addon:<id>"`).
+    pub fn addon(id: &str) -> Self {
+        Self::Addon(format!("addon:{id}"))
+    }
+
+    /// A probed headless operator capability (`"op:<id>"`).
+    pub fn operator(id: &str) -> Self {
+        Self::Operator(format!("op:{id}"))
     }
 }
 
@@ -161,6 +180,8 @@ pub struct Registry {
     config: Config,
     client: reqwest::Client,
     statuses: Vec<Status>,
+    /// Add-on and operator records of the last Blender probe.
+    blender_addons: BlenderAddons,
 }
 
 impl Registry {
@@ -174,6 +195,7 @@ impl Registry {
             config,
             client,
             statuses: Vec::new(),
+            blender_addons: BlenderAddons::default(),
         };
         registry.reload().await;
         registry
@@ -182,14 +204,30 @@ impl Registry {
     /// Re-probe every tool, replacing the cached statuses.
     pub async fn reload(&mut self) {
         let mut statuses = Vec::with_capacity(ToolId::ALL.len());
+        let mut blender_addons = BlenderAddons::default();
         for id in ToolId::ALL {
             let status = match id {
-                ToolId::Blender => probe_blender(&self.config),
+                ToolId::Blender => {
+                    let (status, addons) = probe_blender(&self.config);
+                    blender_addons = addons;
+                    status
+                }
                 ToolId::ComfyUi => probe_comfyui(&self.config, &self.client).await,
             };
             statuses.push(status);
         }
         self.statuses = statuses;
+        self.blender_addons = blender_addons;
+    }
+
+    /// Add-ons the last Blender probe found (empty when it did not run).
+    pub fn blender_addons(&self) -> &[AddonInfo] {
+        &self.blender_addons.addons
+    }
+
+    /// Operators the last Blender probe checked (empty when it did not run).
+    pub fn blender_operators(&self) -> &[OperatorInfo] {
+        &self.blender_addons.operators
     }
 
     /// Cached status of every tool.
@@ -208,20 +246,29 @@ impl Registry {
     }
 }
 
-/// Probe the Blender CLI: version first, then the Cycles device list.
-fn probe_blender(config: &Config) -> Status {
+/// Probe the Blender CLI: version first, then the Cycles device list, then
+/// the installed add-ons and the baseline operators.
+fn probe_blender(config: &Config) -> (Status, BlenderAddons) {
     let bin = config
         .blender_path
         .as_deref()
         .unwrap_or_else(|| Path::new("blender"));
     let version_out = match run_tool(bin, &["--version"], config.timeout) {
         Ok(out) => out,
-        Err(unavailable) => return unavailable_status(ToolId::Blender, unavailable),
+        Err(unavailable) => {
+            return (
+                unavailable_status(ToolId::Blender, unavailable),
+                BlenderAddons::default(),
+            );
+        }
     };
     let Some(version) = parse_blender_version(&version_out) else {
-        return unavailable_status(
-            ToolId::Blender,
-            Unavailable::ProbeFailed("unexpected --version output".to_string()),
+        return (
+            unavailable_status(
+                ToolId::Blender,
+                Unavailable::ProbeFailed("unexpected --version output".to_string()),
+            ),
+            BlenderAddons::default(),
         );
     };
 
@@ -245,13 +292,33 @@ fn probe_blender(config: &Config) -> Status {
         devices = found;
     }
 
-    Status {
-        id: ToolId::Blender,
-        version: Some(version),
-        capabilities,
-        devices,
-        unavailable: None,
+    // The add-on probe is best effort: a probe that cannot run must not take
+    // the renderer down with it. Nothing is claimed it did not prove.
+    let mut addons = BlenderAddons::default();
+    if let Ok(found) = blender_addons::probe(bin, config.timeout) {
+        for addon in &found.addons {
+            if addon.enabled {
+                capabilities.push(Capability::addon(&addon.id));
+            }
+        }
+        for operator in &found.operators {
+            if operator.headless {
+                capabilities.push(Capability::operator(&operator.id));
+            }
+        }
+        addons = found;
     }
+
+    (
+        Status {
+            id: ToolId::Blender,
+            version: Some(version),
+            capabilities,
+            devices,
+            unavailable: None,
+        },
+        addons,
+    )
 }
 
 /// Probe a `ComfyUI` server through `/system_stats` (version + devices) and
@@ -357,7 +424,11 @@ fn unavailable_status(id: ToolId, unavailable: Unavailable) -> Status {
 }
 
 /// Run a tool with a timeout and return its stdout.
-fn run_tool(bin: &Path, args: &[&str], timeout: Duration) -> Result<String, Unavailable> {
+pub(crate) fn run_tool(
+    bin: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, Unavailable> {
     let mut child = Command::new(bin)
         .args(args)
         .stdout(Stdio::piped())

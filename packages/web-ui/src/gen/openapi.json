@@ -2410,7 +2410,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Capabilities the probe actually proved (bounded closed vocabulary)."
+            "description": "Capabilities the probe actually proved: the tool capabilities plus the\nprobed add-on (`addon:<id>`) and headless operator (`op:<id>`) ids."
           },
           "devices": {
             "type": "array",

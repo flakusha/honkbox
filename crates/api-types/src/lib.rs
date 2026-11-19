@@ -3014,7 +3014,8 @@ pub struct ExternalTool {
     /// Version the tool reported; absent when it never reported one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// Capabilities the probe actually proved (bounded closed vocabulary).
+    /// Capabilities the probe actually proved: the tool capabilities plus the
+    /// probed add-on (`addon:<id>`) and headless operator (`op:<id>`) ids.
     pub capabilities: Vec<String>,
     /// Probed device names; never credentials or paths.
     pub devices: Vec<String>,

@@ -1832,7 +1832,8 @@ export type ExternalTool = {
    */
   version?: string | null;
   /**
-   * Capabilities the probe actually proved (bounded closed vocabulary).
+   * Capabilities the probe actually proved: the tool capabilities plus the
+   * probed add-on (`addon:<id>`) and headless operator (`op:<id>`) ids.
    */
   capabilities: Array<string>;
   /**
