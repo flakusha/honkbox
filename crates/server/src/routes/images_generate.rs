@@ -10,15 +10,17 @@ use std::time::Instant;
 use axum::{
     Json,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use base64::Engine as _;
-use honkbox_api_types::{ImageB64, ImagesGenerationRequest, ImagesGenerationResponse, OpenAiError};
+use honkbox_api_types::{
+    ImageArtifact, ImageB64, ImagesGenerationRequest, ImagesGenerationResponse, OpenAiError,
+};
 
 use super::chat_prep::{admit_then_register, with_job_id};
 use super::images_controlnet::resolve_controlnet;
-use super::images_inputs::{resolve_loras, validate_images_request};
+use super::images_inputs::{DeliveryMode, resolve_loras, validate_images_request};
 use super::images_recipe::resolve_sd_model;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
 
@@ -36,6 +38,24 @@ pub(super) fn write_generation_bundle(
     if let Err(err) = crate::jobs::write_bundle(data_dir, inputs, bytes, elapsed_ms) {
         tracing::warn!(error = %err, "job bundle write failed for HTTP generation");
     }
+}
+
+/// Artifact-mode bundle write: a missing data dir or a failed write fails
+/// the request loudly (the inline path above stays best-effort warn-only).
+/// Returns the bundle directory for the `bundle` response field.
+pub(super) fn write_generation_bundle_strict(
+    config: &AppConfig,
+    inputs: &crate::jobs::BundleInputs,
+    bytes: &[u8],
+    elapsed_ms: u64,
+) -> Result<String, String> {
+    let data_dir = config
+        .data_dir
+        .as_ref()
+        .ok_or_else(|| "artifact delivery requires a configured data dir".to_owned())?;
+    let dir = crate::jobs::write_bundle(data_dir, inputs, bytes, elapsed_ms)
+        .map_err(|err| format!("job bundle write failed: {err}"))?;
+    Ok(dir.to_string_lossy().into_owned())
 }
 
 /// Default generation recipe for the HTTP surface: the same defaults as
@@ -109,14 +129,58 @@ pub(super) async fn generate_image_bytes(
     cancel: Arc<AtomicBool>,
     token: tokio_util::sync::CancellationToken,
 ) -> Result<Vec<u8>, GenerateFailure> {
+    generate_image_bytes_inner(pipeline, txt2img, format, compression, cancel, token, None).await
+}
+
+/// Artifact-mode variant: pipeline steps feed the job's `job_progress` SSE
+/// frames. `generate_with_progress` defaults to `generate`, so the encoded
+/// bytes are unchanged; only the callback is new.
+pub(super) async fn generate_image_bytes_with_progress(
+    pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
+    txt2img: honkbox_sd_core::Txt2ImgRequest,
+    format: honkbox_sd_core::OutputFormat,
+    compression: Option<u8>,
+    cancel: Arc<AtomicBool>,
+    token: tokio_util::sync::CancellationToken,
+    job_id: &str,
+) -> Result<Vec<u8>, GenerateFailure> {
+    generate_image_bytes_inner(
+        pipeline,
+        txt2img,
+        format,
+        compression,
+        cancel,
+        token,
+        Some(job_id.to_owned()),
+    )
+    .await
+}
+
+async fn generate_image_bytes_inner(
+    pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
+    txt2img: honkbox_sd_core::Txt2ImgRequest,
+    format: honkbox_sd_core::OutputFormat,
+    compression: Option<u8>,
+    cancel: Arc<AtomicBool>,
+    token: tokio_util::sync::CancellationToken,
+    progress_job_id: Option<String>,
+) -> Result<Vec<u8>, GenerateFailure> {
     let worker_cancel = Arc::clone(&cancel);
     let mut worker = tokio::task::spawn_blocking(move || {
-        let img = pipeline
-            .generate(&txt2img, &worker_cancel)
-            .map_err(|err| match err {
-                honkbox_sd_core::SdError::Cancelled => GenerateFailure::Cancelled,
-                other => GenerateFailure::Failed(other.to_string()),
-            })?;
+        let to_failure = |err: honkbox_sd_core::SdError| match err {
+            honkbox_sd_core::SdError::Cancelled => GenerateFailure::Cancelled,
+            other => GenerateFailure::Failed(other.to_string()),
+        };
+        let img = match &progress_job_id {
+            Some(job_id) => pipeline
+                .generate_with_progress(&txt2img, &worker_cancel, &|step, total| {
+                    crate::jobs_registry::global().emit_progress(job_id, step, total);
+                })
+                .map_err(to_failure)?,
+            None => pipeline
+                .generate(&txt2img, &worker_cancel)
+                .map_err(to_failure)?,
+        };
         match compression {
             Some(q) => honkbox_sd_core::encode_image_with_quality(img, format, q)
                 .map_err(|err| GenerateFailure::Failed(err.to_string())),
@@ -208,15 +272,21 @@ pub(super) fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> Str
 )]
 pub(super) async fn post_images_generations(
     State(config): State<AppConfig>,
+    headers: HeaderMap,
     Json(req): Json<ImagesGenerationRequest>,
 ) -> Response {
-    let (width, height, n, recipe, hires, format, compression) = match validate_images_request(&req)
-    {
-        Ok(valid) => valid,
-        Err((message, code)) => {
-            return super::openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
-        }
-    };
+    let (width, height, n, recipe, hires, format, compression, delivery) =
+        match validate_images_request(
+            &req,
+            headers
+                .get("X-Honkbox-Delivery")
+                .map(|value| value.to_str().unwrap_or_default()),
+        ) {
+            Ok(valid) => valid,
+            Err((message, code)) => {
+                return super::openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+            }
+        };
     let catalog = config.catalog_snapshot();
     let (pipeline_loras, lora_records, lora_warnings) =
         match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
@@ -276,6 +346,8 @@ pub(super) async fn post_images_generations(
         Err((status, message)) => return super::openai_error_response(status, message, None),
     };
     let mut images = Vec::with_capacity(n as usize);
+    let mut artifacts: Vec<ImageArtifact> = Vec::with_capacity(n as usize);
+    let mut bundle: Option<String> = None;
     let backend_id = pipeline.backend_id();
     // Provenance (TASK-determinism-contract): the verified digest sidecar
     // exists only when the model arrived as a checksum-verified download;
@@ -311,38 +383,55 @@ pub(super) async fn post_images_generations(
         // Per-image seeds keep n>1 outputs distinct while staying
         // deterministic per request (explicit seed base when given).
         let seed = recipe.seed_base.wrapping_add(i);
-        let bytes = match generate_image_bytes(
-            Arc::clone(&pipeline),
-            honkbox_sd_core::Txt2ImgRequest {
-                seed,
-                steps: recipe.steps,
-                prompt: prompt.clone(),
-                width,
-                height,
-                model_slug: slug.clone(),
-                clip: None,
-                vae: None,
-                sampler: Some(recipe.sampler),
-                scheduler: Some(recipe.scheduler),
-                cfg_scale: Some(recipe.cfg_scale),
-                negative_prompt: recipe.negative_prompt.clone(),
-                loras: (!pipeline_loras.is_empty()).then(|| pipeline_loras.clone()),
-                init_image: None,
-                mask_image: None,
-                strength: None,
-                hires: hires.clone(),
-                control_net: controlnet.as_ref().map(|c| c.weights.clone()),
-                control_image: controlnet.as_ref().map(|c| c.image.clone()),
-                controlnet_strength: controlnet.as_ref().and_then(|c| c.strength),
-                control_type: controlnet.as_ref().and_then(|c| c.control_type),
-            },
-            format,
-            compression,
-            Arc::clone(&cancel),
-            job_token.clone(),
-        )
-        .await
-        {
+        let txt2img = honkbox_sd_core::Txt2ImgRequest {
+            seed,
+            steps: recipe.steps,
+            prompt: prompt.clone(),
+            width,
+            height,
+            model_slug: slug.clone(),
+            clip: None,
+            vae: None,
+            sampler: Some(recipe.sampler),
+            scheduler: Some(recipe.scheduler),
+            cfg_scale: Some(recipe.cfg_scale),
+            negative_prompt: recipe.negative_prompt.clone(),
+            loras: (!pipeline_loras.is_empty()).then(|| pipeline_loras.clone()),
+            init_image: None,
+            mask_image: None,
+            strength: None,
+            hires: hires.clone(),
+            control_net: controlnet.as_ref().map(|c| c.weights.clone()),
+            control_image: controlnet.as_ref().map(|c| c.image.clone()),
+            controlnet_strength: controlnet.as_ref().and_then(|c| c.strength),
+            control_type: controlnet.as_ref().and_then(|c| c.control_type),
+        };
+        let generated = match delivery {
+            DeliveryMode::Inline => {
+                generate_image_bytes(
+                    Arc::clone(&pipeline),
+                    txt2img,
+                    format,
+                    compression,
+                    Arc::clone(&cancel),
+                    job_token.clone(),
+                )
+                .await
+            }
+            DeliveryMode::Artifact => {
+                generate_image_bytes_with_progress(
+                    Arc::clone(&pipeline),
+                    txt2img,
+                    format,
+                    compression,
+                    Arc::clone(&cancel),
+                    job_token.clone(),
+                    job.id(),
+                )
+                .await
+            }
+        };
+        let bytes = match generated {
             Ok(bytes) => bytes,
             Err(GenerateFailure::Cancelled) => {
                 // The in-flight render was aborted mid-sampling: answer the
@@ -366,42 +455,95 @@ pub(super) async fn post_images_generations(
                 );
             }
         };
-        write_generation_bundle(
-            &config,
-            &crate::jobs::BundleInputs {
-                model_slug: slug.clone(),
-                prompt: prompt.clone(),
-                seed,
-                steps: recipe.steps,
-                width,
-                height,
-                format,
-                backend_id,
-                model_sha256: model_sha256.clone(),
-                engine_version,
-                sampler: recipe.sampler.name().to_string(),
-                scheduler: image_scheduler_name(recipe.scheduler),
-                cfg_scale: recipe.cfg_scale,
-                negative_prompt: recipe.negative_prompt.clone(),
-                loras: lora_records.clone(),
-                strength: None,
-                recipe: recipe.name.map(str::to_owned),
-                hires: hires.as_ref().map(|fix| crate::jobs::HiresRecord {
-                    upscaler: "latent",
-                    target: {
-                        let (tw, th) = honkbox_sd_core::hires_target((width, height), fix);
-                        format!("{tw}x{th}")
-                    },
-                    scale: fix.scale,
-                    denoising_strength: fix.denoising_strength,
-                }),
-            },
-            &bytes,
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        );
-        images.push(ImageB64 {
-            b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        });
+        let bundle_inputs = crate::jobs::BundleInputs {
+            model_slug: slug.clone(),
+            prompt: prompt.clone(),
+            seed,
+            steps: recipe.steps,
+            width,
+            height,
+            format,
+            backend_id,
+            model_sha256: model_sha256.clone(),
+            engine_version,
+            sampler: recipe.sampler.name().to_string(),
+            scheduler: image_scheduler_name(recipe.scheduler),
+            cfg_scale: recipe.cfg_scale,
+            negative_prompt: recipe.negative_prompt.clone(),
+            loras: lora_records.clone(),
+            strength: None,
+            recipe: recipe.name.map(str::to_owned),
+            hires: hires.as_ref().map(|fix| crate::jobs::HiresRecord {
+                upscaler: "latent",
+                target: {
+                    let (tw, th) = honkbox_sd_core::hires_target((width, height), fix);
+                    format!("{tw}x{th}")
+                },
+                scale: fix.scale,
+                denoising_strength: fix.denoising_strength,
+            }),
+        };
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match delivery {
+            DeliveryMode::Inline => {
+                write_generation_bundle(&config, &bundle_inputs, &bytes, elapsed_ms);
+            }
+            DeliveryMode::Artifact => {
+                let dir = match write_generation_bundle_strict(
+                    &config,
+                    &bundle_inputs,
+                    &bytes,
+                    elapsed_ms,
+                ) {
+                    Ok(dir) => dir,
+                    Err(message) => {
+                        return with_job_id(
+                            super::openai_error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                message,
+                                Some("bundle_write_failed"),
+                            ),
+                            job.id(),
+                        );
+                    }
+                };
+                // One bundle dir per image; `bundle` names the first so the
+                // field is a single stable handle for the request.
+                if bundle.is_none() {
+                    bundle = Some(dir);
+                }
+                let info = match config.artifacts.put_bytes(&bytes, format.mime()) {
+                    Ok(info) => info,
+                    Err(err) => {
+                        return with_job_id(
+                            super::openai_error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("artifact store failed: {err}"),
+                                Some("artifact_store_failed"),
+                            ),
+                            job.id(),
+                        );
+                    }
+                };
+                crate::jobs_registry::global().emit_result(
+                    job.id(),
+                    &info.id,
+                    &info.sha256,
+                    info.size_bytes,
+                );
+                artifacts.push(ImageArtifact {
+                    artifact_id: info.id,
+                    content_type: info.content_type,
+                    size_bytes: info.size_bytes,
+                    job_id: job.id().to_owned(),
+                });
+            }
+        }
+        if delivery == DeliveryMode::Inline {
+            images.push(ImageB64 {
+                b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            });
+        }
     }
     drop(lease);
     with_job_id(
@@ -409,6 +551,9 @@ pub(super) async fn post_images_generations(
             created: epoch_secs(),
             data: images,
             warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
+            artifacts: (!artifacts.is_empty()).then_some(artifacts),
+            bundle,
+            job_id: (delivery == DeliveryMode::Artifact).then(|| job.id().to_owned()),
         })
         .into_response(),
         job.id(),

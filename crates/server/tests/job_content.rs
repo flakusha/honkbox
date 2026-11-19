@@ -226,11 +226,12 @@ async fn zip_bytes_are_deterministic_across_runs() {
 #[tokio::test]
 async fn content_route_serves_only_allowlisted_names() {
     let root = tmp_dir("allowlist");
+    let manifest = br#"{"manifest":1,"artifacts":[{"name":"output.glb"},{"name":"output_turntable.webp"}]}"#;
     bundle(
         &root,
         ID_A,
         &[
-            ("manifest.json", br#"{"manifest":1}"#),
+            ("manifest.json", manifest),
             ("output.glb", b"glb"),
             ("output_turntable.webp", b"webp"),
             ("secret.txt", b"secret"),
@@ -238,7 +239,7 @@ async fn content_route_serves_only_allowlisted_names() {
     );
     let app = app_with(Some(root.clone()));
     for (name, expected) in [
-        ("manifest.json", br#"{"manifest":1}"#.as_slice()),
+        ("manifest.json", manifest.as_slice()),
         ("output.glb", b"glb".as_slice()),
         ("output_turntable.webp", b"webp".as_slice()),
     ] {
@@ -301,7 +302,11 @@ async fn missing_job_and_missing_data_dir_are_404() {
 #[tokio::test]
 async fn missing_file_is_404() {
     let root = tmp_dir("missing-file");
-    bundle(&root, ID_A, &[("manifest.json", b"{}")]);
+    bundle(
+        &root,
+        ID_A,
+        &[("manifest.json", br#"{"artifacts":[{"name":"output.glb"}]}"#)],
+    );
     let (status, _, body) = get(
         app_with(Some(root.clone())),
         &format!("/v1/jobs/{ID_A}/content/output.glb"),
@@ -315,7 +320,11 @@ async fn missing_file_is_404() {
 #[tokio::test]
 async fn oversized_file_is_413() {
     let root = tmp_dir("too-large");
-    let dir = bundle(&root, ID_A, &[]);
+    let dir = bundle(
+        &root,
+        ID_A,
+        &[("manifest.json", br#"{"artifacts":[{"name":"output.glb"}]}"#)],
+    );
     // Sparse: the cap is checked from metadata before any bytes are read.
     let file = std::fs::File::create(dir.join("output.glb")).expect("sparse file");
     file.set_len(routes::job_content::MAX_CONTENT_BYTES + 1)

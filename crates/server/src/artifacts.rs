@@ -330,6 +330,83 @@ impl Registry {
         self.max_artifact_bytes
     }
 
+    /// Store raw `bytes` as a content-addressed artifact — the synchronous
+    /// counterpart to the streaming upload routes, for callers that already
+    /// hold the bytes in memory (e.g. generated images).
+    ///
+    /// The id is the lowercase sha256 of `bytes`. The blob and its sidecar are
+    /// published under `blobs/<aa>/<sha256>` exactly as the upload path
+    /// publishes them, so identical bytes dedup to a single immutable blob.
+    /// Only the [`ArtifactInfo`] descriptor is returned — no filesystem path
+    /// ever crosses this API.
+    ///
+    /// Returns [`ArtifactError::StorageUnavailable`] with no data dir and
+    /// [`ArtifactError::ArtifactTooLarge`] past the configured cap.
+    pub fn put_bytes(
+        &self,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> Result<ArtifactInfo, ArtifactError> {
+        let root = self
+            .root
+            .as_ref()
+            .ok_or(ArtifactError::StorageUnavailable)?;
+        if bytes.len() as u64 > self.max_artifact_bytes {
+            return Err(ArtifactError::ArtifactTooLarge(self.max_artifact_bytes));
+        }
+        let sha256 = hex_lower(&Sha256::digest(bytes));
+        let target = Self::blob_path(root, &sha256);
+
+        let blobs = root.join("blobs");
+        std::fs::create_dir_all(&blobs)
+            .map_err(|err| ArtifactError::Storage(format!("create blobs dir: {err}")))?;
+        // One token for both `.part` paths: parallel callers never share a
+        // temp name, so a concurrent rename cannot steal another's part.
+        let token = ulid::Ulid::new();
+        let part = blobs.join(format!("{token}.part"));
+        std::fs::write(&part, bytes)
+            .map_err(|err| ArtifactError::Storage(format!("write {}: {err}", part.display())))?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                ArtifactError::Storage(format!("create {}: {err}", parent.display()))
+            })?;
+        }
+        // Same dedup rule as `publish_blob`: an existing blob is immutable,
+        // so discard our `.part` instead of rewriting the target.
+        if target.exists() {
+            let _ = std::fs::remove_file(&part);
+        } else {
+            std::fs::rename(&part, &target).map_err(|err| {
+                ArtifactError::Storage(format!("rename {}: {err}", part.display()))
+            })?;
+        }
+
+        let info = ArtifactInfo {
+            id: sha256.clone(),
+            sha256,
+            size_bytes: bytes.len() as u64,
+            chunk_count: 1,
+            content_type: content_type.to_owned(),
+        };
+        let sidecar = Self::sidecar_path(root, &info.sha256);
+        let sidecar_part = sidecar.with_extension(format!("json.{token}.part"));
+        let raw = serde_json::to_vec(&info).map_err(|err| {
+            ArtifactError::Storage(format!("serialize {}: {err}", sidecar.display()))
+        })?;
+        std::fs::write(&sidecar_part, &raw).map_err(|err| {
+            ArtifactError::Storage(format!("write {}: {err}", sidecar_part.display()))
+        })?;
+        std::fs::File::open(&sidecar_part)
+            .and_then(|file| file.sync_all())
+            .map_err(|err| {
+                ArtifactError::Storage(format!("fsync {}: {err}", sidecar_part.display()))
+            })?;
+        std::fs::rename(&sidecar_part, &sidecar).map_err(|err| {
+            ArtifactError::Storage(format!("rename {}: {err}", sidecar_part.display()))
+        })?;
+        Ok(info)
+    }
+
     /// The stored blob for an artifact id (its sha256) with its size.
     /// `None` when the id is malformed or nothing is stored under it — the
     /// only way a job route can hand a file to an external engine without
@@ -1379,5 +1456,47 @@ impl Stream for BlobStream {
                 std::task::Poll::Ready(Some(Err(err)))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn put_bytes_publishes_blob_and_dedups() {
+        let base =
+            std::env::temp_dir().join(format!("honkbox-artifacts-putbytes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let reg = Registry::new(Some(base.clone()), 1024 * 1024);
+
+        let bytes = b"the quick brown fox jumps over the lazy dog";
+        let info = reg.put_bytes(bytes, "text/plain").expect("store bytes");
+        assert_eq!(info.id, info.sha256);
+        assert_eq!(info.size_bytes, bytes.len() as u64);
+        assert_eq!(info.chunk_count, 1);
+        assert_eq!(info.content_type, "text/plain");
+
+        // Read back through the existing read path.
+        let (path, size) = reg.stored_blob(&info.id).expect("stored blob");
+        assert_eq!(size, bytes.len() as u64);
+        assert_eq!(std::fs::read(&path).expect("read blob"), bytes.as_slice());
+
+        // Sidecar published alongside the blob.
+        let sidecar = Registry::sidecar_path(&base.join("artifacts"), &info.sha256);
+        assert!(sidecar.exists());
+
+        // Identical bytes are idempotent: still exactly one blob on disk.
+        let again = reg.put_bytes(bytes, "text/plain").expect("store again");
+        assert_eq!(again.id, info.id);
+        let shard = path.parent().expect("shard dir");
+        let blob_files: Vec<_> = std::fs::read_dir(shard)
+            .expect("read shard")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy() == info.sha256.as_str())
+            .collect();
+        assert_eq!(blob_files.len(), 1, "identical bytes must leave one blob");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

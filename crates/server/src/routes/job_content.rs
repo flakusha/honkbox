@@ -2,8 +2,9 @@
 //! `GET /v1/jobs/{id}/content/{name}`.
 //!
 //! The only client-controlled inputs are a 26-character ULID and (for the
-//! single-file route) one of three fixed names. Both are validated before a
-//! path is built, so no host path can enter a response or escape
+//! single-file route) a name from the job's `manifest.json` (the manifest
+//! itself plus every `artifacts[].name`). Both are validated before a path is
+//! built, so no host path can enter a response or escape
 //! `<data_dir>/jobs/<id>/`. Bundle files are read at the top level only:
 //! nested directories (the recipe's `.staging` tree) and symlinks are
 //! ignored, never traversed or followed. The single-file route uses
@@ -41,12 +42,32 @@ const MAX_COMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 /// Bounded single-file download (same order of magnitude as the bundle cap).
 pub const MAX_CONTENT_BYTES: u64 = MAX_UNCOMPRESSED_BYTES;
 
-/// The content route's closed allowlist and each name's content type.
-const CONTENT_TYPES: &[(&str, &str)] = &[
-    ("manifest.json", "application/json"),
-    ("output.glb", "model/gltf-binary"),
-    ("output_turntable.webp", "image/webp"),
-];
+/// A manifest-listed name must be a plain file name: no separators, no parent
+/// traversal, no absolute path and a bounded length. `manifest.json` itself
+/// passes the same check.
+fn validate_content_name(name: &str) -> Result<(), JobContentError> {
+    if name.is_empty()
+        || name.len() > 128
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+    {
+        return Err(JobContentError::InvalidName);
+    }
+    Ok(())
+}
+
+/// Map a bundle file name to the MIME type it is served with. Registry
+/// promotion in `blender_exec::commit` uses the same mapping.
+pub(super) fn content_type_for_name(name: &str) -> &'static str {
+    match name.rsplit_once('.').map_or("", |(_, ext)| ext) {
+        "glb" => "model/gltf-binary",
+        "webp" => "image/webp",
+        "png" => "image/png",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
 
 /// Named rejection, rendered as an OpenAI-style envelope. Details that can
 /// carry host paths are logged server-side and never echoed to the caller.
@@ -54,7 +75,7 @@ const CONTENT_TYPES: &[(&str, &str)] = &[
 enum JobContentError {
     /// `{id}` is not a 26-character Crockford ULID: 400.
     InvalidId,
-    /// `{name}` is outside the allowlist: 400.
+    /// `{name}` is unsafe or not listed in the bundle manifest: 400.
     InvalidName,
     /// No data dir, no job dir, no file, or an unreadable job dir: 404.
     NotFound,
@@ -126,6 +147,53 @@ fn validate_id(id: &str) -> Result<&str, JobContentError> {
 /// The bundle directory for a validated id (no data dir → no bundle).
 fn job_dir(config: &AppConfig, id: &str) -> Option<PathBuf> {
     Some(config.data_dir.as_ref()?.join("jobs").join(id))
+}
+
+/// Resolve a requested name against the bundle's manifest. `manifest.json`
+/// is always allowed; every other name must appear in `artifacts[].name`.
+/// Names are validated before any path is built, and symlinks are never
+/// followed: only a regular file can be served. Runs on the blocking pool.
+fn resolve_content(
+    dir: &Path,
+    name: &str,
+) -> Result<(PathBuf, &'static str, u64), JobContentError> {
+    validate_content_name(name)?;
+    let manifest_path = dir.join("manifest.json");
+    // Never follow a symlink (or read a non-regular file): a manifest that
+    // points outside the bundle must not leak its bytes.
+    let manifest_meta =
+        std::fs::symlink_metadata(&manifest_path).map_err(|_| JobContentError::NotFound)?;
+    if !manifest_meta.is_file() {
+        return Err(JobContentError::NotFound);
+    }
+    let bytes = std::fs::read(&manifest_path).map_err(|_| JobContentError::NotFound)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|err| JobContentError::Storage(format!("bad bundle manifest: {err}")))?;
+    let mut allowed: Vec<(&str, &'static str)> = vec![("manifest.json", "application/json")];
+    if let Some(artifacts) = manifest.get("artifacts").and_then(|value| value.as_array()) {
+        for entry in artifacts {
+            let Some(candidate) = entry.get("name").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            // One poisoned name must not make every other name unreachable.
+            if validate_content_name(candidate).is_err() {
+                continue;
+            }
+            allowed.push((candidate, content_type_for_name(candidate)));
+        }
+    }
+    let Some((_, content_type)) = allowed.iter().find(|(allowed, _)| *allowed == name) else {
+        return Err(JobContentError::InvalidName);
+    };
+    let path = dir.join(name);
+    let meta = std::fs::symlink_metadata(&path).map_err(|_| JobContentError::NotFound)?;
+    if !meta.is_file() {
+        return Err(JobContentError::NotFound);
+    }
+    if meta.len() > MAX_CONTENT_BYTES {
+        return Err(JobContentError::TooLarge(MAX_CONTENT_BYTES));
+    }
+    Ok((path, *content_type, meta.len()))
 }
 
 /// Fixed entry metadata: no wall clock, no host permissions, no ZIP64.
@@ -244,14 +312,14 @@ fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
     Ok(out)
 }
 
-/// `GET /v1/jobs/{id}/content/{name}`: stream one allowlisted bundle file.
+/// `GET /v1/jobs/{id}/content/{name}`: stream one manifest-listed bundle file.
 /// Missing files are 404, oversized files are 413; nothing is buffered whole.
 #[utoipa::path(
     get,
     path = "/v1/jobs/{id}/content/{name}",
     params(
         ("id" = String, Path, description = "26-character Crockford ULID of the job bundle"),
-        ("name" = String, Path, description = "One of manifest.json, output.glb, output_turntable.webp")
+        ("name" = String, Path, description = "A file listed in the job's manifest.json: manifest.json or any artifacts[].name")
     ),
     responses(
         (status = 200, description = "The requested bundle file", content_type = "application/octet-stream"),
@@ -268,29 +336,24 @@ pub(super) async fn get_job_content(
         Ok(id) => id.to_owned(),
         Err(err) => return err.into_response(),
     };
-    let Some(content_type) = CONTENT_TYPES
-        .iter()
-        .find(|(allowed, _)| *allowed == name)
-        .map(|(_, content_type)| *content_type)
-    else {
-        return JobContentError::InvalidName.into_response();
-    };
-    let Some(path) = job_dir(&config, &id).map(|dir| dir.join(&name)) else {
+    let Some(dir) = job_dir(&config, &id) else {
         return JobContentError::NotFound.into_response();
     };
-    // symlink_metadata: an allowlisted name must be a regular file, never a
-    // link to a path outside <data_dir>/jobs/<id>/.
-    let meta = match tokio::fs::symlink_metadata(&path).await {
-        Ok(meta) if meta.is_file() => meta,
-        _ => return JobContentError::NotFound.into_response(),
-    };
-    if meta.len() > MAX_CONTENT_BYTES {
-        return JobContentError::TooLarge(MAX_CONTENT_BYTES).into_response();
-    }
+    // Name validation, the manifest allowlist and the symlink/size checks all
+    // touch the filesystem: keep them off the async worker.
+    let (path, content_type, len) =
+        match tokio::task::spawn_blocking(move || resolve_content(&dir, &name)).await {
+            Ok(Ok(resolved)) => resolved,
+            Ok(Err(err)) => return err.into_response(),
+            Err(err) => {
+                return JobContentError::Storage(format!("content task failed: {err}"))
+                    .into_response();
+            }
+        };
     let Ok(file) = tokio::fs::File::open(&path).await else {
         return JobContentError::NotFound.into_response();
     };
-    let stream = ReaderStream::new(file.take(meta.len()));
+    let stream = ReaderStream::new(file.take(len));
     let mut response = Response::new(Body::from_stream(stream));
     let headers = response.headers_mut();
     if let Ok(value) = HeaderValue::from_str(content_type) {
@@ -301,4 +364,39 @@ pub(super) async fn get_job_content(
         HeaderValue::from_static("nosniff"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_names_are_plain_files_with_known_types() {
+        let too_long = "x".repeat(129);
+        for bad in [
+            "../outside",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            "C:\\x",
+            "",
+            too_long.as_str(),
+        ] {
+            assert!(
+                validate_content_name(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        for good in ["manifest.json", "custom.glb", "bake_01.webp", "map.png"] {
+            validate_content_name(good).expect("a plain name is admitted");
+        }
+        assert_eq!(content_type_for_name("custom.glb"), "model/gltf-binary");
+        assert_eq!(content_type_for_name("bake.webp"), "image/webp");
+        assert_eq!(content_type_for_name("map.png"), "image/png");
+        assert_eq!(content_type_for_name("manifest.json"), "application/json");
+        assert_eq!(
+            content_type_for_name("unknown.bin"),
+            "application/octet-stream"
+        );
+    }
 }

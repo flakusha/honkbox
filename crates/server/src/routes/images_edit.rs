@@ -533,6 +533,9 @@ pub(super) async fn post_images_edits(
             b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
         }],
         warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
+        artifacts: None,
+        bundle: None,
+        job_id: None,
     })
     .into_response()
 }

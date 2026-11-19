@@ -103,14 +103,20 @@ pub(super) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
 /// - `event: job_cancelled` — a cancel was REQUESTED for the job (POST
 ///   `.../cancel` or DELETE `/v1/jobs/{id}`); not a completion event;
 /// - `event: job_finished` — the job left the registry (its request ended,
-///   any outcome).
+///   any outcome);
+/// - `event: job_progress` — a work update: `step`, `total_steps`, and
+///   `pct` (percent, 0..=100; omitted when the total is 0);
+/// - `event: job_result` — an artifact was produced: `artifact_id`,
+///   `sha256`, `size_bytes`. A job may emit several; not a completion
+///   signal.
 ///
 /// Each frame's JSON `data` mirrors the SSE `event` line in its `event`
 /// field (`JobEvent`): `id`, `kind`, `model` (when known),
 /// `started_at_ms`, `interruptible`, and `cancelled` (= a cancel had been
 /// requested at that point; on `job_finished` it is `true` for a
 /// token-marked job, which for a non-interruptible job still ran to
-/// completion). Frames are transition-only: a subscriber that falls more
+/// completion), plus the progress/result fields above when applicable.
+/// Frames are live-only: a subscriber that falls more
 /// than 256 events behind gets an `events_dropped` frame naming the skipped
 /// count (honest gap marker, never silent skipping), and (re)connecting
 /// replays nothing — `GET /v1/jobs` is the current-state snapshot.
@@ -118,7 +124,7 @@ pub(super) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
     get,
     path = "/v1/events",
     responses(
-        (status = 200, description = "SSE stream of job lifecycle events (job_registered / job_cancelled / job_finished; catalogue above)", content_type = "text/event-stream"),
+        (status = 200, description = "SSE stream of job events (job_registered / job_cancelled / job_finished / job_progress / job_result; catalogue above)", content_type = "text/event-stream"),
     )
 )]
 pub(super) async fn get_events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -145,4 +151,24 @@ pub(super) fn job_event_frame(event: &JobEvent) -> Event {
     Event::default()
         .event(event.event.label())
         .data(serde_json::to_string(&event).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use honkbox_api_types::JobEventType;
+
+    /// The SSE `event:` line comes from `label()`; every event type,
+    /// progress and result included, must have a wire label.
+    #[test]
+    fn frame_labels_cover_every_event_type() {
+        for (kind, label) in [
+            (JobEventType::Registered, "job_registered"),
+            (JobEventType::Cancelled, "job_cancelled"),
+            (JobEventType::Finished, "job_finished"),
+            (JobEventType::Progress, "job_progress"),
+            (JobEventType::Result, "job_result"),
+        ] {
+            assert_eq!(kind.label(), label);
+        }
+    }
 }

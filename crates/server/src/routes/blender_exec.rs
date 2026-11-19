@@ -65,6 +65,7 @@ mod unix {
     use crate::admission::GpuLease;
 
     use super::super::blender::JobPlan;
+    use super::super::job_content::content_type_for_name;
     use super::super::supervisor::{self, Termination};
 
     /// How often the cancel watcher checks the job's token.
@@ -218,25 +219,37 @@ mod unix {
                 .to_string();
             // The preview is the one artifact the bundle keeps in another
             // container: Blender writes PNG, the bundle keeps webp (the
-            // format every consumer reads).
-            if artifact.kind == "preview" {
+            // format every consumer reads). Every output is ALSO promoted
+            // into the content-addressed registry; its digest is the id the
+            // manifest and the job_result frame carry.
+            let (name, bytes, content_type) = if artifact.kind == "preview" {
                 let webp = to_webp(&artifact.path)?;
                 let name = format!("{}.webp", name.trim_end_matches(".png"));
                 crate::jobs::write_atomic(bundle, &name, &webp)?;
-                artifacts.push(json!({
-                    "name": name,
-                    "kind": artifact.kind,
-                    "bytes": webp.len(),
-                    "sha256": sha256_hex(&webp),
-                }));
-                continue;
-            }
-            let bytes = crate::jobs::copy_file_atomic(bundle, &name, &artifact.path)?;
+                (name, webp, "image/webp")
+            } else {
+                crate::jobs::copy_file_atomic(bundle, &name, &artifact.path)?;
+                let bytes = std::fs::read(bundle.join(&name))
+                    .map_err(|err| format!("cannot read committed {name}: {err}"))?;
+                let content_type = content_type_for_name(&name);
+                (name, bytes, content_type)
+            };
+            let info = plan
+                .artifacts
+                .put_bytes(&bytes, content_type)
+                .map_err(|err| format!("cannot promote {name}: {err}"))?;
+            crate::jobs_registry::global().emit_result(
+                &plan.job_id,
+                &info.id,
+                &info.sha256,
+                info.size_bytes,
+            );
             artifacts.push(json!({
                 "name": name,
                 "kind": artifact.kind,
-                "bytes": bytes,
-                "sha256": artifact.sha256,
+                "bytes": bytes.len(),
+                "sha256": info.sha256,
+                "artifact_id": info.id,
             }));
         }
         // The bundle manifest is path-free: the bundle's own file names,
@@ -293,19 +306,6 @@ mod unix {
             )
             .map_err(|err| format!("cannot encode {}: {err}", path.display()))?;
         Ok(out)
-    }
-
-    /// The sha256 of the bytes (hex): the digest the bundle manifest records
-    /// for an artifact the server itself produced.
-    fn sha256_hex(bytes: &[u8]) -> String {
-        use sha2::{Digest as _, Sha256};
-        use std::fmt::Write as _;
-
-        let mut hex = String::with_capacity(64);
-        for byte in Sha256::digest(bytes) {
-            let _ = write!(hex, "{byte:02x}");
-        }
-        hex
     }
 
     /// The job's terminal state. The registry is a liveness view, so the
@@ -389,6 +389,8 @@ mod unix {
                 seed: 7,
                 timeout: Duration::from_secs(600),
                 max_output_bytes: 1024,
+                artifacts: Arc::new(crate::artifacts::Registry::new(None, 1024)),
+                job_id: "01J00000000000000000000000".to_owned(),
             };
             let manifest = AssetManifest {
                 manifest: 1,
@@ -424,6 +426,7 @@ mod unix {
                 "kind": "model",
                 "bytes": 3,
                 "sha256": "c".repeat(64),
+                "artifact_id": "d".repeat(64),
             })];
 
             let dto = BlenderJobCompletion {
@@ -447,6 +450,7 @@ mod unix {
                     kind: "model".to_owned(),
                     bytes: 3,
                     sha256: "c".repeat(64),
+                    artifact_id: "d".repeat(64),
                 }],
                 warnings: manifest.warnings.clone(),
                 progress: manifest

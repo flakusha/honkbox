@@ -42,6 +42,9 @@
 //! REQUESTED, and `job_finished` when the job leaves the registry (the
 //! event's `cancelled` flag says whether the token had been marked — for a
 //! non-interruptible job that still means the FFI call ran to completion).
+//! Progress-reporting backends also emit `job_progress` (step / total / pct)
+//! and artifact-producing routes emit `job_result` (artifact id / sha256 /
+//! size); neither is a lifecycle transition.
 //! Emission is fire-and-forget: with no live subscribers the send fails and
 //! the event is dropped; a subscriber that falls more than
 //! [`EVENT_CHANNEL_CAPACITY`] events behind gets a `Lagged` error (the SSE
@@ -148,6 +151,12 @@ impl JobEntry {
             started_at_ms: self.started_at_ms,
             interruptible: self.interruptible,
             cancelled,
+            step: None,
+            total_steps: None,
+            pct: None,
+            artifact_id: None,
+            sha256: None,
+            size_bytes: None,
         }
     }
 }
@@ -224,6 +233,12 @@ impl Registry {
             started_at_ms,
             interruptible,
             cancelled: false,
+            step: None,
+            total_steps: None,
+            pct: None,
+            artifact_id: None,
+            sha256: None,
+            size_bytes: None,
         });
         JobGuard {
             entries: Arc::clone(&self.entries),
@@ -285,6 +300,47 @@ impl Registry {
     /// `list` is the current-state snapshot.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
         self.events.subscribe()
+    }
+
+    /// Emit an incremental `job_progress` event for a live job. Fire-and-forget
+    /// like every other event; an unknown (already finished) id is a no-op.
+    pub(crate) fn emit_progress(&self, id: &str, step: u32, total_steps: u32) {
+        let mut event = {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(entry) = entries.get(id) else {
+                return;
+            };
+            entry.to_event(JobEventType::Progress, false)
+        };
+        event.step = Some(step);
+        event.total_steps = Some(total_steps);
+        // Percentage of work done; no percentage exists without a total.
+        event.pct = (total_steps > 0)
+            .then(|| ((f64::from(step) / f64::from(total_steps)) * 100.0).clamp(0.0, 100.0));
+        // The entries lock is already released; send only touches the channel.
+        let _ = self.events.send(event);
+    }
+
+    /// Emit a `job_result` event for a live job: one produced artifact,
+    /// identified by its content hash. Fire-and-forget; unknown id is a no-op.
+    pub(crate) fn emit_result(&self, id: &str, artifact_id: &str, sha256: &str, size_bytes: u64) {
+        let mut event = {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(entry) = entries.get(id) else {
+                return;
+            };
+            entry.to_event(JobEventType::Result, false)
+        };
+        event.artifact_id = Some(artifact_id.to_owned());
+        event.sha256 = Some(sha256.to_owned());
+        event.size_bytes = Some(size_bytes);
+        let _ = self.events.send(event);
     }
 }
 
@@ -420,6 +476,39 @@ mod tests {
         assert_eq!(listed[1].kind, "images");
         drop(first);
         drop(second);
+    }
+
+    #[tokio::test]
+    async fn progress_and_result_events_carry_their_payloads() {
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(JobKind::Images, None, true);
+        let _ = next_event(&mut receiver).await; // job_registered
+
+        registry.emit_progress(job.id(), 1, 4);
+        let progress = next_event(&mut receiver).await;
+        assert_eq!(progress.event, JobEventType::Progress);
+        assert_eq!(progress.step, Some(1));
+        assert_eq!(progress.total_steps, Some(4));
+        assert_eq!(progress.pct, Some(25.0));
+        assert!(progress.artifact_id.is_none());
+
+        registry.emit_progress(job.id(), 9, 4);
+        assert_eq!(next_event(&mut receiver).await.pct, Some(100.0));
+        registry.emit_progress(job.id(), 1, 0);
+        assert_eq!(next_event(&mut receiver).await.pct, None);
+
+        registry.emit_result(job.id(), "art_1", "abc123", 42);
+        let result = next_event(&mut receiver).await;
+        assert_eq!(result.event, JobEventType::Result);
+        assert_eq!(result.artifact_id.as_deref(), Some("art_1"));
+        assert_eq!(result.sha256.as_deref(), Some("abc123"));
+        assert_eq!(result.size_bytes, Some(42));
+        assert!(result.step.is_none());
+
+        // An id that is not live emits nothing.
+        registry.emit_result("job_unknown", "art_2", "def", 1);
+        assert!(receiver.try_recv().is_err());
     }
 
     /// Receive one event with a generous bound (a missed send fails with

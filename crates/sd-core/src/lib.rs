@@ -450,6 +450,20 @@ pub trait SdPipeline: Send + Sync {
         req: &Txt2ImgRequest,
         cancel: &AtomicBool,
     ) -> Result<GeneratedImage, SdError>;
+    /// Same generation, with a `(step, total_steps)` callback for backends
+    /// that can report work units. The default ignores `progress` and calls
+    /// [`SdPipeline::generate`], so existing implementors need no change.
+    /// Steps are backend-defined; a receiver must treat `total_steps == 0`
+    /// as "no percentage available".
+    fn generate_with_progress(
+        &self,
+        req: &Txt2ImgRequest,
+        cancel: &AtomicBool,
+        progress: &dyn Fn(u32, u32),
+    ) -> Result<GeneratedImage, SdError> {
+        let _ = progress;
+        self.generate(req, cancel)
+    }
     /// Backend tag recorded in bundle sidecars (`"stub"` here).
     fn backend_id(&self) -> &'static str;
 }

@@ -13,6 +13,7 @@
 //! content digest — a wrong digest is rejected before any process starts.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
@@ -68,6 +69,10 @@ pub(super) struct JobPlan {
     pub timeout: Duration,
     /// The caller's byte cap for the produced artifacts.
     pub max_output_bytes: u64,
+    /// Shared registry used to promote committed outputs by content digest.
+    pub artifacts: Arc<crate::artifacts::Registry>,
+    /// The registered job id, filled from the guard after admission.
+    pub job_id: String,
 }
 
 /// `POST /v1/jobs/blender` (FEAT-blender-job-route): admit a typed Blender
@@ -112,7 +117,7 @@ pub(super) async fn post_blender_job(
             Some("blender_storage_unavailable"),
         );
     };
-    let plan = match plan_job(&req, &config.artifacts) {
+    let mut plan = match plan_job(&req, config.artifacts.clone()) {
         Ok(plan) => plan,
         Err(rejection) => return rejection_response(rejection),
     };
@@ -143,6 +148,7 @@ pub(super) async fn post_blender_job(
         }
     };
     let job_id = guard.id().to_string();
+    plan.job_id.clone_from(&job_id);
     let bundle_id = ulid::Ulid::new().to_string();
     let bundle = data_dir.join("jobs").join(&bundle_id);
     if let Err(err) = std::fs::create_dir_all(&bundle) {
@@ -217,7 +223,7 @@ fn process_groups_supported() -> bool {
 /// `Err` is the named rejection (400 / 404 / 413).
 fn plan_job(
     req: &BlenderJobRequest,
-    artifacts: &crate::artifacts::Registry,
+    artifacts: Arc<crate::artifacts::Registry>,
 ) -> Result<JobPlan, Rejection> {
     if req.manifest != 1 {
         return Err((
@@ -300,7 +306,7 @@ fn plan_job(
     }
     let mut stages = Vec::with_capacity(req.stages.len());
     for stage in &req.stages {
-        stages.push(map_stage(stage, artifacts)?);
+        stages.push(map_stage(stage, &artifacts)?);
     }
     Ok(JobPlan {
         stages,
@@ -312,6 +318,8 @@ fn plan_job(
         seed: params.map_or(0, |params| params.seed),
         timeout: Duration::from_secs(timeout_secs),
         max_output_bytes: req.output.max_bytes,
+        artifacts,
+        job_id: String::new(), // replaced with the guard's id at admission
     })
 }
 
@@ -369,7 +377,7 @@ mod tests {
 
     /// The code of the named rejection the request earns.
     fn code(req: &BlenderJobRequest) -> &'static str {
-        plan_job(req, &store()).unwrap_err().2
+        plan_job(req, Arc::new(store())).unwrap_err().2
     }
 
     #[test]

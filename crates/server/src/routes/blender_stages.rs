@@ -31,6 +31,14 @@ const MAX_UV_MARGIN: f64 = 100.0;
 const MIN_VOXEL_SIZE: f64 = 0.001;
 const MAX_VOXEL_SIZE: f64 = 1000.0;
 
+/// No `job_progress` emission here: this is a pure, id-less validation pass
+/// over the whole recipe (it runs before the job executes), so there is
+/// neither a step index nor a job id to report. The emit belongs in
+/// `routes/blender_exec.rs::run`/`execute`, where the live guard id is in
+/// scope and the recipe's `HONKBOX_PROGRESS` events arrive via
+/// `honkbox_external_tools::blender_assets::parse_progress`
+/// (`AssetManifest::progress`) — translating those, not inventing steps.
+///
 /// Map one typed stage onto the recipe's own stage vocabulary, resolving
 /// the artifacts it names.
 #[allow(clippy::too_many_lines)] // one closed stage per branch, by design
