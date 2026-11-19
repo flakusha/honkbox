@@ -136,6 +136,10 @@ pub struct FeatureFlags {
     /// Experimental ash SD backend (compile feature
     /// `experimental-ash-sd`); empty until that backend's first code lands.
     pub experimental_ash_sd: bool,
+    /// Typed Blender asset jobs (`POST /v1/jobs/blender`). `true` only when
+    /// a Blender engine is installed and probed: the route answers a named
+    /// 501 otherwise.
+    pub blender: bool,
 }
 
 /// Vision chat capability (`FeatureFlags::vision`).
@@ -1676,8 +1680,9 @@ pub struct TranscriptionVerbose {
 
 /// `POST /v1/audio/speech` request (REQ-9). `model` is optional (server
 /// default TTS); `response_format` accepts `wav` (default, RIFF/WAVE
-/// container) or `pcm` (raw little-endian signed 16-bit mono samples,
-/// matching the `OpenAI` pcm semantics — no container, no header); anything
+/// container), `pcm` (raw little-endian signed 16-bit mono samples,
+/// matching the `OpenAI` pcm semantics — no container, no header), `flac`
+/// (lossless FLAC), or `opus` (Ogg-encapsulated gapless Opus); anything
 /// else is an explicit 400.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct SpeechRequest {
@@ -1690,7 +1695,8 @@ pub struct SpeechRequest {
     /// backend default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
-    /// Output format: `wav` (default) or `pcm` (raw s16le, no container).
+    /// Output format: `wav` (default), `pcm` (raw s16le, no container),
+    /// `flac` (lossless), or `opus` (Ogg-encapsulated, gapless).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
 }
@@ -2262,6 +2268,252 @@ pub struct JobEvent {
     pub cancelled: bool,
 }
 
+/// One Blender asset job (`POST /v1/jobs/blender`).
+///
+/// The route admits the job asynchronously: it answers `202` with the
+/// registry id, and the lifecycle runs through `GET /v1/jobs` and
+/// `GET /v1/events` like every other job class.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobRequest {
+    /// The mesh the job works on.
+    pub input: BlenderJobInput,
+    /// The stages to run, in execution order.
+    pub stages: Vec<BlenderStage>,
+    /// Job-wide parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<BlenderJobParams>,
+    /// The engine contract the caller expects; checked before Blender starts.
+    pub engine: BlenderEngine,
+    /// The output limits the caller expects.
+    pub output: BlenderOutput,
+    /// The manifest schema version the caller expects (currently `1`).
+    pub manifest: u32,
+}
+
+/// The mesh a Blender job works on. The mesh is read from the artifact
+/// store by id — the route never accepts a filesystem path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobInput {
+    /// The stored artifact id (its sha256) or an object key.
+    pub asset_id: String,
+    /// The format the stored mesh is in.
+    pub format: BlenderMeshFormat,
+    /// The sha256 the caller expects; a mismatch is rejected before the
+    /// Blender process starts.
+    pub sha256: String,
+}
+
+/// The mesh formats a Blender job can read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BlenderMeshFormat {
+    /// Binary glTF.
+    Glb,
+    /// Wavefront OBJ.
+    Obj,
+    /// Stanford PLY.
+    Ply,
+}
+
+/// Job-wide parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobParams {
+    /// The seed recorded in the manifest. The recipe is deterministic, so
+    /// the seed is metadata, not entropy.
+    #[serde(default)]
+    pub seed: u64,
+    /// The artifact name prefix; defaults to `output` (the artifacts land
+    /// as `output.glb`, `output_color.png`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// The job's wall-clock bound in seconds (default 600, max 3600). The
+    /// process group is killed when it expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+/// The engine contract a Blender job expects. Both fields are checked
+/// against the installed engine before the process starts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderEngine {
+    /// The Blender version the caller expects (e.g. `"4.5.15"`).
+    pub blender_version: String,
+    /// The recipe content pin: the sha256 of the embedded recipe BYTES
+    /// (`recipe_sha256()`, 64 lowercase hex). Absent = the caller pins no
+    /// recipe (the server runs its current one); present = the digest must
+    /// match, so a recipe change is a named 409
+    /// (`blender_script_version_mismatch`) instead of a silently different
+    /// result. This is a CONTENT digest only: a digest of a script path (or
+    /// of any other string) can never match and is rejected the same way.
+    /// A caller that cannot compute the byte digest omits the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_version: Option<String>,
+}
+
+/// The output limits a Blender job expects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderOutput {
+    /// The output format the caller expects (currently `"glb"`).
+    pub format: String,
+    /// The byte cap for the produced artifacts.
+    pub max_bytes: u64,
+}
+
+/// One stage of a Blender job, in execution order. The vocabulary is
+/// closed: the recipe knows exactly these stages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum BlenderStage {
+    /// Smart UV project.
+    UvUnpack {
+        /// The island margin in Blender units.
+        margin: f64,
+    },
+    /// Pack the file-backed images into the blend.
+    UvPack,
+    /// Voxel remesh.
+    VoxelRemesh {
+        /// The voxel size in Blender units.
+        voxel_size: f64,
+    },
+    /// Quadriflow retopology.
+    Quadriflow {
+        /// The target face count.
+        target_faces: u64,
+    },
+    /// Attach a texture through a `ShaderNodeTexImage`.
+    AttachTexture {
+        /// The stored artifact id of the image to attach.
+        image_id: String,
+        /// The node name to create.
+        node: String,
+    },
+    /// Bake maps to PNG files.
+    Bake {
+        /// The maps to bake.
+        maps: Vec<BlenderBakeMap>,
+        /// The square resolution of the baked maps.
+        resolution: u32,
+    },
+    /// Export the scene as a binary glTF.
+    ExportGlb,
+    /// Render a turntable preview: `frames` views around the object, tiled
+    /// into one image (the workspace has no animated webp encoder, so the
+    /// turntable ships as one still).
+    Turntable {
+        /// How many views to render (1..=8).
+        frames: u32,
+        /// The square resolution of each view (16..=1024).
+        resolution: u32,
+    },
+}
+
+/// The maps a bake can produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BlenderBakeMap {
+    /// The diffuse colour map.
+    Color,
+    /// The tangent-space normal map.
+    Normal,
+    /// The roughness map.
+    Roughness,
+}
+
+/// 202 acceptance body (`POST /v1/jobs/blender`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct BlenderJobAccepted {
+    /// Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the
+    /// `X-Job-Id` header and the cancel route while the job is live.
+    pub job_id: String,
+    /// The state at acceptance: always `"queued"`.
+    pub status: String,
+    /// Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the manifest and
+    /// the artifacts land there. Absent when the server runs without a data
+    /// dir (bundles are disabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+}
+
+/// The typed completion record of a Blender asset job: the same shape the
+/// bundle's `manifest.json` carries. The writer is
+/// `routes/blender_exec.rs::manifest_record`, and a unit test there pins
+/// this DTO to it — the file on disk and this contract cannot drift apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobCompletion {
+    /// The manifest schema version (currently `1`).
+    pub manifest: u32,
+    /// The Blender version that ran the job.
+    pub blender_version: String,
+    /// The recipe version that ran the job.
+    pub recipe_version: String,
+    /// The sha256 of the recipe bytes that ran the job.
+    pub recipe_sha256: String,
+    /// The job, echoed back.
+    pub job: BlenderJobCompletionJob,
+    /// The produced artifacts, in recipe order.
+    pub artifacts: Vec<BlenderJobCompletionArtifact>,
+    /// Non-fatal notes from the recipe.
+    pub warnings: Vec<String>,
+    /// The progress events the recipe reported.
+    pub progress: Vec<BlenderJobCompletionProgress>,
+}
+
+/// The echoed job inside a [`BlenderJobCompletion`]: what ran, without any
+/// filesystem path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobCompletionJob {
+    /// The mesh the job consumed.
+    pub input: BlenderJobCompletionInput,
+    /// The stages as requested (the request echo).
+    pub stages: Vec<BlenderStage>,
+    /// The artifact name prefix the job used.
+    pub prefix: String,
+    /// The seed recorded for the job (metadata, not entropy).
+    pub seed: u64,
+}
+
+/// The mesh a [`BlenderJobCompletion`] records as consumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobCompletionInput {
+    /// The artifact-store id of the mesh (its sha256).
+    pub artifact_id: String,
+    /// The mesh format (`glb`, `obj` or `ply`).
+    pub format: String,
+}
+
+/// One produced artifact in a [`BlenderJobCompletion`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobCompletionArtifact {
+    /// The bundle file name (never a staging path).
+    pub name: String,
+    /// What it is (`map`, `model` or the `preview` strip).
+    pub kind: String,
+    /// Its size in bytes (post-conversion for the preview).
+    pub bytes: u64,
+    /// Its sha256 (of the bundle bytes).
+    pub sha256: String,
+}
+
+/// One progress event a [`BlenderJobCompletion`] records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderJobCompletionProgress {
+    /// The stage the event belongs to.
+    pub stage: String,
+    /// What happened: `start`, `done` or `cancelled`.
+    pub event: String,
+}
+
 /// Fit-pill verdict for a curated catalog entry against the configured
 /// `[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind
 /// overhead factors over weight bytes), never a measurement.
@@ -2525,6 +2777,20 @@ mod tests {
             RecognitionPage::decl(&config),
             RecognitionEngineMeta::decl(&config),
             RecognizeResult::decl(&config),
+            BlenderJobRequest::decl(&config),
+            BlenderJobInput::decl(&config),
+            BlenderMeshFormat::decl(&config),
+            BlenderJobParams::decl(&config),
+            BlenderEngine::decl(&config),
+            BlenderOutput::decl(&config),
+            BlenderStage::decl(&config),
+            BlenderBakeMap::decl(&config),
+            BlenderJobAccepted::decl(&config),
+            BlenderJobCompletion::decl(&config),
+            BlenderJobCompletionJob::decl(&config),
+            BlenderJobCompletionInput::decl(&config),
+            BlenderJobCompletionArtifact::decl(&config),
+            BlenderJobCompletionProgress::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');

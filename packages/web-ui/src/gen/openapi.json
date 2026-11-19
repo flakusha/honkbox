@@ -298,7 +298,7 @@
     "/v1/audio/speech": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as\n`/v1/synthesize`. `model` optional (server default TTS), `voice` passed\nthrough; `response_format` is `\"wav\"` (default, RIFF/WAVE container) or\n`\"pcm\"` — raw little-endian signed 16-bit mono samples with **no**\ncontainer: the worker already returns mono PCM16, so the pcm path\nserializes the exact same samples minus the 44-byte RIFF header (`OpenAI`\npcm semantics). `response_format` accepts `wav` (default) or `pcm`.",
+        "summary": "`POST /v1/audio/speech` (REQ-9): `OpenAI`-shaped TTS. Same worker as\n`/v1/synthesize`. `model` optional (server default TTS), `voice` passed\nthrough; `response_format` is `\"wav\"` (default, RIFF/WAVE container),\n`\"pcm\"` (raw s16le, no container), `\"flac\"` (lossless), or `\"opus\"`\n(Ogg-encapsulated, gapless). Applies to every TTS backend (stub + Kokoro):\nencoding runs on the worker's PCM16, never in the voice model.",
         "operationId": "post_audio_speech",
         "requestBody": {
           "content": {
@@ -312,9 +312,9 @@
         },
         "responses": {
           "200": {
-            "description": "Raw s16le mono PCM (pcm response_format; no container)",
+            "description": "Ogg-encapsulated Opus, gapless (opus response_format)",
             "content": {
-              "audio/pcm-s16le": {}
+              "audio/ogg": {}
             }
           },
           "400": {
@@ -338,7 +338,7 @@
             }
           },
           "500": {
-            "description": "Synthesis failed",
+            "description": "Synthesis or audio encoding failed",
             "content": {
               "application/json": {
                 "schema": {
@@ -532,7 +532,7 @@
     "/v1/catalog": {
       "get": {
         "tags": [],
-        "summary": "`GET /v1/catalog`: the curated manifest merged with the local scan\nsnapshot. Match by (kind, file name); fit pills (`ok`/`slow`/`fail`)\ncompute only from the matched file's bytes against\n`[models] vram_budget_bytes` — without a budget the advisory fields are\nomitted and entries show manifest metadata + local bytes only. Pills\nare advice, never enforcement.",
+        "summary": "`GET /v1/catalog`: the raw catalog list, serialized from the shared\nsnapshot so the response is byte-identical across refreshes.",
         "operationId": "get_catalog",
         "responses": {
           "200": {
@@ -1195,6 +1195,105 @@
         }
       }
     },
+    "/v1/jobs/blender": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/jobs/blender` (FEAT-blender-job-route): admit a typed Blender\nasset job. The route validates the request, resolves the mesh from the\nartifact store, checks the engine contract against the probed Blender\nand takes the admission lease; the work itself runs in a supervised\nBlender process (`routes/blender_exec.rs`) and the outcome lands in the\njob bundle (`<data_dir>/jobs/{bundle}/`).",
+        "operationId": "post_blender_job",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlenderJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Job admitted; the bundle id names the job directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlenderJobAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request, unsupported manifest or output format, out-of-range stage params, or an input digest that does not match the artifact id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The input mesh (or a texture) is not in the artifact store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The engine contract does not match the installed Blender or recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The input mesh is over the byte cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission busy (the ledger queue)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No Blender engine is installed, or the host cannot supervise a process group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No data dir: the artifact store and the job bundles are disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/jobs/{id}": {
       "delete": {
         "tags": [],
@@ -1655,6 +1754,540 @@
             "description": "`\"none\"` (loopback-only operation) or `\"bearer\"` (key required on\nevery route except the probes). The key VALUE is never in this\ndocument."
           }
         }
+      },
+      "BlenderBakeMap": {
+        "type": "string",
+        "description": "The maps a bake can produce.",
+        "enum": [
+          "color",
+          "normal",
+          "roughness"
+        ]
+      },
+      "BlenderEngine": {
+        "type": "object",
+        "description": "The engine contract a Blender job expects. Both fields are checked\nagainst the installed engine before the process starts.",
+        "required": [
+          "blender_version"
+        ],
+        "properties": {
+          "blender_version": {
+            "type": "string",
+            "description": "The Blender version the caller expects (e.g. `\"4.5.15\"`)."
+          },
+          "script_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The recipe content pin: the sha256 of the embedded recipe BYTES\n(`recipe_sha256()`, 64 lowercase hex). Absent = the caller pins no\nrecipe (the server runs its current one); present = the digest must\nmatch, so a recipe change is a named 409\n(`blender_script_version_mismatch`) instead of a silently different\nresult. This is a CONTENT digest only: a digest of a script path (or\nof any other string) can never match and is rejected the same way.\nA caller that cannot compute the byte digest omits the field."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobAccepted": {
+        "type": "object",
+        "description": "202 acceptance body (`POST /v1/jobs/blender`).",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "properties": {
+          "bundle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the manifest and\nthe artifacts land there. Absent when the server runs without a data\ndir (bundles are disabled)."
+          },
+          "job_id": {
+            "type": "string",
+            "description": "Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the\n`X-Job-Id` header and the cancel route while the job is live."
+          },
+          "status": {
+            "type": "string",
+            "description": "The state at acceptance: always `\"queued\"`."
+          }
+        }
+      },
+      "BlenderJobCompletion": {
+        "type": "object",
+        "description": "The typed completion record of a Blender asset job: the same shape the\nbundle's `manifest.json` carries. The writer is\n`routes/blender_exec.rs::manifest_record`, and a unit test there pins\nthis DTO to it — the file on disk and this contract cannot drift apart.",
+        "required": [
+          "manifest",
+          "blender_version",
+          "recipe_version",
+          "recipe_sha256",
+          "job",
+          "artifacts",
+          "warnings",
+          "progress"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlenderJobCompletionArtifact"
+            },
+            "description": "The produced artifacts, in recipe order."
+          },
+          "blender_version": {
+            "type": "string",
+            "description": "The Blender version that ran the job."
+          },
+          "job": {
+            "$ref": "#/components/schemas/BlenderJobCompletionJob",
+            "description": "The job, echoed back."
+          },
+          "manifest": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The manifest schema version (currently `1`).",
+            "minimum": 0
+          },
+          "progress": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlenderJobCompletionProgress"
+            },
+            "description": "The progress events the recipe reported."
+          },
+          "recipe_sha256": {
+            "type": "string",
+            "description": "The sha256 of the recipe bytes that ran the job."
+          },
+          "recipe_version": {
+            "type": "string",
+            "description": "The recipe version that ran the job."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Non-fatal notes from the recipe."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobCompletionArtifact": {
+        "type": "object",
+        "description": "One produced artifact in a [`BlenderJobCompletion`].",
+        "required": [
+          "name",
+          "kind",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its size in bytes (post-conversion for the preview).",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "What it is (`map`, `model` or the `preview` strip)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The bundle file name (never a staging path)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Its sha256 (of the bundle bytes)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobCompletionInput": {
+        "type": "object",
+        "description": "The mesh a [`BlenderJobCompletion`] records as consumed.",
+        "required": [
+          "artifact_id",
+          "format"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The artifact-store id of the mesh (its sha256)."
+          },
+          "format": {
+            "type": "string",
+            "description": "The mesh format (`glb`, `obj` or `ply`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobCompletionJob": {
+        "type": "object",
+        "description": "The echoed job inside a [`BlenderJobCompletion`]: what ran, without any\nfilesystem path.",
+        "required": [
+          "input",
+          "stages",
+          "prefix",
+          "seed"
+        ],
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/BlenderJobCompletionInput",
+            "description": "The mesh the job consumed."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The artifact name prefix the job used."
+          },
+          "seed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The seed recorded for the job (metadata, not entropy).",
+            "minimum": 0
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlenderStage"
+            },
+            "description": "The stages as requested (the request echo)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobCompletionProgress": {
+        "type": "object",
+        "description": "One progress event a [`BlenderJobCompletion`] records.",
+        "required": [
+          "stage",
+          "event"
+        ],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "What happened: `start`, `done` or `cancelled`."
+          },
+          "stage": {
+            "type": "string",
+            "description": "The stage the event belongs to."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobInput": {
+        "type": "object",
+        "description": "The mesh a Blender job works on. The mesh is read from the artifact\nstore by id — the route never accepts a filesystem path.",
+        "required": [
+          "asset_id",
+          "format",
+          "sha256"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The stored artifact id (its sha256) or an object key."
+          },
+          "format": {
+            "$ref": "#/components/schemas/BlenderMeshFormat",
+            "description": "The format the stored mesh is in."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The sha256 the caller expects; a mismatch is rejected before the\nBlender process starts."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobParams": {
+        "type": "object",
+        "description": "Job-wide parameters.",
+        "properties": {
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artifact name prefix; defaults to `output` (the artifacts land\nas `output.glb`, `output_color.png`, ...)."
+          },
+          "seed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The seed recorded in the manifest. The recipe is deterministic, so\nthe seed is metadata, not entropy.",
+            "minimum": 0
+          },
+          "timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The job's wall-clock bound in seconds (default 600, max 3600). The\nprocess group is killed when it expires.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderJobRequest": {
+        "type": "object",
+        "description": "One Blender asset job (`POST /v1/jobs/blender`).\n\nThe route admits the job asynchronously: it answers `202` with the\nregistry id, and the lifecycle runs through `GET /v1/jobs` and\n`GET /v1/events` like every other job class.",
+        "required": [
+          "input",
+          "stages",
+          "engine",
+          "output",
+          "manifest"
+        ],
+        "properties": {
+          "engine": {
+            "$ref": "#/components/schemas/BlenderEngine",
+            "description": "The engine contract the caller expects; checked before Blender starts."
+          },
+          "input": {
+            "$ref": "#/components/schemas/BlenderJobInput",
+            "description": "The mesh the job works on."
+          },
+          "manifest": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The manifest schema version the caller expects (currently `1`).",
+            "minimum": 0
+          },
+          "output": {
+            "$ref": "#/components/schemas/BlenderOutput",
+            "description": "The output limits the caller expects."
+          },
+          "params": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BlenderJobParams",
+                "description": "Job-wide parameters."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlenderStage"
+            },
+            "description": "The stages to run, in execution order."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderMeshFormat": {
+        "type": "string",
+        "description": "The mesh formats a Blender job can read.",
+        "enum": [
+          "glb",
+          "obj",
+          "ply"
+        ]
+      },
+      "BlenderOutput": {
+        "type": "object",
+        "description": "The output limits a Blender job expects.",
+        "required": [
+          "format",
+          "max_bytes"
+        ],
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "The output format the caller expects (currently `\"glb\"`)."
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The byte cap for the produced artifacts.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlenderStage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Smart UV project.",
+            "required": [
+              "margin",
+              "op"
+            ],
+            "properties": {
+              "margin": {
+                "type": "number",
+                "format": "double",
+                "description": "The island margin in Blender units."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "uv_unpack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pack the file-backed images into the blend.",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "uv_pack"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Voxel remesh.",
+            "required": [
+              "voxel_size",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "voxel_remesh"
+                ]
+              },
+              "voxel_size": {
+                "type": "number",
+                "format": "double",
+                "description": "The voxel size in Blender units."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Quadriflow retopology.",
+            "required": [
+              "target_faces",
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "quadriflow"
+                ]
+              },
+              "target_faces": {
+                "type": "integer",
+                "format": "int64",
+                "description": "The target face count.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Attach a texture through a `ShaderNodeTexImage`.",
+            "required": [
+              "image_id",
+              "node",
+              "op"
+            ],
+            "properties": {
+              "image_id": {
+                "type": "string",
+                "description": "The stored artifact id of the image to attach."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node name to create."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "attach_texture"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Bake maps to PNG files.",
+            "required": [
+              "maps",
+              "resolution",
+              "op"
+            ],
+            "properties": {
+              "maps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlenderBakeMap"
+                },
+                "description": "The maps to bake."
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "bake"
+                ]
+              },
+              "resolution": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The square resolution of the baked maps.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Export the scene as a binary glTF.",
+            "required": [
+              "op"
+            ],
+            "properties": {
+              "op": {
+                "type": "string",
+                "enum": [
+                  "export_glb"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Render a turntable preview: `frames` views around the object, tiled\ninto one image (the workspace has no animated webp encoder, so the\nturntable ships as one still).",
+            "required": [
+              "frames",
+              "resolution",
+              "op"
+            ],
+            "properties": {
+              "frames": {
+                "type": "integer",
+                "format": "int32",
+                "description": "How many views to render (1..=8).",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "turntable"
+                ]
+              },
+              "resolution": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The square resolution of each view (16..=1024).",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "One stage of a Blender job, in execution order. The vocabulary is\nclosed: the recipe knows exactly these stages."
       },
       "Capabilities": {
         "type": "object",
@@ -2466,9 +3099,14 @@
           "jobs",
           "events",
           "vad",
-          "experimental_ash_sd"
+          "experimental_ash_sd",
+          "blender"
         ],
         "properties": {
+          "blender": {
+            "type": "boolean",
+            "description": "Typed Blender asset jobs (`POST /v1/jobs/blender`). `true` only when\na Blender engine is installed and probed: the route answers a named\n501 otherwise."
+          },
           "controlnet": {
             "$ref": "#/components/schemas/ControlNetFeature",
             "description": "ControlNet-conditioned renders on `POST /v1/images/generations`."
@@ -4607,7 +5245,7 @@
       },
       "SpeechRequest": {
         "type": "object",
-        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` accepts `wav` (default, RIFF/WAVE\ncontainer) or `pcm` (raw little-endian signed 16-bit mono samples,\nmatching the `OpenAI` pcm semantics — no container, no header); anything\nelse is an explicit 400.",
+        "description": "`POST /v1/audio/speech` request (REQ-9). `model` is optional (server\ndefault TTS); `response_format` accepts `wav` (default, RIFF/WAVE\ncontainer), `pcm` (raw little-endian signed 16-bit mono samples,\nmatching the `OpenAI` pcm semantics — no container, no header), `flac`\n(lossless FLAC), or `opus` (Ogg-encapsulated gapless Opus); anything\nelse is an explicit 400.",
         "required": [
           "input"
         ],
@@ -4628,7 +5266,7 @@
               "string",
               "null"
             ],
-            "description": "Output format: `wav` (default) or `pcm` (raw s16le, no container)."
+            "description": "Output format: `wav` (default), `pcm` (raw s16le, no container),\n`flac` (lossless), or `opus` (Ogg-encapsulated, gapless)."
           },
           "voice": {
             "type": [

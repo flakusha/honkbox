@@ -16,13 +16,6 @@ mod model_formats;
 mod ora;
 mod raster;
 mod routes;
-// Supervised external processes (TASK-process-supervisor): process groups
-// are a unix mechanism, so the module is unix-only. `allow(dead_code)`: the
-// supervisor lands ahead of its first caller (the Blender job route,
-// FEAT-blender-job-route), so nothing in the binary calls it yet.
-#[cfg(unix)]
-#[allow(dead_code)]
-mod supervisor;
 mod svg;
 mod swap;
 

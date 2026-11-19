@@ -137,6 +137,9 @@ pub struct Outcome {
     /// `true` when stderr hit the cap.
     pub stderr_truncated: bool,
     /// The artifacts matched by `Spec::artifacts`, sorted and deduplicated.
+    // The blender caller reads its artifacts from the recipe manifest (it
+    // needs their kinds and hashes), so nothing reads this list there.
+    #[allow(dead_code)]
     pub artifacts: Vec<PathBuf>,
 }
 

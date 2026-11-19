@@ -889,7 +889,8 @@ export type SpeechRequest = {
    */
   voice?: string | null;
   /**
-   * Output format: `wav` (default) or `pcm` (raw s16le, no container).
+   * Output format: `wav` (default), `pcm` (raw s16le, no container),
+   * `flac` (lossless), or `opus` (Ogg-encapsulated, gapless).
    */
   response_format?: string | null;
 };
@@ -1659,6 +1660,12 @@ export type FeatureFlags = {
    * `experimental-ash-sd`); empty until that backend's first code lands.
    */
   experimental_ash_sd: boolean;
+  /**
+   * Typed Blender asset jobs (`POST /v1/jobs/blender`). `true` only when
+   * a Blender engine is installed and probed: the route answers a named
+   * 501 otherwise.
+   */
+  blender: boolean;
 };
 export type VisionFeature = {
   /**
@@ -1951,4 +1958,255 @@ export type RecognizeResult = {
    * One entry per processed page.
    */
   pages: Array<RecognitionPage>;
+};
+export type BlenderJobRequest = {
+  /**
+   * The mesh the job works on.
+   */
+  input: BlenderJobInput;
+  /**
+   * The stages to run, in execution order.
+   */
+  stages: Array<BlenderStage>;
+  /**
+   * Job-wide parameters.
+   */
+  params?: BlenderJobParams | null;
+  /**
+   * The engine contract the caller expects; checked before Blender starts.
+   */
+  engine: BlenderEngine;
+  /**
+   * The output limits the caller expects.
+   */
+  output: BlenderOutput;
+  /**
+   * The manifest schema version the caller expects (currently `1`).
+   */
+  manifest: number;
+};
+export type BlenderJobInput = {
+  /**
+   * The stored artifact id (its sha256) or an object key.
+   */
+  asset_id: string;
+  /**
+   * The format the stored mesh is in.
+   */
+  format: BlenderMeshFormat;
+  /**
+   * The sha256 the caller expects; a mismatch is rejected before the
+   * Blender process starts.
+   */
+  sha256: string;
+};
+export type BlenderMeshFormat = "glb" | "obj" | "ply";
+export type BlenderJobParams = {
+  /**
+   * The seed recorded in the manifest. The recipe is deterministic, so
+   * the seed is metadata, not entropy.
+   */
+  seed: bigint;
+  /**
+   * The artifact name prefix; defaults to `output` (the artifacts land
+   * as `output.glb`, `output_color.png`, ...).
+   */
+  prefix?: string | null;
+  /**
+   * The job's wall-clock bound in seconds (default 600, max 3600). The
+   * process group is killed when it expires.
+   */
+  timeout_secs?: bigint | null;
+};
+export type BlenderEngine = {
+  /**
+   * The Blender version the caller expects (e.g. `"4.5.15"`).
+   */
+  blender_version: string;
+  /**
+   * The recipe content pin: the sha256 of the embedded recipe BYTES
+   * (`recipe_sha256()`, 64 lowercase hex). Absent = the caller pins no
+   * recipe (the server runs its current one); present = the digest must
+   * match, so a recipe change is a named 409
+   * (`blender_script_version_mismatch`) instead of a silently different
+   * result. This is a CONTENT digest only: a digest of a script path (or
+   * of any other string) can never match and is rejected the same way.
+   * A caller that cannot compute the byte digest omits the field.
+   */
+  script_version?: string | null;
+};
+export type BlenderOutput = {
+  /**
+   * The output format the caller expects (currently `"glb"`).
+   */
+  format: string;
+  /**
+   * The byte cap for the produced artifacts.
+   */
+  max_bytes: bigint;
+};
+export type BlenderStage =
+  | {
+    "op": "uv_unpack";
+    /**
+     * The island margin in Blender units.
+     */
+    margin: number;
+  }
+  | { "op": "uv_pack"; }
+  | {
+    "op": "voxel_remesh";
+    /**
+     * The voxel size in Blender units.
+     */
+    voxel_size: number;
+  }
+  | {
+    "op": "quadriflow";
+    /**
+     * The target face count.
+     */
+    target_faces: bigint;
+  }
+  | {
+    "op": "attach_texture";
+    /**
+     * The stored artifact id of the image to attach.
+     */
+    image_id: string;
+    /**
+     * The node name to create.
+     */
+    node: string;
+  }
+  | {
+    "op": "bake";
+    /**
+     * The maps to bake.
+     */
+    maps: Array<BlenderBakeMap>;
+    /**
+     * The square resolution of the baked maps.
+     */
+    resolution: number;
+  }
+  | { "op": "export_glb"; }
+  | {
+    "op": "turntable";
+    /**
+     * How many views to render (1..=8).
+     */
+    frames: number;
+    /**
+     * The square resolution of each view (16..=1024).
+     */
+    resolution: number;
+  };
+export type BlenderBakeMap = "color" | "normal" | "roughness";
+export type BlenderJobAccepted = {
+  /**
+   * Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the
+   * `X-Job-Id` header and the cancel route while the job is live.
+   */
+  job_id: string;
+  /**
+   * The state at acceptance: always `"queued"`.
+   */
+  status: string;
+  /**
+   * Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the manifest and
+   * the artifacts land there. Absent when the server runs without a data
+   * dir (bundles are disabled).
+   */
+  bundle?: string | null;
+};
+export type BlenderJobCompletion = {
+  /**
+   * The manifest schema version (currently `1`).
+   */
+  manifest: number;
+  /**
+   * The Blender version that ran the job.
+   */
+  blender_version: string;
+  /**
+   * The recipe version that ran the job.
+   */
+  recipe_version: string;
+  /**
+   * The sha256 of the recipe bytes that ran the job.
+   */
+  recipe_sha256: string;
+  /**
+   * The job, echoed back.
+   */
+  job: BlenderJobCompletionJob;
+  /**
+   * The produced artifacts, in recipe order.
+   */
+  artifacts: Array<BlenderJobCompletionArtifact>;
+  /**
+   * Non-fatal notes from the recipe.
+   */
+  warnings: Array<string>;
+  /**
+   * The progress events the recipe reported.
+   */
+  progress: Array<BlenderJobCompletionProgress>;
+};
+export type BlenderJobCompletionJob = {
+  /**
+   * The mesh the job consumed.
+   */
+  input: BlenderJobCompletionInput;
+  /**
+   * The stages as requested (the request echo).
+   */
+  stages: Array<BlenderStage>;
+  /**
+   * The artifact name prefix the job used.
+   */
+  prefix: string;
+  /**
+   * The seed recorded for the job (metadata, not entropy).
+   */
+  seed: bigint;
+};
+export type BlenderJobCompletionInput = {
+  /**
+   * The artifact-store id of the mesh (its sha256).
+   */
+  artifact_id: string;
+  /**
+   * The mesh format (`glb`, `obj` or `ply`).
+   */
+  format: string;
+};
+export type BlenderJobCompletionArtifact = {
+  /**
+   * The bundle file name (never a staging path).
+   */
+  name: string;
+  /**
+   * What it is (`map`, `model` or the `preview` strip).
+   */
+  kind: string;
+  /**
+   * Its size in bytes (post-conversion for the preview).
+   */
+  bytes: bigint;
+  /**
+   * Its sha256 (of the bundle bytes).
+   */
+  sha256: string;
+};
+export type BlenderJobCompletionProgress = {
+  /**
+   * The stage the event belongs to.
+   */
+  stage: string;
+  /**
+   * What happened: `start`, `done` or `cancelled`.
+   */
+  event: string;
 };

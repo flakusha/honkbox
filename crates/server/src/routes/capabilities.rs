@@ -48,6 +48,9 @@ pub const ADMITTING_ROUTES: &[(&str, &str)] = &[
     // The CPU-only bucket: image ops and the audio routes take the `rag`
     // bucket (0 GPU slots) — the fixed 8-kind vocabulary has no CPU kind.
     ("rag", "/v1/image-ops"),
+    // Blender asset jobs (`POST /v1/jobs/blender`): the route admits a job
+    // of the `blender` kind, so the reserved row becomes callable.
+    ("blender", "/v1/jobs/blender"),
 ];
 
 /// The route that admits a job of `kind`, if any (see [`ADMITTING_ROUTES`]).
@@ -123,6 +126,11 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             events: true,
             vad: VAD_COMPILED,
             experimental_ash_sd: cfg!(feature = "experimental-ash-sd"),
+            // Blender engine jobs (`POST /v1/jobs/blender`): `true` only
+            // when a Blender engine is installed and probed — the route
+            // answers a named 501 otherwise, so the flag never promises
+            // an engine the server cannot drive.
+            blender: super::external_tools::blender_engine().is_some(),
         },
         formats: Formats {
             // The registry (`crate::formats`) is the single source of truth:

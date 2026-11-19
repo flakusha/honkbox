@@ -1,6 +1,6 @@
 # EPIC: Blender asset workstream
 
-Status: proposed
+Status: in progress
 Priority: P1
 Owner: unassigned
 Research: `.tmp/research/ReviewedFullCycle-Blender-Workstream.md`,
@@ -16,7 +16,7 @@ and are never incorporated into honkbox.
 
 ## Tickets
 
-- `FEAT-blender-job-route.md` — typed `POST /v1/jobs/blender` job kind + route (P1, filed from the 2026-11-18 full-cycle research; depends on `TASK-process-supervisor.md` and `FEAT-blender-asset-preflight.md`).
+- `FEAT-blender-job-route.md` — typed `POST /v1/jobs/blender` job kind + route (P1, LANDED 2026-11-19: the typed route, the supervised run and the closed stage vocabulary live in `crates/server/src/routes/blender*.rs`; the mesh comes from the artifact store by id and the lifecycle runs through `/v1/jobs` + `/v1/events`; the live HTTP fixture wrote `output.glb`, `output_turntable.webp`, `manifest.json` and `status.json: done`).
 - `FEAT-blender-asset-preflight.md` — headless map/geometry normalization into engine-ready assets with a deterministic manifest (P1, LANDED 2026-11-19: the typed job API, the embedded recipe and the manifest live in `crates/external-tools`; the HTTP job route is the next ticket).
 - `TASK-blender-addon-capability-probe.md` — headless addon probe; built-in/free-OSS/paid-detect-only tiers with versions and licenses (P1, LANDED 2026-11-19: crate-side probe + capability advertisement; the tier rows reach HTTP and job metadata with the job route).
 - `FEAT-blender-rigging.md` — OSS-first rig jobs with bone/weight reports and base-rig-only warning (P2).

@@ -17,6 +17,7 @@ import os
 import sys
 
 import bpy
+from mathutils import Vector
 
 PROGRESS_PREFIX = "HONKBOX_PROGRESS="
 
@@ -276,6 +277,105 @@ def stage_export_glb(obj, op, job):
     return [{"path": path, "kind": "model"}]
 
 
+def bounds_of(obj):
+    """The world-space center and radius of the object's bounding box."""
+    bpy.context.view_layer.update()
+    corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    mins = [min(c[axis] for c in corners) for axis in range(3)]
+    maxs = [max(c[axis] for c in corners) for axis in range(3)]
+    center = Vector([(mins[axis] + maxs[axis]) / 2.0 for axis in range(3)])
+    extent = Vector([maxs[axis] - mins[axis] for axis in range(3)])
+    return center, max(extent.length / 2.0, 1e-3)
+
+
+def render_turntable(obj, frames, resolution, output_dir, prefix):
+    """Render `frames` views around the object and tile them into one image.
+
+    The turntable ships as ONE still (a horizontal strip of the views): the
+    workspace has no animated webp encoder, and a strip shows every angle a
+    consumer needs to judge the mesh.
+    """
+    import numpy as np
+
+    scene = bpy.context.scene
+    center, radius = bounds_of(obj)
+    cam_data = bpy.data.cameras.new("turntable_camera")
+    cam = bpy.data.objects.new("turntable_camera", cam_data)
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+    light_data = bpy.data.lights.new("turntable_light", type="SUN")
+    light_data.energy = 4.0
+    light = bpy.data.objects.new("turntable_light", light_data)
+    scene.collection.objects.link(light)
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = 8
+    # A dim world so the faces turned away from the sun are still readable.
+    world = scene.world
+    if world is None:
+        world = bpy.data.worlds.new("turntable_world")
+        scene.world = world
+    world.use_nodes = True
+    world.node_tree.nodes["Background"].inputs[0].default_value = (0.08, 0.08, 0.08, 1.0)
+    scene.render.resolution_x = resolution
+    scene.render.resolution_y = resolution
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    distance = radius * 3.5
+    frame_paths = []
+    for index in range(frames):
+        angle = 2.0 * math.pi * index / float(frames)
+        cam.location = center + Vector(
+            (math.cos(angle) * distance, radius * 0.8, math.sin(angle) * distance)
+        )
+        cam.rotation_euler = (center - cam.location).to_track_quat("-Z", "Y").to_euler()
+        # The key light travels with the camera (a studio setup): every view
+        # is lit the same way, so no frame is a black silhouette.
+        light_pos = center + Vector(
+            (
+                math.cos(angle + 0.7) * distance * 0.8,
+                radius * 1.6,
+                math.sin(angle + 0.7) * distance * 0.8,
+            )
+        )
+        light.location = light_pos
+        light.rotation_euler = (center - light_pos).to_track_quat("-Z", "Y").to_euler()
+        path = os.path.join(output_dir, "%s_turntable_%02d.png" % (prefix, index))
+        scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        frame_paths.append(path)
+    strip_path = os.path.join(output_dir, "%s_turntable.png" % prefix)
+    images = [bpy.data.images.load(path) for path in frame_paths]
+    width, height = images[0].size
+    strip = np.zeros((height, width * len(images), 4), dtype=np.float32)
+    for index, image in enumerate(images):
+        pixels = np.empty(width * height * 4, dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        strip[:, index * width : (index + 1) * width, :] = pixels.reshape(height, width, 4)
+        bpy.data.images.remove(image)
+    out = bpy.data.images.new("turntable", width=width * len(images), height=height)
+    out.pixels.foreach_set(strip.reshape(-1))
+    out.filepath_raw = strip_path
+    out.file_format = "PNG"
+    out.save()
+    for path in frame_paths:
+        os.remove(path)
+    return strip_path
+
+
+def stage_turntable(obj, op, job):
+    """Render the turntable preview of the current object."""
+    frames = max(1, int(op.get("frames", 4)))
+    resolution = max(16, int(op.get("resolution", 256)))
+    path = render_turntable(
+        obj,
+        frames,
+        resolution,
+        job["output_dir"],
+        job.get("prefix", "honkbox_asset"),
+    )
+    return [{"path": path, "kind": "preview"}]
+
+
 def apply_stage(obj, op, job, artifacts, warnings):
     """Run one stage; return the artifacts it produced."""
     stage = op.get("op", "")
@@ -293,6 +393,8 @@ def apply_stage(obj, op, job, artifacts, warnings):
         return stage_bake(obj, op, job)
     if stage == "export_glb":
         return stage_export_glb(obj, op, job)
+    if stage == "turntable":
+        return stage_turntable(obj, op, job)
     raise RecipeError("unknown stage: %s" % stage)
 
 

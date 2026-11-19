@@ -124,6 +124,14 @@ pub enum AssetStage {
     },
     /// Export the scene as a binary glTF.
     ExportGlb,
+    /// Render a turntable preview: `frames` views around the object, tiled
+    /// into one image.
+    Turntable {
+        /// How many views to render.
+        frames: u32,
+        /// The square resolution of each view.
+        resolution: u32,
+    },
 }
 
 /// The maps a bake can produce.
@@ -259,6 +267,60 @@ pub fn run(
     Ok(manifest)
 }
 
+/// The files one recipe run needs on disk. A caller that owns its own
+/// process lifecycle (the server route drives Blender through the process
+/// supervisor) writes them with [`prepare`] and runs the script itself.
+#[derive(Debug, Clone)]
+pub struct RecipeFiles {
+    /// The recipe script to hand to Blender (`--python`).
+    pub script: PathBuf,
+    /// The job JSON the recipe reads.
+    pub job: PathBuf,
+    /// Where the recipe writes its result.
+    pub result: PathBuf,
+    /// The cancel marker the recipe checks between stages.
+    pub cancel: PathBuf,
+}
+
+/// Write the recipe and the job description into `scratch` and report the
+/// files Blender needs. The job JSON is the recipe's own protocol, so the
+/// built-in runner and an external driver share one description.
+pub fn prepare(job: &AssetJob, scratch: &Path) -> Result<RecipeFiles, AssetError> {
+    std::fs::create_dir_all(scratch)
+        .map_err(|e| AssetError::Failed(format!("cannot create {}: {e}", scratch.display())))?;
+    let script = scratch.join("blender_asset.py");
+    std::fs::write(&script, RECIPE)
+        .map_err(|e| AssetError::Failed(format!("cannot write the recipe: {e}")))?;
+    let result = scratch.join("result.json");
+    let cancel = scratch.join("cancel");
+    let job_path = scratch.join("job.json");
+    let recipe_job = RecipeJob {
+        source: &job.source,
+        stages: &job.stages,
+        output_dir: &job.output_dir,
+        prefix: &job.prefix,
+        result_path: &result,
+        cancel_path: &cancel,
+    };
+    let job_bytes =
+        serde_json::to_vec(&recipe_job).map_err(|e| AssetError::InvalidJob(e.to_string()))?;
+    std::fs::write(&job_path, job_bytes)
+        .map_err(|e| AssetError::Failed(format!("cannot write the job: {e}")))?;
+    Ok(RecipeFiles {
+        script,
+        job: job_path,
+        result,
+        cancel,
+    })
+}
+
+/// The sha256 of the embedded recipe: the script version a caller pins in
+/// its engine contract.
+#[must_use]
+pub fn recipe_sha256() -> String {
+    sha256_hex(RECIPE.as_bytes())
+}
+
 /// Hand the job to Blender and collect what it produced.
 fn run_recipe(
     job: &AssetJob,
@@ -267,34 +329,16 @@ fn run_recipe(
     cancel: &AtomicBool,
     scratch: &Path,
 ) -> Result<AssetManifest, AssetError> {
-    let recipe_path = scratch.join("blender_asset.py");
-    std::fs::write(&recipe_path, RECIPE)
-        .map_err(|e| AssetError::Failed(format!("cannot write the recipe: {e}")))?;
-    let result_path = scratch.join("result.json");
-    let cancel_path = scratch.join("cancel");
-    let job_path = scratch.join("job.json");
-
-    let recipe_job = RecipeJob {
-        source: &job.source,
-        stages: &job.stages,
-        output_dir: &job.output_dir,
-        prefix: &job.prefix,
-        result_path: &result_path,
-        cancel_path: &cancel_path,
-    };
-    let job_bytes =
-        serde_json::to_vec(&recipe_job).map_err(|e| AssetError::InvalidJob(e.to_string()))?;
-    std::fs::write(&job_path, job_bytes)
-        .map_err(|e| AssetError::Failed(format!("cannot write the job: {e}")))?;
+    let files = prepare(job, scratch)?;
 
     let mut child = Command::new(blender_bin)
         .args(["--background", "--factory-startup", "-noaudio"])
         .arg("--python")
-        .arg(&recipe_path)
+        .arg(&files.script)
         .args(["--python-exit-code", "1"])
         .arg("--")
-        .arg(&job_path)
-        .arg(&result_path)
+        .arg(&files.job)
+        .arg(&files.result)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -305,13 +349,13 @@ fn run_recipe(
     let out_handle = std::thread::spawn(move || stdout.map_or_else(String::new, drain));
     let err_handle = std::thread::spawn(move || stderr.map_or_else(String::new, drain));
 
-    let status = wait_with_cancel(&mut child, &cancel_path, timeout, cancel)?;
+    let status = wait_with_cancel(&mut child, &files.cancel, timeout, cancel)?;
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
     if !status.success() {
         return Err(AssetError::Failed(tail(&stderr, 40)));
     }
-    build_manifest(job, &result_path, &stdout)
+    build_manifest(job, &files.result, &stdout)
 }
 
 /// Wait for Blender, delivering a cancel request as a marker file.
@@ -344,8 +388,10 @@ fn wait_with_cancel(
     }
 }
 
-/// Read the recipe's result and turn it into a manifest.
-fn build_manifest(
+/// Read the recipe's result and turn it into a manifest. Public so a caller
+/// that drove Blender itself (the server route, through the process
+/// supervisor) reads the result exactly like the built-in runner does.
+pub fn build_manifest(
     job: &AssetJob,
     result_path: &Path,
     stdout: &str,
@@ -656,6 +702,39 @@ mod tests {
         )
         .expect_err("must fail");
         assert!(matches!(err, AssetError::InputMissing(_)), "{err:?}");
+    }
+
+    #[test]
+    #[ignore = "needs a local Blender install"]
+    fn a_real_turntable_renders_one_preview() {
+        let dir = scratch("turntable");
+        let bin = std::env::var("HONKBOX_BLENDER").unwrap_or_else(|_| "blender".to_string());
+        let job = AssetJob {
+            source: AssetSource::Primitive {
+                primitive: Primitive::Cube,
+                size: 2.0,
+            },
+            stages: vec![AssetStage::Turntable {
+                frames: 3,
+                resolution: 64,
+            }],
+            output_dir: dir.join("out"),
+            prefix: "honkbox_asset".to_string(),
+            seed: 1,
+        };
+        let manifest = run(
+            &job,
+            Path::new(&bin),
+            Duration::from_secs(600),
+            &AtomicBool::new(false),
+        )
+        .expect("manifest");
+        assert_eq!(manifest.artifacts.len(), 1);
+        let artifact = &manifest.artifacts[0];
+        assert_eq!(artifact.kind, "preview");
+        assert!(artifact.path.exists(), "the preview is on disk");
+        assert!(artifact.bytes > 0);
+        assert_eq!(artifact.sha256.len(), 64);
     }
 
     #[test]
