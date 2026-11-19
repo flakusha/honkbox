@@ -13,9 +13,31 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use honkbox_api_types::{ModelCatalog, ModelDeleteResult, OpenAiError, UnloadResult};
+use honkbox_api_types::{CatalogList, ModelCatalog, ModelDeleteResult, OpenAiError, UnloadResult};
 
 use super::AppConfig;
+
+/// `GET /v1/catalog`: the raw catalog list, serialized from the shared
+/// snapshot so the response is byte-identical across refreshes.
+#[utoipa::path(
+    get,
+    path = "/v1/catalog",
+    responses(
+        (status = 200, description = "Curated catalog with local presence + fit pills", body = CatalogList),
+    )
+)]
+pub(super) async fn get_catalog(State(config): State<AppConfig>) -> Response {
+    let snapshot = config.catalog_snapshot();
+    let list = crate::catalog::build(&snapshot, config.vram_budget);
+    match serde_json::to_string(&list) {
+        Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("catalog serialize failed: {err}"),
+        )
+            .into_response(),
+    }
+}
 
 /// `GET /v1/models`: the discovered-model catalog as an OpenAI-style list
 /// envelope (`{object: "list", data: [...]}`). Served from the shared scan
