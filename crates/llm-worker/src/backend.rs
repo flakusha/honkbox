@@ -1,7 +1,8 @@
 //! llama.cpp-backed [`LlmPipeline`](super::LlmPipeline) (GGUF via llama-cpp-4).
 
 use super::{
-    AbortState, ChatRequest, ChatResponse, LlmError, LlmOptions, LlmPipeline, Role, ToolCallOut,
+    AbortState, ChatRequest, ChatResponse, KvQuant, LlmError, LlmOptions, LlmPipeline, Role,
+    ToolCallOut, clamp_n_ctx,
 };
 use llama_cpp_4::chat::{
     ChatApplyParams, ChatParams, ChatTemplates, ToolChoice, json_schema_to_grammar,
@@ -13,6 +14,7 @@ use llama_cpp_4::model::LlamaChatMessage;
 use llama_cpp_4::mtmd::{
     MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
 };
+use llama_cpp_4::quantize::GgmlType;
 use llama_cpp_4::{
     AddBos, LlamaBackend, LlamaBatch, LlamaContextParams, LlamaModel, LlamaModelParams,
     LlamaSampler, Special,
@@ -32,6 +34,14 @@ const XTC_THRESHOLD: f32 = 0.1;
 
 /// DRY sequence breakers (llama.cpp defaults: newline, colon, quote, asterisk).
 const DRY_BREAKERS: [&str; 4] = ["\n", ":", "\"", "*"];
+
+/// The ggml element type a KV cache quantization maps to.
+fn ggml_type(quant: KvQuant) -> GgmlType {
+    match quant {
+        KvQuant::F16 => GgmlType::F16,
+        KvQuant::Q8_0 => GgmlType::Q8_0,
+    }
+}
 
 /// Generic any-JSON GBNF grammar, enforcing `response_format:
 /// {"type":"json_object"}`. Copied verbatim from llama-cpp-4's bundled
@@ -130,6 +140,16 @@ impl LlamaCppLlm {
         let params = LlamaModelParams::default().with_n_gpu_layers(opts.n_gpu_layers);
         let model = LlamaModel::load_from_file(&backend, model_path, &params)
             .map_err(|e| LlmError::Load(format!("load {} failed: {e:?}", model_path.display())))?;
+        // The KV cache IS the context: clamp it against the declared VRAM
+        // ceiling before any request runs, so the cache can never outgrow the
+        // budget the operator set. The model is loaded already, so its real
+        // dimensions are known - the clamp is exact, not a guess.
+        let mut opts = opts.clone();
+        if let Some(budget) = opts.vram_budget_bytes {
+            let n_embd = u32::try_from(model.n_embd()).unwrap_or(0);
+            let n_layer = u32::try_from(model.n_layer()).unwrap_or(0);
+            opts.n_ctx = clamp_n_ctx(opts.n_ctx, Some(budget), n_embd, n_layer, opts.kv_quant);
+        }
         // Vision chat: load the configured mmproj projector against the text
         // model. A configured-but-failed projector is a loud load error —
         // never a silent text-only start (the request gate would answer 400
@@ -167,7 +187,7 @@ impl LlamaCppLlm {
         Ok(Self {
             backend,
             model,
-            opts: opts.clone(),
+            opts,
             #[cfg(feature = "vision")]
             mtmd,
             abort: Arc::default(),
@@ -373,6 +393,18 @@ impl LlamaCppLlm {
         ))
     }
 
+    /// The llama.cpp context params: the (clamped) context size, the
+    /// threads, and the KV cache's element type + placement.
+    fn context_params(&self) -> LlamaContextParams {
+        LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(self.opts.n_ctx))
+            .with_n_threads(i32::try_from(self.opts.threads).unwrap_or(i32::MAX))
+            .with_n_threads_batch(i32::try_from(self.opts.threads).unwrap_or(i32::MAX))
+            .with_cache_type_k(ggml_type(self.opts.kv_quant))
+            .with_cache_type_v(ggml_type(self.opts.kv_quant))
+            .with_offload_kqv(self.opts.offload_kqv)
+    }
+
     fn run(
         &self,
         req: &ChatRequest,
@@ -396,13 +428,7 @@ impl LlamaCppLlm {
 
         let mut ctx = self
             .model
-            .new_context(
-                &self.backend,
-                LlamaContextParams::default()
-                    .with_n_ctx(NonZeroU32::new(self.opts.n_ctx))
-                    .with_n_threads(i32::try_from(self.opts.threads).unwrap_or(i32::MAX))
-                    .with_n_threads_batch(i32::try_from(self.opts.threads).unwrap_or(i32::MAX)),
-            )
+            .new_context(&self.backend, self.context_params())
             .map_err(|e| LlmError::Context(format!("{e:?}")))?;
 
         // Prefill: plain text decodes the tokenized prompt; image content

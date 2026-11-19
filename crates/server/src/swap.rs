@@ -58,19 +58,22 @@
 //! constructors differ (diffusion-rs/whisper/kokoro assemblies) and each
 //! needs its own eviction cost model; tight scope per the P1 ticket.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use honkbox_api_types::{ModelCatalog, ModelCatalogEntry, ModelKind};
-use honkbox_llm_worker::{EmbedPipeline, LlamaCppEmbed, LlamaCppLlm, LlmOptions, LlmPipeline};
+use honkbox_llm_worker::{
+    EmbedPipeline, KvQuant, LlamaCppEmbed, LlamaCppLlm, LlmOptions, LlmPipeline,
+};
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::config::{CacheConfig, KvQuantConfig};
 use crate::metrics::{
-    LoadReason, UnloadReason, note_model_load, note_model_load_duration, note_model_unload,
-    note_swap_eviction,
+    LoadReason, UnloadReason, note_cache_hit, note_cache_miss, note_model_load,
+    note_model_load_duration, note_model_unload, note_swap_eviction,
 };
 
 /// The manager's only modality: [`catalog_llm_loader`] refuses every other
@@ -258,6 +261,7 @@ impl SwapManager {
             .map_err(|err| SwapError::Load(format!("model load task failed: {err}")))??;
         note_model_load(SWAP_KIND, LoadReason::Request);
         note_model_load_duration(SWAP_KIND, started.elapsed());
+        note_cache_miss(SWAP_KIND);
         self.lock_entries().insert(
             slug.to_owned(),
             Entry {
@@ -278,7 +282,7 @@ impl SwapManager {
     /// configured window (they never TTL-evict anyway).
     fn touch(&self, slug: &str, requested: Duration) -> Option<Arc<dyn LlmPipeline>> {
         let mut entries = self.lock_entries();
-        entries.get_mut(slug).map(|entry| {
+        let hit = entries.get_mut(slug).map(|entry| {
             let now = Instant::now();
             if !self.settings.pinned.contains(slug) {
                 let remaining = entry.ttl.saturating_sub(now.duration_since(entry.last_use));
@@ -286,7 +290,11 @@ impl SwapManager {
             }
             entry.last_use = now;
             Arc::clone(&entry.pipe)
-        })
+        });
+        if hit.is_some() {
+            note_cache_hit(SWAP_KIND);
+        }
+        hit
     }
 
     /// Evict every non-pinned entry idle beyond its TTL budget. Called by
@@ -476,6 +484,78 @@ pub fn spawn_reaper(manager: Arc<SwapManager>) -> tokio::task::JoinHandle<()> {
     })
 }
 
+/// The worker options for a slug: the declared cache knobs, else the
+/// backend defaults, plus the global VRAM ceiling the KV cache is clamped
+/// to by the worker.
+pub(crate) fn llm_options(cache: CacheConfig, vram_budget_bytes: Option<u64>) -> LlmOptions {
+    let defaults = LlmOptions::default();
+    LlmOptions {
+        n_ctx: cache.n_ctx.unwrap_or(defaults.n_ctx),
+        kv_quant: cache.kv_quant.map_or(defaults.kv_quant, kv_quant_of),
+        offload_kqv: cache.offload.unwrap_or(defaults.offload_kqv),
+        vram_budget_bytes,
+        ..defaults
+    }
+}
+
+/// The worker-side spelling of a configured KV quantization.
+fn kv_quant_of(config: KvQuantConfig) -> KvQuant {
+    match config {
+        KvQuantConfig::F16 => KvQuant::F16,
+        KvQuantConfig::Q8_0 => KvQuant::Q8_0,
+    }
+}
+
+/// The per-slug LLM cache policy: the knobs the loader applies when it
+/// builds a pipeline, plus the VRAM ceiling the KV cache is clamped to.
+///
+/// The policy is derived from the operator config (`[[models.entry]] cache`
+/// per slug, `[models] vram_budget_bytes` as the global ceiling). An empty
+/// policy = the backend defaults, so a deployment that configures nothing
+/// behaves exactly as before.
+#[derive(Debug, Clone, Default)]
+pub struct CachePolicy {
+    /// Per-slug knobs, keyed by the registry slug (`llm:…`).
+    by_slug: BTreeMap<String, CacheConfig>,
+    /// The VRAM ceiling for the KV cache (`[models] vram_budget_bytes`).
+    vram_budget_bytes: Option<u64>,
+}
+
+impl CachePolicy {
+    /// The policy for a config: the per-slug knobs keyed by the registry
+    /// slug, plus the global VRAM ceiling.
+    #[must_use]
+    pub fn new(by_slug: BTreeMap<String, CacheConfig>, vram_budget_bytes: Option<u64>) -> Self {
+        Self {
+            by_slug,
+            vram_budget_bytes,
+        }
+    }
+
+    /// The knobs for a slug: the declared ones, or the empty default.
+    fn for_slug(&self, slug: &str) -> CacheConfig {
+        self.by_slug.get(slug).copied().unwrap_or_default()
+    }
+
+    /// The knobs for a model the operator addresses by id (an alias) or by
+    /// slug: the catalog resolves the request to the registry slug the
+    /// knobs are keyed by.
+    ///
+    /// Integration-test binaries that include this module without
+    /// exercising it need the allow (same pattern as the stub loaders).
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn for_request(&self, catalog: &ModelCatalog, requested: &str) -> CacheConfig {
+        catalog
+            .data
+            .iter()
+            .find(|entry| entry.id == requested || entry.slug == requested)
+            .and_then(|entry| self.by_slug.get(&entry.slug))
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
 /// Production loader: resolve a catalog slug to its on-disk path via the
 /// current `/v1/models` snapshot (stays fresh across
 /// `POST /v1/models/refresh`) and load it with `LlamaCppLlm` (plus the
@@ -483,7 +563,10 @@ pub fn spawn_reaper(manager: Arc<SwapManager>) -> tokio::task::JoinHandle<()> {
 /// chat). Non-LLM catalog entries (STT/TTS/SD weights) and unknown slugs
 /// are [`SwapError::UnknownSlug`] — a 400 at the route.
 #[must_use]
-pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader {
+pub fn catalog_llm_loader(
+    catalog: Arc<RwLock<Arc<ModelCatalog>>>,
+    policy: CachePolicy,
+) -> LlmLoader {
     Arc::new(move |slug: &str| {
         let snapshot = catalog
             .read()
@@ -507,16 +590,18 @@ pub fn catalog_llm_loader(catalog: Arc<RwLock<Arc<ModelCatalog>>>) -> LlmLoader 
             )));
         }
         let path = std::path::PathBuf::from(&entry.path);
+        // The cache knobs for this slug (an entry that declares none keeps
+        // the backend defaults). The VRAM ceiling is global - it is the
+        // operator's declared ceiling for the whole box, not a per-slug one.
+        let cache = policy.for_slug(&entry.slug);
+        let mut opts = llm_options(cache, policy.vram_budget_bytes);
         // Vision chat (REQ-8): a sibling mmproj projector upgrades the
         // pipeline to multimodal (same discovery + same `VISION_COMPILED`
         // flag the catalog's `capabilities.vision` derives from); none is
         // text-only.
-        let opts = LlmOptions {
-            mmproj_path: honkbox_llm_worker::VISION_COMPILED
-                .then(|| honkbox_registry::sibling_mmproj(&path))
-                .flatten(),
-            ..LlmOptions::default()
-        };
+        opts.mmproj_path = honkbox_llm_worker::VISION_COMPILED
+            .then(|| honkbox_registry::sibling_mmproj(&path))
+            .flatten();
         match LlamaCppLlm::load(&path, &opts) {
             Ok(pipe) => Ok(Arc::new(pipe) as Arc<dyn LlmPipeline>),
             Err(err) => Err(SwapError::Load(format!(
@@ -647,6 +732,83 @@ impl EmbedCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cache policy keys the knobs by slug; an undeclared slug keeps the
+    /// backend defaults, and the loader's options follow the knobs plus the
+    /// global VRAM ceiling.
+    #[test]
+    fn cache_policy_keys_the_knobs_by_slug() {
+        let mut knobs = BTreeMap::new();
+        knobs.insert(
+            "llm:a.gguf".to_owned(),
+            CacheConfig {
+                n_ctx: Some(4096),
+                kv_quant: Some(KvQuantConfig::Q8_0),
+                offload: Some(false),
+            },
+        );
+        let policy = CachePolicy::new(knobs, Some(8_000_000_000));
+        let declared = policy.for_slug("llm:a.gguf");
+        assert_eq!(declared.n_ctx, Some(4096));
+        assert_eq!(declared.kv_quant, Some(KvQuantConfig::Q8_0));
+        assert_eq!(declared.offload, Some(false));
+        // An undeclared slug keeps the defaults.
+        assert_eq!(policy.for_slug("llm:other.gguf"), CacheConfig::default());
+
+        let opts = llm_options(declared, policy.vram_budget_bytes);
+        assert_eq!(opts.n_ctx, 4096);
+        assert_eq!(opts.kv_quant, KvQuant::Q8_0);
+        assert!(!opts.offload_kqv);
+        assert_eq!(opts.vram_budget_bytes, Some(8_000_000_000));
+
+        // No knobs declared -> the backend defaults, with the ceiling.
+        let opts = llm_options(CacheConfig::default(), Some(42));
+        assert_eq!(opts.n_ctx, LlmOptions::default().n_ctx);
+        assert_eq!(opts.kv_quant, KvQuant::F16);
+        assert!(opts.offload_kqv);
+        assert_eq!(opts.vram_budget_bytes, Some(42));
+    }
+
+    /// The catalog resolves a request (an alias or the slug) to the knobs
+    /// keyed by the registry slug.
+    #[test]
+    fn cache_policy_resolves_a_request_to_its_slug() {
+        let mut knobs = BTreeMap::new();
+        knobs.insert(
+            "llm:a.gguf".to_owned(),
+            CacheConfig {
+                n_ctx: Some(4096),
+                ..CacheConfig::default()
+            },
+        );
+        let policy = CachePolicy::new(knobs, None);
+        let catalog = ModelCatalog {
+            object: "list".to_owned(),
+            data: vec![ModelCatalogEntry {
+                id: "alpha".to_owned(),
+                slug: "llm:a.gguf".to_owned(),
+                kind: ModelKind::Llm,
+                owned_by: "local".to_owned(),
+                context_length: None,
+                max_output: None,
+                thinking: false,
+                tool_calling: false,
+                modalities: vec!["text".to_owned()],
+                capabilities: honkbox_api_types::ModelCapabilities::for_kind(ModelKind::Llm),
+                category: "root".to_owned(),
+                path: "/models/a.gguf".to_owned(),
+                bytes: 1,
+                metadata: None,
+            }],
+        };
+        assert_eq!(policy.for_request(&catalog, "alpha").n_ctx, Some(4096));
+        assert_eq!(policy.for_request(&catalog, "llm:a.gguf").n_ctx, Some(4096));
+        // An unrequested model gets the defaults.
+        assert_eq!(
+            policy.for_request(&catalog, "other"),
+            CacheConfig::default()
+        );
+    }
 
     /// Pin the settings plumbing: clone + equality on the tunables the
     /// config layer feeds in (real behavior lives in the integration tests).

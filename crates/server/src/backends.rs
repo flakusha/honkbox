@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use honkbox_audio_worker::{KokoroTts, SttPipeline, StubStt, StubTts, TtsPipeline, WhisperStt};
-use honkbox_llm_worker::{LlamaCppLlm, LlmOptions, LlmPipeline, StubLlm};
+use honkbox_llm_worker::{LlamaCppLlm, LlmPipeline, StubLlm};
 
 /// `--llm-backend` values: instant stub or the real llama.cpp pipeline.
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
@@ -53,6 +53,8 @@ pub fn make_llm(
     backend: LlmBackend,
     model: Option<&str>,
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
+    cache: crate::config::CacheConfig,
+    vram_budget_bytes: Option<u64>,
 ) -> Arc<dyn LlmPipeline> {
     match backend {
         LlmBackend::Stub => Arc::new(StubLlm::default()),
@@ -62,18 +64,18 @@ pub fn make_llm(
                 std::process::exit(1);
             });
             let path = resolve(slug);
+            // The cache knobs: the declared ones, else the backend defaults;
+            // the VRAM ceiling clamps the KV cache (see `swap::llm_options`).
+            let mut opts = crate::swap::llm_options(cache, vram_budget_bytes);
             // Vision chat (REQ-8): a sibling mmproj projector (HF
             // `mmproj*.gguf` convention) upgrades the static pipeline to
             // multimodal — when the build compiles the mtmd path at all
             // (`llm-vision` feature; the catalog mirrors the same flag so
             // `/v1/models` never advertises vision this build cannot
             // serve). None means text-only.
-            let opts = LlmOptions {
-                mmproj_path: honkbox_llm_worker::VISION_COMPILED
-                    .then(|| honkbox_registry::sibling_mmproj(&path))
-                    .flatten(),
-                ..LlmOptions::default()
-            };
+            opts.mmproj_path = honkbox_llm_worker::VISION_COMPILED
+                .then(|| honkbox_registry::sibling_mmproj(&path))
+                .flatten();
             Arc::new(crate::or_exit(LlamaCppLlm::load(&path, &opts)))
         }
     }

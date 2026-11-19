@@ -299,6 +299,7 @@ fn build_swap_manager(
     catalog: &Arc<RwLock<Arc<honkbox_api_types::ModelCatalog>>>,
     llm: &Arc<dyn honkbox_llm_worker::LlmPipeline>,
     llm_model: Option<&str>,
+    cache_policy: swap::CachePolicy,
 ) -> Option<Arc<swap::SwapManager>> {
     if !(swap_cfg.enabled && matches!(llm_backend, backends::LlmBackend::LlamaCpp)) {
         return None;
@@ -310,7 +311,7 @@ fn build_swap_manager(
             max_ttl: swap_cfg.max_ttl,
             pinned: swap_cfg.pin.iter().cloned().collect(),
         },
-        swap::catalog_llm_loader(Arc::clone(catalog)),
+        swap::catalog_llm_loader(Arc::clone(catalog), cache_policy),
     ));
     if let Some(slug) = llm_model {
         manager.seed(slug, Arc::clone(llm));
@@ -527,6 +528,8 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // best-effort, and an empty scan serves the cached fallback catalog.
     // Same pipeline as `POST /v1/models/refresh`.
     let model_entries = cfg.entries.clone();
+    // The per-slug LLM cache knobs (the `[models.entry.cache]` blocks).
+    let cache_knobs = cfg.cache.clone();
     let catalog = Arc::new(RwLock::new(Arc::new(or_exit(routes::refresh_catalog(
         &found,
         data_dir.as_deref(),
@@ -536,7 +539,23 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // Pipelines are built from the configured slugs before the strings move
     // into `AppConfig` (they are accepted as request `model` values alongside
     // the catalog).
-    let llm = backends::make_llm(llm_backend, llm_model.as_deref(), &resolve);
+    // The per-slug LLM cache policy: the operator's per-entry knobs plus the
+    // global VRAM ceiling the KV cache is clamped to.
+    let cache_policy = swap::CachePolicy::new(cache_knobs, vram_budget);
+    // The seeded pipeline is the model the swap manager would load, so it
+    // gets the same knobs: the catalog resolves the requested id (an alias)
+    // to the registry slug the operator keyed the knobs by.
+    let llm_cache = {
+        let snapshot = catalog.read().expect("catalog lock");
+        cache_policy.for_request(&snapshot, llm_model.as_deref().unwrap_or(""))
+    };
+    let llm = backends::make_llm(
+        llm_backend,
+        llm_model.as_deref(),
+        &resolve,
+        llm_cache,
+        vram_budget,
+    );
     let stt = backends::make_stt(
         stt_backend,
         stt_model.as_deref(),
@@ -545,7 +564,14 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     );
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
     let sd = backends::make_sd(sd_backend, sd_model.as_deref(), &resolve);
-    let swap = build_swap_manager(&swap_cfg, llm_backend, &catalog, &llm, llm_model.as_deref());
+    let swap = build_swap_manager(
+        &swap_cfg,
+        llm_backend,
+        &catalog,
+        &llm,
+        llm_model.as_deref(),
+        cache_policy,
+    );
     // POST /v1/embeddings (REQ-4): load-once cache keyed by slug; the idle
     // reuse window reuses `[swap] max_ttl` (see `EmbedCache::catalog`).
     let embed = Arc::new(crate::swap::EmbedCache::catalog(swap_cfg.max_ttl));
@@ -818,12 +844,23 @@ fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>)
         llm_backend,
     } = args;
     info!("honkbox chat model={model} backend={llm_backend:?}");
+    // The cache knobs for the requested model (the CLI addresses the model
+    // by its registry slug; an alias gets the backend defaults) plus the
+    // global VRAM ceiling.
+    let llm_cache = cfg.cache.get(model.as_str()).copied().unwrap_or_default();
+    let vram_budget = cfg.vram_budget_bytes;
     let found = match llm_backend {
         LlmBackend::Stub => Vec::new(),
         LlmBackend::LlamaCpp => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
-    let pipe = backends::make_llm(llm_backend, Some(model.as_str()), &resolve);
+    let pipe = backends::make_llm(
+        llm_backend,
+        Some(model.as_str()),
+        &resolve,
+        llm_cache,
+        vram_budget,
+    );
     // Reserve BEFORE the model loads; the chat CLI is an `llm` job in the
     // ledger's fixed kind vocabulary.
     let _lease =

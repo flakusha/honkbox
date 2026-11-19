@@ -221,8 +221,21 @@ pub const VISION_COMPILED: bool = cfg!(feature = "vision");
 /// Options for [`LlamaCppLlm::load`].
 #[derive(Debug, Clone)]
 pub struct LlmOptions {
-    /// Context size in tokens.
+    /// Context size in tokens. This is the KV cache's size: the cache holds
+    /// `n_ctx` tokens of K and V, so the context size IS the cache budget.
+    /// [`LlmOptions::vram_budget_bytes`] clamps it further.
     pub n_ctx: u32,
+    /// The element type the KV cache is stored in. `F16` is llama.cpp's
+    /// default; `Q8_0` halves the cache bytes at a small quality cost.
+    pub kv_quant: KvQuant,
+    /// Whether the KV cache is offloaded to the GPU. `false` keeps the cache
+    /// in RAM (the cache-in-RAM placement) and leaves the VRAM to the
+    /// weights.
+    pub offload_kqv: bool,
+    /// The VRAM ceiling for the KV cache, in bytes. `Some` clamps `n_ctx`
+    /// so the cache stays inside the ceiling (see [`clamp_n_ctx`]); `None`
+    /// means the operator declared no ceiling.
+    pub vram_budget_bytes: Option<u64>,
     /// GPU layers to offload (`u32::MAX` = all).
     pub n_gpu_layers: u32,
     /// CPU threads.
@@ -238,12 +251,80 @@ impl Default for LlmOptions {
     fn default() -> Self {
         Self {
             n_ctx: 8192,
+            kv_quant: KvQuant::F16,
+            offload_kqv: true,
+            vram_budget_bytes: None,
             n_gpu_layers: u32::MAX,
             threads: std::thread::available_parallelism()
                 .map_or(4, |n| u32::try_from(n.get()).unwrap_or(u32::MAX)),
             mmproj_path: None,
         }
     }
+}
+
+/// The element type the attention (KV) cache is stored in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KvQuant {
+    /// 16-bit floats — llama.cpp's default.
+    #[default]
+    F16,
+    /// 8-bit quantized: half the cache bytes, a little perplexity.
+    Q8_0,
+}
+
+impl KvQuant {
+    /// Bytes per cached element: 2 for [`KvQuant::F16`], 1 for
+    /// [`KvQuant::Q8_0`].
+    #[must_use]
+    pub fn bytes_per_element(self) -> u64 {
+        match self {
+            Self::F16 => 2,
+            Self::Q8_0 => 1,
+        }
+    }
+}
+
+/// The KV cache's bytes per cached token: the K and the V cache each hold
+/// `n_embd` elements per layer, so one token costs
+/// `n_layer * n_embd * 2 * bytes_per_element` bytes.
+///
+/// The estimate ignores grouped-query attention (where the V cache is
+/// narrower than the K cache), so it OVER-estimates the real cache — the
+/// clamp below is therefore conservative, never optimistic.
+#[must_use]
+pub fn kv_cache_bytes_per_token(n_embd: u32, n_layer: u32, quant: KvQuant) -> u64 {
+    u64::from(n_layer) * u64::from(n_embd) * 2 * quant.bytes_per_element()
+}
+
+/// The KV cache's total bytes for `n_ctx` cached tokens.
+#[must_use]
+pub fn kv_cache_bytes(n_ctx: u32, n_embd: u32, n_layer: u32, quant: KvQuant) -> u64 {
+    u64::from(n_ctx) * kv_cache_bytes_per_token(n_embd, n_layer, quant)
+}
+
+/// Clamp the context size so the KV cache stays inside `budget_bytes`.
+///
+/// `None` budget means the operator declared no ceiling: the context size is
+/// returned unchanged. The result is never 0 — a budget too small for a
+/// single token keeps one token, and the request then fails with the usual
+/// "prompt fills `n_ctx`" error instead of a zero-sized context.
+#[must_use]
+pub fn clamp_n_ctx(
+    n_ctx: u32,
+    budget_bytes: Option<u64>,
+    n_embd: u32,
+    n_layer: u32,
+    quant: KvQuant,
+) -> u32 {
+    let Some(budget) = budget_bytes else {
+        return n_ctx;
+    };
+    let per_token = kv_cache_bytes_per_token(n_embd, n_layer, quant);
+    if per_token == 0 {
+        return n_ctx;
+    }
+    let affordable = u32::try_from(budget / per_token).unwrap_or(u32::MAX);
+    n_ctx.min(affordable.max(1))
 }
 
 /// Errors from [`LlmPipeline`] backends (hand-rolled, no thiserror).
@@ -564,6 +645,34 @@ mod tests {
     }
 
     const TOOLS_JSON: &str = r#"[{"type":"function","function":{"name":"lookup_weather","description":"weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]"#;
+
+    /// The KV cache's byte math: one token costs the K and the V cache per
+    /// layer, and `Q8_0` halves it.
+    #[test]
+    fn kv_cache_bytes_scale_with_quant() {
+        // 8-wide embedding, 1 layer: F16 -> 8 * 2 (K+V) * 2 bytes = 32.
+        assert_eq!(kv_cache_bytes_per_token(8, 1, KvQuant::F16), 32);
+        assert_eq!(kv_cache_bytes_per_token(8, 1, KvQuant::Q8_0), 16);
+        assert_eq!(kv_cache_bytes(100, 8, 1, KvQuant::F16), 3200);
+    }
+
+    /// The context size IS the cache budget: the clamp keeps the cache
+    /// inside the operator's ceiling and never returns 0.
+    #[test]
+    fn clamp_n_ctx_respects_the_budget() {
+        // No ceiling -> the context size is unchanged.
+        assert_eq!(clamp_n_ctx(8192, None, 4096, 32, KvQuant::F16), 8192);
+        // 4096 * 32 layers * 2 (K+V) * 2 bytes = 524288 bytes per token, so
+        // a 1 MiB ceiling buys exactly two tokens.
+        assert_eq!(clamp_n_ctx(8192, Some(1 << 20), 4096, 32, KvQuant::F16), 2);
+        // `Q8_0` halves the bytes per token: twice the tokens fit.
+        assert_eq!(clamp_n_ctx(8192, Some(1 << 20), 4096, 32, KvQuant::Q8_0), 4);
+        // A ceiling too small for one token still keeps one token (a
+        // zero-sized context would fail every request instead).
+        assert_eq!(clamp_n_ctx(8192, Some(1), 4096, 32, KvQuant::F16), 1);
+        // The clamp never grows the context.
+        assert_eq!(clamp_n_ctx(1, Some(1 << 30), 4096, 32, KvQuant::F16), 1);
+    }
 
     #[test]
     fn stub_tools_call_first_tool_with_schema_arguments() {

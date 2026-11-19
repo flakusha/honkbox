@@ -154,7 +154,7 @@ fn catalog_loader_resolves_alias_and_slug() {
             }],
         },
     )));
-    let loader = swap::catalog_llm_loader(catalog);
+    let loader = swap::catalog_llm_loader(catalog, swap::CachePolicy::default());
 
     // Raw registry slug: lookup must hit (load failure names the path).
     // (`expect_err` is unavailable — the Ok side isn't `Debug`.)

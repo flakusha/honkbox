@@ -15,7 +15,7 @@ controls, and remove silent tool-choice surprises. Retrieval/rerank stays in
 ## Tickets
 
 - `TASK-llm-vision-default.md` — feature default + stale docs (P0).
-- `TASK-llm-prompt-cache.md` — bounded `cache_prompt`/`cache_ram` knobs (P1).
+- `TASK-llm-prompt-cache.md` — bounded per-slug KV cache knobs (P1, done).
 - `TASK-llm-tool-choice-contract.md` — document/align tool-choice fidelity (P2).
 - `TASK-remote-vision-url-fetch.md` — opt-in SSRF-safe image URL fetch (P2).
 - `TASK-llm-speculative-decoding-spike.md` — draftless `ngram-mod` spike (P2).

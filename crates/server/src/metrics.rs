@@ -14,7 +14,10 @@
 //! `honkbox_model_unloads_total{kind,reason}` are 7 × 3 = 21 series each,
 //! `honkbox_swap_evictions_total{kind}` is 7, and
 //! `honkbox_model_load_duration_seconds{kind}` re-uses the existing 11
-//! buckets (7 × 13 lines with `count`/`sum`). Unpopulated kinds render `0`;
+//! buckets (7 × 13 lines with `count`/`sum`). The cache counters follow the
+//! same rule: `honkbox_cache_hits_total{kind}` and
+//! `honkbox_cache_misses_total{kind}` are 7 series each. Unpopulated kinds
+//! render `0`;
 //! the swap manager serves `llm` today, other kinds light up when per-kind
 //! swap actors land. Request metrics stay slug-free by design (the safe
 //! label is `kind`: 100 models × route × code would multiply `requests_total`
@@ -237,6 +240,16 @@ static MODEL_UNLOADS: LazyLock<[[AtomicU64; UNLOAD_REASON_SLOTS]; KIND_SLOTS]> =
 static SWAP_EVICTIONS: LazyLock<[AtomicU64; KIND_SLOTS]> =
     LazyLock::new(|| [const { AtomicU64::new(0) }; KIND_SLOTS]);
 
+/// `cache_hits_total` cells: `[kind]` (a request served from a resident
+/// pipeline - nothing was loaded).
+static CACHE_HITS: LazyLock<[AtomicU64; KIND_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; KIND_SLOTS]);
+
+/// `cache_misses_total` cells: `[kind]` (no pipeline was resident, so one
+/// was loaded).
+static CACHE_MISSES: LazyLock<[AtomicU64; KIND_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; KIND_SLOTS]);
+
 /// Per-kind pipeline-construction duration histograms (the same 11 buckets
 /// as the global request duration).
 static LOAD_DURATION: LazyLock<[Histogram; KIND_SLOTS]> =
@@ -313,11 +326,54 @@ pub(crate) fn note_swap_eviction(kind: ModelKind) {
     SWAP_EVICTIONS[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
 }
 
+/// Count one cache hit (call when a request is served from a resident
+/// pipeline).
+pub(crate) fn note_cache_hit(kind: ModelKind) {
+    CACHE_HITS[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one cache miss (call when a pipeline had to be loaded).
+pub(crate) fn note_cache_miss(kind: ModelKind) {
+    CACHE_MISSES[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
+}
+
 /// Observe one pipeline-construction duration (call around the swap
 /// manager's blocking load).
 pub(crate) fn note_model_load_duration(kind: ModelKind, elapsed: Duration) {
     let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
     LOAD_DURATION[kind_slot(kind)].observe(nanos);
+}
+
+/// Render the cache counters: the hits and the misses, each labeled by
+/// kind (a bounded grid: one series per kind).
+fn push_cache_families(out: &mut String) {
+    push_family(
+        out,
+        "honkbox_cache_hits_total",
+        "Requests served from a resident pipeline, by kind.",
+        "counter",
+    );
+    for (kind, cell) in KIND_LABELS.iter().zip(CACHE_HITS.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_cache_hits_total{{kind=\"{kind}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
+
+    push_family(
+        out,
+        "honkbox_cache_misses_total",
+        "Pipelines loaded because none was resident, by kind.",
+        "counter",
+    );
+    for (kind, cell) in KIND_LABELS.iter().zip(CACHE_MISSES.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_cache_misses_total{{kind=\"{kind}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
 }
 
 /// Render the swap/residency families: the kind-labeled grids (bounded by
@@ -373,6 +429,8 @@ fn push_swap_families(out: &mut String) {
             cell.load(Ordering::Relaxed)
         );
     }
+
+    push_cache_families(out);
 
     push_family(
         out,
@@ -582,6 +640,8 @@ mod tests {
         note_model_unload(ModelKind::Llm, UnloadReason::Ttl);
         note_model_unload(ModelKind::Sd, UnloadReason::Evict);
         note_swap_eviction(ModelKind::Llm);
+        note_cache_hit(ModelKind::Llm);
+        note_cache_miss(ModelKind::Llm);
         note_model_load_duration(ModelKind::Llm, Duration::from_millis(25));
         let body = exposition();
 
@@ -618,6 +678,12 @@ mod tests {
         assert!(body.contains("# TYPE honkbox_swap_evictions_total counter"));
         assert!(series_value(&body, "honkbox_swap_evictions_total{kind=\"llm\"}") >= 1);
         assert!(body.contains("honkbox_swap_evictions_total{kind=\"stt\"} 0"));
+
+        assert!(body.contains("# TYPE honkbox_cache_hits_total counter"));
+        assert!(series_value(&body, "honkbox_cache_hits_total{kind=\"llm\"}") >= 1);
+        assert!(body.contains("honkbox_cache_hits_total{kind=\"stt\"} 0"));
+        assert!(body.contains("# TYPE honkbox_cache_misses_total counter"));
+        assert!(series_value(&body, "honkbox_cache_misses_total{kind=\"llm\"}") >= 1);
 
         assert!(body.contains("# TYPE honkbox_model_load_duration_seconds histogram"));
         // 25ms lands in le=0.025 (and above), llm row only.

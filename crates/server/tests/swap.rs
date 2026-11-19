@@ -629,7 +629,7 @@ fn catalog_loader_rejects_unknown_and_non_llm_slugs() {
         ("llm:ok.gguf", ModelKind::Llm),
         ("stt:voice.bin", ModelKind::Stt),
     ]))));
-    let loader = swap::catalog_llm_loader(Arc::clone(&catalog));
+    let loader = swap::catalog_llm_loader(Arc::clone(&catalog), swap::CachePolicy::default());
     let Err(missing) = loader("llm:not-in-catalog.gguf") else {
         panic!("unknown slug must not load");
     };

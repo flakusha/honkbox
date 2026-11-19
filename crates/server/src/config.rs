@@ -49,6 +49,14 @@
 //! Structured tables have no env stage in this config's house pattern (all
 //! `HONKBOX_*` env vars are scalars/path lists), so entries are file-only.
 //!
+//! Per-slug LLM cache controls ride `[[models.entry]] cache`: `n_ctx` (the
+//! KV cache's context size in tokens), `kv_quant` (`"f16"` | `"q8_0"` —
+//! `q8_0` halves the cache bytes) and `offload` (`false` keeps the cache in
+//! RAM instead of the VRAM). The knobs bound the attention cache of the
+//! loaded pipeline and are off until an entry declares them (absent keys
+//! keep the backend default). The cache never exceeds the global
+//! `[models] vram_budget_bytes` ceiling: the loader clamps `n_ctx` to it.
+//!
 //! Auth (REQ-7): `[server] auth` is `"none"` (default) or `"bearer"`;
 //! `[auth] api_key_env` names the env var holding the bearer key (default
 //! `HONKBOX_API_KEY`). Only the NAME is configured; the key VALUE is read
@@ -97,6 +105,9 @@ pub struct ModelConfig {
     /// Operator model bindings (`[[models.entry]]`, REQ-2): aliases +
     /// capability overrides bound to scan hits by `routes::bind_entries`.
     pub entries: Vec<ModelEntryConfig>,
+    /// The per-slug LLM cache controls (`[[models.entry]] cache`), keyed by
+    /// the entry's registry slug. Empty = the backend defaults.
+    pub cache: BTreeMap<String, CacheConfig>,
 }
 
 /// One operator model binding (`[[models.entry]]`): targets a scan hit by
@@ -118,6 +129,34 @@ pub struct ModelEntryConfig {
     /// Capability overrides (`Option<bool>` per flag; absent keys keep the
     /// kind-inferred default).
     pub capabilities: ModelCapabilitiesOverride,
+}
+
+/// Per-slug LLM cache controls (`[[models.entry]] cache`).
+///
+/// The knobs bound the attention (KV) cache of the loaded pipeline: the
+/// context size IS the cache size, the element type halves it, and
+/// `offload = false` keeps it in RAM instead of the VRAM. Absent keys keep
+/// the backend default, so an entry that declares no cache block behaves
+/// exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CacheConfig {
+    /// The KV cache's context size in tokens (`n_ctx`).
+    pub n_ctx: Option<u32>,
+    /// The KV cache's element type (`kv_quant`).
+    pub kv_quant: Option<KvQuantConfig>,
+    /// Whether the KV cache is offloaded to the GPU (`offload`); `false`
+    /// keeps the cache in RAM.
+    pub offload: Option<bool>,
+}
+
+/// The element type an LLM's KV cache is stored in (config spelling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KvQuantConfig {
+    /// 16-bit floats (the backend default).
+    F16,
+    /// 8-bit quantized: half the cache bytes.
+    Q8_0,
 }
 
 /// Per-flag capability overrides (`[[models.entry]] capabilities`).
@@ -855,6 +894,9 @@ struct FileStages {
     vram_budget: Option<u64>,
     /// `[[models.entry]]` bindings (REQ-2), parse-validated.
     entries: Vec<ModelEntryConfig>,
+    /// The per-slug LLM cache controls (`[[models.entry]] cache`), keyed by
+    /// the entry's registry slug.
+    cache: BTreeMap<String, CacheConfig>,
     /// `[server] auth` raw value (REQ-7), validated in `load`.
     auth: Option<String>,
     /// `[auth] api_key_env` raw value (REQ-7), validated in `load`.
@@ -930,13 +972,35 @@ fn stage_config_file(
     out.mesh = file.mesh;
     out.tools = file.tools;
     out.vram_budget = file.models.vram_budget_bytes;
-    out.entries = file
-        .models
-        .entry
-        .iter()
-        .map(FileModelEntry::parse)
-        .collect::<Result<Vec<_>, String>>()?;
+    // The bindings + the per-slug cache knobs.
+    let (entries, cache) = parse_entries(&file.models.entry)?;
+    out.entries = entries;
+    out.cache = cache;
     Ok(out)
+}
+
+/// The parsed `[[models.entry]]` bindings plus the per-slug cache knobs
+/// (keyed by the entry's slug). A cache block rides a slug-targeting entry:
+/// the slug is the key the policy looks up.
+fn parse_entries(
+    files: &[FileModelEntry],
+) -> Result<(Vec<ModelEntryConfig>, BTreeMap<String, CacheConfig>), String> {
+    let mut entries = Vec::new();
+    let mut cache = BTreeMap::new();
+    for file_entry in files {
+        let entry = file_entry.parse()?;
+        if let Some(knobs) = file_entry.cache.config()? {
+            let Some(slug) = entry.slug.clone() else {
+                return Err(
+                    "[[models.entry]] cache needs a slug-targeting entry (the slug is the key)"
+                        .to_owned(),
+                );
+            };
+            cache.insert(slug, knobs);
+        }
+        entries.push(entry);
+    }
+    Ok((entries, cache))
 }
 
 /// One `[[models.entry]]` table as written (`match` is a Rust keyword, so
@@ -956,6 +1020,41 @@ struct FileModelEntry {
     /// or an inline `capabilities = { … }` value).
     #[serde(default)]
     capabilities: ModelCapabilitiesOverride,
+    /// The LLM cache controls (the `[models.entry.cache]` sub-table).
+    #[serde(default)]
+    cache: FileCacheConfig,
+}
+
+/// The `[models.entry.cache]` sub-table as written.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileCacheConfig {
+    /// The KV cache's context size in tokens.
+    #[serde(default)]
+    n_ctx: Option<u32>,
+    /// The KV cache's element type (`f16` | `q8_0`).
+    #[serde(default)]
+    kv_quant: Option<KvQuantConfig>,
+    /// Whether the KV cache is offloaded to the GPU.
+    #[serde(default)]
+    offload: Option<bool>,
+}
+
+impl FileCacheConfig {
+    /// The knobs, or `None` when the entry declares no cache block (the
+    /// backend defaults then apply).
+    fn config(&self) -> Result<Option<CacheConfig>, String> {
+        if self.n_ctx.is_none() && self.kv_quant.is_none() && self.offload.is_none() {
+            return Ok(None);
+        }
+        if self.n_ctx == Some(0) {
+            return Err("[[models.entry]] cache.n_ctx must be greater than 0".to_owned());
+        }
+        Ok(Some(CacheConfig {
+            n_ctx: self.n_ctx,
+            kv_quant: self.kv_quant,
+            offload: self.offload,
+        }))
+    }
 }
 
 impl FileModelEntry {
@@ -1030,6 +1129,7 @@ pub fn load(
         core: file_core,
         vram_budget,
         entries,
+        cache,
         auth,
         api_key_env,
         queue_wait: queue_wait_file,
@@ -1088,6 +1188,7 @@ pub fn load(
     .merged(jobs, swap);
     models.vram_budget_bytes = vram_budget;
     models.entries = entries;
+    models.cache = cache;
     // Managed download roots (NEW-4): `<data_dir>/models/{llm,sd,stt,tts}`
     // stay part of the scan no matter what file/env configured, so a
     // completed download shows up in `GET /v1/models` after the rescan
@@ -1207,6 +1308,8 @@ impl RootStages {
             // Operator bindings staged out of the file pass (`load` fills
             // them; no env stage — structured tables have none).
             entries: Vec::new(),
+            // The per-slug cache knobs, staged with the bindings.
+            cache: BTreeMap::new(),
         }
     }
 }
@@ -1971,6 +2074,64 @@ mod tests {
             ModelCapabilitiesOverride::from_cache_json(&json),
             entries[0].capabilities
         );
+    }
+
+    /// `[[models.entry]] cache`: the per-slug KV cache knobs parse into the
+    /// slug-keyed map, an entry without a cache block contributes nothing,
+    /// and a zero context size (a zero-sized cache) is a config error.
+    #[test]
+    fn models_entry_cache_knobs_parse() {
+        let loaded = load_toml(
+            "cache",
+            "[models]\n\
+             [[models.entry]]\n\
+             slug = \"llm:a.gguf\"\n\
+             [models.entry.cache]\n\
+             n_ctx = 4096\n\
+             kv_quant = \"q8_0\"\n\
+             offload = false\n",
+        )
+        .expect("load config");
+        let knobs = loaded
+            .models
+            .cache
+            .get("llm:a.gguf")
+            .expect("cache knobs for the slug");
+        assert_eq!(knobs.n_ctx, Some(4096));
+        assert_eq!(knobs.kv_quant, Some(KvQuantConfig::Q8_0));
+        assert_eq!(knobs.offload, Some(false));
+
+        let loaded = load_toml(
+            "cache-absent",
+            "[models]\n\
+             [[models.entry]]\n\
+             slug = \"llm:a.gguf\"\n",
+        )
+        .expect("load config");
+        assert!(loaded.models.cache.is_empty());
+
+        let err = load_toml(
+            "cache-zero",
+            "[models]\n\
+             [[models.entry]]\n\
+             slug = \"llm:a.gguf\"\n\
+             [models.entry.cache]\n\
+             n_ctx = 0\n",
+        )
+        .expect_err("zero n_ctx");
+        assert!(err.contains("n_ctx"), "{err}");
+
+        // A cache block on a match-targeted entry has no slug to key on.
+        let err = load_toml(
+            "cache-match",
+            "[models]\n\
+             [[models.entry]]\n\
+             match = \"a.gguf\"\n\
+             [models.entry.cache]\n\
+             n_ctx = 4096\n",
+        )
+        .expect_err("cache without a slug");
+        assert!(err.contains("slug"), "{err}");
     }
 
     /// Malformed `[[models.entry]]` declarations are config errors (the
