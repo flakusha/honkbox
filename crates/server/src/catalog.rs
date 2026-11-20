@@ -21,6 +21,28 @@ use std::sync::LazyLock;
 
 use honkbox_api_types::{CatalogEntry, CatalogList, CatalogLocal, ModelCatalog, ModelKind, Pill};
 
+// Declared here (not at the crate root) so every `#[path]` test harness that
+// includes routes.rs transitively compiles the license contract too.
+#[path = "asset_packs.rs"]
+pub(crate) mod asset_packs;
+#[path = "license_gate.rs"]
+pub(crate) mod license_gate;
+#[path = "licenses.rs"]
+pub(crate) mod licenses;
+
+/// Checked-in curated asset-pack manifest (kept separate from the model
+/// array so existing `catalog.json` consumers keep their array shape).
+const PACKS_JSON: &str = include_str!("packs.json");
+
+/// Curated packs, parsed once; a broken checked-in list is a programmer
+/// error, like a broken model manifest.
+#[must_use]
+pub(crate) fn packs() -> &'static [asset_packs::PackEntry] {
+    static PACKS: LazyLock<Vec<asset_packs::PackEntry>> =
+        LazyLock::new(|| serde_json::from_str(PACKS_JSON).expect("bad packs.json"));
+    &PACKS
+}
+
 /// Checked-in curated manifest (review-by-PR is the signature).
 const MANIFEST_JSON: &str = include_str!("catalog.json");
 
@@ -43,6 +65,27 @@ pub struct ManifestEntry {
     pub quant: String,
     /// Model license tag.
     pub license: String,
+    /// Human-readable terms URL, when the source publishes one.
+    #[serde(default)]
+    pub license_url: Option<String>,
+    /// Territory restriction (`excludes-eu-uk-kr`) or `None`.
+    #[serde(default)]
+    pub territory: Option<String>,
+    /// `commercial` | `non-commercial` | `all-rights-reserved`.
+    #[serde(default)]
+    pub commercial_terms: String,
+    /// HF repo-level gating (`auto` | `manual`); needs an accepted token.
+    #[serde(default)]
+    pub gated: bool,
+    /// Canonical source (HF repo) URL.
+    #[serde(default)]
+    pub source_url: Option<String>,
+    /// Published sha256, when the source publishes one (never fabricated).
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Mandatory attribution text for CC-BY-family sources.
+    #[serde(default)]
+    pub attribution_text: Option<String>,
     /// Manual verification month (`YYYY-MM`).
     pub verified_date: String,
     /// Short human note.

@@ -60,15 +60,13 @@ fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     caches.retain(|_, cache| !cache.cache.is_empty());
-    Arc::clone(
-        caches.entry(key).or_insert_with(|| {
-            Arc::new(ScopedGenerationCache {
-                _pipeline: Arc::clone(&config.sd),
-                _catalog: Arc::clone(&config.catalog),
-                cache: RequestCache::new(64, Duration::from_secs(300)),
-            })
-        }),
-    )
+    Arc::clone(caches.entry(key).or_insert_with(|| {
+        Arc::new(ScopedGenerationCache {
+            _pipeline: Arc::clone(&config.sd),
+            _catalog: Arc::clone(&config.catalog),
+            cache: RequestCache::new(64, Duration::from_secs(300)),
+        })
+    }))
 }
 
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
@@ -340,8 +338,7 @@ pub(super) async fn post_images_generations(
     // inline work consumes no slot. The catalog hash keeps a refresh (new
     // models/controlnet entries) from replaying a pre-refresh answer; backend
     // and model identity travel with the instance-scoped key as well.
-    let cache = matches!(delivery, DeliveryMode::Inline)
-        .then(|| scoped_generation_cache(&config));
+    let cache = matches!(delivery, DeliveryMode::Inline).then(|| scoped_generation_cache(&config));
     let cache_key = cache.as_ref().map(|_| {
         format!(
             "{}:{}:{}:{}",
@@ -360,7 +357,12 @@ pub(super) async fn post_images_generations(
         match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
             Ok(resolved) => resolved,
             Err((message, code)) => {
-                return super::openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+                let status = if code.starts_with("model_license_") {
+                    StatusCode::PRECONDITION_FAILED
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return super::openai_error_response(status, message, Some(code));
             }
         };
     // ControlNet (honkbox extension): slug + conditioning image are
@@ -394,6 +396,16 @@ pub(super) async fn post_images_generations(
         // Server default: the startup-configured SD pipeline.
         None => config.sd_model.clone().unwrap_or_default(),
     };
+    // License gate before GPU admission / bundle writes.
+    if let Err(refusal) =
+        crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
+    {
+        return super::openai_error_response(
+            refusal.status(),
+            refusal.message(),
+            Some(refusal.code()),
+        );
+    }
     let pipeline = Arc::clone(&config.sd);
     let prompt = req.prompt;
     let started = Instant::now();

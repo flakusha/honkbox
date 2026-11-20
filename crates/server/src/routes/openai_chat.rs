@@ -129,6 +129,12 @@ pub(super) async fn post_chat_completions(
     };
     let served_id = entry.id.clone();
     let slug = entry.slug.clone();
+    // License gate before swap load / GPU admission: a refusal leaves no job.
+    if let Err(refusal) =
+        crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
+    {
+        return openai_error_response(refusal.status(), refusal.message(), Some(refusal.code()));
+    }
     // REQ-4 + REQ-8 request gates (see [`completions_request_gates`]).
     if let Some(response) = completions_request_gates(entry, model, &req.messages) {
         return response;

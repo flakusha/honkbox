@@ -373,7 +373,12 @@ pub(super) async fn post_images_edits(
         match resolve_loras(edit.loras.as_deref().unwrap_or_default(), &catalog) {
             Ok(resolved) => resolved,
             Err((message, code)) => {
-                return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+                let status = if code.starts_with("model_license_") {
+                    StatusCode::PRECONDITION_FAILED
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return openai_error_response(status, message, Some(code));
             }
         };
     let slug: String = match edit
@@ -397,6 +402,12 @@ pub(super) async fn post_images_edits(
         // Server default: the startup-configured SD pipeline.
         None => config.sd_model.clone().unwrap_or_default(),
     };
+    // License gate before GPU admission / bundle writes.
+    if let Err(refusal) =
+        crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
+    {
+        return openai_error_response(refusal.status(), refusal.message(), Some(refusal.code()));
+    }
     // Shared admission gate (REQ-6 Option A): same slot acquisition as the
     // generations route (lease dropped at the route ends below).
     let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {

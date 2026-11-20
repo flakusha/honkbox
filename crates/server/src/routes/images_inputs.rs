@@ -214,6 +214,12 @@ pub(super) fn resolve_loras(
                 "unknown_lora",
             ));
         };
+        // License gate before the adapter is admitted to the pipeline.
+        if let Err(refusal) =
+            crate::catalog::license_gate::gate(&entry.slug, catalog, crate::config::licenses())
+        {
+            return Err((refusal.message(), refusal.code()));
+        }
         let strength = match lora.strength {
             Some(v) if IMAGE_LORA_STRENGTH_RANGE.contains(&v) && v.is_finite() => v,
             Some(v) => {

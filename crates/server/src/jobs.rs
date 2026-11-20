@@ -140,6 +140,95 @@ pub fn write_bundle(
     Ok(dir)
 }
 
+/// `record_for_slug` maps a slug to a curated row through a catalog's
+/// slug/file-name pairs. Bundle writers have no `AppConfig`, so build that
+/// map from the checked-in curated manifest — the authoritative list of
+/// license rows — rather than from a scan snapshot.
+fn license_catalog() -> honkbox_api_types::ModelCatalog {
+    use honkbox_api_types::{ModelCapabilities, ModelCatalogEntry};
+    honkbox_api_types::ModelCatalog {
+        object: "list".to_owned(),
+        data: crate::catalog::manifest()
+            .iter()
+            .map(|row| ModelCatalogEntry {
+                id: row.id.clone(),
+                slug: row.id.clone(),
+                kind: row.kind,
+                owned_by: "curated".to_owned(),
+                context_length: None,
+                max_output: None,
+                thinking: false,
+                tool_calling: false,
+                modalities: Vec::new(),
+                capabilities: ModelCapabilities::for_kind(row.kind),
+                category: "curated".to_owned(),
+                path: row.file.clone(),
+                bytes: 0,
+                metadata: None,
+            })
+            .collect(),
+    }
+}
+
+/// Sidecar license provenance from the same curated rows capabilities
+/// publish. Null when the slug has no curated record — never fabricated.
+fn model_license_record(slug: &str) -> Option<serde_json::Value> {
+    crate::catalog::licenses::record_for_slug(slug, &license_catalog()).map(|record| {
+        let non_commercial = record.commercial_terms == "non-commercial";
+        serde_json::json!({
+            "license": record.license,
+            "license_url": record.license_url,
+            "territory": record.territory,
+            "commercial_terms": record.commercial_terms,
+            "gated": record.gated,
+            "source_url": record.source_url,
+            "sha256": record.sha256,
+            "attribution_text": record.attribution_text,
+            "non_commercial": non_commercial,
+        })
+    })
+}
+
+/// CC0 pack license rows recorded by the asset-pack fetch job. Read from
+/// `<data_dir>/asset-packs` rather than a global registry: every bundle
+/// manifest carries the same rows the fetch wrote, joined on sha256. QAL
+/// rows can never be present — the fetch guard refuses them before write.
+fn pack_license_rows(bundle_dir: &Path) -> Vec<serde_json::Value> {
+    let Some(data_dir) = bundle_dir.parent().and_then(Path::parent) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(data_dir.join("asset-packs")) else {
+        return Vec::new();
+    };
+    let mut rows: Vec<serde_json::Value> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".license.json"))
+            {
+                return None;
+            }
+            let raw = fs::read_to_string(path).ok()?;
+            let row: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            // Defense in depth: a stray row never bundles a QAL pack.
+            if row["license"].as_str() == Some("QAL-1.0") {
+                return None;
+            }
+            Some(row)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a["pack_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["pack_id"].as_str().unwrap_or_default())
+    });
+    rows
+}
+
 /// Write the bundle files into an existing `dir` (split out for tests).
 pub fn write_bundle_into(
     dir: &Path,
@@ -154,10 +243,13 @@ pub fn write_bundle_into(
     // the same request carry the same value; volatile per-run state (ULID
     // dir name, elapsed_ms) is excluded by the canonical form.
     let inputs_sha256 = determinism::bundle_record_hash(inputs);
+    let model_license = model_license_record(&inputs.model_slug);
+    let pack_licenses = pack_license_rows(dir);
     let request = serde_json::json!({
         "model": inputs.model_slug,
         "model_sha256": inputs.model_sha256,
         "engine_version": inputs.engine_version,
+        "pack_licenses": pack_licenses.clone(),
         "prompt": inputs.prompt,
         "seed": inputs.seed,
         "steps": inputs.steps,
@@ -187,6 +279,8 @@ pub fn write_bundle_into(
         "backend_id": inputs.backend_id,
         "model_sha256": inputs.model_sha256,
         "engine_version": inputs.engine_version,
+        "model_license": model_license,
+        "pack_licenses": pack_licenses,
         "loras": inputs.loras,
         "strength": inputs.strength,
         "recipe": inputs.recipe,

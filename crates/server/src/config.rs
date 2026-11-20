@@ -12,7 +12,9 @@
 //! (TASK-resource-ledger-bounded-queue: `gpu_slots`, `vram_budget_bytes`,
 //! `ram_budget_bytes`, `cpu_threads`, `oom_headroom_bytes`, `queue_cap`
 //! with `HONKBOX_LEDGER_*` env stages, plus the file-only per-kind maps
-//! `[ledger.queue_caps]` / `[ledger.vram_demand]`).
+//! `[ledger.queue_caps]` / `[ledger.vram_demand]`), and `[licenses]` serving
+//! gates (`territory` default `unknown`, `commercial` default `true`, env
+//! `HONKBOX_LICENSES_TERRITORY` / `HONKBOX_LICENSES_COMMERCIAL`).
 //!
 //! The ONE data-dir knob resolves `--data-dir` CLI flag > `HONKBOX_DATA_DIR`
 //! env > `[core] data_dir` file key > `$XDG_STATE_HOME/honkbox` (empty or
@@ -83,6 +85,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use honkbox_residency::ResourceKind;
@@ -238,6 +241,77 @@ pub const DEFAULT_SWAP_MAX_LOADED: usize = 1;
 /// media (a 1 GiB `LoRA` bundle, an hour of WAV), still a hard wall against
 /// unbounded disk growth; operators tighten or raise it via config/env.
 pub const DEFAULT_ARTIFACT_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Default declared jurisdiction: an undeclared territory fails the license
+/// gate closed (TASK-model-license-registry).
+pub const DEFAULT_LICENSE_TERRITORY: &str = "unknown";
+
+/// Resolved `[licenses]` knobs (TASK-model-license-registry). `commercial`
+/// defaults to true, so NC weights refuse until a research pipeline opts out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    pub territory: String,
+    pub commercial: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            territory: DEFAULT_LICENSE_TERRITORY.to_owned(),
+            commercial: true,
+        }
+    }
+}
+
+static LICENSE_CONFIG: OnceLock<Config> = OnceLock::new();
+
+/// Effective knobs for request-time license gates. Defaults until
+/// [`install_licenses`] publishes the resolved config at startup.
+pub(crate) fn licenses() -> &'static Config {
+    LICENSE_CONFIG.get_or_init(Config::default)
+}
+
+/// Publish the resolved `[licenses]` knobs (first call wins, like
+/// `runtime_config::configure`).
+pub(crate) fn install_licenses(config: Config) {
+    let _ = LICENSE_CONFIG.set(config);
+}
+
+/// Resolve `[licenses]` file keys + env overrides. Pure (env as args) so
+/// tests stay thread-safe; invalid boolean env values warn and keep the
+/// previous stage, matching the GC/swap knobs.
+pub(crate) fn resolve_licenses(
+    file_territory: Option<&str>,
+    file_commercial: Option<bool>,
+    territory_env: Option<&str>,
+    commercial_env: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Config {
+    let mut territory = file_territory
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_LICENSE_TERRITORY)
+        .to_owned();
+    if let Some(value) = territory_env
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        territory = value.to_owned();
+    }
+    let mut commercial = file_commercial.unwrap_or(true);
+    if let Some(value) = commercial_env {
+        match value.trim().parse::<bool>() {
+            Ok(parsed) => commercial = parsed,
+            Err(_) => warnings.push(format!(
+                "invalid HONKBOX_LICENSES_COMMERCIAL {value:?}; keeping {commercial}"
+            )),
+        }
+    }
+    Config {
+        territory,
+        commercial,
+    }
+}
 /// Per-request `ttl_seconds` cap (`max_ttl_secs`): 24 h. Advice above the cap
 /// is clamped at the route with a `warn!` (never a 400) so a third-party
 /// client cannot out-stay the residency budget a server operator chose.
@@ -789,6 +863,8 @@ pub struct LoadedConfig {
     pub nsfw: NsfwConfig,
     /// `[python]` resolved sidecar settings.
     pub python: PythonConfig,
+    /// `[licenses]` resolved serving-gate knobs.
+    pub licenses: Config,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
     /// Non-fatal config notices (invalid values that kept a previous stage):
@@ -1059,7 +1135,13 @@ fn auth_settings(
         signed_url_ttl_secs: signed_url_ttl_secs.unwrap_or(DEFAULT_SIGNED_URL_TTL_SECS),
         scopes: parse_scopes(scopes, where_)?,
     };
-    Ok((AuthConfig { mode, api_key_env: env }, facts))
+    Ok((
+        AuthConfig {
+            mode,
+            api_key_env: env,
+        },
+        facts,
+    ))
 }
 
 /// Final data dir: flag > env > `[core] data_dir` file key > located default
@@ -1136,6 +1218,8 @@ struct FileStages {
     nsfw: FileNsfw,
     /// `[python]` keys, resolved in `load`.
     python: FilePython,
+    /// `[licenses]` keys, resolved in `load`.
+    licenses: FileLicenses,
     /// `[auth] signed_url_secret_env` raw value (a NAME only).
     signed_url_secret_env: Option<String>,
     /// `[auth] signed_url_ttl_secs` raw value.
@@ -1206,6 +1290,7 @@ fn stage_config_file(
     out.vram_budget = file.models.vram_budget_bytes;
     out.nsfw = file.safety.nsfw;
     out.python = file.python;
+    out.licenses = file.licenses;
     out.signed_url_secret_env = file.auth.signed_url_secret_env;
     out.signed_url_ttl_secs = file.auth.signed_url_ttl_secs;
     out.scopes = file.auth.scopes;
@@ -1379,6 +1464,7 @@ pub fn load(
         tools: file_tools,
         nsfw: file_nsfw,
         python: file_python,
+        licenses: file_licenses,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -1454,9 +1540,20 @@ pub fn load(
             .timeout_secs
             .unwrap_or(DEFAULT_PYTHON_TIMEOUT_SECS),
         model_allowlist: clean_slugs(
-            file_python.model_allowlist.iter().flatten().map(String::as_str),
+            file_python
+                .model_allowlist
+                .iter()
+                .flatten()
+                .map(String::as_str),
         ),
     };
+    let licenses = resolve_licenses(
+        file_licenses.territory.as_deref(),
+        file_licenses.commercial,
+        std::env::var("HONKBOX_LICENSES_TERRITORY").ok().as_deref(),
+        std::env::var("HONKBOX_LICENSES_COMMERCIAL").ok().as_deref(),
+        &mut warnings,
+    );
     let (auth, auth_facts) = auth_settings(
         auth.as_deref(),
         api_key_env.as_deref(),
@@ -1500,6 +1597,7 @@ pub fn load(
         tools,
         nsfw,
         python,
+        licenses,
         data_dir,
         warnings,
     })
@@ -1704,6 +1802,18 @@ struct FileConfig {
     /// / the loopback `ComfyUI` default and a 5 s probe timeout.
     #[serde(default)]
     tools: FileTools,
+    /// `[licenses]` keys (TASK-model-license-registry); absent table keeps
+    /// the defaults (`unknown` / `true`).
+    #[serde(default)]
+    licenses: FileLicenses,
+}
+
+/// `[licenses]` keys: `territory` (declared jurisdiction) and `commercial`
+/// (false opts a research pipeline out of the NC refusal).
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileLicenses {
+    territory: Option<String>,
+    commercial: Option<bool>,
 }
 
 /// `[core]` keys: `data_dir` (the one data-dir knob's file stage).
@@ -2729,24 +2839,30 @@ mod tests {
             policy: Some("quarantine".to_owned()),
             ..FileNsfw::default()
         };
-        assert!(resolve_nsfw(&bad_policy, where_)
-            .unwrap_err()
-            .contains("[safety.nsfw] policy"));
+        assert!(
+            resolve_nsfw(&bad_policy, where_)
+                .unwrap_err()
+                .contains("[safety.nsfw] policy")
+        );
         let bad_path = FileNsfw {
             classifier_bin: Some("  ".to_owned()),
             ..FileNsfw::default()
         };
-        assert!(resolve_nsfw(&bad_path, where_)
-            .unwrap_err()
-            .contains("[safety.nsfw] classifier_bin"));
+        assert!(
+            resolve_nsfw(&bad_path, where_)
+                .unwrap_err()
+                .contains("[safety.nsfw] classifier_bin")
+        );
         for threshold in [-0.1, 1.1, f64::NAN] {
             let bad = FileNsfw {
                 threshold: Some(threshold),
                 ..FileNsfw::default()
             };
-            assert!(resolve_nsfw(&bad, where_)
-                .unwrap_err()
-                .contains("[safety.nsfw] threshold"));
+            assert!(
+                resolve_nsfw(&bad, where_)
+                    .unwrap_err()
+                    .contains("[safety.nsfw] threshold")
+            );
         }
     }
 

@@ -459,6 +459,8 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // Config loads BEFORE logging: the file-refined data dir relocates
     // the log too, and config-parse errors go to stderr via `or_exit`.
     let loaded = or_exit(config::load(config, data_dir_flag));
+    // License gates read one immutable `[licenses]` snapshot for the process.
+    config::install_licenses(loaded.licenses.clone());
     // Publish the read-only runtime facts snapshot before any `loaded`
     // field moves, so every feature lane reads one complete configuration.
     routes::runtime_config::configure(&loaded);

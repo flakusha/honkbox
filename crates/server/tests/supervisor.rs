@@ -16,6 +16,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "../src/admission.rs"]
 #[allow(dead_code)]
 mod admission;
+#[path = "../src/catalog.rs"]
+#[allow(dead_code)]
+mod catalog;
 #[path = "../src/config.rs"]
 #[allow(dead_code)]
 mod config;

@@ -48,9 +48,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -59,6 +56,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
@@ -735,7 +735,16 @@ async fn capabilities_report_external_tools_without_probing() {
         .iter()
         .map(|tool| tool["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["blender", "comfyui"]);
+    assert_eq!(
+        ids,
+        [
+            "blender",
+            "comfyui",
+            "splat_renderer",
+            "shader_validator",
+            "unirig"
+        ]
+    );
     // No probed Blender → the feature flag is false (the same truth the
     // job route's named 501 enforces).
     assert_eq!(doc["features"]["blender"], false);
@@ -810,7 +819,7 @@ async fn external_tool_routes_name_missing_tools() {
     let app = app_with(catalog_with(&[]));
     let (status, body) = get_json(&app, "/v1/external-tools").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+    assert_eq!(body["tools"].as_array().unwrap().len(), 5);
 
     let (status, body) = get_text(&app, "/v1/external-tools/blender").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
@@ -833,4 +842,60 @@ async fn external_tool_routes_name_missing_tools() {
         .await
         .expect("infallible");
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// The opt-in external binaries are advertised as named rows even when no
+/// binary is configured: a missing tool is never a silent skip, and the
+/// shader route answers a named 501 carrying that status.
+#[tokio::test]
+async fn opt_in_external_tools_are_named_and_unavailable() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with(catalog_with(&[]));
+
+    let (status, body) = get_json(&app, "/v1/external-tools").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tools = body["tools"].as_array().expect("tools");
+    for id in ["splat_renderer", "shader_validator", "unirig"] {
+        let row = tools
+            .iter()
+            .find(|tool| tool["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("{id} row missing"));
+        assert_eq!(row["available"], false, "{id}");
+        assert_eq!(row["unavailable"], "not installed", "{id}");
+        assert_eq!(row["capabilities"], json!([]), "{id}");
+        assert_eq!(row["version"], Value::Null, "{id}");
+    }
+
+    let (status, body) = get_text(&app, "/v1/external-tools/splat_renderer").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert!(
+        body.contains("splat_renderer") && body.contains("not installed"),
+        "{body}"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/shader-validate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"shader": "shader_type spatial;"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("infallible");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).expect("json 501");
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert_eq!(body["error"]["code"], "shader_validator_unavailable");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("not installed")),
+        "{body}"
+    );
 }

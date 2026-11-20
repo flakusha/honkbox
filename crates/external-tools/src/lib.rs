@@ -29,7 +29,10 @@ use std::time::{Duration, Instant};
 
 mod blender_addons;
 mod blender_assets;
+pub mod shader_validate;
 mod texture_postprocess;
+pub mod unirig;
+pub mod vkgs;
 
 pub use blender_addons::{AddonInfo, AddonTier, BlenderAddons, OperatorInfo};
 pub use blender_assets::{
@@ -62,11 +65,23 @@ pub enum ToolId {
     ComfyUi,
     /// The OIIO texture toolchain (`oiiotool` + `maketx`), driven as binaries.
     Oiio,
+    /// The prebuilt `vk_gaussian_splatting` renderer (external binary).
+    SplatRenderer,
+    /// The external headless shader compile validator.
+    ShaderValidator,
+    /// The external UniRig auto-rigger (external binary).
+    Unirig,
 }
 
 impl ToolId {
     /// Every tool the registry probes at discovery, in a stable order.
-    pub const ALL: [ToolId; 2] = [ToolId::Blender, ToolId::ComfyUi];
+    pub const ALL: [ToolId; 5] = [
+        ToolId::Blender,
+        ToolId::ComfyUi,
+        ToolId::SplatRenderer,
+        ToolId::ShaderValidator,
+        ToolId::Unirig,
+    ];
 
     /// Stable lowercase identifier (never user data).
     pub const fn as_str(self) -> &'static str {
@@ -74,6 +89,9 @@ impl ToolId {
             Self::Blender => "blender",
             Self::ComfyUi => "comfyui",
             Self::Oiio => "oiio",
+            Self::SplatRenderer => "splat_renderer",
+            Self::ShaderValidator => "shader_validator",
+            Self::Unirig => "unirig",
         }
     }
 }
@@ -99,6 +117,18 @@ pub enum Capability {
     Operator(String),
     /// Tiled, MIP-mapped texture post-process (`oiiotool` + `maketx`).
     TexturePostprocess,
+    /// A prebuilt Gaussian-splat renderer binary is available. A render is
+    /// NOT exercised by the probe (no GPU work at discovery time).
+    SplatRender,
+    /// Sequencefile-driven renderer automation (camera preset, pipeline,
+    /// headless screenshot).
+    Sequencefile,
+    /// Headless shader compile validation.
+    ShaderValidate,
+    /// Auto-rigging: skeleton + weights report for a generated mesh.
+    AutoRig,
+    /// A probed detail string (for example the sequencefile contract).
+    Detail(String),
 }
 
 impl Capability {
@@ -108,8 +138,12 @@ impl Capability {
             Self::Render => "render",
             Self::Cycles => "cycles",
             Self::Workflow => "workflow",
-            Self::Addon(id) | Self::Operator(id) => id.as_str(),
+            Self::Addon(id) | Self::Operator(id) | Self::Detail(id) => id.as_str(),
             Self::TexturePostprocess => "texture_postprocess",
+            Self::SplatRender => "splat_render",
+            Self::Sequencefile => "sequencefile",
+            Self::ShaderValidate => "shader_validate",
+            Self::AutoRig => "auto_rig",
         }
     }
 
@@ -121,6 +155,11 @@ impl Capability {
     /// A probed headless operator capability (`"op:<id>"`).
     pub fn operator(id: &str) -> Self {
         Self::Operator(format!("op:{id}"))
+    }
+
+    /// A probed detail string, reported verbatim in capability details.
+    pub fn detail(text: &str) -> Self {
+        Self::Detail(text.to_owned())
     }
 }
 
@@ -245,7 +284,15 @@ impl Registry {
             move || probe_blender(&config)
         });
         let comfyui = probe_comfyui(&self.config, &self.client);
-        let (blender, comfyui) = tokio::join!(blender, comfyui);
+        let timeout = self.config.timeout;
+        let vkgs = tokio::task::spawn_blocking(move || vkgs::status(&vkgs::binary(), timeout));
+        let shader = tokio::task::spawn_blocking(move || {
+            shader_validate::status(&shader_validate::binary(), timeout)
+        });
+        let unirig =
+            tokio::task::spawn_blocking(move || unirig::status(&unirig::binary(), timeout));
+        let (blender, comfyui, vkgs, shader, unirig) =
+            tokio::join!(blender, comfyui, vkgs, shader, unirig);
         let (blender_status, blender_addons) = match blender {
             Ok(probed) => probed,
             Err(join_error) => (
@@ -256,11 +303,29 @@ impl Registry {
                 BlenderAddons::default(),
             ),
         };
+        let vkgs_status = vkgs.unwrap_or_else(|err| {
+            unavailable_status(
+                ToolId::SplatRenderer,
+                Unavailable::ProbeFailed(err.to_string()),
+            )
+        });
+        let shader_status = shader.unwrap_or_else(|err| {
+            unavailable_status(
+                ToolId::ShaderValidator,
+                Unavailable::ProbeFailed(err.to_string()),
+            )
+        });
+        let unirig_status = unirig.unwrap_or_else(|err| {
+            unavailable_status(ToolId::Unirig, Unavailable::ProbeFailed(err.to_string()))
+        });
         let mut statuses = Vec::with_capacity(ToolId::ALL.len());
         for id in ToolId::ALL {
             statuses.push(match id {
                 ToolId::Blender => blender_status.clone(),
                 ToolId::ComfyUi => comfyui.clone(),
+                ToolId::SplatRenderer => vkgs_status.clone(),
+                ToolId::ShaderValidator => shader_status.clone(),
+                ToolId::Unirig => unirig_status.clone(),
                 // OIIO is a job tool with its own probe (`texture_tools_status`),
                 // not a registry-discovered capability; it is never in `ALL`.
                 ToolId::Oiio => unreachable!("OIIO is not registry-discovered"),
@@ -487,12 +552,100 @@ fn unavailable_status(id: ToolId, unavailable: Unavailable) -> Status {
     }
 }
 
-/// Run a tool with a timeout and return its stdout.
+/// Turn a probe into a cacheable status, preserving the exact reason when
+/// the tool cannot serve work.
+pub(crate) fn status_from_probe(
+    id: ToolId,
+    probed: Result<(String, Vec<Capability>), Unavailable>,
+) -> Status {
+    match probed {
+        Ok((version, capabilities)) => Status {
+            id,
+            version: Some(version),
+            capabilities,
+            devices: Vec::new(),
+            unavailable: None,
+        },
+        Err(unavailable) => Status {
+            id,
+            version: None,
+            capabilities: Vec::new(),
+            devices: Vec::new(),
+            unavailable: Some(unavailable),
+        },
+    }
+}
+
+/// Version token from a `--version` (or `--help`) run. Some prebuilt binaries
+/// print a banner around the version; the first token carrying a digit is the
+/// honest, stable part of that output.
+pub(crate) fn probe_version(binary: &Path, timeout: Duration) -> Result<String, Unavailable> {
+    let stdout = match run_tool(binary, &["--version"], timeout) {
+        Ok(stdout) => stdout,
+        Err(Unavailable::ProbeFailed(version_error)) => {
+            // Prebuilt tools that do not implement `--version` still prove
+            // themselves through `--help`; a truly broken binary fails both.
+            match run_tool(binary, &["--help"], timeout) {
+                Ok(stdout) => stdout,
+                Err(Unavailable::ProbeFailed(help_error)) => {
+                    return Err(Unavailable::ProbeFailed(format!(
+                        "{version_error}; {help_error}"
+                    )));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(err) => return Err(err),
+    };
+    stdout
+        .lines()
+        .flat_map(|line| line.split_whitespace())
+        .find(|token| token.chars().any(|c| c.is_ascii_digit()))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Unavailable::ProbeFailed(format!(
+                "{}: no version token in probe output",
+                binary.display()
+            ))
+        })
+}
+
+/// What one bounded process run produced, including a nonzero exit.
+pub(crate) struct ToolOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+    /// `ExitStatus` display, used when a failure carries no diagnostics.
+    pub status: String,
+}
+
+/// Run a tool with a timeout and return its stdout on success.
 pub(crate) fn run_tool(
     bin: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, Unavailable> {
+    let output = run_tool_output(bin, args, timeout)?;
+    if !output.success {
+        let detail = output.stderr.lines().next().unwrap_or_default().trim();
+        let reason = if detail.is_empty() {
+            output.status
+        } else {
+            format!("{}: {detail}", output.status)
+        };
+        return Err(Unavailable::ProbeFailed(reason));
+    }
+    Ok(output.stdout)
+}
+
+/// Run a tool with a timeout and keep both streams even on a nonzero exit.
+/// Compilers routinely exit nonzero to report a normal validation failure;
+/// [`run_tool`] stays the probe path, while this is the diagnostic path.
+fn run_tool_output(
+    bin: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<ToolOutput, Unavailable> {
     // Linux can return ETXTBSY when two probes of the same script race its
     // interpreter releasing the file. Retry that transient case only.
     let mut attempts = 0;
@@ -511,10 +664,9 @@ pub(crate) fn run_tool(
             Err(err) => {
                 return Err(match err.kind() {
                     std::io::ErrorKind::NotFound => Unavailable::NotInstalled,
-                    _ => Unavailable::ProbeFailed(format!(
-                        "spawn failed: {err} ({})",
-                        bin.display()
-                    )),
+                    _ => {
+                        Unavailable::ProbeFailed(format!("spawn failed: {err} ({})", bin.display()))
+                    }
                 });
             }
         }
@@ -553,16 +705,12 @@ pub(crate) fn run_tool(
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
-    if !status.success() {
-        let detail = stderr.lines().next().unwrap_or_default().trim();
-        let reason = if detail.is_empty() {
-            format!("{status}")
-        } else {
-            format!("{status}: {detail}")
-        };
-        return Err(Unavailable::ProbeFailed(reason));
-    }
-    Ok(stdout)
+    Ok(ToolOutput {
+        stdout,
+        stderr,
+        success: status.success(),
+        status: status.to_string(),
+    })
 }
 
 /// Read a pipe to the end (tool output is bytes; invalid UTF-8 is replaced).

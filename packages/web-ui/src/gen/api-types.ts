@@ -1707,6 +1707,11 @@ export type Capabilities = {
    */
   scopes: ScopeCapability | null;
   /**
+   * Machine-readable model/asset license records from the live curated
+   * catalog. Additive optional field per the version policy above.
+   */
+  licenses: LicenseCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;

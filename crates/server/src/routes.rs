@@ -85,6 +85,9 @@ mod bindings;
 #[path = "routes/downloads.rs"]
 mod downloads;
 
+#[path = "routes/asset_packs.rs"]
+mod asset_packs;
+
 #[path = "routes/ui.rs"]
 mod ui;
 
@@ -103,16 +106,21 @@ pub(super) mod job_content;
 #[path = "routes/texture_postprocess.rs"]
 mod texture_postprocess;
 
+#[path = "routes/shader_validate.rs"]
+mod shader_validate;
+
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
 use self::blender::{__path_post_blender_job, post_blender_job};
-#[allow(unused_imports)]
-use self::texture_postprocess::{__path_post_texture_postprocess, post_texture_postprocess};
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
 use self::job_content::{
     __path_get_job_bundle, __path_get_job_content, get_job_bundle, get_job_content,
 };
+#[allow(unused_imports)]
+use self::shader_validate::{__path_post_shader_validate, post_shader_validate};
+#[allow(unused_imports)]
+use self::texture_postprocess::{__path_post_texture_postprocess, post_texture_postprocess};
 
 // Supervised external processes (TASK-process-supervisor): the process
 // group teardown is a unix mechanism, so the module is unix-only. It is
@@ -123,6 +131,8 @@ use self::job_content::{
 #[path = "supervisor.rs"]
 mod supervisor;
 
+#[allow(unused_imports)]
+use self::asset_packs::{__path_post_asset_pack_fetch, post_asset_pack_fetch};
 #[allow(unused_imports)] // main.rs and in-file tests use these via routes::
 pub use self::bindings::{ModelBindings, bind_entries, build_catalog};
 #[allow(unused_imports)] // main.rs and in-file tests use these via routes::
@@ -251,9 +261,7 @@ use self::content_urls::{__path_post_content_urls, post_content_urls};
 #[allow(unused_imports)]
 use self::queue::{__path_get_queue, get_queue};
 #[allow(unused_imports)]
-use self::rerank::{
-    __path_post_rerank, __path_post_rerank_slash, post_rerank, post_rerank_slash,
-};
+use self::rerank::{__path_post_rerank, __path_post_rerank_slash, post_rerank, post_rerank_slash};
 
 #[allow(unused_imports)] // re-exported for integration tests
 #[cfg(test)]
@@ -376,6 +384,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/jobs/{id}", delete(delete_job))
         .route("/v1/jobs/blender", post(post_blender_job))
         .route("/v1/texture-postprocess", post(post_texture_postprocess))
+        .route("/v1/shader-validate", post(post_shader_validate))
         .route("/v1/jobs/{id}/bundle.zip", get(get_job_bundle))
         .route("/v1/jobs/{id}/content/{name}", get(get_job_content))
         .route("/v1/events", get(get_events))
@@ -383,6 +392,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/api/models/unload", post(post_unload_all))
         .route("/api/models/unload/{model}", post(post_unload_one))
         .route("/v1/downloads", post(post_download).get(list_downloads))
+        .route("/v1/asset-packs/fetch", post(post_asset_pack_fetch))
         .route(
             "/v1/downloads/{id}",
             get(get_download).delete(delete_download),

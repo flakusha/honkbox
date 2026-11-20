@@ -295,6 +295,75 @@
         }
       }
     },
+    "/v1/asset-packs/fetch": {
+      "post": {
+        "tags": [],
+        "summary": "Fetch a curated CC0 pack into `<data_dir>/asset-packs/<artifact_id>.bin`\nand return the recorded sha256 + license row for bundle manifests.",
+        "operationId": "post_asset_pack_fetch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Fetched pack with sha256 and license row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FetchRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pack id, URL, or artifact id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Pack license forbids redistribution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "No data dir or local IO failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Source failed or checksum mismatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/audio/speech": {
       "post": {
         "tags": [],
@@ -1933,6 +2002,61 @@
         }
       }
     },
+    "/v1/shader-validate": {
+      "post": {
+        "tags": [],
+        "summary": "Validate one shader before it ships in a bundle. The tool status is\nchecked first; a missing tool gets a named 501 even for a bad request.",
+        "operationId": "post_shader_validate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Compile verdict with named issues",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid shader request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Staging or validator failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Validator absent or broken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/synthesize": {
       "post": {
         "tags": [],
@@ -2783,6 +2907,17 @@
               {
                 "$ref": "#/components/schemas/ImageOpsCapability",
                 "description": "CPU image-ops surface (`POST /v1/image-ops`): the supported op\nvocabulary. Present whenever the ops route is compiled (always\ntoday) — additive optional field per the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "licenses": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LicenseCapability",
+                "description": "Machine-readable model/asset license records from the live curated\ncatalog. Additive optional field per the version policy above."
               },
               {
                 "type": "null"
@@ -3708,6 +3843,83 @@
           "vision": {
             "$ref": "#/components/schemas/VisionFeature",
             "description": "Vision chat (mtmd/mmproj image parts)."
+          }
+        }
+      },
+      "FetchRecord": {
+        "type": "object",
+        "description": "What the fetch wrote: the record returned to the caller and the license\nrow read back by the bundle-manifest renderer.",
+        "required": [
+          "pack_id",
+          "artifact_id",
+          "license",
+          "source_url",
+          "fetch_url",
+          "sha256",
+          "bytes"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "attribution_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "fetch_url": {
+            "type": "string",
+            "description": "Actual URL the bytes were fetched from (may be an operator mirror)."
+          },
+          "license": {
+            "type": "string"
+          },
+          "pack_id": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Locally computed sha256 of the bytes actually stored."
+          },
+          "source_md5": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Publisher's md5, when the curated row records one."
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Curated publisher page from the reviewed pack list."
+          }
+        }
+      },
+      "FetchRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/asset-packs/fetch`.",
+        "required": [
+          "pack_id",
+          "source_url",
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "Safe artifact id used for the stored bytes and license sidecar."
+          },
+          "pack_id": {
+            "type": "string",
+            "description": "Curated pack id."
+          },
+          "source_url": {
+            "type": "string",
+            "description": "Direct source URL for this fetch."
           }
         }
       },
@@ -4706,6 +4918,80 @@
           "strict": {
             "type": "boolean",
             "description": "`OpenAI` strict-mode flag; accepted (grammar enforcement is always\nstrict here)."
+          }
+        }
+      },
+      "LicenseCapability": {
+        "type": "object",
+        "description": "Machine-readable model/asset license surface (`Capabilities::licenses`):\none summary row per curated license record. Additive optional field per\nthe API version policy above.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LicenseSummaryRow"
+            },
+            "description": "One summary row per curated license record."
+          }
+        }
+      },
+      "LicenseSummaryRow": {
+        "type": "object",
+        "description": "One curated license record published on `GET /v1/capabilities`. Nullable\nsource facts stay absent on the wire, never fabricated.",
+        "required": [
+          "license",
+          "commercial_terms",
+          "gated"
+        ],
+        "properties": {
+          "attribution_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Required attribution text, for CC-BY-family sources."
+          },
+          "commercial_terms": {
+            "type": "string",
+            "description": "`commercial` / `non-commercial` / `all-rights-reserved`."
+          },
+          "gated": {
+            "type": "boolean",
+            "description": "Whether the upstream weights are gated behind accepted terms/token."
+          },
+          "license": {
+            "type": "string",
+            "description": "Curated license id (SPDX-style where one exists)."
+          },
+          "license_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "License terms URL, when curated."
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Published weight digest, when known (never fabricated)."
+          },
+          "source_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Upstream source URL, when curated."
+          },
+          "territory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Territory restriction tag, when curated."
           }
         }
       },

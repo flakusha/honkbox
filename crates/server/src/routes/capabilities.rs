@@ -7,9 +7,9 @@
 use axum::{Json, extract::State};
 use honkbox_api_types::{
     AuthCapabilities, Capabilities, CompressionRange, ControlNetFeature, FeatureFlags,
-    FormatLimits, Formats, ImageOpKind, ImageOpsCapability, ModelKind, OutputFormatCapability,
-    QueueCapabilities, QueueKindCapacity, RecognitionFeature, ServerInfo, StorageCapability,
-    ToolCallingCapability, VisionFeature,
+    FormatLimits, Formats, ImageOpKind, ImageOpsCapability, LicenseCapability, LicenseSummaryRow,
+    ModelKind, OutputFormatCapability, QueueCapabilities, QueueKindCapacity, RecognitionFeature,
+    ServerInfo, StorageCapability, ToolCallingCapability, VisionFeature,
 };
 use honkbox_audio_worker::VAD_COMPILED;
 use honkbox_recognition_worker::{BARCODE_COMPILED, RecKind as WorkerRecKind};
@@ -253,5 +253,22 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             })
         },
         texture_postprocess: Some(crate::texture_postprocess::capability()),
+        // Curated license records are the authoritative, review-controlled
+        // catalog: the same rows the model-license gate and bundle sidecars
+        // read. Additive so older clients ignore the block entirely.
+        licenses: Some(LicenseCapability {
+            rows: crate::catalog::licenses::records()
+                .map(|record| LicenseSummaryRow {
+                    license: record.license.clone(),
+                    license_url: record.license_url.clone(),
+                    territory: record.territory.clone(),
+                    commercial_terms: record.commercial_terms.clone(),
+                    gated: record.gated,
+                    source_url: record.source_url.clone(),
+                    sha256: record.sha256.clone(),
+                    attribution_text: record.attribution_text.clone(),
+                })
+                .collect(),
+        }),
     }
 }

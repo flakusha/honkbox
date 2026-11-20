@@ -1,0 +1,68 @@
+[
+  {
+    "id": "quaternius-ultimate-modular-nature-kit",
+    "source_url": "https://quaternius.com/packs/ultimatemodularnaturekit.html",
+    "license": "QAL-1.0",
+    "redistributable": false,
+    "restriction": "no redistribution as assets (Quaternius QAL v1.0; commercial use in games is fine)",
+    "sha256": null,
+    "source_md5": null,
+    "file_names": ["UltimateModularNatureKit.zip"],
+    "attribution_text": "Quaternius — QAL v1.0 (dev-only; no redistribution as assets)"
+  },
+  {
+    "id": "quaternius-ultimate-space-kit",
+    "source_url": "https://quaternius.com/packs/ultimatespacekit.html",
+    "license": "QAL-1.0",
+    "redistributable": false,
+    "restriction": "no redistribution as assets (Quaternius QAL v1.0; commercial use in games is fine)",
+    "sha256": null,
+    "source_md5": null,
+    "file_names": ["UltimateSpaceKit.zip"],
+    "attribution_text": "Quaternius — QAL v1.0 (dev-only; no redistribution as assets)"
+  },
+  {
+    "id": "polyhaven-rocks",
+    "source_url": "https://polyhaven.com/a/rocks",
+    "license": "CC0-1.0",
+    "redistributable": true,
+    "restriction": null,
+    "sha256": null,
+    "source_md5": null,
+    "file_names": [],
+    "attribution_text": "Poly Haven — CC0-1.0"
+  },
+  {
+    "id": "kenney-prototype-textures",
+    "source_url": "https://kenney.nl/assets/prototype-textures",
+    "license": "CC0-1.0",
+    "redistributable": true,
+    "restriction": null,
+    "sha256": null,
+    "source_md5": null,
+    "file_names": [],
+    "attribution_text": "Kenney — CC0-1.0"
+  },
+  {
+    "id": "kaykit-adventurers",
+    "source_url": "https://kaylousberg.itch.io/kaykit-adventurers",
+    "license": "CC0-1.0",
+    "redistributable": true,
+    "restriction": null,
+    "sha256": null,
+    "source_md5": null,
+    "file_names": [],
+    "attribution_text": "KayKit (Kay Lousberg) — CC0-1.0"
+  },
+  {
+    "id": "ambientcg-bricks001",
+    "source_url": "https://ambientcg.com/view?id=Bricks001",
+    "license": "CC0-1.0",
+    "redistributable": true,
+    "restriction": null,
+    "sha256": null,
+    "source_md5": null,
+    "file_names": [],
+    "attribution_text": "ambientCG — CC0-1.0"
+  }
+]

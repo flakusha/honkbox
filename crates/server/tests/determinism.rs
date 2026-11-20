@@ -10,6 +10,12 @@
 //! cross-backend or cross-hardware byte-equality assertion here (L3 is
 //! unsupported — see `src/determinism.rs` module docs).
 
+#[allow(dead_code)]
+#[path = "../src/catalog.rs"]
+mod catalog;
+#[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod config;
 #[allow(dead_code)] // the whole module tree, not just the items used below
 #[path = "../src/jobs.rs"]
 mod jobs;

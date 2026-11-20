@@ -28,6 +28,9 @@ use tower::ServiceExt as _;
 // (house pattern: per-mod allow(dead_code); this harness does not mount the
 // full app, only the config/mesh/jobs slice it exercises).
 #[allow(dead_code)]
+#[path = "../src/catalog.rs"]
+mod catalog;
+#[allow(dead_code)]
 #[path = "../src/config.rs"]
 mod config;
 #[allow(dead_code)]

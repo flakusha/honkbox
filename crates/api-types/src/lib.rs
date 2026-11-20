@@ -127,10 +127,50 @@ pub struct Capabilities {
     /// scopes exist. Additive optional field per the version policy above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<ScopeCapability>,
+    /// Machine-readable model/asset license records from the live curated
+    /// catalog. Additive optional field per the version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub licenses: Option<LicenseCapability>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
     pub models: String,
+}
+
+/// Machine-readable model/asset license surface (`Capabilities::licenses`):
+/// one summary row per curated license record. Additive optional field per
+/// the API version policy above.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct LicenseCapability {
+    /// One summary row per curated license record.
+    pub rows: Vec<LicenseSummaryRow>,
+}
+
+/// One curated license record published on `GET /v1/capabilities`. Nullable
+/// source facts stay absent on the wire, never fabricated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct LicenseSummaryRow {
+    /// Curated license id (SPDX-style where one exists).
+    pub license: String,
+    /// License terms URL, when curated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license_url: Option<String>,
+    /// Territory restriction tag, when curated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub territory: Option<String>,
+    /// `commercial` / `non-commercial` / `all-rights-reserved`.
+    pub commercial_terms: String,
+    /// Whether the upstream weights are gated behind accepted terms/token.
+    pub gated: bool,
+    /// Upstream source URL, when curated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    /// Published weight digest, when known (never fabricated).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Required attribution text, for CC-BY-family sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_text: Option<String>,
 }
 
 /// Local storage surface (`Capabilities::storage`): whether the server has
