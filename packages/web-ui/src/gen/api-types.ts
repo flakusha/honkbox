@@ -1720,6 +1720,46 @@ export type Capabilities = {
    */
   models: string;
 };
+export type LicenseCapability = {
+  /**
+   * One summary row per curated license record.
+   */
+  rows: Array<LicenseSummaryRow>;
+};
+export type LicenseSummaryRow = {
+  /**
+   * Curated license id (SPDX-style where one exists).
+   */
+  license: string;
+  /**
+   * License terms URL, when curated.
+   */
+  license_url: string | null;
+  /**
+   * Territory restriction tag, when curated.
+   */
+  territory: string | null;
+  /**
+   * `commercial` / `non-commercial` / `all-rights-reserved`.
+   */
+  commercial_terms: string;
+  /**
+   * Whether the upstream weights are gated behind accepted terms/token.
+   */
+  gated: boolean;
+  /**
+   * Upstream source URL, when curated.
+   */
+  source_url: string | null;
+  /**
+   * Published weight digest, when known (never fabricated).
+   */
+  sha256: string | null;
+  /**
+   * Required attribution text, for CC-BY-family sources.
+   */
+  attribution_text: string | null;
+};
 export type StorageCapability = {
   /**
    * A data dir is configured and writable.

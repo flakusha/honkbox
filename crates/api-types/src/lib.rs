@@ -2944,6 +2944,8 @@ mod tests {
             ArtifactInfo::decl(&config),
             ArtifactManifest::decl(&config),
             Capabilities::decl(&config),
+            LicenseCapability::decl(&config),
+            LicenseSummaryRow::decl(&config),
             StorageCapability::decl(&config),
             ServerInfo::decl(&config),
             FeatureFlags::decl(&config),
