@@ -1,6 +1,6 @@
 # TASK: Non-commercial weight gate (NC-flagged artifacts)
 
-Status: proposed
+Status: done (2026-11-20, NC gate + manifest stamping landed)
 Priority: P2
 Epic: epic-binary-formats
 Owner: unassigned

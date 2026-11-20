@@ -1,6 +1,6 @@
 # TASK: Redistribution-restricted pack guard (QAL)
 
-Status: proposed
+Status: done (2026-11-20, curated pack guard landed)
 Priority: P1
 Epic: epic-binary-formats
 Owner: unassigned

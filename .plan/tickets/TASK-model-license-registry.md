@@ -1,6 +1,6 @@
 # TASK: Model-license registry + product-license rendering
 
-Status: proposed
+Status: done (2026-11-20, license-registry wave)
 Priority: P1
 Epic: epic-binary-formats
 Owner: unassigned

@@ -1,6 +1,6 @@
 # TASK: UniRig probe (ML auto-rig for generated meshes)
 
-Status: proposed
+Status: in progress (2026-11-20, probe surface landed; real rig run + wrapper-license decision outstanding)
 Priority: P2
 Epic: epic-blender-assets
 Owner: unassigned

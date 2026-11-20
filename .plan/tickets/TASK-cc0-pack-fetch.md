@@ -1,6 +1,6 @@
 # TASK: CC0 pack fetch (PolyHaven API + Kenney/KayKit)
 
-Status: proposed
+Status: done (2026-11-20, local-mirror fetch + sha/license rows landed)
 Priority: P1
 Epic: epic-game-engine-export
 Owner: unassigned

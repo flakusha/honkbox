@@ -1,6 +1,6 @@
 # TASK: vk_gaussian_splatting renderer probe
 
-Status: proposed
+Status: in progress (2026-11-20, probe/capability surface landed; real-binary render unverified — external vkgs binary absent)
 Priority: P2
 Epic: epic-3d-capture
 Owner: unassigned
