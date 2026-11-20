@@ -5,7 +5,8 @@
 //! `llm:<posix-relative-path>` for files under an `llm_dir`,
 //! `comfy:<posix-relative-path>` for files under a `comfyui_dir` (e.g.
 //! `comfy:checkpoints/sdxl.safetensors`), and `stt:` / `tts:` likewise for
-//! files under the audio roots. Relative paths are measured from the root;
+//! files under the audio roots, and `ocr:` under an OCR weights root.
+//! Relative paths are measured from the root;
 //! separators are always `/`.
 
 use std::collections::HashSet;
@@ -30,6 +31,8 @@ pub enum RootKind {
     Stt,
     /// Text-to-speech weights (kokoro safetensors, piper onnx).
     Tts,
+    /// OCR weights (ocrs text-detection + text-recognition, `.rten`/`.onnx`).
+    Ocr,
 }
 
 /// Configured model roots to scan.
@@ -44,6 +47,8 @@ pub struct ModelRoots {
     pub stt_dirs: Vec<PathBuf>,
     /// Text-to-speech weight directories; every entry is scanned.
     pub tts_dirs: Vec<PathBuf>,
+    /// OCR weight directories; every entry is scanned.
+    pub ocr_dirs: Vec<PathBuf>,
 }
 
 /// One discovered model file.
@@ -69,6 +74,7 @@ impl serde::Serialize for RootKind {
             RootKind::Comfy => "comfy",
             RootKind::Stt => "stt",
             RootKind::Tts => "tts",
+            RootKind::Ocr => "ocr",
         })
     }
 }
@@ -94,6 +100,8 @@ pub enum ModelKind {
     Stt,
     /// Text-to-speech weights under a TTS root.
     Tts,
+    /// OCR weights under an OCR root.
+    Ocr,
 }
 
 impl serde::Serialize for ModelKind {
@@ -107,6 +115,7 @@ impl serde::Serialize for ModelKind {
             ModelKind::Vae => "vae",
             ModelKind::Stt => "stt",
             ModelKind::Tts => "tts",
+            ModelKind::Ocr => "ocr",
         })
     }
 }
@@ -159,6 +168,7 @@ fn model_kind(root: RootKind, category: &str) -> ModelKind {
         },
         RootKind::Stt => ModelKind::Stt,
         RootKind::Tts => ModelKind::Tts,
+        RootKind::Ocr => ModelKind::Ocr,
     }
 }
 
@@ -175,6 +185,11 @@ const STT_EXTS: &[&str] = &["bin", "gguf"];
 /// Extensions accepted anywhere below a TTS root (lowercase, no dot):
 /// kokoro safetensors, piper onnx.
 const TTS_EXTS: &[&str] = &["onnx", "safetensors"];
+
+/// Extensions accepted anywhere below an OCR root (lowercase, no dot):
+/// ocrs text-detection / text-recognition weights. User-downloaded only —
+/// honkbox bundles none.
+const OCR_EXTS: &[&str] = &["rten", "onnx"];
 
 /// Maximum scan depth, relative to the root (root entries are depth 1).
 const MAX_DEPTH: usize = 8;
@@ -270,6 +285,9 @@ fn classify(kind: RootKind, path: &Path, rel: &str, ext: &str) -> Option<(String
         RootKind::Tts => TTS_EXTS
             .contains(&ext)
             .then(|| (format!("tts:{rel}"), llm_category(path, rel))),
+        RootKind::Ocr => OCR_EXTS
+            .contains(&ext)
+            .then(|| (format!("ocr:{rel}"), llm_category(path, rel))),
     }
 }
 
@@ -304,6 +322,9 @@ pub fn scan_roots(roots: &ModelRoots) -> Vec<FoundModel> {
     }
     for dir in &roots.tts_dirs {
         scan_one(dir, RootKind::Tts, &mut visited, &mut out);
+    }
+    for dir in &roots.ocr_dirs {
+        scan_one(dir, RootKind::Ocr, &mut visited, &mut out);
     }
     out.sort_by(|a, b| a.slug.cmp(&b.slug));
     out
@@ -436,6 +457,7 @@ mod tests {
             comfyui_dirs: vec![comfy.clone()],
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         };
         let found = scan_roots(&roots);
         // Cleanup before asserting: no debris even when an assert fails.
@@ -479,6 +501,7 @@ mod tests {
             comfyui_dirs: vec![comfy],
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         });
         // Cleanup before asserting: no debris even when an assert fails.
         std::fs::remove_dir_all(&base).unwrap();
@@ -519,6 +542,7 @@ mod tests {
             comfyui_dirs: Vec::new(),
             stt_dirs: vec![stt],
             tts_dirs: vec![tts],
+            ocr_dirs: Vec::new(),
         });
         // Cleanup before asserting: no debris even when an assert fails.
         std::fs::remove_dir_all(&base).unwrap();
@@ -550,6 +574,7 @@ mod tests {
             comfyui_dirs: vec![a, b],
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         });
         std::fs::remove_dir_all(&base).unwrap();
         let slugs: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
@@ -616,6 +641,7 @@ mod tests {
             comfyui_dirs: vec![comfy],
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         });
         std::fs::remove_dir_all(&base).unwrap();
         let kinds: Vec<(String, ModelKind)> =
@@ -653,10 +679,41 @@ mod tests {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         });
         std::fs::remove_dir_all(&base).unwrap();
         let slugs: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
         // The cycle is cut, the real file is found exactly once.
         assert_eq!(slugs, ["llm:dir/m.gguf"]);
+    }
+
+    /// OCR roots yield `ocr:` slugs and `ModelKind::Ocr`, with the same
+    /// `.rten`/`.onnx` extension gate as the other model roots.
+    #[test]
+    fn ocr_roots_scan_slugs_and_kinds() {
+        let base = std::env::temp_dir().join(format!("honkbox-ocr-scan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ocr = base.join("ocr");
+        std::fs::create_dir_all(ocr.join("en")).unwrap();
+        std::fs::write(ocr.join("text-detection.rten"), b"det").unwrap();
+        std::fs::write(ocr.join("en/text-rec.onnx"), b"rec").unwrap();
+        std::fs::write(ocr.join("skip.safetensors"), b"no").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+            ocr_dirs: vec![ocr],
+        });
+        std::fs::remove_dir_all(&base).unwrap();
+        let kinds: Vec<(String, ModelKind)> =
+            entries.iter().map(|e| (e.slug.clone(), e.kind)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("ocr:en/text-rec.onnx".to_owned(), ModelKind::Ocr),
+                ("ocr:text-detection.rten".to_owned(), ModelKind::Ocr),
+            ]
+        );
     }
 }

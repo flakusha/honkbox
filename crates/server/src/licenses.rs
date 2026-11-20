@@ -69,6 +69,7 @@ fn kind_name(kind: ModelKind) -> &'static str {
         ModelKind::Vae => "vae",
         ModelKind::Stt => "stt",
         ModelKind::Tts => "tts",
+        ModelKind::Ocr => "ocr",
     }
 }
 

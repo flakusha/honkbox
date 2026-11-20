@@ -103,6 +103,7 @@ fn app_with(data_dir: Option<PathBuf>, max_artifact_bytes: u64) -> Router {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,
@@ -1178,5 +1179,115 @@ async fn weak_if_match_is_rejected() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Repeated conflicting chunk POSTs must not strand streamed `.part` files:
+/// the guard created at the part's creation site owns cleanup on every error
+/// branch, including the digest-conflict branch.
+#[tokio::test]
+async fn conflicting_chunks_leave_no_part_files() {
+    let (app, dir) = default_app("conflict-no-debris");
+    let uploads = dir.join("artifacts").join("uploads");
+
+    let (status, manifest) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "2".to_owned())],
+        &[chunk(0, b"original")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
+
+    for _ in 0..5 {
+        let (status, body) = post_chunks(
+            app.clone(),
+            &[("x-upload-id", id.clone())],
+            &[chunk(0, b"conflicting-bytes")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error_code(&body), Some("upload_conflict"));
+    }
+
+    let parts: Vec<_> = std::fs::read_dir(uploads.join(&id))
+        .expect("session dir")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".chunk.part"))
+        .collect();
+    assert!(
+        parts.is_empty(),
+        "conflicting chunks stranded .part files: {parts:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The lazy TTL sweep reclaims old on-disk-only session dirs, spares fresh
+/// and live ones, and a resumed upload still completes afterwards.
+#[tokio::test]
+async fn stale_sessions_swept_live_and_resume_intact() {
+    let (app, dir) = default_app("sweep-ttl");
+    let uploads = dir.join("artifacts").join("uploads");
+
+    // Live session: present both in the registry and on disk.
+    let (status, manifest) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "2".to_owned())],
+        &[chunk(0, b"first")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let live_id = manifest["upload_id"]
+        .as_str()
+        .expect("upload id")
+        .to_owned();
+
+    // Old on-disk-only session: the sweep must reclaim it.
+    let stale = uploads.join("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    std::fs::create_dir_all(&stale).expect("stale session dir");
+    std::fs::write(stale.join("manifest.json"), b"{}").expect("stale manifest");
+    let old = std::time::SystemTime::now()
+        .checked_sub(Duration::from_hours(2))
+        .expect("backdate");
+    std::fs::File::options()
+        .read(true)
+        .open(&stale)
+        .expect("open stale dir")
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(old)
+                .set_accessed(old),
+        )
+        .expect("backdate stale dir");
+
+    // Fresh on-disk-only session: the age check must spare it.
+    let fresh = uploads.join("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+    std::fs::create_dir_all(&fresh).expect("fresh session dir");
+    std::fs::write(fresh.join("manifest.json"), b"{}").expect("fresh manifest");
+
+    // A new session request triggers the sweep.
+    let (status, _) = post_chunks(
+        app.clone(),
+        &[("x-chunk-count", "1".to_owned())],
+        &[chunk(0, b"trigger")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(!stale.exists(), "stale session dir must be swept");
+    assert!(fresh.exists(), "fresh on-disk session must survive");
+    assert!(
+        uploads.join(&live_id).exists(),
+        "live session must survive the sweep"
+    );
+
+    // The live session can still be resumed and finalized by id.
+    let (status, manifest) =
+        post_chunks(app, &[("x-upload-id", live_id)], &[chunk(1, b"second")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(manifest["status"], "complete");
     let _ = std::fs::remove_dir_all(dir);
 }

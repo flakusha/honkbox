@@ -532,6 +532,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         comfyui_dirs: cfg.comfyui_dirs,
         stt_dirs: cfg.stt_dirs,
         tts_dirs: cfg.tts_dirs,
+        ocr_dirs: cfg.ocr_dirs,
     };
     let found = honkbox_registry::scan_roots(&roots);
     info!("discovered {} models across configured roots", found.len());
@@ -629,7 +630,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         downloads,
         artifacts,
         auth,
-        recognition: crate::backends::make_recognition(),
+        recognition: crate::backends::make_recognition(&found),
     };
     let rescan_signal = app_config.downloads.rescan_signal();
     tokio::spawn(routes::rescan_on_downloads(
@@ -664,6 +665,7 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
         comfyui_dirs: cfg.comfyui_dirs,
         stt_dirs: cfg.stt_dirs,
         tts_dirs: cfg.tts_dirs,
+        ocr_dirs: cfg.ocr_dirs,
     });
     found.sort_by(|a, b| a.slug.cmp(&b.slug));
     if json {
@@ -684,6 +686,7 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
                 honkbox_registry::RootKind::Comfy => "comfy",
                 honkbox_registry::RootKind::Stt => "stt",
                 honkbox_registry::RootKind::Tts => "tts",
+                honkbox_registry::RootKind::Ocr => "ocr",
             };
             println!(
                 "{:<64} {:<6} {:>10}  {}",
@@ -770,6 +773,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         comfyui_dirs: cfg.comfyui_dirs,
         stt_dirs: cfg.stt_dirs,
         tts_dirs: cfg.tts_dirs,
+        ocr_dirs: cfg.ocr_dirs,
     });
     let model_path = resolve_model(&found, &model);
     // Optional split-file inputs: same registry, unknown slug is a loud exit-1.
@@ -857,6 +861,7 @@ fn scan_models(cfg: config::ModelConfig) -> Vec<honkbox_registry::FoundModel> {
         comfyui_dirs: cfg.comfyui_dirs,
         stt_dirs: cfg.stt_dirs,
         tts_dirs: cfg.tts_dirs,
+        ocr_dirs: cfg.ocr_dirs,
     })
 }
 

@@ -46,11 +46,12 @@
 //! uploads/downloads are pure disk IO with no model residency, so there is
 //! no slot to acquire.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -82,6 +83,11 @@ const MAX_PARTS_PER_REQUEST: u32 = 1_024;
 /// Fixed streaming buffer (64 KiB): several chunk writes per syscall batch,
 /// small enough that dozens of concurrent transfers stay memory-trivial.
 const STREAM_BUF: usize = 64 * 1024;
+
+/// Age past which an upload directory not live in the registry is reclaimed
+/// on the next chunked request. Deliberately generous: a client can idle an
+/// hour and still resume.
+const UPLOAD_SESSION_TTL: Duration = Duration::from_hours(1);
 
 /// Header carrying the upload id of a chunked upload being resumed.
 const UPLOAD_ID_HEADER: &str = "x-upload-id";
@@ -474,6 +480,44 @@ impl Registry {
     async fn forget(&self, id: &str) {
         self.uploads.lock().await.remove(id);
     }
+
+    /// Lazily reclaim stale, non-live upload directories. O(directory
+    /// entries), all IO failures ignored — housekeeping must never fail an
+    /// upload. `protect` is the id being resumed right now: it may be old
+    /// and disk-only after a restart, but the client still owns it.
+    // ponytail: lazy TTL sweep ceiling; periodic reaper if upload volume grows.
+    async fn sweep_abandoned_uploads(&self, protect: Option<&str>) {
+        let Some(root) = self.root.as_ref() else {
+            return;
+        };
+        let uploads = root.join("uploads");
+        let Ok(mut entries) = tokio::fs::read_dir(&uploads).await else {
+            return;
+        };
+        let live: HashSet<String> = self.uploads.lock().await.keys().cloned().collect();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if protect == Some(name.as_str()) || live.contains(&name) {
+                continue;
+            }
+            let Ok(kind) = entry.file_type().await else {
+                continue;
+            };
+            if !kind.is_dir() {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .await
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|mtime| mtime.elapsed().ok())
+                .is_some_and(|age| age >= UPLOAD_SESSION_TTL);
+            if stale {
+                let _ = tokio::fs::remove_dir_all(entry.path()).await;
+            }
+        }
+    }
 }
 
 /// On-disk shape of `uploads/<id>/manifest.json` ([`UploadState`] plus its
@@ -552,6 +596,34 @@ async fn sync_file(path: &Path) -> Result<(), ArtifactError> {
 struct Streamed {
     sha256: String,
     bytes: u64,
+}
+
+/// Deletes a streamed `.part` on drop unless [`PartGuard::disarm`] was
+/// called. Created at every `.part` creation site so cap breaches, IO errors,
+/// and digest conflicts cannot strand bytes — whichever `?` fires.
+struct PartGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl PartGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    /// The bytes now live at their final path (or were deliberately
+    /// discarded); nothing to clean up.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Mapped body chunks: both the raw request stream and multipart fields
@@ -637,11 +709,11 @@ async fn accept_chunk(
 ) -> Result<bool, ArtifactError> {
     if let Some(existing) = state.chunks.get(&index) {
         if *existing == record {
-            // Idempotent re-POST: the bytes already live here; drop the
-            // duplicate `.part` and report success without state change.
-            let _ = tokio::fs::remove_file(part_path).await;
+            // Idempotent re-POST: the caller's part guard discards the
+            // duplicate `.part`; no state change.
             return Ok(false);
         }
+        // The caller's part guard discards the streamed bytes on conflict.
         return Err(ArtifactError::UploadConflict(format!(
             "chunk {index} already received with a different digest"
         )));
@@ -794,6 +866,7 @@ async fn store_single_shot(
         .map_err(|err| ArtifactError::Storage(format!("create blobs dir: {err}")))?;
     let token = ulid::Ulid::new().to_string();
     let part = root.join("blobs").join(format!("{token}.part"));
+    let mut guard = PartGuard::new(part.clone());
     let chunks: ChunkStream = Box::pin(
         body.into_data_stream()
             .map(|item| item.map_err(|err| err.to_string())),
@@ -801,6 +874,7 @@ async fn store_single_shot(
     let streamed = stream_to_file(chunks, &part, None, 0, reg.max_artifact_bytes).await?;
     let target = Registry::blob_path(&root, &streamed.sha256);
     publish_blob(&root, &part, &target).await?;
+    guard.disarm(); // renamed, or dedup-discarded by publish_blob
     let info = ArtifactInfo {
         id: streamed.sha256.clone(),
         sha256: streamed.sha256,
@@ -997,6 +1071,7 @@ async fn resolve_upload_session(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|raw| !raw.is_empty());
+    reg.sweep_abandoned_uploads(resume_id).await;
     if let Some(id) = resume_id {
         let state = reg
             .upload(id)
@@ -1050,6 +1125,7 @@ async fn store_one_chunk(
 ) -> Result<(), ArtifactError> {
     let token = ulid::Ulid::new().to_string();
     let part_path = dir.join(format!("{index}-{token}.chunk.part"));
+    let mut part = PartGuard::new(part_path.clone());
     // Per-chunk cap + remaining artifact budget; the stream aborts at
     // whichever trips first, naming the right cap.
     let chunks: ChunkStream<'_> = Box::pin(field.map(|item| item.map_err(|err| err.to_string())));
@@ -1062,14 +1138,11 @@ async fn store_one_chunk(
     )
     .await?;
     if streamed.bytes == 0 {
-        // stream_to_file only cleans up its .part on cap/IO failure; an
-        // empty part is a client error and must leave no debris behind.
-        let _ = tokio::fs::remove_file(&part_path).await;
         return Err(ArtifactError::EmptyChunk(index));
     }
     let chunk_suffix = streamed.sha256.get(..8).unwrap_or("chunk").to_owned();
     let final_path = dir.join(format!("{index}-{chunk_suffix}.chunk"));
-    accept_chunk(
+    let committed = accept_chunk(
         state,
         &dir.join("manifest.json"),
         index,
@@ -1081,6 +1154,10 @@ async fn store_one_chunk(
         &final_path,
     )
     .await?;
+    if committed {
+        // Renamed into place; the guard has nothing left to remove.
+        part.disarm();
+    }
     Ok(())
 }
 

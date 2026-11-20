@@ -21,7 +21,7 @@
 //! relative env/XDG values are treated as unset; fallback
 //! `$HOME/.local/state/honkbox`). Everything derives from it:
 //! `<data_dir>/honkbox.toml` (config), `jobs/`, `logs/honkbox.log`,
-//! `registry.sqlite3`, `models/{llm,sd,stt,tts}` (the audio starters plus
+//! `registry.sqlite3`, `models/{llm,sd,stt,tts,ocr}` (the audio starters plus
 //! the managed download roots appended by `append_managed_roots`). The
 //! file-*locating* default is
 //! pure-env (no file read, no cwd), so the config file lives inside the data
@@ -30,9 +30,10 @@
 //!
 //! Precedence for model roots: built-in defaults → config file → env
 //! (`HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`,
-//! `HONKBOX_TTS_DIRS`, `HONKBOX_DISCOVERY_LLM_DIRS`,
+//! `HONKBOX_TTS_DIRS`, `HONKBOX_OCR_DIRS`, `HONKBOX_DISCOVERY_LLM_DIRS`,
 //! `HONKBOX_DISCOVERY_COMFYUI_DIRS`, `HONKBOX_DISCOVERY_STT_DIRS`,
-//! `HONKBOX_DISCOVERY_TTS_DIRS`); the curated catalog's VRAM budget rides
+//! `HONKBOX_DISCOVERY_TTS_DIRS`, `HONKBOX_DISCOVERY_OCR_DIRS`); the curated
+//! catalog's VRAM budget rides
 //! `[models] vram_budget_bytes` with `HONKBOX_VRAM_BUDGET` as its env stage.
 //!
 //! Operator model bindings (REQ-2) ride `[[models.entry]]` — an array of
@@ -111,6 +112,8 @@ pub struct ModelConfig {
     pub stt_dirs: Vec<PathBuf>,
     /// Text-to-speech weight directories; every entry is scanned.
     pub tts_dirs: Vec<PathBuf>,
+    /// OCR weight directories (ocrs `.rten`/`.onnx`); every entry is scanned.
+    pub ocr_dirs: Vec<PathBuf>,
     /// `[jobs]` GC settings (startup garbage collection of job bundles).
     pub jobs: JobsConfig,
     /// `[swap]` LLM load-on-demand + idle-eviction settings.
@@ -996,7 +999,9 @@ fn ledger_settings(
 ) -> Result<LedgerSettings, String> {
     let mut cfg = LedgerSettings::default();
     if let Some(v) = file.gpu_slots {
-        cfg.gpu_slots = v;
+        // A zero-slot ledger rejects every GPU demand forever; clamp like
+        // queue_cap instead of blaming the request.
+        cfg.gpu_slots = v.max(1);
     }
     if let Some(v) = file.vram_budget_bytes {
         cfg.vram_budget_bytes = v;
@@ -1017,7 +1022,7 @@ fn ledger_settings(
         && !v.is_empty()
         && let Ok(parsed) = v.parse::<u32>()
     {
-        cfg.gpu_slots = parsed;
+        cfg.gpu_slots = parsed.max(1);
     }
     if let Some(v) = vram_env
         && !v.is_empty()
@@ -1274,6 +1279,12 @@ fn stage_config_file(
     if let Some(dirs) = file.discovery.tts_dirs {
         staged.extra_tts = dirs.iter().map(|d| expand_home(d)).collect();
     }
+    if let Some(dirs) = file.models.ocr_dirs {
+        staged.ocr = dirs.iter().map(|d| expand_home(d)).collect();
+    }
+    if let Some(dirs) = file.discovery.ocr_dirs {
+        staged.extra_ocr = dirs.iter().map(|d| expand_home(d)).collect();
+    }
     out.jobs = file.jobs;
     out.swap = file.swap;
     out.artifacts = file.artifacts.max_artifact_bytes;
@@ -1511,6 +1522,8 @@ pub fn load(
         std::env::var("HONKBOX_TTS_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_STT_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_OCR_DIRS").ok().as_deref(),
+        std::env::var("HONKBOX_DISCOVERY_OCR_DIRS").ok().as_deref(),
     )
     .merged(jobs, swap);
     models.vram_budget_bytes = vram_budget;
@@ -1603,13 +1616,15 @@ pub fn load(
 /// Append the managed download roots under `base/models` to a resolved
 /// `ModelConfig`: `llm` under `models/llm`, `sd` as a `ComfyUI` base under
 /// `models/sd` (its download subdir `models/sd/checkpoints` is inside it),
-/// `stt` under `models/stt`, `tts` under `models/tts`. Exact-path dedupe:
-/// the starter `stt`/`tts` dirs already equal these paths.
+/// `stt` under `models/stt`, `tts` under `models/tts`, `ocr` under
+/// `models/ocr`. Exact-path dedupe: the starter `stt`/`tts` dirs already
+/// equal these paths.
 fn append_managed_roots(models: &mut ModelConfig, base: &Path) {
     push_unique(&mut models.llm_dirs, base.join("models/llm"));
     push_unique(&mut models.comfyui_dirs, base.join("models/sd"));
     push_unique(&mut models.stt_dirs, base.join("models/stt"));
     push_unique(&mut models.tts_dirs, base.join("models/tts"));
+    push_unique(&mut models.ocr_dirs, base.join("models/ocr"));
 }
 
 /// Push `path` unless an identical entry exists (the registry scan dedupes
@@ -1628,10 +1643,12 @@ struct RootStages {
     comfyui: Vec<PathBuf>,
     stt: Vec<PathBuf>,
     tts: Vec<PathBuf>,
+    ocr: Vec<PathBuf>,
     extra_llm: Vec<PathBuf>,
     extra_comfyui: Vec<PathBuf>,
     extra_stt: Vec<PathBuf>,
     extra_tts: Vec<PathBuf>,
+    extra_ocr: Vec<PathBuf>,
 }
 
 impl RootStages {
@@ -1643,10 +1660,12 @@ impl RootStages {
             comfyui: vec![expand_home("~/git-ai/ai-models/Data/Models")],
             stt: Vec::new(),
             tts: Vec::new(),
+            ocr: Vec::new(),
             extra_llm: Vec::new(),
             extra_comfyui: Vec::new(),
             extra_stt: Vec::new(),
             extra_tts: Vec::new(),
+            extra_ocr: Vec::new(),
         }
     }
 
@@ -1661,11 +1680,14 @@ impl RootStages {
         stt_dirs.extend(self.extra_stt);
         let mut tts_dirs = self.tts;
         tts_dirs.extend(self.extra_tts);
+        let mut ocr_dirs = self.ocr;
+        ocr_dirs.extend(self.extra_ocr);
         ModelConfig {
             llm_dirs,
             comfyui_dirs,
             stt_dirs,
             tts_dirs,
+            ocr_dirs,
             jobs,
             swap,
             // Resolved separately in `load` (file key + env stage).
@@ -1685,8 +1707,9 @@ impl RootStages {
 /// `HONKBOX_TTS_DIRS` replace the `[models]` `stt_dirs` / `tts_dirs`, and
 /// `HONKBOX_DISCOVERY_LLM_DIRS` / `HONKBOX_DISCOVERY_COMFYUI_DIRS` /
 /// `HONKBOX_DISCOVERY_STT_DIRS` / `HONKBOX_DISCOVERY_TTS_DIRS` replace the
-/// `[discovery]` extras. Pure (args instead of process env) so tests stay
-/// thread-safe.
+/// `[discovery]` extras; `HONKBOX_OCR_DIRS` / `HONKBOX_DISCOVERY_OCR_DIRS`
+/// do the same for OCR weights. Pure (args instead of process env) so tests
+/// stay thread-safe.
 #[allow(clippy::too_many_arguments)]
 fn apply_env(
     mut staged: RootStages,
@@ -1698,6 +1721,8 @@ fn apply_env(
     tts_dirs: Option<&str>,
     extra_stt_dirs: Option<&str>,
     extra_tts_dirs: Option<&str>,
+    ocr_dirs: Option<&str>,
+    extra_ocr_dirs: Option<&str>,
 ) -> RootStages {
     if let Some(v) = llm_dirs
         && !v.is_empty()
@@ -1738,6 +1763,16 @@ fn apply_env(
         && !v.is_empty()
     {
         staged.extra_tts = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = ocr_dirs
+        && !v.is_empty()
+    {
+        staged.ocr = std::env::split_paths(v).collect();
+    }
+    if let Some(v) = extra_ocr_dirs
+        && !v.is_empty()
+    {
+        staged.extra_ocr = std::env::split_paths(v).collect();
     }
     staged
 }
@@ -1923,6 +1958,8 @@ struct FileModels {
     stt_dirs: Option<Vec<String>>,
     #[serde(default)]
     tts_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    ocr_dirs: Option<Vec<String>>,
     /// Optional VRAM budget (bytes) for the curated catalog's fit pills.
     #[serde(default)]
     vram_budget_bytes: Option<u64>,
@@ -1935,7 +1972,7 @@ struct FileModels {
 /// llama-swap parity plan); mirrors `[models]` with a plural `comfyui_dirs`
 /// so extra `ComfyUI` trees can be added without replacing the base one.
 /// Audio parity: `stt_dirs` / `tts_dirs` work exactly like the `[models]`
-/// keys. The research doc's `roots = [{kind, path}]` table plus `cache`/
+/// keys; `ocr_dirs` likewise for OCR weights. The research doc's `roots = [{kind, path}]` table plus `cache`/
 /// `rescan_seconds` still land with the P1 adapter work; unknown
 /// `[discovery]` keys are ignored.
 #[derive(Debug, Default, serde::Deserialize)]
@@ -1943,6 +1980,8 @@ struct FileModels {
 struct FileDiscovery {
     #[serde(default)]
     llm_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    ocr_dirs: Option<Vec<String>>,
     #[serde(default)]
     comfyui_dirs: Option<Vec<String>>,
     #[serde(default)]
@@ -2023,6 +2062,7 @@ mod tests {
         // Starter audio roots derive from the data dir, not from `$HOME`.
         assert_eq!(cfg.stt_dirs, Vec::<PathBuf>::new());
         assert_eq!(cfg.tts_dirs, Vec::<PathBuf>::new());
+        assert_eq!(cfg.ocr_dirs, Vec::<PathBuf>::new());
 
         let staged = apply_env(
             RootStages::defaults(),
@@ -2033,6 +2073,8 @@ mod tests {
             Some("/tmp/honkbox-stt:/tmp/honkbox-stt2"),
             Some("/tmp/honkbox-tts"),
             Some(""),
+            Some(""),
+            Some("/tmp/honkbox-ocr"),
             Some(""),
         );
         let over = staged
@@ -2054,10 +2096,13 @@ mod tests {
             ]
         );
         assert_eq!(over.tts_dirs, vec![PathBuf::from("/tmp/honkbox-tts")]);
+        assert_eq!(over.ocr_dirs, vec![PathBuf::from("/tmp/honkbox-ocr")]);
 
         // Empty values keep the file/default values.
         let kept = apply_env(
             staged,
+            Some(""),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -2072,6 +2117,7 @@ mod tests {
         assert_eq!(kept.comfyui_dirs, over.comfyui_dirs);
         assert_eq!(kept.stt_dirs, over.stt_dirs);
         assert_eq!(kept.tts_dirs, over.tts_dirs);
+        assert_eq!(kept.ocr_dirs, over.ocr_dirs);
 
         // A missing file loads (defaults + ambient env), never errors.
         load(
@@ -2135,6 +2181,7 @@ mod tests {
             RootStages {
                 extra_llm: vec![PathBuf::from("/tmp/extra-llm")],
                 extra_comfyui: vec![PathBuf::from("/tmp/extra-comfy")],
+                extra_ocr: vec![PathBuf::from("/tmp/extra-ocr")],
                 ..RootStages::default()
             },
             Some("/tmp/base-llm"),
@@ -2145,6 +2192,8 @@ mod tests {
             Some(""),
             Some("/tmp/replacement-stt"),
             Some("/tmp/replacement-tts"),
+            Some(""),
+            Some("/tmp/replacement-ocr"),
         )
         .merged(JobsConfig::default(), SwapConfig::default());
         assert_eq!(
@@ -2165,6 +2214,7 @@ mod tests {
         // Audio stages behave the same: extras replace, base env does not touch them.
         assert_eq!(merged.stt_dirs, vec![PathBuf::from("/tmp/replacement-stt")]);
         assert_eq!(merged.tts_dirs, vec![PathBuf::from("/tmp/replacement-tts")]);
+        assert_eq!(merged.ocr_dirs, vec![PathBuf::from("/tmp/replacement-ocr")]);
     }
 
     #[test]
@@ -2175,7 +2225,7 @@ mod tests {
         let path = base.join("honkbox.toml");
         std::fs::write(
             &path,
-            "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\nstt_dirs = [\"/tmp/base-stt\"]\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\nstt_dirs = [\"/tmp/extra-stt\"]\ntts_dirs = [\"/tmp/extra-tts\"]\n",
+            "[models]\ncomfyui_dir = \"/tmp/base-comfy\"\nstt_dirs = [\"/tmp/base-stt\"]\nocr_dirs = [\"/tmp/base-ocr\"]\n\n[discovery]\nllm_dirs = [\"/tmp/extra-llm\"]\ncomfyui_dirs = [\"/tmp/extra-comfy\"]\nstt_dirs = [\"/tmp/extra-stt\"]\ntts_dirs = [\"/tmp/extra-tts\"]\nocr_dirs = [\"/tmp/extra-ocr\"]\n",
         )
         .expect("write config");
         let cfg = load(Some(path), None).expect("load config").models;
@@ -2189,6 +2239,8 @@ mod tests {
         assert!(cfg.stt_dirs.contains(&PathBuf::from("/tmp/base-stt")));
         assert!(cfg.stt_dirs.contains(&PathBuf::from("/tmp/extra-stt")));
         assert!(cfg.tts_dirs.contains(&PathBuf::from("/tmp/extra-tts")));
+        assert!(cfg.ocr_dirs.contains(&PathBuf::from("/tmp/base-ocr")));
+        assert!(cfg.ocr_dirs.contains(&PathBuf::from("/tmp/extra-ocr")));
     }
 
     /// The `[core] data_dir` file key refines the default and relocates the
@@ -2740,6 +2792,24 @@ mod tests {
         // Empty env counts as unset.
         let empty = ledger_settings(&file, Some(""), None, None, None, None, None).expect("empty");
         assert_eq!(empty.gpu_slots, 2);
+        // A zero slot count clamps to one from either source, like queue_cap.
+        let zero_file = ledger_settings(
+            &FileLedger {
+                gpu_slots: Some(0),
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("zero file");
+        assert_eq!(zero_file.gpu_slots, 1);
+        let zero_env =
+            ledger_settings(&file, Some("0"), None, None, None, None, None).expect("zero env");
+        assert_eq!(zero_env.gpu_slots, 1);
     }
 
     /// `[ledger.queue_caps]` / `[ledger.vram_demand]` override per kind;

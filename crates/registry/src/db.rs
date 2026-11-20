@@ -408,6 +408,7 @@ fn kind_str(kind: crate::ModelKind) -> &'static str {
         crate::ModelKind::Vae => "vae",
         crate::ModelKind::Stt => "stt",
         crate::ModelKind::Tts => "tts",
+        crate::ModelKind::Ocr => "ocr",
     }
 }
 
@@ -422,6 +423,7 @@ fn parse_kind(s: &str) -> crate::ModelKind {
         "vae" => crate::ModelKind::Vae,
         "stt" => crate::ModelKind::Stt,
         "tts" => crate::ModelKind::Tts,
+        "ocr" => crate::ModelKind::Ocr,
         _ => crate::ModelKind::Sd,
     }
 }

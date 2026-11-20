@@ -56,6 +56,7 @@ use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -246,7 +247,10 @@ fn temp_root(tag: &str) -> PathBuf {
 
 /// Supervisor rooted at `root/models`.
 fn manager(root: &Path) -> Arc<downloads::DownloadManager> {
-    Arc::new(downloads::DownloadManager::new(Some(root.join("models"))).expect("download manager"))
+    Arc::new(
+        downloads::DownloadManager::new_for_fixture(Some(root.join("models")))
+            .expect("download manager"),
+    )
 }
 
 /// sha256 of `data` as lowercase hex (mirrors the checksum format).
@@ -1007,6 +1011,95 @@ fn count_stale_parts_counts_not_deletes() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A strict supervisor refuses non-public destinations at enqueue time —
+/// before any request can leave the process (SSRF regression).
+#[tokio::test]
+async fn unsafe_urls_are_refused_before_http() {
+    let root = temp_root("unsafe-url");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let server = MockServer::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        MockResponse::once(200, Vec::new(), b"data".to_vec())
+    });
+    let strict = Arc::new(
+        downloads::DownloadManager::new(Some(root.join("models"))).expect("strict manager"),
+    );
+
+    let cases = [
+        server.url("loopback.gguf"), // 127.0.0.1 literal
+        "http://169.254.169.254/latest/meta-data/iam.gguf".to_owned(), // link-local metadata
+        "http://10.1.2.3/private.gguf".to_owned(), // RFC1918 private
+        "http://[::1]/v6loop.gguf".to_owned(), // IPv6 loopback
+        "http://[fd00:ec2::254]/imds.gguf".to_owned(), // IPv6 ULA metadata
+        "http://100.100.100.200/cgnat.gguf".to_owned(), // CGNAT / Alibaba metadata
+        "http://localhost:9/localhost.gguf".to_owned(), // hostname resolving to loopback
+        "ftp://example.com/file.gguf".to_owned(), // wrong scheme
+        "not a url".to_owned(),      // unparseable
+    ];
+    for url in cases {
+        assert_eq!(
+            strict.enqueue(llm_request(url)).await.unwrap_err(),
+            downloads::EnqueueError::UnsafeUrl,
+        );
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "no HTTP before validation");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Redirects are not followed: a 302 stays a terminal failure and the
+/// fixture sees exactly one request (reqwest's default follows redirects).
+#[tokio::test]
+async fn redirects_are_not_followed() {
+    let root = temp_root("no-redirect");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let server = MockServer::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        MockResponse::once(
+            302,
+            vec![("Location".to_owned(), "/target.gguf".to_owned())],
+            Vec::new(),
+        )
+    });
+    let mgr = manager(&root);
+    let accepted = mgr
+        .enqueue(llm_request(server.url("origin.gguf")))
+        .await
+        .expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| {
+        matches!(s, DownloadStatus::Failed | DownloadStatus::Done)
+    })
+    .await;
+    assert_eq!(
+        state.state,
+        DownloadStatus::Failed,
+        "302 must not be followed"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "no redirect request");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A failed fetch returns a named cause, never the absolute `.part` path.
+#[tokio::test]
+async fn failure_dto_has_no_absolute_path() {
+    let root = temp_root("no-path-leak");
+    let server = MockServer::new(|_| MockResponse::once(200, Vec::new(), b"data".to_vec()));
+    let mgr = manager(&root);
+    let url = server.url("blocked.gguf");
+    // A directory at the `.part` path makes `open_part` fail deterministically.
+    let target = target_for(&root, DownloadKind::Llm, "blocked.gguf");
+    std::fs::create_dir_all(with_part(&target)).expect("blocked part dir");
+
+    let accepted = mgr.enqueue(llm_request(url)).await.expect("enqueue");
+    let state = wait_state(&mgr, &accepted.id, |s| *s == DownloadStatus::Failed).await;
+    let cause = state.error.expect("failure cause");
+    assert_eq!(cause, "part_open_failed");
+    assert!(!cause.contains('/'), "host path leaked to client: {cause}");
+    assert!(!cause.contains(root.to_string_lossy().as_ref()));
+    std::fs::remove_dir_all(&root).ok();
+}
+
 // ----------------------------------------------------------- route tests
 
 /// POST a JSON body at `/v1/downloads` (oneshot helper).
@@ -1230,6 +1323,7 @@ fn app_config(root: &Path, mgr: Arc<downloads::DownloadManager>) -> AppConfig {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,

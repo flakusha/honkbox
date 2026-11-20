@@ -83,9 +83,9 @@ const CODE_SLOTS: usize = CODES.len() + 1;
 const BUCKETS: usize = BUCKET_EDGES_NS.len();
 
 /// Kind labels, matching `api-types::ModelKind` serde names one for one
-/// (`KIND_LABELS[kind_slot(k)]`). The closed 8-kind enum is the cardinality
+/// (`KIND_LABELS[kind_slot(k)]`). The closed 9-kind enum is the cardinality
 /// bound; the grids below never grow with the catalog.
-const KIND_LABELS: [&str; 8] = [
+const KIND_LABELS: [&str; 9] = [
     "llm",
     "sd",
     "controlnet",
@@ -94,12 +94,13 @@ const KIND_LABELS: [&str; 8] = [
     "vae",
     "stt",
     "tts",
+    "ocr",
 ];
 /// Job-kind labels for `honkbox_jobs_total`, one per closed `JobKind`
 /// (`crates/server/src/jobs_registry.rs`). The vocabulary is fixed at
 /// compile time, so the series count never grows with the traffic and no
 /// user data (ids, paths, prompts) can reach the label.
-const JOB_KIND_LABELS: [&str; 8] = [
+const JOB_KIND_LABELS: [&str; 9] = [
     "chat",
     "embeddings",
     "images",
@@ -108,6 +109,7 @@ const JOB_KIND_LABELS: [&str; 8] = [
     "translations",
     "image_ops",
     "blender",
+    "ocr",
 ];
 
 /// Load reasons (`request` = load-on-demand, `preload` = startup seed,
@@ -154,6 +156,7 @@ fn kind_slot(kind: ModelKind) -> usize {
         ModelKind::Vae => 5,
         ModelKind::Stt => 6,
         ModelKind::Tts => 7,
+        ModelKind::Ocr => 8,
     }
 }
 
@@ -655,7 +658,7 @@ mod tests {
 
     /// The closed job-kind vocabulary the exposition must render (kept
     /// local: `metrics` must not depend on `jobs_registry`).
-    const EXPECTED_JOB_KINDS: [&str; 8] = [
+    const EXPECTED_JOB_KINDS: [&str; 9] = [
         "chat",
         "embeddings",
         "images",
@@ -664,6 +667,7 @@ mod tests {
         "translations",
         "image_ops",
         "blender",
+        "ocr",
     ];
 
     #[test]
@@ -701,7 +705,8 @@ mod tests {
     #[test]
     fn kind_slots_match_model_kind_order() {
         assert_eq!(kind_slot(ModelKind::Llm), 0);
-        assert_eq!(kind_slot(ModelKind::Tts), KIND_SLOTS - 1);
+        assert_eq!(kind_slot(ModelKind::Tts), 7);
+        assert_eq!(kind_slot(ModelKind::Ocr), KIND_SLOTS - 1);
         assert_eq!(load_reason_slot(LoadReason::Manual), LOAD_REASONS.len() - 1);
         assert_eq!(
             unload_reason_slot(UnloadReason::Evict),

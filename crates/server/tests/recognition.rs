@@ -93,6 +93,7 @@ fn base_config() -> AppConfig {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,
@@ -204,6 +205,26 @@ async fn barcode_round_trip_recovers_payload() {
     assert!(x_min < x_max && y_min < y_max, "bbox not a box: {bbox:?}");
 }
 
+/// An engine override must name the backend actually serving this build.
+#[tokio::test]
+async fn unknown_engine_is_a_named_501() {
+    if !honkbox_recognition_worker::BARCODE_COMPILED {
+        return; // without a barcode backend the kind gate answers first
+    }
+    let (status, body) = post_json(
+        &app_with(),
+        "/v1/recognize",
+        json!({
+            "kind": "barcode",
+            "engine": "not-a-real-engine",
+            "image": qr_data_uri("ignored")
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "body: {body}");
+    assert_eq!(error_code(&body), "recognition_engine_unsupported");
+}
+
 /// A valid container with no barcode is the honest empty result (200,
 /// `pages: []`) — never a 500.
 #[tokio::test]
@@ -296,7 +317,7 @@ async fn undecodable_container_is_invalid_input() {
 
 /// OCR honesty: without a compiled OCR backend the request is the named 501
 /// naming the serving backend — and the capabilities flag mirrors the same
-/// `kinds()` source, so a client can trust either direction.
+/// `serves()` predicate, so a client can trust either direction.
 #[tokio::test]
 async fn unserved_kind_is_named_501_matching_capabilities() {
     let app = app_with();

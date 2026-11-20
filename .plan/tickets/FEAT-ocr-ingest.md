@@ -1,6 +1,8 @@
 # FEAT: OCR ingest stage
 
-Status: proposed
+Status: done (2026-11-20; text-layer-first PDF + pure-Rust ocrs image path,
+job/cache/DTOs landed; ocr_ingest + capabilities 293 tests green, codegen
+regenerated; PDF raster modes return a named 501 until a licensed renderer)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned

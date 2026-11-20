@@ -142,6 +142,7 @@ fn test_app(catalog: ModelCatalog, llm_model: Option<String>) -> Router {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model,
         stt_model: None,
@@ -318,6 +319,7 @@ async fn refresh_rescans_roots_and_updates_snapshot() {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
     );
 
@@ -394,6 +396,7 @@ async fn refresh_picks_up_audio_roots() {
             comfyui_dirs: Vec::new(),
             stt_dirs: vec![stt.clone()],
             tts_dirs: vec![tts.clone()],
+            ocr_dirs: Vec::new(),
         },
     );
 
@@ -460,6 +463,7 @@ async fn refresh_is_idempotent_on_missing_roots() {
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
     );
     for _ in 0..2 {
@@ -494,6 +498,7 @@ fn delete_app(catalog: ModelCatalog, swap: Option<Arc<swap::SwapManager>>) -> Ro
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,

@@ -54,6 +54,9 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
+# OCR text-layer extraction (FEAT-ocr-ingest): pure-Rust MIT parser over
+# in-memory PDF bytes. No rasterizer, no Python, no foreign build.
+pdf-extract = "0.12.1"
 
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
@@ -116,4 +119,7 @@ audio-cpp = [
 # derive from the build, never a hand-written flag. With it off, streaming
 # STT still runs on fixed bounded windows.
 audio-vad = ["honkbox-audio-worker/vad"]
+# ocrs/rten Latin OCR (TASK-ocr-ocrs-backend): non-default, pure-Rust CPU.
+# Weights are user-discovered from `ocr:` roots; honkbox bundles none.
+ocr-ocrs = ["honkbox-recognition-worker/ocr-ocrs"]
 default = ["vulkan", "llm-vision", "barcode"]

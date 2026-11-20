@@ -1881,6 +1881,85 @@
         }
       }
     },
+    "/v1/ocr/ingest": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/ocr/ingest`: admit one OCR job and answer `202` with its id.\nThe result is committed atomically into the job bundle as\n`ocr_result.json` and replayable from the bounded cache.",
+        "operationId": "post_ocr_ingest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OcrIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted; result lands in the job bundle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OcrJobAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request, host path/non-data URI, bad base64, unsupported container, or unbounded DPI",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Decoded input exceeds the OCR byte cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "OCR admission slot busy (`ocr_busy`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No OCR weights/backend (`ocr_engine_unavailable`), or PDF raster mode (`ocr_pdf_raster_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No data dir for the job bundle (`ocr_storage_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "tags": [],
@@ -5383,7 +5462,8 @@
           "embedding",
           "vae",
           "stt",
-          "tts"
+          "tts",
+          "ocr"
         ]
       },
       "ModelMetadata": {
@@ -5527,6 +5607,202 @@
             "type": "number",
             "format": "double",
             "description": "Score threshold above which content is flagged."
+          }
+        }
+      },
+      "OcrEngineMeta": {
+        "type": "object",
+        "description": "The engine that produced an [`OcrResult`], with an honest account of\nwhat its output contains.",
+        "required": [
+          "id",
+          "bbox_support",
+          "confidence_support"
+        ],
+        "properties": {
+          "bbox_support": {
+            "type": "boolean",
+            "description": "Whether region boxes are real coordinates (false for PDF text layer)."
+          },
+          "confidence_support": {
+            "type": "boolean",
+            "description": "Always `false`: `ocrs` 0.14 has no per-word confidence API; a client\nmust not interpret missing scores as zero or full confidence."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable backend id (`\"ocrs-rten\"` when OCR weights are loaded)."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Dependency/model version pin, absent when the engine reports none."
+          }
+        }
+      },
+      "OcrIngestMode": {
+        "type": "string",
+        "description": "Ingest mode (`POST /v1/ocr/ingest`). The vocabulary is closed; an\nunknown name is a typed deserialization 400.\n\n- `text_layer`: extract the existing PDF text layer (no rendering, no\n  OCR engine inference), one region per non-empty text line, no boxes.\n- `replace_text_layer`: same extraction, for clients that overlay the\n  recovered text onto a broken layer; honkbox never rewrites the PDF.\n- `layout_regions` / `full_page`: need rasterization. PDF inputs answer\n  the named 501 `ocr_pdf_raster_unavailable` — this pure-Rust build has\n  no MIT/Apache PDF rasterizer. Image inputs run `ocrs` in-process.",
+        "enum": [
+          "text_layer",
+          "layout_regions",
+          "full_page",
+          "replace_text_layer"
+        ]
+      },
+      "OcrIngestRequest": {
+        "type": "object",
+        "description": "Start one OCR ingest job (`POST /v1/ocr/ingest`).\n\nInput is PATH-FREE by design: a single `data:` URI — either\n`data:application/pdf;base64,…` or `data:image/<container>;base64,…`.\nNothing is fetched from a path, URL or artifact store, so there is no\nSSRF or host-path surface. The decoded bytes are capped by the server;\n`dpi` is bounded and recorded in the cache key even when the current\nbackend does not need it.",
+        "required": [
+          "data_uri",
+          "mode"
+        ],
+        "properties": {
+          "data_uri": {
+            "type": "string",
+            "description": "Path-free input: `data:application/pdf;base64,…` or an image data URI."
+          },
+          "dpi": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Requested render DPI, bounded by the server; unused by the PDF text\nlayer and by `ocrs` (which reads native pixels) but part of the key.",
+            "minimum": 0
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "BCP-47 language hint; `None` = backend default (Latin for `ocrs`)."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/OcrIngestMode",
+            "description": "Which extraction/recognition mode to run."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OcrJobAccepted": {
+        "type": "object",
+        "description": "`202` acceptance body (`POST /v1/ocr/ingest`). The job id is also sent\nas `X-Job-Id`, so it can be cancelled through `POST /v1/jobs/{id}/cancel`.",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Registry id of the accepted job."
+          },
+          "status": {
+            "type": "string",
+            "description": "Fixed `\"queued\"` acceptance state."
+          }
+        }
+      },
+      "OcrPage": {
+        "type": "object",
+        "description": "One processed page of an OCR ingest result.",
+        "required": [
+          "index",
+          "text",
+          "regions"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based page index in source order.",
+            "minimum": 0
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OcrRegion"
+            },
+            "description": "Located regions, in reading order; `bbox`/`confidence` may be absent."
+          },
+          "text": {
+            "type": "string",
+            "description": "Full page text (regions joined with `\\n`, in deterministic order)."
+          }
+        }
+      },
+      "OcrRegion": {
+        "type": "object",
+        "description": "One OCR region. A PDF text layer has no boxes, so `bbox` is optional;\n`confidence` is absent because `ocrs` 0.14 emits no score (never guessed).",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "bbox": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
+            "description": "`[x_min, y_min, x_max, y_max]` in page pixels, or `None` when the\nsource has no geometry (PDF text layer)."
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Always absent in this build: `ocrs` does not expose a per-word score."
+          },
+          "text": {
+            "type": "string",
+            "description": "Recognized text for this region (one text line for a PDF layer)."
+          }
+        }
+      },
+      "OcrResult": {
+        "type": "object",
+        "description": "Result of one OCR ingest job, also stored in the job bundle as\n`ocr_result.json`. Replaying an unchanged request sets `cache_hit` and\nconsumes no admission lease.",
+        "required": [
+          "engine",
+          "mode",
+          "page_count",
+          "pages",
+          "cache_hit",
+          "cancelled"
+        ],
+        "properties": {
+          "cache_hit": {
+            "type": "boolean",
+            "description": "`true` when a bounded TTL cache replayed a previous identical job."
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "`true` when the job's cancel token stopped it between pages."
+          },
+          "engine": {
+            "$ref": "#/components/schemas/OcrEngineMeta",
+            "description": "Producing engine and the honesty flags for its output."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/OcrIngestMode",
+            "description": "Mode that actually ran."
+          },
+          "page_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of pages processed before completion or cancellation.",
+            "minimum": 0
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OcrPage"
+            },
+            "description": "Processed pages, in source order."
           }
         }
       },
@@ -6203,7 +6479,7 @@
           },
           "ocr": {
             "type": "boolean",
-            "description": "OCR is compiled and served. Always `false` until the first OCR\nbackend lands — honest absence, never a half seam."
+            "description": "OCR is compiled and its weights actually loaded (`serves(Ocr)`).\nBoth OCR routes key their 501 on this same predicate — honest\nabsence, never a half seam. The `ocrs` backend emits no confidence;\nsee `OcrEngineMeta`."
           }
         }
       },
@@ -6260,7 +6536,7 @@
       },
       "RecognizeRequest": {
         "type": "object",
-        "description": "One recognition request over one image (`POST /v1/recognize`).\n\nStage 1 is synchronous: barcode-class latency is sub-millisecond. The\nOCR/document pipeline becomes job-based when FEAT-ocr-ingest lands; the\nrequest shape is its already-compatible prefix.",
+        "description": "One recognition request over one image (`POST /v1/recognize`).\n\nStage 1 is synchronous: barcode-class latency is sub-millisecond.\nDocument ingest is the job-based `POST /v1/ocr/ingest`; this request\nshape is its already-compatible single-image prefix.",
         "required": [
           "kind",
           "image"

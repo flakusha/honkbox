@@ -26,6 +26,14 @@ pub(super) fn recognition_501_message(detail: &str) -> String {
     format!("{detail}; see GET /v1/capabilities recognition")
 }
 
+fn not_served(detail: &str, code: &'static str) -> Response {
+    openai_error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        recognition_501_message(detail),
+        Some(code),
+    )
+}
+
 /// `POST /v1/recognize` (recognition tickets): one image in, recognition
 /// out. Stage 1 is synchronous — barcode-class latency is sub-millisecond,
 /// so the request-response shape needs no job registry entry; the
@@ -71,21 +79,22 @@ pub(super) async fn post_recognize(
     // Honesty gate FIRST: a kind this build cannot serve is a 501 even when
     // the payload is also broken — the kind is the primary selector, and the
     // 501 message is what a capability-driven client is built to handle.
-    if !config.recognition.kinds().contains(&kind) {
-        return openai_error_response(
-            StatusCode::NOT_IMPLEMENTED,
-            recognition_501_message(&format!(
-                "recognition kind {:?} is not served by this build (backend {:?} serves {:?})",
-                kind.as_str(),
-                config.recognition.backend_id(),
-                config
-                    .recognition
-                    .kinds()
-                    .iter()
-                    .map(|k| k.as_str())
-                    .collect::<Vec<_>>()
-            )),
-            Some("recognition_kind_unsupported"),
+    let kind_backend = config.recognition.backend_id_for(kind);
+    if !config.recognition.serves(kind) {
+        return not_served(
+            &format!(
+                "recognition kind {:?} is not served by this build (backend {kind_backend:?})",
+                kind.as_str()
+            ),
+            "recognition_kind_unsupported",
+        );
+    }
+    if let Some(engine) = &req.engine
+        && engine != kind_backend
+    {
+        return not_served(
+            &format!("recognition engine {engine:?} is not served by this build (backend {kind_backend:?})"),
+            "recognition_engine_unsupported",
         );
     }
     // The route owns input resolution: worker backends only ever see
@@ -106,13 +115,12 @@ pub(super) async fn post_recognize(
     let out = match config.recognition.recognize(&worker_req) {
         Ok(out) => out,
         Err(RecError::Unsupported { kind, backend }) => {
-            return openai_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                recognition_501_message(&format!(
+            return not_served(
+                &format!(
                     "recognition kind {:?} is not served by backend {backend:?}",
                     kind.as_str()
-                )),
-                Some("recognition_kind_unsupported"),
+                ),
+                "recognition_kind_unsupported",
             );
         }
         Err(RecError::Invalid(message)) => {

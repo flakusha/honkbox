@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,6 +77,11 @@ const HF_RESOLVE_BASE: &str = "https://huggingface.co";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
 /// Download kinds, in metrics-slot order.
 const KIND_LABELS: [&str; 4] = ["llm", "sd", "stt", "tts"];
+/// Client-facing cause when the `.part` file cannot be opened. The detailed
+/// host path stays in server-side tracing (it may disclose the models root).
+const PART_OPEN_FAILED: &str = "part_open_failed";
+/// Client-facing cause when the `.part` file cannot be flushed.
+const PART_FLUSH_FAILED: &str = "part_flush_failed";
 
 /// `honkbox_download_bytes_total{kind}` grid (`llm`, `sd`, `stt`, `tts`).
 static DOWNLOAD_BYTES: LazyLock<[AtomicU64; 4]> =
@@ -144,6 +150,9 @@ pub enum EnqueueError {
     BadRepo(String),
     /// The derived local file name is unusable (empty, separators, `..`).
     BadFileName(String),
+    /// The URL is not a safe public http(s) destination. Carries no URL:
+    /// it may embed credentials.
+    UnsafeUrl,
     /// The target directory could not be created.
     CreateDir(String),
 }
@@ -159,6 +168,7 @@ impl fmt::Display for EnqueueError {
             }
             Self::BadRepo(repo) => write!(f, "bad HuggingFace repo id {repo:?}: want owner/name"),
             Self::BadFileName(name) => write!(f, "unusable file name {name:?}"),
+            Self::UnsafeUrl => write!(f, "download URL is not a safe public http(s) destination"),
             Self::CreateDir(err) => write!(f, "cannot create target dir: {err}"),
         }
     }
@@ -287,6 +297,10 @@ pub struct DownloadManager {
     models_root: Option<PathBuf>,
     /// Notified once per committed file; drives the post-download rescan.
     rescan: Arc<Notify>,
+    /// `cfg(test)` only: local HTTP fixtures use loopback, which production
+    /// validation rejects. Set by `new_for_fixture`; absent from the binary.
+    #[cfg(test)]
+    allow_non_public_hosts: bool,
 }
 
 impl DownloadManager {
@@ -300,6 +314,7 @@ impl DownloadManager {
             .user_agent(concat!("honkbox/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(30))
             .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| format!("download HTTP client: {err}"))?;
         Ok(Self {
@@ -309,7 +324,19 @@ impl DownloadManager {
             client,
             models_root,
             rescan: Arc::new(Notify::new()),
+            #[cfg(test)]
+            allow_non_public_hosts: false,
         })
+    }
+
+    /// Test-only manager that trusts loopback fixtures. The field it sets is
+    /// `cfg(test)`, so this escape hatch cannot exist in the shipped binary.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub fn new_for_fixture(models_root: Option<PathBuf>) -> Result<Self, String> {
+        let mut manager = Self::new(models_root)?;
+        manager.allow_non_public_hosts = true;
+        Ok(manager)
     }
 
     /// The rescan signal, fired after every committed file; wire it to the
@@ -317,6 +344,77 @@ impl DownloadManager {
     /// `GET /v1/models` with their normal slug.
     pub fn rescan_signal(&self) -> Arc<Notify> {
         Arc::clone(&self.rescan)
+    }
+
+    /// SSRF guard: reject URLs that could reach a non-public network before
+    /// any request is made. Literal IPs are classified directly; DNS names are
+    /// resolved with tokio and every answer must be public. Resolution errors
+    /// and empty answers are refusals — validation never falls open.
+    async fn validate_source_url(url: &str) -> Result<(), EnqueueError> {
+        let parsed = reqwest::Url::parse(url).map_err(|_| EnqueueError::UnsafeUrl)?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(EnqueueError::UnsafeUrl);
+        }
+        let host = parsed.host_str().ok_or(EnqueueError::UnsafeUrl)?;
+        if parsed.domain().is_some() {
+            // ponytail: DNS rebinding ceiling; pin resolved IP + Host header if adversarial DNS matters.
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            let addresses: Vec<_> = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|_| EnqueueError::UnsafeUrl)?
+                .collect();
+            if addresses.is_empty()
+                || addresses
+                    .iter()
+                    .any(|socket| !Self::is_public_address(socket.ip()))
+            {
+                return Err(EnqueueError::UnsafeUrl);
+            }
+        } else {
+            // IPv6 literals arrive bracketed from `host_str`.
+            let ip: IpAddr = host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse()
+                .map_err(|_| EnqueueError::UnsafeUrl)?;
+            if !Self::is_public_address(ip) {
+                return Err(EnqueueError::UnsafeUrl);
+            }
+        }
+        Ok(())
+    }
+
+    /// True only for globally-routable addresses. Covers loopback, RFC1918
+    /// private, link-local (incl. 169.254.169.254 metadata), CGNAT 100.64/10
+    /// (incl. Alibaba metadata 100.100.100.200), IPv6 ULA (incl. `fd00:ec2::254`
+    /// IMDS), IPv6 link-local, and other special-use ranges.
+    fn is_public_address(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => {
+                let [first, second, ..] = v4.octets();
+                !v4.is_unspecified()
+                    && !v4.is_loopback()
+                    && !v4.is_private()
+                    && !v4.is_link_local()
+                    && !v4.is_multicast()
+                    && !v4.is_broadcast()
+                    && !v4.is_documentation()
+                    && !(first == 100 && (64..=127).contains(&second))
+            }
+            IpAddr::V6(v6) => {
+                if let Some(mapped) = v6.to_ipv4_mapped() {
+                    Self::is_public_address(IpAddr::V4(mapped))
+                } else {
+                    let segments = v6.segments();
+                    !(v6.is_unspecified()
+                        || v6.is_loopback()
+                        || v6.is_multicast()
+                        || v6.is_unicast_link_local()
+                        || v6.is_unique_local()
+                        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+                }
+            }
+        }
     }
 
     /// Accept a download request: validate, resolve the target under the
@@ -345,6 +443,24 @@ impl DownloadManager {
             (None, None) => request.url.clone().unwrap_or_default(),
             _ => return Err(EnqueueError::InvalidSource),
         };
+        // Server misconfiguration outranks caller-URL checks (500, not 400).
+        if self.models_root.is_none() {
+            return Err(EnqueueError::NoModelsRoot);
+        }
+        // Reject unsafe destinations before any request carries this URL.
+        let validate = {
+            #[cfg(test)]
+            {
+                !self.allow_non_public_hosts
+            }
+            #[cfg(not(test))]
+            {
+                true
+            }
+        };
+        if validate {
+            Self::validate_source_url(&url).await?;
+        }
         let name = Self::url_file_name(&url)?;
         let expected_sha = match (repo, file) {
             (Some(repo), Some(file)) => hf_expected_sha256(&self.client, repo, file).await,
@@ -954,7 +1070,8 @@ async fn finalize(
     done: u64,
 ) -> Outcome {
     if let Err(err) = file.sync_all().await {
-        return Outcome::failed(format!("cannot flush {}: {err}", part.display()));
+        tracing::warn!(path = %part.display(), %err, "part flush failed");
+        return Outcome::failed(PART_FLUSH_FAILED.to_owned());
     }
     drop(file);
     let mut verified: Option<String> = None;
@@ -1061,10 +1178,8 @@ async fn open_part(
     let file = match opened {
         Ok(file) => file,
         Err(err) => {
-            return Err(Outcome::failed(format!(
-                "cannot open {}: {err}",
-                part.display()
-            )));
+            tracing::warn!(path = %part.display(), %err, "part open failed");
+            return Err(Outcome::failed(PART_OPEN_FAILED.to_owned()));
         }
     };
     let mut hasher = expected.map(|_| Sha256::new());

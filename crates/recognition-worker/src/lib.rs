@@ -1,9 +1,9 @@
-//! Sync recognition pipelines (barcode/QR decode now; OCR/VLM backends land
-//! via `.plan/tickets/TASK-ocr-*.md`).
+//! Sync recognition pipelines (barcode/QR decode, optional ocrs/rten OCR).
 //!
 //! CPU-only, tokio-free, std (+ `serde` for the wire DTOs). `barcode` (default)
-//! pulls in `rxing` for QR/1D/2D decode; a stub keeps builds without it
-//! honest.
+//! pulls in `rxing` for QR/1D/2D decode; the non-default `ocr-ocrs` feature
+//! pulls in the pure-Rust `ocrs`/`rten` Latin-script engine. Stubs keep builds
+//! without a compiled backend honest.
 
 use std::fmt;
 
@@ -12,6 +12,16 @@ mod barcode;
 
 #[cfg(feature = "barcode")]
 pub use barcode::{BarcodeRecognition, RXING_BACKEND_ID, RXING_VERSION};
+
+#[cfg(feature = "ocr-ocrs")]
+mod ocr;
+#[cfg(feature = "ocr-ocrs")]
+pub use ocr::{OCRS_BACKEND_ID, OCRS_VERSION, OcrRecognition, RTEN_VERSION};
+
+/// `true` when THIS build compiles the ocrs/rten OCR backend (`ocr-ocrs`
+/// feature). The capability block and the route both key on the backend's
+/// runtime `serves(Ocr)`; this probe names the compiled surface only.
+pub const OCR_COMPILED: bool = cfg!(feature = "ocr-ocrs");
 
 /// `true` when THIS build compiles the rxing barcode backend (`barcode`
 /// feature) — the same compile probe the capability advertisement reports
@@ -26,8 +36,8 @@ pub const BARCODE_COMPILED: bool = cfg!(feature = "barcode");
 pub enum RecKind {
     /// Barcode/QR decode (symbology + payload + corner bbox).
     Barcode,
-    /// Document/scene OCR (text, regions, confidence). No compiled backend
-    /// yet — see `.plan/tickets/TASK-ocr-ocrs-backend.md` and siblings.
+    /// Document/scene OCR (text, regions, confidence). Served only by a
+    /// build with the `ocr-ocrs` feature AND user-downloaded weights.
     Ocr,
 }
 
@@ -155,16 +165,70 @@ impl fmt::Display for RecError {
 
 impl std::error::Error for RecError {}
 
+/// Stable cache-engine token for FEAT-ocr-ingest (`sha256(source)` +
+/// `ocrs` + model version + language + dpi + mode).
+pub const OCR_CACHE_ENGINE: &str = "ocrs";
+
+/// The complete set of OCR result-cache key inputs (FEAT-ocr-ingest).
+///
+/// Exposed here so the later ingest layer can build and replay a key without
+/// this worker ever retaining image bytes. The caller owns `source_sha256`;
+/// no image data enters the key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrCacheKey {
+    /// sha256 of the source image bytes, computed by the caller.
+    pub source_sha256: String,
+    /// Fixed engine token [`OCR_CACHE_ENGINE`] (`"ocrs"`).
+    pub engine: &'static str,
+    /// Engine/model version pin (the compiled `ocrs` dependency version).
+    pub model_version: String,
+    /// BCP-47 language hint, when one was supplied.
+    pub language: Option<String>,
+    /// Effective render DPI, when one was supplied.
+    pub dpi: Option<u32>,
+    /// Recognition mode hint (`text_layer`/`layout_regions`/`full_page`).
+    pub mode: Option<String>,
+}
+
+impl OcrCacheKey {
+    /// Unambiguous single-string cache key. Unit-separator delimiters keep
+    /// free-form `language`/`mode` values from colliding with a field break;
+    /// absent optional fields are empty.
+    #[must_use]
+    pub fn as_key(&self) -> String {
+        format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            self.source_sha256,
+            self.engine,
+            self.model_version,
+            self.language.as_deref().unwrap_or(""),
+            self.dpi.map_or_else(String::new, |d| d.to_string()),
+            self.mode.as_deref().unwrap_or(""),
+        )
+    }
+}
+
 /// Sync recognition pipeline.
 ///
 /// Backend ids: `"stub-recognition"` | `"rxing"` (with the `barcode`
-/// feature) | future OCR backends.
+/// feature) | `"ocrs-rten"` (with the `ocr-ocrs` feature).
 pub trait RecognitionPipeline: Send + Sync {
     /// Stable backend id.
     fn backend_id(&self) -> &'static str;
+    /// Backend that actually serves `kind`. A kind-dispatching router must
+    /// override this; the default is correct for single-kind backends.
+    fn backend_id_for(&self, _kind: RecKind) -> &'static str {
+        self.backend_id()
+    }
     /// The kinds THIS backend can serve — the honesty source for the
     /// capabilities `recognition` block and the route's named 501.
     fn kinds(&self) -> &'static [RecKind];
+    /// Whether THIS binary actually serves `kind`. Backends with a
+    /// compile-time gate override this; the default trusts `kinds()`.
+    /// Capabilities and the route both key on this one predicate.
+    fn serves(&self, kind: RecKind) -> bool {
+        self.kinds().contains(&kind)
+    }
     /// Run one recognition request over one image.
     ///
     /// A successful return with `pages: []` means the engine processed the
@@ -198,6 +262,13 @@ impl RecognitionPipeline for StubRecognition {
 
     fn kinds(&self) -> &'static [RecKind] {
         &[RecKind::Barcode]
+    }
+
+    /// The stub is test scaffolding, never a served backend: in a build that
+    /// falls back to it, the route must answer 501 and capabilities must say
+    /// `false` even though the wire vocabulary still lists Barcode.
+    fn serves(&self, _kind: RecKind) -> bool {
+        false
     }
 
     fn recognize(&self, req: &RecognizeRequest) -> Result<RecognizeOutput, RecError> {
@@ -292,5 +363,32 @@ mod tests {
         assert_eq!(RecKind::Ocr.as_str(), "ocr");
         assert_eq!(BARCODE_COMPILED, cfg!(feature = "barcode"));
         assert_eq!(StubRecognition.kinds(), &[RecKind::Barcode]);
+        assert!(!StubRecognition.serves(RecKind::Barcode));
+        assert_eq!(OCR_COMPILED, cfg!(feature = "ocr-ocrs"));
+    }
+
+    /// The ingest cache key covers exactly the ticket's six inputs and
+    /// distinguishes absent hints from empty ones only by their real value.
+    #[test]
+    fn ocr_cache_key_inputs() {
+        let key = OcrCacheKey {
+            source_sha256: "abc123".to_owned(),
+            engine: OCR_CACHE_ENGINE,
+            model_version: "0.14.0".to_owned(),
+            language: Some("en-US".to_owned()),
+            dpi: Some(300),
+            mode: Some("full_page".to_owned()),
+        };
+        let rendered = key.as_key();
+        assert_eq!(
+            rendered,
+            "abc123\u{1f}ocrs\u{1f}0.14.0\u{1f}en-US\u{1f}300\u{1f}full_page"
+        );
+        let mut other = key.clone();
+        other.mode = Some("layout_regions".to_owned());
+        assert_ne!(rendered, other.as_key());
+        other.mode = key.mode.clone();
+        other.dpi = None;
+        assert_ne!(rendered, other.as_key());
     }
 }

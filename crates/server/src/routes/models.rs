@@ -211,9 +211,12 @@ pub(super) async fn delete_model(
     let removed = match delete_model_path(&path).await {
         Ok(removed) => removed,
         Err(err) => {
+            // Host paths are operator data: log them server-side, never echo
+            // them into a client error body.
+            tracing::error!(%err, slug, ?path, "model deletion failed");
             return super::openai_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("delete of {} failed: {err}", path.display()),
+                format!("delete of model {slug:?} failed"),
                 None,
             );
         }

@@ -1960,6 +1960,8 @@ pub enum ModelKind {
     Stt,
     /// Text-to-speech weights (TTS root).
     Tts,
+    /// OCR weights (OCR root).
+    Ocr,
 }
 
 /// GGUF header summary (`GET /v1/models` entry `metadata`).
@@ -3038,6 +3040,13 @@ mod tests {
             RerankItem::decl(&config),
             RerankResult::decl(&config),
             TexturePostprocessCapability::decl(&config),
+            OcrIngestMode::decl(&config),
+            OcrIngestRequest::decl(&config),
+            OcrRegion::decl(&config),
+            OcrPage::decl(&config),
+            OcrEngineMeta::decl(&config),
+            OcrResult::decl(&config),
+            OcrJobAccepted::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');
@@ -3064,6 +3073,7 @@ mod tests {
             ModelKind::Vae,
             ModelKind::Stt,
             ModelKind::Tts,
+            ModelKind::Ocr,
         ] {
             let caps = ModelCapabilities::for_kind(kind);
             assert!(!caps.chat && !caps.completion && !caps.embeddings);
@@ -3512,9 +3522,8 @@ mod content_parts_properties {
 pub enum RecKind {
     /// Barcode/QR decode (symbology + payload + corner-derived bbox).
     Barcode,
-    /// Document/scene OCR. Advertised `false` until an OCR backend lands
-    /// (`.plan/tickets/TASK-ocr-ocrs-backend.md` and siblings); requests
-    /// answer the named 501 `recognition_kind_unsupported` meanwhile.
+    /// Document/scene OCR, served by the in-process `ocrs`/`rten` backend
+    /// when weights are present; otherwise a named 501.
     Ocr,
 }
 
@@ -3554,16 +3563,18 @@ pub struct ExternalToolsCapability {
 pub struct RecognitionFeature {
     /// Barcode/QR decode is compiled and served by `POST /v1/recognize`.
     pub barcode: bool,
-    /// OCR is compiled and served. Always `false` until the first OCR
-    /// backend lands — honest absence, never a half seam.
+    /// OCR is compiled and its weights actually loaded (`serves(Ocr)`).
+    /// Both OCR routes key their 501 on this same predicate — honest
+    /// absence, never a half seam. The `ocrs` backend emits no confidence;
+    /// see `OcrEngineMeta`.
     pub ocr: bool,
 }
 
 /// One recognition request over one image (`POST /v1/recognize`).
 ///
-/// Stage 1 is synchronous: barcode-class latency is sub-millisecond. The
-/// OCR/document pipeline becomes job-based when FEAT-ocr-ingest lands; the
-/// request shape is its already-compatible prefix.
+/// Stage 1 is synchronous: barcode-class latency is sub-millisecond.
+/// Document ingest is the job-based `POST /v1/ocr/ingest`; this request
+/// shape is its already-compatible single-image prefix.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RecognizeRequest {
@@ -3637,6 +3648,143 @@ pub struct RecognizeResult {
     pub engine: RecognitionEngineMeta,
     /// One entry per processed page.
     pub pages: Vec<RecognitionPage>,
+}
+
+/// Ingest mode (`POST /v1/ocr/ingest`). The vocabulary is closed; an
+/// unknown name is a typed deserialization 400.
+///
+/// - `text_layer`: extract the existing PDF text layer (no rendering, no
+///   OCR engine inference), one region per non-empty text line, no boxes.
+/// - `replace_text_layer`: same extraction, for clients that overlay the
+///   recovered text onto a broken layer; honkbox never rewrites the PDF.
+/// - `layout_regions` / `full_page`: need rasterization. PDF inputs answer
+///   the named 501 `ocr_pdf_raster_unavailable` — this pure-Rust build has
+///   no MIT/Apache PDF rasterizer. Image inputs run `ocrs` in-process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrIngestMode {
+    /// Extract the existing PDF text layer; no rendering and no OCR.
+    TextLayer,
+    /// Raster-based layout analysis (image inputs only in this build).
+    LayoutRegions,
+    /// Whole-page OCR with word boxes (image inputs only in this build).
+    FullPage,
+    /// Recover text for clients to overlay onto a broken PDF layer.
+    ReplaceTextLayer,
+}
+
+impl OcrIngestMode {
+    /// Stable wire spelling, also used in the cache key and job metadata.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TextLayer => "text_layer",
+            Self::LayoutRegions => "layout_regions",
+            Self::FullPage => "full_page",
+            Self::ReplaceTextLayer => "replace_text_layer",
+        }
+    }
+
+    /// Whether this mode needs a PDF rasterizer (unavailable in this build).
+    #[must_use]
+    pub fn needs_raster(self) -> bool {
+        matches!(self, Self::LayoutRegions | Self::FullPage)
+    }
+}
+
+/// Start one OCR ingest job (`POST /v1/ocr/ingest`).
+///
+/// Input is PATH-FREE by design: a single `data:` URI — either
+/// `data:application/pdf;base64,…` or `data:image/<container>;base64,…`.
+/// Nothing is fetched from a path, URL or artifact store, so there is no
+/// SSRF or host-path surface. The decoded bytes are capped by the server;
+/// `dpi` is bounded and recorded in the cache key even when the current
+/// backend does not need it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OcrIngestRequest {
+    /// Path-free input: `data:application/pdf;base64,…` or an image data URI.
+    pub data_uri: String,
+    /// Which extraction/recognition mode to run.
+    pub mode: OcrIngestMode,
+    /// BCP-47 language hint; `None` = backend default (Latin for `ocrs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Requested render DPI, bounded by the server; unused by the PDF text
+    /// layer and by `ocrs` (which reads native pixels) but part of the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpi: Option<u32>,
+}
+
+/// One OCR region. A PDF text layer has no boxes, so `bbox` is optional;
+/// `confidence` is absent because `ocrs` 0.14 emits no score (never guessed).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+pub struct OcrRegion {
+    /// `[x_min, y_min, x_max, y_max]` in page pixels, or `None` when the
+    /// source has no geometry (PDF text layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bbox: Option<[f32; 4]>,
+    /// Recognized text for this region (one text line for a PDF layer).
+    pub text: String,
+    /// Always absent in this build: `ocrs` does not expose a per-word score.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+/// One processed page of an OCR ingest result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+pub struct OcrPage {
+    /// Zero-based page index in source order.
+    pub index: u32,
+    /// Full page text (regions joined with `\n`, in deterministic order).
+    pub text: String,
+    /// Located regions, in reading order; `bbox`/`confidence` may be absent.
+    pub regions: Vec<OcrRegion>,
+}
+
+/// The engine that produced an [`OcrResult`], with an honest account of
+/// what its output contains.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct OcrEngineMeta {
+    /// Stable backend id (`"ocrs-rten"` when OCR weights are loaded).
+    pub id: String,
+    /// Dependency/model version pin, absent when the engine reports none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Whether region boxes are real coordinates (false for PDF text layer).
+    pub bbox_support: bool,
+    /// Always `false`: `ocrs` 0.14 has no per-word confidence API; a client
+    /// must not interpret missing scores as zero or full confidence.
+    pub confidence_support: bool,
+}
+
+/// Result of one OCR ingest job, also stored in the job bundle as
+/// `ocr_result.json`. Replaying an unchanged request sets `cache_hit` and
+/// consumes no admission lease.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+pub struct OcrResult {
+    /// Producing engine and the honesty flags for its output.
+    pub engine: OcrEngineMeta,
+    /// Mode that actually ran.
+    pub mode: OcrIngestMode,
+    /// Number of pages processed before completion or cancellation.
+    pub page_count: u32,
+    /// Processed pages, in source order.
+    pub pages: Vec<OcrPage>,
+    /// `true` when a bounded TTL cache replayed a previous identical job.
+    pub cache_hit: bool,
+    /// `true` when the job's cancel token stopped it between pages.
+    pub cancelled: bool,
+}
+
+/// `202` acceptance body (`POST /v1/ocr/ingest`). The job id is also sent
+/// as `X-Job-Id`, so it can be cancelled through `POST /v1/jobs/{id}/cancel`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct OcrJobAccepted {
+    /// Registry id of the accepted job.
+    pub job_id: String,
+    /// Fixed `"queued"` acceptance state.
+    pub status: String,
 }
 
 /// Texture post-processing capability (`Capabilities::texture_postprocess`):

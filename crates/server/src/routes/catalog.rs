@@ -169,6 +169,7 @@ pub(super) fn catalog_entry(
             honkbox_registry::ModelKind::Vae => ModelKind::Vae,
             honkbox_registry::ModelKind::Stt => ModelKind::Stt,
             honkbox_registry::ModelKind::Tts => ModelKind::Tts,
+            honkbox_registry::ModelKind::Ocr => ModelKind::Ocr,
         }
     };
     let mut capabilities = ModelCapabilities::for_kind(kind);
@@ -267,6 +268,10 @@ fn modality_for(kind: ModelKind, capabilities: ModelCapabilities) -> ModelModali
         ModelKind::Embedding => ModelModalities {
             input: vec!["text".to_owned()],
             output: Vec::new(),
+        },
+        ModelKind::Ocr => ModelModalities {
+            input: vec!["image".to_owned()],
+            output: vec!["text".to_owned()],
         },
         // ControlNet/LoRA/VAE have no I/O content contract today.
         ModelKind::ControlNet | ModelKind::Lora | ModelKind::Vae => ModelModalities {

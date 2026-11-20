@@ -14,7 +14,7 @@ use honkbox_api_types::{
 use honkbox_audio_worker::{
     AUDIOCPP_COMPILED, AUDIOCPP_STT_FAMILIES, AUDIOCPP_TTS_FAMILIES, VAD_COMPILED,
 };
-use honkbox_recognition_worker::{BARCODE_COMPILED, RecKind as WorkerRecKind};
+use honkbox_recognition_worker::RecKind as WorkerRecKind;
 
 /// `GET /v1/capabilities`: the machine-readable server contract (FEAT-
 /// capabilities-api). Everything is DERIVED at request time — compiled
@@ -53,6 +53,10 @@ pub const ADMITTING_ROUTES: &[(&str, &str)] = &[
     // Blender asset jobs (`POST /v1/jobs/blender`): the route admits a job
     // of the `blender` kind, so the reserved row becomes callable.
     ("blender", "/v1/jobs/blender"),
+    // OCR ingest (`POST /v1/ocr/ingest`) is the first real consumer of the
+    // `ocr` admission bucket; the route keys its 501 on the same `serves()`
+    // predicate this document reports as `recognition.ocr`.
+    ("ocr", "/v1/ocr/ingest"),
 ];
 
 /// The route that admits a job of `kind`, if any (see [`ADMITTING_ROUTES`]).
@@ -65,7 +69,15 @@ pub fn admitting_route(kind: honkbox_residency::ResourceKind) -> Option<&'static
 
 /// Build the format half of the capability document from the registry so a
 /// missing encoder never appears as writable.
-fn formats_capability() -> Formats {
+fn formats_capability(config: &super::AppConfig) -> Formats {
+    // The router-wide audio ceiling and the artifact upload route's raised
+    // ceiling are both real; advertise the larger one instead of a number
+    // that understates what this binary accepts.
+    let audio_limit = u64::try_from(super::AUDIO_BODY_LIMIT_BYTES).unwrap_or(u64::MAX);
+    let artifact_limit = config
+        .artifacts
+        .max_artifact_bytes()
+        .saturating_add(crate::artifacts::CHUNK_MAX_BYTES);
     Formats {
         // The registry (`crate::formats`) is the single source of truth:
         // `read` = rows the SD ingest validators accept (edits `image`/
@@ -90,9 +102,9 @@ fn formats_capability() -> Formats {
                 max: 100,
                 applies_to: "jpeg".to_owned(),
             },
-            // The router-wide body ceiling (`AUDIO_BODY_LIMIT_BYTES`,
-            // H1) — the largest upload any route accepts.
-            body_bytes: u64::try_from(super::AUDIO_BODY_LIMIT_BYTES).unwrap_or(u64::MAX),
+            // Largest upload any route accepts (audio ceiling or artifact
+            // route ceiling, whichever is higher).
+            body_bytes: audio_limit.max(artifact_limit),
         },
     }
 }
@@ -194,7 +206,7 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             python_sidecar: super::runtime_config::python_enabled(),
             texture_postprocess: crate::texture_postprocess::capability().available,
         },
-        formats: formats_capability(),
+        formats: formats_capability(config),
         auth: AuthCapabilities {
             mode: auth_mode.to_owned(),
         },
@@ -232,16 +244,13 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
         // `resolve_constraints` clamp is defined against — so the document
         // cannot drift from what `/v1/chat/completions` actually does.
         tools: Some(ToolCallingCapability::chat_routes()),
-        // Recognition honesty (recognition tickets): each flag is the same
-        // gate the `/v1/recognize` route's named 501 keys on — the pipeline's
-        // served kinds AND the compile probe. `ocr` stays `false` until an
-        // OCR backend lands (the stub/barcode backend answers
-        // `recognition_kind_unsupported` for it), so a client can trust the
-        // absence.
+        // Recognition honesty: the SAME `serves` predicate the route uses
+        // for its named 501 drives both flags. A stub fallback therefore
+        // advertises nothing, and `ocr` stays false until a real backend is
+        // compiled and selected.
         recognition: Some(RecognitionFeature {
-            barcode: BARCODE_COMPILED
-                && config.recognition.kinds().contains(&WorkerRecKind::Barcode),
-            ocr: config.recognition.kinds().contains(&WorkerRecKind::Ocr),
+            barcode: config.recognition.serves(WorkerRecKind::Barcode),
+            ocr: config.recognition.serves(WorkerRecKind::Ocr),
         }),
         external_tools: Some(super::external_tools::external_tools_capability()),
         // Additive probe so clients can check storage before using artifact

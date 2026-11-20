@@ -186,15 +186,170 @@ pub fn make_tts(
     }
 }
 
-/// Recognition pipeline (recognition tickets): the rxing barcode backend
-/// when this build compiles it (`barcode` feature — default-on, pure-Rust
-/// CPU decode), otherwise the stub. No CLI selection in stage 1: barcode
-/// decode needs no model, and OCR engines land with their own tickets.
+/// Recognition pipeline, feature-off build: the rxing barcode backend when
+/// compiled, otherwise the stub. OCR is not in the wire vocabulary of this
+/// build (no `ocrs-rten` engine exists here).
+#[cfg(not(feature = "ocr-ocrs"))]
 #[must_use]
-pub fn make_recognition() -> Arc<dyn honkbox_recognition_worker::RecognitionPipeline> {
+pub fn make_recognition(
+    _found: &[honkbox_registry::FoundModel],
+) -> Arc<dyn honkbox_recognition_worker::RecognitionPipeline> {
     if honkbox_recognition_worker::BARCODE_COMPILED {
         Arc::new(honkbox_recognition_worker::BarcodeRecognition)
     } else {
         Arc::new(honkbox_recognition_worker::StubRecognition)
+    }
+}
+
+/// Dispatch by kind so enabling OCR never takes barcode away. `backend_id`
+/// names `ocrs-rten` whenever that engine is compiled: the route's first-gate
+/// 501 for absent OCR weights must name the missing engine, not rxing.
+#[cfg(feature = "ocr-ocrs")]
+struct RecognitionRouter {
+    ocr: Arc<dyn honkbox_recognition_worker::RecognitionPipeline>,
+    barcode: Option<Arc<dyn honkbox_recognition_worker::RecognitionPipeline>>,
+    id: &'static str,
+}
+
+#[cfg(feature = "ocr-ocrs")]
+impl honkbox_recognition_worker::RecognitionPipeline for RecognitionRouter {
+    fn backend_id(&self) -> &'static str {
+        self.id
+    }
+
+    fn backend_id_for(&self, kind: honkbox_recognition_worker::RecKind) -> &'static str {
+        use honkbox_recognition_worker::RecKind;
+        match kind {
+            RecKind::Barcode => self
+                .barcode
+                .as_ref()
+                .map_or(self.id, |backend| backend.backend_id_for(kind)),
+            RecKind::Ocr => self.ocr.backend_id_for(kind),
+        }
+    }
+
+    fn kinds(&self) -> &'static [honkbox_recognition_worker::RecKind] {
+        &[
+            honkbox_recognition_worker::RecKind::Barcode,
+            honkbox_recognition_worker::RecKind::Ocr,
+        ]
+    }
+
+    fn serves(&self, kind: honkbox_recognition_worker::RecKind) -> bool {
+        match kind {
+            honkbox_recognition_worker::RecKind::Barcode => {
+                self.barcode.as_ref().is_some_and(|b| b.serves(kind))
+            }
+            honkbox_recognition_worker::RecKind::Ocr => self.ocr.serves(kind),
+        }
+    }
+
+    fn recognize(
+        &self,
+        req: &honkbox_recognition_worker::RecognizeRequest,
+    ) -> Result<honkbox_recognition_worker::RecognizeOutput, honkbox_recognition_worker::RecError>
+    {
+        use honkbox_recognition_worker::{RecError, RecKind};
+        match req.kind {
+            RecKind::Barcode => self.barcode.as_ref().map_or_else(
+                || {
+                    Err(RecError::Unsupported {
+                        kind: req.kind,
+                        backend: self.id,
+                    })
+                },
+                |b| b.recognize(req),
+            ),
+            RecKind::Ocr => self.ocr.recognize(req),
+        }
+    }
+
+    fn cancel(&self) {
+        self.ocr.cancel();
+        if let Some(barcode) = &self.barcode {
+            barcode.cancel();
+        }
+    }
+}
+
+/// Recognition pipeline, `ocr-ocrs` build: locate user-downloaded OCR
+/// weights in the scan result and construct the engine. Missing weights
+/// leave it absent — `serves(Ocr)` is false and the named 501 follows from
+/// the same predicate. Barcode dispatch is preserved when compiled.
+#[cfg(feature = "ocr-ocrs")]
+#[must_use]
+pub fn make_recognition(
+    found: &[honkbox_registry::FoundModel],
+) -> Arc<dyn honkbox_recognition_worker::RecognitionPipeline> {
+    use honkbox_recognition_worker::{
+        BarcodeRecognition, OCRS_BACKEND_ID, OcrRecognition, RecognitionPipeline,
+    };
+    use honkbox_registry::RootKind;
+
+    let mut detection = None;
+    let mut recognition = None;
+    // `found` is sorted by slug; `or` picks the first match deterministically.
+    for entry in found.iter().filter(|e| e.root == RootKind::Ocr) {
+        let name = entry
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if name.starts_with("text-detection") {
+            detection = detection.or(Some(entry.path.as_path()));
+        } else if name.starts_with("text-rec") {
+            recognition = recognition.or(Some(entry.path.as_path()));
+        }
+    }
+    let ocr = Arc::new(OcrRecognition::new(detection, recognition));
+    let barcode: Option<Arc<dyn RecognitionPipeline>> =
+        if honkbox_recognition_worker::BARCODE_COMPILED {
+            Some(Arc::new(BarcodeRecognition))
+        } else {
+            None
+        };
+    Arc::new(RecognitionRouter {
+        ocr,
+        barcode,
+        id: OCRS_BACKEND_ID,
+    })
+}
+
+#[cfg(all(test, feature = "ocr-ocrs"))]
+mod ocr_tests {
+    use super::*;
+    use honkbox_recognition_worker::{BARCODE_COMPILED, RecError, RecKind, RecognizeRequest};
+
+    #[test]
+    fn absent_weights_are_unserved_and_name_the_engine() {
+        let pipeline = make_recognition(&[]);
+        assert_eq!(pipeline.backend_id(), "ocrs-rten");
+        assert!(!pipeline.serves(RecKind::Ocr));
+        // Feature-on keeps barcode when the barcode backend is compiled.
+        assert_eq!(pipeline.serves(RecKind::Barcode), BARCODE_COMPILED);
+        let req = RecognizeRequest {
+            kind: RecKind::Ocr,
+            image: vec![1, 2, 3],
+            language: None,
+            mode: None,
+            engine: None,
+        };
+        match pipeline.recognize(&req).unwrap_err() {
+            RecError::Unsupported { kind, backend } => {
+                assert_eq!(kind, RecKind::Ocr);
+                assert_eq!(backend, "ocrs-rten");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kind_specific_backend_ids_stay_distinct() {
+        let pipeline = make_recognition(&[]);
+        assert_eq!(pipeline.backend_id_for(RecKind::Ocr), "ocrs-rten");
+        if BARCODE_COMPILED {
+            assert_eq!(pipeline.backend_id_for(RecKind::Barcode), "rxing");
+        }
     }
 }

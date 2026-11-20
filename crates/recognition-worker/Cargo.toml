@@ -9,6 +9,10 @@ publish.workspace = true
 default = ["barcode"]
 # rxing barcode/QR decode (pure Rust; see workspace Cargo.toml license note).
 barcode = ["dep:rxing"]
+# ocrs/rten Latin OCR (TASK-ocr-ocrs-backend): pure-Rust CPU engine,
+# MIT OR Apache-2.0, no cmake/foreign build. Non-default — weights are
+# user-downloaded, honkbox bundles none.
+ocr-ocrs = ["dep:ocrs", "dep:rten"]
 
 [dependencies]
 # Container decode (PNG/JPEG/WebP — the same workspace image the sd-core
@@ -44,6 +48,11 @@ rxing = { version = "0.9", default-features = false, features = [
     # (encoding_rs + codepage-437, both MIT/Apache-2.0).
     "encoding_rs",
 ], optional = true }
+# OCR engine + runtime: both MIT OR Apache-2.0, pure Rust, `build = false`.
+# ocrs default features dropped (`export-wasm` is wasm-only); `onnx` + `rten`
+# keep both user-downloaded weight formats loadable.
+ocrs = { version = "0.14", default-features = false, features = ["onnx", "rten"], optional = true }
+rten = { version = "0.28", features = ["rten_format"], optional = true }
 
 [lints]
 workspace = true

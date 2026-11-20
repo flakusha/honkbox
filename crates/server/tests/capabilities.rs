@@ -189,6 +189,7 @@ fn base_config(catalog: ModelCatalog, sd: Arc<dyn honkbox_sd_core::SdPipeline>) 
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,
@@ -571,10 +572,10 @@ async fn formats_agree_with_compiled_encoders() {
         doc["formats"]["limits"]["output_compression"]["applies_to"],
         "jpeg"
     );
-    assert_eq!(
-        doc["formats"]["limits"]["body_bytes"],
-        routes::AUDIO_BODY_LIMIT_BYTES
-    );
+    let expected_body_bytes = u64::try_from(routes::AUDIO_BODY_LIMIT_BYTES)
+        .expect("audio ceiling fits u64")
+        .max(crate::config::DEFAULT_ARTIFACT_MAX_BYTES + crate::artifacts::CHUNK_MAX_BYTES);
+    assert_eq!(doc["formats"]["limits"]["body_bytes"], expected_body_bytes);
 
     let magics: [(&str, MagicCheck); 3] = [
         ("png", |bytes| bytes.starts_with(&[0x89, b'P', b'N', b'G'])),
@@ -893,8 +894,8 @@ async fn external_tool_routes_name_missing_tools() {
 }
 
 /// The opt-in external binaries are advertised as named rows even when no
-/// binary is configured: a missing tool is never a silent skip, and the
-/// shader route answers a named 501 carrying that status.
+/// binary is configured. The shader route follows the host probe: a named 501
+/// when absent, a real verdict when a validator is installed.
 #[tokio::test]
 async fn opt_in_external_tools_are_named_and_unavailable() {
     let _slot = SLOT_LOCK.lock().await;
@@ -937,18 +938,27 @@ async fn opt_in_external_tools_are_named_and_unavailable() {
         .expect("infallible");
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body: Value = serde_json::from_slice(&bytes).expect("json 501");
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
-    assert_eq!(body["error"]["code"], "shader_validator_unavailable");
-    // The route probes the real binary per request; on a host where a
-    // validator exists but its probe fails, the named reason is a probe
-    // failure rather than "not installed". Both are honest absence.
-    assert!(
-        body["error"]["message"].as_str().is_some_and(|message| {
-            message.contains("not installed") || message.contains("probe failed")
-        }),
-        "{body}"
+    let body: Value = serde_json::from_slice(&bytes).expect("json response");
+    // The route probes the real binary per request: a host with Godot
+    // installed answers honestly with a verdict, not the absent-tool 501.
+    let probe = honkbox_external_tools::shader_validate::status(
+        &honkbox_external_tools::shader_validate::binary(),
+        Duration::from_secs(2),
     );
+    if probe.is_available() {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["tool"], "shader_validator");
+        assert!(body.get("valid").is_some(), "{body}");
+    } else {
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+        assert_eq!(body["error"]["code"], "shader_validator_unavailable");
+        assert!(
+            body["error"]["message"].as_str().is_some_and(|message| {
+                message.contains("not installed") || message.contains("probe failed")
+            }),
+            "{body}"
+        );
+    }
 }
 
 /// Default (feature-off) snapshot: no decision endpoint and no audio.cpp
@@ -1053,6 +1063,7 @@ async fn catalog_modalities_match_kinds_and_keep_the_flat_list() {
         comfyui_dirs: vec![dir.join("comfy")],
         stt_dirs: vec![dir.join("stt")],
         tts_dirs: vec![dir.join("tts")],
+        ocr_dirs: Vec::new(),
     };
     app_config.model_entries = vec![config::ModelEntryConfig {
         slug: Some("llm:vision.gguf".to_owned()),

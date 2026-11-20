@@ -3,7 +3,9 @@
 //! The validator is an external binary, opt-in via `HONKBOX_SHADER_VALIDATOR`
 //! (default `godot` on `PATH`). It is never linked or vendored. The probe
 //! proves the binary answers a version request; the validate call hands it one
-//! staged shader file and reads diagnostics from stdout:
+//! staged shader file and reads diagnostics from stdout. Godot-family binaries
+//! are invoked with `--headless --quit` so a validation never opens a desktop
+//! window or waits for an editor loop:
 //!
 //! - empty stdout or `OK` lines ⇒ the shader compiles;
 //! - one line per failure, `path:line: message` ⇒ the named shader and line.
@@ -85,7 +87,19 @@ pub fn validate(
     let path = shader
         .to_str()
         .ok_or_else(|| Unavailable::ProbeFailed("staged shader path is not UTF-8".to_owned()))?;
-    let output = run_tool_output(binary, &[path], timeout)?;
+    // Godot's bare positional argument opens a project/window on the desktop.
+    // Prepend the headless + quit flags for every Godot-family binary; keep the
+    // raw single-argument contract for other operator-supplied validators.
+    let godot = binary
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "godot" || name.starts_with("godot-"));
+    let args: Vec<&str> = if godot {
+        vec!["--headless", "--quit", path]
+    } else {
+        vec![path]
+    };
+    let output = run_tool_output(binary, &args, timeout)?;
     // A compiler reports failures on either stream and exits nonzero; the
     // verdict comes from its diagnostics, not from the exit code alone.
     let diagnostics = if output.stdout.trim().is_empty() {
@@ -226,5 +240,36 @@ mod tests {
         let report = validate(&bin, &shader, Duration::from_secs(2)).expect("validate");
         assert!(report.is_valid());
         assert_eq!(report.issues, Vec::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn godot_validation_is_headless() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = scratch("headless");
+        let args_log = dir.join("args");
+        let bin = dir.join("godot");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\necho OK\n",
+            args_log.display()
+        );
+        std::fs::write(&bin, script).expect("fake godot");
+        let mut perms = std::fs::metadata(&bin).expect("stat").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+        let shader = dir.join("hero.gdshader");
+        std::fs::write(&shader, "shader_type spatial;\n").expect("staged shader");
+
+        let report = validate(&bin, &shader, Duration::from_secs(2)).expect("validate");
+        assert!(report.is_valid());
+        let args = std::fs::read_to_string(&args_log).expect("args log");
+        let lines: Vec<_> = args.lines().collect();
+        assert_eq!(lines.first(), Some(&"--headless"));
+        assert_eq!(lines.get(1), Some(&"--quit"));
+        assert_eq!(
+            lines.get(2),
+            Some(shader.to_str().expect("utf-8 path")).as_ref()
+        );
     }
 }

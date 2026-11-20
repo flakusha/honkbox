@@ -225,6 +225,9 @@ mod image_ops_route;
 #[path = "routes/recognition.rs"]
 mod recognition;
 
+#[path = "routes/ocr_ingest.rs"]
+pub(crate) mod ocr_ingest;
+
 #[path = "routes/audio_speech.rs"]
 mod audio_speech;
 
@@ -331,6 +334,8 @@ use self::jobs::{
     __path_delete_job, __path_get_events, __path_get_jobs, __path_post_job_cancel, delete_job,
     get_events, get_jobs, post_job_cancel,
 };
+#[allow(unused_imports)] // used by .route() and the OpenApi derive's generated types
+use self::ocr_ingest::{__path_post_ocr_ingest, post_ocr_ingest};
 #[allow(unused_imports)] // shared with sibling route modules
 use self::openai_chat::{
     __path_post_chat_completions, completions_json, epoch_secs, finish_reason,
@@ -386,6 +391,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/images/edits", post(post_images_edits))
         .route("/v1/image-ops", post(post_image_ops))
         .route("/v1/recognize", post(post_recognize))
+        .route("/v1/ocr/ingest", post(post_ocr_ingest))
         .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/synthesize", post(post_synthesize))
         .route("/v1/audio/voices", get(get_audio_voices))

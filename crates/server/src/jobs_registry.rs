@@ -100,6 +100,9 @@ pub(crate) enum JobKind {
     /// process; cancel is honored at the next STAGE boundary (the recipe
     /// checks a marker file between stages, never mid-bake).
     Blender,
+    /// OCR document ingest (`POST /v1/ocr/ingest`): in-process CPU work;
+    /// cancel is honored between pages of a document.
+    Ocr,
 }
 
 impl JobKind {
@@ -114,6 +117,7 @@ impl JobKind {
             Self::Translations => "translations",
             Self::ImageOps => "image_ops",
             Self::Blender => "blender",
+            Self::Ocr => "ocr",
         }
     }
 }

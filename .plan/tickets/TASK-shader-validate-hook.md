@@ -1,6 +1,6 @@
 # TASK: Headless shader-compile check hook
 
-Status: in progress (2026-11-20, hook + 501 path landed; real Godot validation unverified — external binary absent)
+Status: in progress (2026-11-20, hook + 501 path landed; Godot-family call now uses `--headless --quit` so tests never open a desktop window; real Godot compile verdict still unverified)
 Priority: P3
 Epic: epic-game-engine-export
 Owner: unassigned

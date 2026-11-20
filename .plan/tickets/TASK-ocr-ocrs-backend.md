@@ -1,6 +1,7 @@
 # TASK: OCR backend — ocrs (pure Rust)
 
-Status: proposed
+Status: done (2026-11-20; ocrs/rten non-default backend, ocr roots, honest
+absence gate; worker 15/15 feature-on + 11/11 off, registry 22/22)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned

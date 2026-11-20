@@ -266,6 +266,7 @@ fn base_config(catalog: Vec<ModelCatalogEntry>, data_dir: Option<PathBuf>) -> Ap
             comfyui_dirs: Vec::new(),
             stt_dirs: Vec::new(),
             tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
         llm_model: None,
         stt_model: None,
