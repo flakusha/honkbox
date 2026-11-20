@@ -131,10 +131,15 @@ pub struct Outcome {
     /// The child's stdout (capped at `Spec::log_bytes`).
     pub stdout: String,
     /// The child's stderr (capped at `Spec::log_bytes`).
+    // Read by the blender/python routes and the supervisor contract test;
+    // harnesses that include only `routes.rs` never read it.
+    #[allow(dead_code)]
     pub stderr: String,
     /// `true` when stdout hit the cap (the rest was drained, not kept).
     pub stdout_truncated: bool,
     /// `true` when stderr hit the cap.
+    // Same harness pattern as `stderr` above.
+    #[allow(dead_code)]
     pub stderr_truncated: bool,
     /// The artifacts matched by `Spec::artifacts`, sorted and deduplicated.
     // The blender caller reads its artifacts from the recipe manifest (it

@@ -63,6 +63,22 @@
 //! at request time via `std::env` in the route middleware (so rotation
 //! works without a restart) and is never logged, never in metrics, and
 //! never in any config dump — these types store the env-var name only.
+//!
+//! Signed URLs and scoped keys (file-only): `[auth] signed_url_secret_env`
+//! names the env var holding the signed-URL HMAC secret (default
+//! `HONKBOX_SIGNED_URL_SECRET`) and `signed_url_ttl_secs` bounds signed-URL
+//! lifetime (default 300). `[[auth.scopes]]` entries carry `api_key_env` (the
+//! NAME of a key env var) plus a `scopes` list, de-duplicated by
+//! `api_key_env`. Only NAMES are stored — never secret VALUES.
+//!
+//! `[safety.nsfw]` holds the NSFW gate: `enabled` (default false), `policy`
+//! (`flag|block|off`, default `flag`), `model_version` (default
+//! `stub-nsfw-v1`), `threshold` (0..=1, default 0.8) and `classifier_bin`
+//! (optional path, default unset).
+//!
+//! `[python]` holds the optional sidecar: `enabled` (default false), `venv`
+//! (default `<data_dir>/sidecar/venv`, or `sidecar/venv` without a data dir),
+//! `timeout_secs` (default 300) and `model_allowlist` (default empty).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -302,6 +318,93 @@ impl Default for AuthConfig {
     }
 }
 
+/// Resolved `[auth]` signed-URL and scoped-key facts. Kept separate from
+/// [`AuthConfig`] so the existing single-key mode (and its struct literals)
+/// stays unchanged. Only env-var NAMES are stored — never secret VALUES.
+#[derive(Debug, Clone)]
+pub struct AuthFactsConfig {
+    /// `[auth] signed_url_secret_env`: NAME of the secret's env var.
+    pub signed_url_secret_env: String,
+    /// `[auth] signed_url_ttl_secs`: signed-URL lifetime in seconds.
+    pub signed_url_ttl_secs: u64,
+    /// `[[auth.scopes]]` entries, de-duplicated by `api_key_env`.
+    pub scopes: Vec<FileScope>,
+}
+
+impl Default for AuthFactsConfig {
+    fn default() -> Self {
+        Self {
+            signed_url_secret_env: DEFAULT_SIGNED_URL_SECRET_ENV.to_owned(),
+            signed_url_ttl_secs: DEFAULT_SIGNED_URL_TTL_SECS,
+            scopes: Vec::new(),
+        }
+    }
+}
+
+/// Default `[auth] signed_url_secret_env` (a NAME, never a value).
+pub const DEFAULT_SIGNED_URL_SECRET_ENV: &str = "HONKBOX_SIGNED_URL_SECRET";
+/// Default `[auth] signed_url_ttl_secs`.
+pub const DEFAULT_SIGNED_URL_TTL_SECS: u64 = 300;
+/// Default `[python] timeout_secs`.
+pub const DEFAULT_PYTHON_TIMEOUT_SECS: u64 = 300;
+
+/// One `[[auth.scopes]]` entry: a key env-var NAME plus the scopes granted to
+/// keys read from it. Both fields are validated/cleaned in the file stage;
+/// the secret VALUE behind `api_key_env` is never stored here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct FileScope {
+    /// NAME of the env var holding the key (trimmed, non-empty).
+    #[serde(default)]
+    pub api_key_env: String,
+    /// Scopes granted to that key (trimmed, empty entries dropped).
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+/// Resolved `[safety.nsfw]` gate. Facts only — no model is loaded here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NsfwConfig {
+    pub enabled: bool,
+    pub policy: String,
+    pub model_version: String,
+    pub threshold: f64,
+    /// Optional explicit classifier binary path; `None` uses discovery.
+    pub classifier_bin: Option<PathBuf>,
+}
+
+impl Default for NsfwConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            policy: "flag".to_owned(),
+            model_version: "stub-nsfw-v1".to_owned(),
+            threshold: 0.8,
+            classifier_bin: None,
+        }
+    }
+}
+
+/// Resolved `[python]` sidecar settings. `venv` is derived from the final
+/// data dir in `load` (default `<data_dir>/sidecar/venv`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonConfig {
+    pub enabled: bool,
+    pub venv: PathBuf,
+    pub timeout_secs: u64,
+    pub model_allowlist: Vec<String>,
+}
+
+impl Default for PythonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            venv: PathBuf::from("sidecar/venv"),
+            timeout_secs: DEFAULT_PYTHON_TIMEOUT_SECS,
+            model_allowlist: Vec::new(),
+        }
+    }
+}
+
 /// Resolved `[server]` serving knobs. Currently one: the REQ-6 Option A
 /// admission-queue bound (`queue_wait_secs`); `Duration::ZERO` keeps the
 /// pre-REQ-6 immediate-429 behavior (queueing disabled).
@@ -320,15 +423,108 @@ impl Default for ServerConfig {
     }
 }
 
-/// Validate `[auth] api_key_env`: trimmed, non-empty env-var NAME; empty is
-/// a config error (an unnameable key would fail every bearer request).
-fn parse_api_key_env(raw: &str, where_: &str) -> Result<String, String> {
+/// Validate a configured env-var NAME (trimmed, non-empty). The VALUE behind
+/// it is read at request time and never stored. Pure.
+fn parse_env_name(raw: &str, key: &str, where_: &str) -> Result<String, String> {
     let name = raw.trim();
     if name.is_empty() {
-        Err(format!("{where_}: [auth] api_key_env must name an env var"))
+        Err(format!("{where_}: {key} must name an env var"))
     } else {
         Ok(name.to_owned())
     }
+}
+
+/// Validate `[auth] api_key_env` (an unnameable key would fail every request).
+fn parse_api_key_env(raw: &str, where_: &str) -> Result<String, String> {
+    parse_env_name(raw, "[auth] api_key_env", where_)
+}
+
+/// Validate `[safety.nsfw] policy`: `flag`, `block` or `off`. Pure; a typo
+/// must be a loud config error, never a silently disabled gate.
+fn parse_nsfw_policy(raw: &str, where_: &str) -> Result<String, String> {
+    let policy = raw.trim();
+    match policy {
+        "flag" | "block" | "off" => Ok(policy.to_owned()),
+        _ => Err(format!(
+            "{where_}: [safety.nsfw] policy must be flag|block|off, got {policy:?}"
+        )),
+    }
+}
+
+/// Validate `[safety.nsfw] threshold`: a finite probability in `0..=1`. Pure.
+fn parse_nsfw_threshold(raw: f64, where_: &str) -> Result<f64, String> {
+    if raw.is_finite() && (0.0..=1.0).contains(&raw) {
+        Ok(raw)
+    } else {
+        Err(format!(
+            "{where_}: [safety.nsfw] threshold must be between 0 and 1, got {raw}"
+        ))
+    }
+}
+
+/// Resolve `[safety.nsfw]` from the file stage. Pure.
+fn resolve_nsfw(file: &FileNsfw, where_: &str) -> Result<NsfwConfig, String> {
+    let mut out = NsfwConfig::default();
+    if let Some(enabled) = file.enabled {
+        out.enabled = enabled;
+    }
+    if let Some(policy) = &file.policy {
+        out.policy = parse_nsfw_policy(policy, where_)?;
+    }
+    if let Some(version) = &file.model_version {
+        let version = version.trim();
+        if version.is_empty() {
+            return Err(format!(
+                "{where_}: [safety.nsfw] model_version must not be empty"
+            ));
+        }
+        version.clone_into(&mut out.model_version);
+    }
+    if let Some(threshold) = file.threshold {
+        out.threshold = parse_nsfw_threshold(threshold, where_)?;
+    }
+    out.classifier_bin = match file.classifier_bin.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(expand_home(raw.trim())),
+        Some(_) => {
+            return Err(format!(
+                "{where_}: [safety.nsfw] classifier_bin must be a path"
+            ));
+        }
+        None => None,
+    };
+    Ok(out)
+}
+
+/// Default `[python] venv`: `<data_dir>/sidecar/venv`, or the relative
+/// `sidecar/venv` when no data dir is known. Pure.
+fn python_venv_default(data_dir: Option<&Path>) -> PathBuf {
+    data_dir.map_or_else(
+        || PathBuf::from("sidecar/venv"),
+        |dir| dir.join("sidecar/venv"),
+    )
+}
+
+/// Validate + clean `[[auth.scopes]]`: each `api_key_env` is a trimmed,
+/// non-empty NAME, scopes are trimmed with empties dropped, and entries are
+/// de-duplicated by `api_key_env` (first declaration wins). Pure.
+fn parse_scopes(raw: &[FileScope], where_: &str) -> Result<Vec<FileScope>, String> {
+    let mut out: Vec<FileScope> = Vec::new();
+    for (index, scope) in raw.iter().enumerate() {
+        let name = scope.api_key_env.trim();
+        if name.is_empty() {
+            return Err(format!(
+                "{where_}: [[auth.scopes]] #{index} must name an env var"
+            ));
+        }
+        if out.iter().any(|kept| kept.api_key_env == name) {
+            continue;
+        }
+        out.push(FileScope {
+            api_key_env: name.to_owned(),
+            scopes: clean_slugs(scope.scopes.iter().map(String::as_str)),
+        });
+    }
+    Ok(out)
 }
 
 /// Fail-closed bind check (REQ-7 acceptance): `auth = none` on a
@@ -573,6 +769,8 @@ pub struct LoadedConfig {
     pub models: ModelConfig,
     /// Auth settings (REQ-7): `[server] auth` + `[auth] api_key_env` name.
     pub auth: AuthConfig,
+    /// `[auth]` signed-URL + scoped-key facts (names only, no secret values).
+    pub auth_facts: AuthFactsConfig,
     /// `[server]` serving knobs (REQ-6 admission-queue bound).
     pub server: ServerConfig,
     /// `[ledger]` resource-ledger settings (bounded per-kind admission
@@ -587,6 +785,10 @@ pub struct LoadedConfig {
     pub mesh: mesh::MeshConfig,
     /// `[tools]` external-engine discovery settings.
     pub tools: ExternalToolsConfig,
+    /// `[safety.nsfw]` resolved gate facts.
+    pub nsfw: NsfwConfig,
+    /// `[python]` resolved sidecar settings.
+    pub python: PythonConfig,
     /// Final data dir; `None` only when no absolute base can be derived.
     pub data_dir: Option<PathBuf>,
     /// Non-fatal config notices (invalid values that kept a previous stage):
@@ -831,25 +1033,33 @@ pub fn residency_config(
     config
 }
 
-/// Resolve the REQ-7 auth knobs: defaults → `[server] auth` +
-/// `[auth] api_key_env` file keys. Missing keys keep the defaults
-/// (`none` / `HONKBOX_API_KEY`); invalid values are config errors. There is
-/// deliberately NO env stage for these: `HONKBOX_API_KEY` (or whatever name
-/// is configured) holds the key VALUE at request time, not a config
-/// override. Pure (args) so tests stay thread-safe.
+/// Resolve the REQ-7 auth knobs plus the signed-URL and scoped-key facts:
+/// defaults → `[server] auth` + `[auth]` file keys. Missing keys keep the
+/// defaults; invalid values are config errors. There is deliberately NO env
+/// stage for these: the configured env vars hold VALUES at request time, not
+/// config overrides. Pure (args) so tests stay thread-safe.
 fn auth_settings(
     auth: Option<&str>,
     api_key_env: Option<&str>,
+    signed_url_secret_env: Option<&str>,
+    signed_url_ttl_secs: Option<u64>,
+    scopes: &[FileScope],
     where_: &str,
-) -> Result<AuthConfig, String> {
+) -> Result<(AuthConfig, AuthFactsConfig), String> {
     let mode = auth.map_or(Ok(AuthMode::None), |raw| AuthMode::parse(raw, where_))?;
     let env = api_key_env.map_or(Ok(AuthConfig::default().api_key_env), |raw| {
         parse_api_key_env(raw, where_)
     })?;
-    Ok(AuthConfig {
-        mode,
-        api_key_env: env,
-    })
+    let secret_env = signed_url_secret_env.map_or_else(
+        || Ok(AuthFactsConfig::default().signed_url_secret_env),
+        |raw| parse_env_name(raw, "[auth] signed_url_secret_env", where_),
+    )?;
+    let facts = AuthFactsConfig {
+        signed_url_secret_env: secret_env,
+        signed_url_ttl_secs: signed_url_ttl_secs.unwrap_or(DEFAULT_SIGNED_URL_TTL_SECS),
+        scopes: parse_scopes(scopes, where_)?,
+    };
+    Ok((AuthConfig { mode, api_key_env: env }, facts))
 }
 
 /// Final data dir: flag > env > `[core] data_dir` file key > located default
@@ -922,6 +1132,16 @@ struct FileStages {
     mesh: mesh::FileMesh,
     /// `[tools]` keys (TASK-external-tool-registry), resolved in `load`.
     tools: FileTools,
+    /// `[safety.nsfw]` keys, resolved in `load`.
+    nsfw: FileNsfw,
+    /// `[python]` keys, resolved in `load`.
+    python: FilePython,
+    /// `[auth] signed_url_secret_env` raw value (a NAME only).
+    signed_url_secret_env: Option<String>,
+    /// `[auth] signed_url_ttl_secs` raw value.
+    signed_url_ttl_secs: Option<u64>,
+    /// `[[auth.scopes]]` raw entries, validated in `load`.
+    scopes: Vec<FileScope>,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -984,6 +1204,11 @@ fn stage_config_file(
     out.mesh = file.mesh;
     out.tools = file.tools;
     out.vram_budget = file.models.vram_budget_bytes;
+    out.nsfw = file.safety.nsfw;
+    out.python = file.python;
+    out.signed_url_secret_env = file.auth.signed_url_secret_env;
+    out.signed_url_ttl_secs = file.auth.signed_url_ttl_secs;
+    out.scopes = file.auth.scopes;
     // The bindings + the per-slug cache knobs.
     let (entries, cache) = parse_entries(&file.models.entry)?;
     out.entries = entries;
@@ -1144,11 +1369,16 @@ pub fn load(
         cache,
         auth,
         api_key_env,
+        signed_url_secret_env,
+        signed_url_ttl_secs,
+        scopes,
         queue_wait: queue_wait_file,
         ledger: file_ledger,
         artifacts: artifact_cap_file,
         mesh: file_mesh,
         tools: file_tools,
+        nsfw: file_nsfw,
+        python: file_python,
     } = stage_config_file(
         path.as_deref(),
         &mut staged,
@@ -1213,7 +1443,28 @@ pub fn load(
     let display = path
         .as_deref()
         .map_or_else(|| "<none>".to_owned(), |p| p.display().to_string());
-    let auth = auth_settings(auth.as_deref(), api_key_env.as_deref(), &display)?;
+    let nsfw = resolve_nsfw(&file_nsfw, &display)?;
+    let python = PythonConfig {
+        enabled: file_python.enabled.unwrap_or(false),
+        venv: file_python
+            .venv
+            .as_deref()
+            .map_or_else(|| python_venv_default(data_dir.as_deref()), expand_home),
+        timeout_secs: file_python
+            .timeout_secs
+            .unwrap_or(DEFAULT_PYTHON_TIMEOUT_SECS),
+        model_allowlist: clean_slugs(
+            file_python.model_allowlist.iter().flatten().map(String::as_str),
+        ),
+    };
+    let (auth, auth_facts) = auth_settings(
+        auth.as_deref(),
+        api_key_env.as_deref(),
+        signed_url_secret_env.as_deref(),
+        signed_url_ttl_secs,
+        &scopes,
+        &display,
+    )?;
     let server = server_settings(
         queue_wait_file,
         std::env::var("HONKBOX_QUEUE_WAIT_SECS").ok().as_deref(),
@@ -1241,11 +1492,14 @@ pub fn load(
     Ok(LoadedConfig {
         models,
         auth,
+        auth_facts,
         server,
         ledger,
         artifact_max_bytes,
         mesh,
         tools,
+        nsfw,
+        python,
         data_dir,
         warnings,
     })
@@ -1422,6 +1676,12 @@ struct FileConfig {
     /// `[auth]` keys (REQ-7 key env-var NAME); absent table keeps the default.
     #[serde(default)]
     auth: FileAuth,
+    /// `[safety]` keys (NSFW gate); absent table keeps defaults.
+    #[serde(default)]
+    safety: FileSafety,
+    /// `[python]` keys (sidecar); absent table keeps defaults.
+    #[serde(default)]
+    python: FilePython,
     #[serde(default)]
     core: FileCore,
     #[serde(default)]
@@ -1495,12 +1755,54 @@ struct FileLedger {
     vram_demand: Option<BTreeMap<String, u64>>,
 }
 
-/// `[auth]` keys: `api_key_env` — the NAME of the env var holding the
-/// bearer key. The value is read per request in the route middleware and
-/// is never logged or dumped; only the name lives in config.
+/// `[auth]` keys: the bearer key env-var NAME (REQ-7), the signed-URL secret
+/// env-var NAME + TTL, and `[[auth.scopes]]` entries. Only NAMES live here;
+/// VALUES are read per request and never logged or dumped.
 #[derive(Debug, Default, serde::Deserialize)]
 struct FileAuth {
     api_key_env: Option<String>,
+    #[serde(default)]
+    signed_url_secret_env: Option<String>,
+    #[serde(default)]
+    signed_url_ttl_secs: Option<u64>,
+    #[serde(default)]
+    scopes: Vec<FileScope>,
+}
+
+/// `[safety]` table as written.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileSafety {
+    #[serde(default)]
+    nsfw: FileNsfw,
+}
+
+/// `[safety.nsfw]` keys; each missing key keeps its default.
+#[derive(Debug, Default, serde::Deserialize)]
+struct FileNsfw {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    policy: Option<String>,
+    #[serde(default)]
+    model_version: Option<String>,
+    #[serde(default)]
+    threshold: Option<f64>,
+    #[serde(default)]
+    classifier_bin: Option<String>,
+}
+
+/// `[python]` keys; each missing key keeps its default (`venv` derives from
+/// the final data dir in `load`).
+#[derive(Debug, Default, serde::Deserialize)]
+struct FilePython {
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    venv: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    model_allowlist: Option<Vec<String>>,
 }
 
 /// `[models]` keys; each missing key keeps its default.
@@ -2400,5 +2702,100 @@ mod tests {
             std::net::IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])
         );
         assert!(parse_bind_host("not-an-ip").is_err());
+    }
+
+    #[test]
+    fn nsfw_file_stage_defaults_and_validation() {
+        let where_ = "test.toml";
+        let default = resolve_nsfw(&FileNsfw::default(), where_).expect("defaults");
+        assert_eq!(default, NsfwConfig::default());
+        assert_eq!(default.classifier_bin, None);
+
+        let good = FileNsfw {
+            enabled: Some(true),
+            policy: Some(" block ".to_owned()),
+            model_version: Some(" v2 ".to_owned()),
+            threshold: Some(0.25),
+            classifier_bin: Some(" ~/models/nsfw.bin ".to_owned()),
+        };
+        let got = resolve_nsfw(&good, where_).expect("valid nsfw");
+        assert!(got.enabled);
+        assert_eq!(got.policy, "block");
+        assert_eq!(got.model_version, "v2");
+        assert_eq!(got.threshold, 0.25);
+        assert_eq!(got.classifier_bin, Some(expand_home("~/models/nsfw.bin")));
+
+        let bad_policy = FileNsfw {
+            policy: Some("quarantine".to_owned()),
+            ..FileNsfw::default()
+        };
+        assert!(resolve_nsfw(&bad_policy, where_)
+            .unwrap_err()
+            .contains("[safety.nsfw] policy"));
+        let bad_path = FileNsfw {
+            classifier_bin: Some("  ".to_owned()),
+            ..FileNsfw::default()
+        };
+        assert!(resolve_nsfw(&bad_path, where_)
+            .unwrap_err()
+            .contains("[safety.nsfw] classifier_bin"));
+        for threshold in [-0.1, 1.1, f64::NAN] {
+            let bad = FileNsfw {
+                threshold: Some(threshold),
+                ..FileNsfw::default()
+            };
+            assert!(resolve_nsfw(&bad, where_)
+                .unwrap_err()
+                .contains("[safety.nsfw] threshold"));
+        }
+    }
+
+    #[test]
+    fn scope_names_are_validated_and_deduped() {
+        let where_ = "test.toml";
+        let raw = vec![
+            FileScope {
+                api_key_env: " KEY_A ".to_owned(),
+                scopes: vec![" read ".to_owned(), String::new(), "write".to_owned()],
+            },
+            FileScope {
+                api_key_env: "KEY_A".to_owned(),
+                scopes: vec!["admin".to_owned()],
+            },
+            FileScope {
+                api_key_env: "KEY_B".to_owned(),
+                scopes: vec![],
+            },
+        ];
+        let got = parse_scopes(&raw, where_).expect("valid scopes");
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].api_key_env, "KEY_A");
+        assert_eq!(got[0].scopes, vec!["read", "write"]);
+        assert_eq!(got[1].api_key_env, "KEY_B");
+
+        let bad = vec![FileScope {
+            api_key_env: "  ".to_owned(),
+            scopes: vec![],
+        }];
+        assert!(parse_scopes(&bad, where_).unwrap_err().contains("#0"));
+    }
+
+    #[test]
+    fn python_venv_default_follows_data_dir() {
+        assert_eq!(python_venv_default(None), PathBuf::from("sidecar/venv"));
+        assert_eq!(
+            python_venv_default(Some(Path::new("/tmp/hb"))),
+            PathBuf::from("/tmp/hb/sidecar/venv")
+        );
+    }
+
+    #[test]
+    fn env_names_are_trimmed_and_empty_rejected() {
+        assert_eq!(
+            parse_env_name("  HONKBOX_X  ", "[auth] signed_url_secret_env", "t.toml")
+                .expect("name"),
+            "HONKBOX_X"
+        );
+        assert!(parse_env_name("  ", "[auth] signed_url_secret_env", "t.toml").is_err());
     }
 }

@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use base64::Engine as _;
 use honkbox_api_types::{ImageOpOutput, ImageOpRequest, ImageOpResponse};
 
+use super::chat_prep::admit_then_register;
 use super::AppConfig;
 use super::image_ops_dedup::{ImageOpSettled, op_label, sha256_hex};
 use super::image_ops_exec::{
@@ -85,22 +86,24 @@ pub(super) async fn execute_image_op(
                 ));
             }
         };
-    let job = crate::jobs_registry::global().register(
-        crate::jobs_registry::JobKind::ImageOps,
-        None,
-        req.inputs.len() > 1,
-    );
     // Admission (TASK-image-ops-job-route): CPU-only work takes the
     // ledger's CPU-only bucket (`rag`, 0 GPU slots) — the fixed 8-kind
     // vocabulary has no image-ops kind, the same nearest-bucket mapping the
     // audio routes use with `llm`. Image ops therefore contend with rag
     // pipelines on CPU threads instead of bypassing the ledger entirely.
-    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Rag).await {
-        Ok(lease) => lease,
+    // Admission first, registration second: a rejection carries no job id.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Rag).await,
+        crate::jobs_registry::JobKind::ImageOps,
+        None,
+        req.inputs.len() > 1,
+    ) {
+        Ok(pair) => pair,
         Err((status, message)) => {
             return ImageOpSettled {
                 response: Err((status, message, None)),
-                job_id: Some(job.id().to_owned()),
+                job_id: None,
             };
         }
     };

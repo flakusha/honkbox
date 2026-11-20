@@ -44,6 +44,9 @@ mod ora;
 #[path = "../src/raster.rs"]
 mod raster;
 #[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
+#[allow(dead_code)] // this harness checks type bindings, not route handlers
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]

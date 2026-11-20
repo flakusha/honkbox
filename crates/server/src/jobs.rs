@@ -79,6 +79,16 @@ pub struct BundleInputs {
     /// Hires-fix second pass actually applied (HTTP generations only;
     /// `None` = single-pass).
     pub hires: Option<HiresRecord>,
+    /// Named annotations attached to this bundle (sidecar record).
+    pub annotations: Vec<BundleAnnotation>,
+}
+
+/// A single named annotation attached to a generation bundle (sidecar
+/// record). `name` is a stable key; `value` is any JSON value.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct BundleAnnotation {
+    pub name: String,
+    pub value: serde_json::Value,
 }
 
 /// One `LoRA` adapter actually applied to a generation (sidecar record).
@@ -181,6 +191,7 @@ pub fn write_bundle_into(
         "strength": inputs.strength,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
+        "annotations": inputs.annotations,
         "inputs_sha256": inputs_sha256,
     });
     let metrics = serde_json::json!({
@@ -540,6 +551,7 @@ mod tests {
             strength: None,
             recipe: None,
             hires: None,
+            annotations: Vec::new(),
         }
     }
 

@@ -710,6 +710,65 @@
         }
       }
     },
+    "/v1/content-urls": {
+      "post": {
+        "tags": [],
+        "summary": "Mint a signed relative URL after checking the job exists. HMAC keying and\nexpiry come from runtime config; the secret VALUE is read from its env NAME\nat request time (rotation needs no restart, and it is never logged/stored).",
+        "operationId": "post_content_urls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContentUrlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Short-lived signed relative content URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentUrlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed job id or content name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Signed URLs unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/downloads": {
       "get": {
         "tags": [],
@@ -1355,6 +1414,33 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "expires",
+            "in": "query",
+            "description": "Unix expiry of a signed URL",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sig",
+            "in": "query",
+            "description": "HMAC-SHA256 signature of this job/content tuple",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Scope bound into the signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1366,6 +1452,16 @@
           },
           "400": {
             "description": "Malformed job id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired signed URL",
             "content": {
               "application/json": {
                 "schema": {
@@ -1442,6 +1538,33 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "expires",
+            "in": "query",
+            "description": "Unix expiry of a signed URL",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sig",
+            "in": "query",
+            "description": "HMAC-SHA256 signature of this job/content tuple",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "Scope bound into the signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1453,6 +1576,16 @@
           },
           "400": {
             "description": "Malformed job id or disallowed name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired signed URL",
             "content": {
               "application/json": {
                 "schema": {
@@ -1646,6 +1779,25 @@
         }
       }
     },
+    "/v1/queue": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/queue`: side-effect-free snapshot of the live running jobs and\nthe bounded admission queue's aggregate depth.",
+        "operationId": "get_queue",
+        "responses": {
+          "200": {
+            "description": "Live queue snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueSnapshot"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/recognize": {
       "post": {
         "tags": [],
@@ -1705,6 +1857,82 @@
         }
       }
     },
+    "/v1/rerank": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/rerank` — TEI `texts[]` or Jina `documents[]` in, ranked items out.",
+        "operationId": "post_rerank",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reranked candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Rerank failed"
+          },
+          "501": {
+            "description": "No ranker available"
+          }
+        }
+      }
+    },
+    "/v1/rerank/": {
+      "post": {
+        "tags": [],
+        "summary": "Trailing-slash twin of [`post_rerank`]; the router registers both.",
+        "operationId": "post_rerank_slash",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reranked candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Rerank failed"
+          },
+          "501": {
+            "description": "No ranker available"
+          }
+        }
+      }
+    },
     "/v1/synthesize": {
       "post": {
         "tags": [],
@@ -1732,6 +1960,75 @@
           },
           "500": {
             "description": "Synthesis failed"
+          }
+        }
+      }
+    },
+    "/v1/texture-postprocess": {
+      "post": {
+        "tags": [],
+        "summary": "`POST /v1/texture-postprocess`: post-process a PBR map set and publish the\nsidecar and `.tx` maps as a job bundle. The gate runs before the body is\nvalidated or any process starts.",
+        "operationId": "post_texture_postprocess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TexturePostprocessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sidecar and bundle carrying the .tx maps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TexturePostprocessResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Tool, bundle write or I/O failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "OIIO tools absent or broken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No data dir: job bundles disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
           }
         }
       }
@@ -2492,9 +2789,31 @@
               }
             ]
           },
+          "mesh": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MeshExternalCapability",
+                "description": "External mesh surface: what is enabled, which upstreams and models\nare known, and how fresh the observation is. Additive optional field\nper the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "models": {
             "type": "string",
             "description": "Where the model catalog lives."
+          },
+          "nsfw": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NsfwCapability",
+                "description": "NSFW classification surface: the policy in effect, the model\nversion, and the score threshold. Additive optional field per the\nversion policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "openapi": {
             "type": "string",
@@ -2515,15 +2834,48 @@
               }
             ]
           },
+          "scopes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScopeCapability",
+                "description": "Scope surface: whether scoped credentials are enabled and which\nscopes exist. Additive optional field per the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "server": {
             "$ref": "#/components/schemas/ServerInfo",
             "description": "Server identity (name + crate version)."
+          },
+          "signed_urls": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignedUrlCapability",
+                "description": "Signed-URL delivery surface: whether signed URLs are enabled and\ntheir time-to-live. Additive optional field per the version policy\nabove."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "storage": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/StorageCapability",
                 "description": "Local storage surface: whether a data dir is configured, so a client\ncan probe artifact delivery before using it. Additive optional field\nper the version policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "texture_postprocess": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TexturePostprocessCapability",
+                "description": "Texture post-processing surface (`oiiotool`/`maketx`): whether the\nserver can run texture conversion passes, and which tool versions\nare present. Additive optional field per the version policy above."
               },
               {
                 "type": "null"
@@ -2831,6 +3183,42 @@
             "format": "int32",
             "description": "Smallest accepted value (inclusive).",
             "minimum": 0
+          }
+        }
+      },
+      "ContentUrlRequest": {
+        "type": "object",
+        "description": "Request body: one job ULID plus a manifest name or `bundle.zip`.",
+        "required": [
+          "job_id",
+          "content_name"
+        ],
+        "properties": {
+          "content_name": {
+            "type": "string",
+            "description": "A file listed in the job's manifest, or the literal `bundle.zip`."
+          },
+          "job_id": {
+            "type": "string",
+            "description": "26-character Crockford ULID of a job in the in-flight registry."
+          }
+        }
+      },
+      "ContentUrlResponse": {
+        "type": "object",
+        "description": "Relative URL to hand to a client; the signature lives in its query string\nand expires at `expires_unix`. No secret value is ever returned.",
+        "required": [
+          "url",
+          "expires_unix"
+        ],
+        "properties": {
+          "expires_unix": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string"
           }
         }
       },
@@ -3263,7 +3651,10 @@
           "vad",
           "experimental_ash_sd",
           "blender",
-          "artifact_delivery"
+          "artifact_delivery",
+          "rerank",
+          "python_sidecar",
+          "texture_postprocess"
         ],
         "properties": {
           "artifact_delivery": {
@@ -3293,6 +3684,18 @@
           "lora": {
             "type": "boolean",
             "description": "Per-request `LoRA` stacks on image generations AND edits."
+          },
+          "python_sidecar": {
+            "type": "boolean",
+            "description": "Python sidecar surface: whether a Python worker sidecar is\navailable to this build."
+          },
+          "rerank": {
+            "type": "boolean",
+            "description": "Rerank surface (`POST /v1/rerank`): whether a rerank route is\nmounted and backed by a model."
+          },
+          "texture_postprocess": {
+            "type": "boolean",
+            "description": "Texture post-processing: whether `oiiotool`/`maketx` passes can\nrun in this build."
           },
           "vad": {
             "type": "boolean",
@@ -4118,6 +4521,16 @@
           "cancelled"
         ],
         "properties": {
+          "annotations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NsfwAnnotation"
+            },
+            "description": "NSFW annotations attached to the job's output, when a classifier\nran. Absent when no annotation was produced."
+          },
           "artifact_id": {
             "type": [
               "string",
@@ -4363,6 +4776,47 @@
               "$ref": "#/components/schemas/ResidentModel"
             },
             "description": "Resident entries, sorted by slug."
+          }
+        }
+      },
+      "MeshExternalCapability": {
+        "type": "object",
+        "description": "External mesh capability (`Capabilities::mesh`): the external mesh\ngenerators/upstreams this server knows about.",
+        "required": [
+          "enabled",
+          "upstreams",
+          "models",
+          "stale"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` when the external mesh surface is enabled."
+          },
+          "last_observation_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the last successful observation, Unix milliseconds; absent\nwhen no observation has been made yet.",
+            "minimum": 0
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Known external mesh model ids."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "`true` when the last observation is older than the freshness\nbound, i.e. the upstream view may be out of date."
+          },
+          "upstreams": {
+            "type": "integer",
+            "description": "Number of reachable upstreams.",
+            "minimum": 0
           }
         }
       },
@@ -4618,6 +5072,62 @@
           "name": {
             "type": "string",
             "description": "Tool name to steer the model towards."
+          }
+        }
+      },
+      "NsfwAnnotation": {
+        "type": "object",
+        "description": "One NSFW annotation attached to a job's output (`JobEvent::annotations`).",
+        "required": [
+          "score",
+          "classes",
+          "model_version"
+        ],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Classes the classifier assigned."
+          },
+          "model_version": {
+            "type": "string",
+            "description": "Version of the classifier model that produced the annotation."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Classifier score for the annotated content (higher is more likely\nNSFW)."
+          }
+        }
+      },
+      "NsfwCapability": {
+        "type": "object",
+        "description": "NSFW classification capability (`Capabilities::nsfw`): the policy in\neffect, the classifier model version, and the score threshold above\nwhich content is flagged.",
+        "required": [
+          "available",
+          "policy",
+          "model_version",
+          "threshold"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`true` when NSFW classification is available in this build."
+          },
+          "model_version": {
+            "type": "string",
+            "description": "Version of the classifier model in use."
+          },
+          "policy": {
+            "type": "string",
+            "description": "Policy applied to scores (for example `\"flag\"` or `\"block\"`)."
+          },
+          "threshold": {
+            "type": "number",
+            "format": "double",
+            "description": "Score threshold above which content is flagged."
           }
         }
       },
@@ -5133,6 +5643,51 @@
           }
         }
       },
+      "QueueJob": {
+        "type": "object",
+        "description": "One queued job (ledger ticket) in a [`QueueSnapshot`].",
+        "required": [
+          "kind",
+          "state",
+          "position",
+          "ttl_secs"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public job id, when the ticket has one; absent for queued ledger\ntickets that have not been admitted yet."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Job kind (for example `\"chat\"` or `\"images\"`)."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Model slug the job runs against, when known."
+          },
+          "position": {
+            "type": "integer",
+            "description": "Zero-based position in the queue.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "Current lifecycle state of the ticket."
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Time-to-live of the queued ticket in seconds.",
+            "minimum": 0
+          }
+        }
+      },
       "QueueKindCapacity": {
         "type": "object",
         "description": "Per-kind admission queue row (`QueueCapabilities::kinds`).",
@@ -5161,6 +5716,43 @@
             "type": "integer",
             "format": "int64",
             "description": "Queue TTL in seconds (a waiter un-admitted after this long is\nevicted); `0` = never expires.",
+            "minimum": 0
+          }
+        }
+      },
+      "QueueSnapshot": {
+        "type": "object",
+        "description": "Queue snapshot: the currently queued tickets plus the aggregate queue\ndepth and GPU slot count.",
+        "required": [
+          "jobs",
+          "gpu_slots",
+          "queued",
+          "queue_wait_secs"
+        ],
+        "properties": {
+          "gpu_slots": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of GPU slots the server has.",
+            "minimum": 0
+          },
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueJob"
+            },
+            "description": "Queued tickets, in queue order."
+          },
+          "queue_wait_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current queue wait bound in seconds.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Aggregate pending count from the ledger queue depth.",
             "minimum": 0
           }
         }
@@ -5333,6 +5925,193 @@
           }
         }
       },
+      "RerankBody": {
+        "type": "object",
+        "description": "Accepts both wire shapes; `RerankRequest` itself is the shared contract\nhanded to the sidecar seam. `RerankRequest` is serialize-only in\n`api-types`, so this is the sole deserialization surface.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "documents": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/RerankDocument"
+            },
+            "description": "Jina shape."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rerank model slug."
+          },
+          "query": {
+            "type": "string",
+            "description": "Query to score candidates against."
+          },
+          "return_text": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether each result carries its original text."
+          },
+          "texts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "TEI shape."
+          },
+          "top_n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many top-scoring candidates to return.",
+            "minimum": 0
+          }
+        }
+      },
+      "RerankDocument": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Plain text."
+          },
+          {
+            "type": "object",
+            "description": "Object form (`{\"text\": ...}` or `{\"content\": ...}`).",
+            "properties": {
+              "content": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Alternate text field some Jina clients use."
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The candidate text."
+              }
+            }
+          }
+        ],
+        "description": "One Jina `documents[]` entry: a bare string or a `text`/`content` object."
+      },
+      "RerankItem": {
+        "type": "object",
+        "description": "One reranked candidate.",
+        "required": [
+          "index",
+          "score"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "Index of the candidate in the request's input order.",
+            "minimum": 0
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "Relevance score for the candidate."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The candidate's text, present only when `return_text` was\nrequested."
+          }
+        }
+      },
+      "RerankRequest": {
+        "type": "object",
+        "description": "Rerank request: a query scored against a set of texts or documents.",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "documents": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Candidate documents to rerank."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rerank model slug, when the caller wants a specific one."
+          },
+          "query": {
+            "type": "string",
+            "description": "The query the candidates are scored against."
+          },
+          "return_text": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether each result carries the original text back."
+          },
+          "texts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Candidate texts to rerank."
+          },
+          "top_n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many results to keep.",
+            "minimum": 0
+          }
+        }
+      },
+      "RerankResult": {
+        "type": "object",
+        "description": "Rerank result: the scored candidates plus the model that produced\nthem.",
+        "required": [
+          "results",
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "The rerank model that produced the scores."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankItem"
+            },
+            "description": "Scored candidates, most relevant first."
+          }
+        }
+      },
       "ResidentModel": {
         "type": "object",
         "description": "One resident entry of the swap manager (`GET /v1/memory`, `GET\n/running`).",
@@ -5497,6 +6276,27 @@
           }
         }
       },
+      "ScopeCapability": {
+        "type": "object",
+        "description": "Scope capability (`Capabilities::scopes`): whether scoped credentials\nare enabled, and which scopes the server recognizes.",
+        "required": [
+          "enabled",
+          "scopes"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` when scoped credentials are enabled."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Recognized scope names."
+          }
+        }
+      },
       "ServerInfo": {
         "type": "object",
         "description": "Server identity (`Capabilities::server`).",
@@ -5512,6 +6312,26 @@
           "version": {
             "type": "string",
             "description": "Crate version, from `CARGO_PKG_VERSION` (release version, NOT the\nwire-contract version)."
+          }
+        }
+      },
+      "SignedUrlCapability": {
+        "type": "object",
+        "description": "Signed-URL capability (`Capabilities::signed_urls`): whether artifact\nURLs can be signed, and how long a signature stays valid.",
+        "required": [
+          "enabled",
+          "ttl_secs"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` when signed URLs are enabled."
+          },
+          "ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Signature time-to-live in seconds.",
+            "minimum": 0
           }
         }
       },
@@ -5603,6 +6423,125 @@
             ],
             "description": "Voice name; backend default when absent."
           }
+        }
+      },
+      "TexturePostprocessArtifact": {
+        "type": "object",
+        "required": [
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "TexturePostprocessCapability": {
+        "type": "object",
+        "description": "Texture post-processing capability (`Capabilities::texture_postprocess`):\nwhether the server can run texture conversion passes, and the tool\nversions it found.",
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "`true` when the texture post-processing tools are present and\nusable."
+          },
+          "maketx_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the `maketx` binary, when found."
+          },
+          "oiiotool_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the `oiiotool` binary, when found."
+          }
+        }
+      },
+      "TexturePostprocessMap": {
+        "type": "object",
+        "required": [
+          "role",
+          "artifact_id"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "Content digest of an already-uploaded artifact — never a host path."
+          },
+          "colorspace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "TexturePostprocessRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "maps",
+          "tile_size"
+        ],
+        "properties": {
+          "maps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TexturePostprocessMap"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "tile_size": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TexturePostprocessResult": {
+        "type": "object",
+        "required": [
+          "bundle",
+          "manifest",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "manifest": {}
         }
       },
       "ToolCall": {

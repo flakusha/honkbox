@@ -100,9 +100,14 @@ mod blender_exec;
 #[path = "routes/job_content.rs"]
 pub(super) mod job_content;
 
+#[path = "routes/texture_postprocess.rs"]
+mod texture_postprocess;
+
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
 use self::blender::{__path_post_blender_job, post_blender_job};
+#[allow(unused_imports)]
+use self::texture_postprocess::{__path_post_texture_postprocess, post_texture_postprocess};
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
 use self::job_content::{
@@ -213,6 +218,42 @@ mod state;
 
 #[path = "routes/middleware.rs"]
 mod middleware;
+
+#[path = "runtime_config.rs"]
+pub(crate) mod runtime_config;
+
+#[path = "nsfw.rs"]
+pub(crate) mod nsfw;
+
+#[path = "mesh_discovery.rs"]
+pub(crate) mod mesh_discovery;
+
+#[path = "request_cache.rs"]
+pub(crate) mod request_cache;
+
+#[path = "signed_urls.rs"]
+pub(crate) mod signed_urls;
+
+#[path = "routes/queue.rs"]
+mod queue;
+
+#[path = "routes/rerank.rs"]
+mod rerank;
+
+#[path = "routes/python_sidecar.rs"]
+mod python_sidecar;
+
+#[path = "routes/content_urls.rs"]
+mod content_urls;
+
+#[allow(unused_imports)]
+use self::content_urls::{__path_post_content_urls, post_content_urls};
+#[allow(unused_imports)]
+use self::queue::{__path_get_queue, get_queue};
+#[allow(unused_imports)]
+use self::rerank::{
+    __path_post_rerank, __path_post_rerank_slash, post_rerank, post_rerank_slash,
+};
 
 #[allow(unused_imports)] // re-exported for integration tests
 #[cfg(test)]
@@ -334,6 +375,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/jobs/{id}/cancel", post(post_job_cancel))
         .route("/v1/jobs/{id}", delete(delete_job))
         .route("/v1/jobs/blender", post(post_blender_job))
+        .route("/v1/texture-postprocess", post(post_texture_postprocess))
         .route("/v1/jobs/{id}/bundle.zip", get(get_job_bundle))
         .route("/v1/jobs/{id}/content/{name}", get(get_job_content))
         .route("/v1/events", get(get_events))
@@ -366,6 +408,10 @@ pub fn app(config: AppConfig) -> Router {
             "/v1/artifacts/{id}/bytes",
             get(crate::artifacts::get_artifact_bytes),
         )
+        .route("/v1/queue", get(get_queue))
+        .route("/v1/rerank", post(post_rerank))
+        .route("/v1/rerank/", post(post_rerank_slash))
+        .route("/v1/content-urls", post(post_content_urls))
         .route("/metrics", get(metrics_endpoint))
         .route_layer(axum_middleware::from_fn_with_state(
             config.clone(),

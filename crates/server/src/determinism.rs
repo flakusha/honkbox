@@ -180,7 +180,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// The canonical input record of a generation bundle: every recorded
 /// input (model, seed, sampler/scheduler, steps, cfg, dimensions,
-/// negative prompt, strength, recipe, hires pass, `LoRA` entries) plus the
+/// negative prompt, strength, recipe, hires pass, `LoRA` entries, annotations) plus the
 /// version/provenance context (`record_version`, `code_version`,
 /// `backend_id`).
 ///
@@ -216,6 +216,7 @@ pub fn bundle_record(inputs: &BundleInputs) -> Value {
         "strength": inputs.strength,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
+        "annotations": inputs.annotations,
     })
 }
 

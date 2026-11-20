@@ -16,7 +16,7 @@ use honkbox_audio_worker::{
 };
 
 use super::audio_upload::run_synthesis;
-use super::chat_prep::with_job_id;
+use super::chat_prep::{admit_then_register, with_job_id};
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, SPEECH_INPUT_MAX_CHARS, validate_model};
 
@@ -118,25 +118,27 @@ pub(super) async fn post_audio_speech(
         voice: req.voice,
         sample_rate: None,
     };
-    // NEW-3: registry-visible while the request lives (one blocking FFI
-    // call — the cancel token is marked but never checked).
-    let job = crate::jobs_registry::global().register(
+    // Admission first, registration second: a 429/503 carries no job id and
+    // never enters the registry. Audio uses the `llm` bucket; one blocking
+    // FFI call, never interruptible.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Synthesize,
         (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
         false,
-    );
-    let audio = match run_synthesis(config.tts.clone(), worker_req).await {
-        Ok(audio) => audio,
-        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
-            return with_job_id(
-                openai_error_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    message,
-                    Some("gpu_slot_busy"),
-                ),
-                job.id(),
+    ) {
+        Ok(pair) => pair,
+        Err((code, message)) => {
+            return openai_error_response(
+                code,
+                message,
+                (code == StatusCode::TOO_MANY_REQUESTS).then_some("gpu_slot_busy"),
             );
         }
+    };
+    let audio = match run_synthesis(config.tts.clone(), worker_req, lease).await {
+        Ok(audio) => audio,
         Err((code, message)) => return openai_error_response(code, message, None),
     };
     if format == SpeechFormat::Pcm {

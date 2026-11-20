@@ -20,7 +20,7 @@ use honkbox_audio_worker::{
     decode_wav, encode_wav,
 };
 
-use super::chat_prep::{TranscribeQuery, clamp_ttl_seconds, with_job_id};
+use super::chat_prep::{admit_then_register, TranscribeQuery, clamp_ttl_seconds, with_job_id};
 // The multipart helpers now live in `audio_multipart`; re-exported so the
 // sibling `audio_transcriptions` routes keep a single import path.
 
@@ -93,14 +93,17 @@ pub(super) async fn post_transcribe(
         language: query.language,
         translate: false,
     };
-    // NEW-3: registry-visible while the request lives (never interruptible:
-    // one blocking FFI call; the token is only marked by a cancel).
-    let job = crate::jobs_registry::global().register(
+    // Admission first, registration second: a rejected request never enters
+    // the registry and carries no job id. Audio uses the `llm` bucket (see
+    // `run_transcription`); one blocking FFI call, never interruptible.
+    let (lease, job) = admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Transcribe,
         (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
         false,
-    );
-    let out = run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await?;
+    )?;
+    let out = run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await?;
     Ok(with_job_id(
         Json(Transcript {
             backend_id: out.backend_id,
@@ -165,14 +168,17 @@ pub(super) async fn post_synthesize(
         voice: req.voice,
         sample_rate: req.sample_rate,
     };
-    // NEW-3: registry-visible while the request lives (one blocking FFI
-    // call — the cancel token is marked but never checked).
-    let job = crate::jobs_registry::global().register(
+    // Admission first, registration second: a rejected request never enters
+    // the registry and carries no job id. Audio uses the `llm` bucket; one
+    // blocking FFI call, never interruptible.
+    let (lease, job) = admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Synthesize,
         (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
         false,
-    );
-    let audio = run_synthesis(config.tts.clone(), worker_req).await?;
+    )?;
+    let audio = run_synthesis(config.tts.clone(), worker_req, lease).await?;
     let wav = encode_wav(audio.sample_rate, &audio.pcm16);
     Ok(with_job_id(
         ([(header::CONTENT_TYPE, "audio/wav")], wav).into_response(),
@@ -183,8 +189,8 @@ pub(super) async fn post_synthesize(
 /// Shared STT execution (native `/v1/transcribe` and REQ-9
 /// `/v1/audio/transcriptions` are the same worker call under two wire
 /// shapes): run the pipeline inside the GPU slot on the blocking pool. The
-/// slot comes through the admission queue (REQ-6 Option A); the caller
-/// registered the job (NEW-3) — one blocking FFI call, never interruptible.
+/// caller acquires the slot and registers the job (admission first, then
+/// registration) — one blocking FFI call, never interruptible.
 /// Audio pipelines share the `llm` admission bucket: the fixed ledger kind
 /// vocabulary has no audio kind, and `llm` is the warm-model-pipeline
 /// bucket the audio workers already load alongside (the label is admission
@@ -194,8 +200,8 @@ pub(super) async fn run_transcription(
     worker_req: WorkerTranscribeRequest,
     sample_rate: u32,
     pcm: Vec<i16>,
+    lease: crate::admission::GpuLease,
 ) -> Result<WorkerTranscript, (StatusCode, String)> {
-    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.transcribe(&pcm, sample_rate, &worker_req)
@@ -222,8 +228,8 @@ pub(super) async fn run_transcription(
 pub(super) async fn run_synthesis(
     pipe: Arc<dyn TtsPipeline>,
     worker_req: WorkerSynthRequest,
+    lease: crate::admission::GpuLease,
 ) -> Result<SynthesizedAudio, (StatusCode, String)> {
-    let lease = crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await?;
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.synthesize(&worker_req).map_err(|err| {

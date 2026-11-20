@@ -106,6 +106,11 @@ const READ_TIMEOUT: Duration = Duration::from_secs(300);
 /// ceiling): a runaway upstream cannot balloon memory. `[mesh]` may override.
 pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Default `[mesh] discovery_ttl_secs`: how long a discovery fact stays fresh.
+pub const DEFAULT_DISCOVERY_TTL_SECS: u64 = 300;
+/// Default `[mesh] discovery_cap`: bounded number of discovered peers.
+pub const DEFAULT_DISCOVERY_CAP: usize = 256;
+
 /// Why a mesh forward failed; named codes follow the house envelope
 /// conventions (`error.code`). Route-layer rendering (into the OpenAI-style
 /// envelope) lands with the reroute ticket; `Display`/`std::error::Error` are
@@ -198,6 +203,10 @@ pub struct MeshConfig {
     /// Per-response body cap in bytes (`max_response_bytes`), default
     /// [`DEFAULT_MAX_RESPONSE_BYTES`]; enforced mid-stream.
     pub max_response_bytes: u64,
+    /// `[mesh] discovery_ttl_secs`: discovery freshness window, default 300.
+    pub discovery_ttl_secs: u64,
+    /// `[mesh] discovery_cap`: bounded discovered peers, default 256 (min 1).
+    pub discovery_cap: usize,
 }
 
 /// `[[mesh.upstreams]]` as written: raw strings; [`MeshConfig::resolve`]
@@ -227,6 +236,21 @@ pub(crate) struct FileMesh {
     /// `max_response_bytes`; absent = the default cap.
     #[serde(default)]
     max_response_bytes: Option<u64>,
+    /// `discovery_ttl_secs`; absent = [`DEFAULT_DISCOVERY_TTL_SECS`].
+    #[serde(default)]
+    discovery_ttl_secs: Option<u64>,
+    /// `discovery_cap`; absent = [`DEFAULT_DISCOVERY_CAP`], min 1.
+    #[serde(default)]
+    discovery_cap: Option<usize>,
+}
+
+/// Resolve `[mesh] discovery_cap`: default 256; `0` is a named config error
+/// (a zero cap would silently drop every discovery hit). Pure.
+fn resolve_discovery_cap(raw: Option<usize>) -> Result<usize, String> {
+    match raw.unwrap_or(DEFAULT_DISCOVERY_CAP) {
+        0 => Err("[mesh] discovery_cap must be at least 1".to_owned()),
+        cap => Ok(cap),
+    }
 }
 
 impl MeshConfig {
@@ -241,6 +265,10 @@ impl MeshConfig {
     /// unparseable/non-http `base_url`, duplicate name, enabled-but-empty).
     pub(crate) fn resolve(file: &FileMesh) -> Result<Self, String> {
         let enabled = file.enabled.unwrap_or(false);
+        let discovery_cap = resolve_discovery_cap(file.discovery_cap)?;
+        let discovery_ttl_secs = file
+            .discovery_ttl_secs
+            .unwrap_or(DEFAULT_DISCOVERY_TTL_SECS);
         let mut upstreams = Vec::new();
         for (index, entry) in file.upstreams.iter().flatten().enumerate() {
             let name = entry
@@ -285,6 +313,8 @@ impl MeshConfig {
                 .max_response_bytes
                 .filter(|cap| *cap > 0)
                 .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES),
+            discovery_ttl_secs,
+            discovery_cap,
         })
     }
 }
@@ -555,6 +585,19 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn discovery_cap_defaults_and_rejects_zero() {
+        assert_eq!(
+            resolve_discovery_cap(None).expect("default"),
+            DEFAULT_DISCOVERY_CAP
+        );
+        assert_eq!(resolve_discovery_cap(Some(7)).expect("override"), 7);
+        assert_eq!(
+            resolve_discovery_cap(Some(0)).unwrap_err(),
+            "[mesh] discovery_cap must be at least 1"
+        );
+    }
+
     /// The const tables are exactly what the ticket pins: the request
     /// allowlist, the response allowlist, and the hop-by-hop set.
     #[test]
@@ -710,6 +753,8 @@ mod tests {
             enabled: Some(true),
             upstreams: Some(vec![upstream("peer-a", "http://10.0.0.9:8080")]),
             max_response_bytes: None,
+            discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+            discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
         };
         let resolved = MeshConfig::resolve(&mesh).unwrap();
         assert!(resolved.enabled);
@@ -729,6 +774,8 @@ mod tests {
             enabled: Some(true),
             upstreams: None,
             max_response_bytes: None,
+            discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+            discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
         };
         assert!(MeshConfig::resolve(&empty).is_err());
 
@@ -740,6 +787,8 @@ mod tests {
                 upstream("a", "http://a:2"),
             ]),
             max_response_bytes: None,
+            discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+            discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
         };
         assert!(MeshConfig::resolve(&dup).is_err());
 
@@ -749,6 +798,8 @@ mod tests {
                 enabled: Some(true),
                 upstreams: Some(vec![upstream("a", bad_url)]),
                 max_response_bytes: None,
+                discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+                discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
             };
             assert!(MeshConfig::resolve(&bad).is_err(), "url {bad_url:?}");
         }
@@ -758,6 +809,8 @@ mod tests {
             enabled: Some(false),
             upstreams: Some(vec![upstream("peer-a", "http://10.0.0.9:8080")]),
             max_response_bytes: None,
+            discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+            discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
         };
         let cfg = MeshConfig::resolve(&disabled).unwrap();
         assert!(!cfg.enabled);
@@ -776,6 +829,8 @@ mod tests {
                 bearer_token: Some("super-secret-value".to_owned()),
             }]),
             max_response_bytes: None,
+            discovery_ttl_secs: Some(DEFAULT_DISCOVERY_TTL_SECS),
+            discovery_cap: Some(DEFAULT_DISCOVERY_CAP),
         })
         .unwrap();
         let rendered = format!("{cfg:?}");

@@ -36,6 +36,7 @@ fn fixture() -> BundleInputs {
         strength: None,
         recipe: None,
         hires: None,
+        annotations: Vec::new(),
     }
 }
 

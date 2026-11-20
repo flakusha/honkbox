@@ -25,7 +25,9 @@ use honkbox_api_types::{
     RunningList, RunningModel, SafetensorsMetadata, ServerInfo, SpeechRequest, StorageCapability,
     SynthesizeRequest, ToolCall, ToolCallType, ToolCallingCapability, ToolChoiceSpec, ToolType,
     Transcript, TranscriptSegment, TranscriptionText, TranscriptionVerbose, UnloadAllResult,
-    UnloadResult, Version, VisionFeature, Voice, VoiceList,
+    UnloadResult, Version, VisionFeature, Voice, VoiceList, NsfwCapability, NsfwAnnotation,
+    MeshExternalCapability, SignedUrlCapability, ScopeCapability, QueueSnapshot, QueueJob,
+    RerankRequest, RerankResult, RerankItem, TexturePostprocessCapability,
 };
 use rust_embed::Embed;
 use utoipa::OpenApi;
@@ -55,6 +57,7 @@ pub struct EmbeddedUi;
         post_images_edits,
         post_image_ops,
         post_blender_job,
+        post_texture_postprocess,
         post_transcribe,
         post_synthesize,
         post_audio_transcriptions,
@@ -82,7 +85,11 @@ pub struct EmbeddedUi;
         crate::artifacts::post_artifact,
         crate::artifacts::get_artifact_bytes,
         get_job_bundle,
-        get_job_content
+        get_job_content,
+        get_queue,
+        post_rerank,
+        post_rerank_slash,
+        post_content_urls
     ),
     components(schemas(
         Health,
@@ -213,7 +220,25 @@ pub struct EmbeddedUi;
         BlenderJobCompletionJob,
         BlenderJobCompletionInput,
         BlenderJobCompletionArtifact,
-        BlenderJobCompletionProgress
+        BlenderJobCompletionProgress,
+        NsfwCapability,
+        NsfwAnnotation,
+        MeshExternalCapability,
+        SignedUrlCapability,
+        ScopeCapability,
+        QueueSnapshot,
+        QueueJob,
+        RerankRequest,
+        RerankResult,
+        RerankItem,
+        super::rerank::RerankBody,
+        super::content_urls::ContentUrlRequest,
+        super::content_urls::ContentUrlResponse,
+        TexturePostprocessCapability,
+        super::texture_postprocess::TexturePostprocessMap,
+        super::texture_postprocess::TexturePostprocessRequest,
+        super::texture_postprocess::TexturePostprocessArtifact,
+        super::texture_postprocess::TexturePostprocessResult
     ))
 )]
 pub struct ApiDoc;

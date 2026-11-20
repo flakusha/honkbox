@@ -122,25 +122,27 @@ pub(super) async fn post_audio_transcriptions(
         language: upload.language,
         translate: false,
     };
-    // NEW-3: registry-visible while the request lives (one blocking FFI
-    // call — the cancel token is marked but never checked).
-    let job = crate::jobs_registry::global().register(
+    // Admission first, registration second: a 429/503 carries no job id and
+    // never enters the registry. Audio uses the `llm` bucket (see
+    // `run_transcription`); one blocking FFI call, never interruptible.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Transcribe,
         (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
         false,
-    );
-    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await {
-        Ok(out) => out,
-        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
-            return with_job_id(
-                openai_error_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    message,
-                    Some("gpu_slot_busy"),
-                ),
-                job.id(),
+    ) {
+        Ok(pair) => pair,
+        Err((code, message)) => {
+            return openai_error_response(
+                code,
+                message,
+                (code == StatusCode::TOO_MANY_REQUESTS).then_some("gpu_slot_busy"),
             );
         }
+    };
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await {
+        Ok(out) => out,
         Err((code, message)) => return openai_error_response(code, message, None),
     };
     let response = match upload.response_format.as_deref() {
@@ -248,25 +250,27 @@ pub(super) async fn post_audio_translations(
         language: None,
         translate: true,
     };
-    // NEW-3: registry-visible while the request lives (one blocking FFI
-    // call — the cancel token is marked but never checked).
-    let job = crate::jobs_registry::global().register(
+    // Admission first, registration second: a 429/503 carries no job id and
+    // never enters the registry. Audio uses the `llm` bucket (see
+    // `run_transcription`); one blocking FFI call, never interruptible.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Llm).await,
         crate::jobs_registry::JobKind::Translations,
         (!worker_req.model.is_empty()).then_some(worker_req.model.clone()),
         false,
-    );
-    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm).await {
-        Ok(out) => out,
-        Err((StatusCode::TOO_MANY_REQUESTS, message)) => {
-            return with_job_id(
-                openai_error_response(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    message,
-                    Some("gpu_slot_busy"),
-                ),
-                job.id(),
+    ) {
+        Ok(pair) => pair,
+        Err((code, message)) => {
+            return openai_error_response(
+                code,
+                message,
+                (code == StatusCode::TOO_MANY_REQUESTS).then_some("gpu_slot_busy"),
             );
         }
+    };
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await {
+        Ok(out) => out,
         Err((code, message)) => return openai_error_response(code, message, None),
     };
     let response = match upload.response_format.as_deref() {

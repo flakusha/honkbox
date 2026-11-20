@@ -501,6 +501,31 @@ pub(super) async fn post_images_edits(
             );
         }
     };
+    let nsfw = match super::nsfw::classify(&bytes, format.extension()) {
+        Ok(decision) => decision,
+        Err(message) => {
+            return openai_error_response(
+                StatusCode::NOT_IMPLEMENTED,
+                message,
+                Some("nsfw_classifier_unavailable"),
+            );
+        }
+    };
+    let annotations = match nsfw {
+        super::nsfw::Decision::Skipped => Vec::new(),
+        super::nsfw::Decision::Allowed(annotation) => vec![annotation],
+        super::nsfw::Decision::Blocked => {
+            return openai_error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "image blocked by the configured NSFW policy".to_string(),
+                Some("nsfw_blocked"),
+            );
+        }
+    };
+    let bundle_annotations = annotations
+        .iter()
+        .map(super::nsfw::bundle_annotation)
+        .collect();
     write_generation_bundle(
         &config,
         &crate::jobs::BundleInputs {
@@ -522,6 +547,7 @@ pub(super) async fn post_images_edits(
             strength: Some(strength),
             recipe: recipe.name.map(str::to_owned),
             hires: None,
+            annotations: bundle_annotations,
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

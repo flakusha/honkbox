@@ -113,6 +113,7 @@ fn proxy_at(addr: std::net::SocketAddr, max_response_bytes: u64) -> MeshProxy {
             bearer_token: Some("config-bearer-secret".to_owned()),
         }],
         max_response_bytes,
+        ..Default::default()
     };
     MeshProxy::new(&config).expect("mesh client builds")
 }

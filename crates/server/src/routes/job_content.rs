@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -32,6 +32,8 @@ use zip::write::SimpleFileOptions;
 
 use super::AppConfig;
 use super::openai_constraints::openai_error_response;
+use super::runtime_config;
+use super::signed_urls;
 
 /// Maximum number of top-level files admitted to a bundle ZIP.
 const MAX_ZIP_ENTRIES: usize = 256;
@@ -45,12 +47,15 @@ pub const MAX_CONTENT_BYTES: u64 = MAX_UNCOMPRESSED_BYTES;
 /// A manifest-listed name must be a plain file name: no separators, no parent
 /// traversal, no absolute path and a bounded length. `manifest.json` itself
 /// passes the same check.
-fn validate_content_name(name: &str) -> Result<(), JobContentError> {
+pub(super) fn validate_content_name(name: &str) -> Result<(), JobContentError> {
     if name.is_empty()
         || name.len() > 128
         || name.contains('/')
         || name.contains('\\')
         || name.contains("..")
+        // The HMAC message is `|`-delimited: a name containing `|` lets a
+        // signed token for one field be parsed as another field's value.
+        || name.contains('|')
     {
         return Err(JobContentError::InvalidName);
     }
@@ -72,9 +77,11 @@ pub(super) fn content_type_for_name(name: &str) -> &'static str {
 /// Named rejection, rendered as an OpenAI-style envelope. Details that can
 /// carry host paths are logged server-side and never echoed to the caller.
 #[derive(Debug)]
-enum JobContentError {
+pub(super) enum JobContentError {
     /// `{id}` is not a 26-character Crockford ULID: 400.
     InvalidId,
+    /// Signed query params are missing, tampered with or expired: 401.
+    InvalidSignedUrl,
     /// `{name}` is unsafe or not listed in the bundle manifest: 400.
     InvalidName,
     /// No data dir, no job dir, no file, or an unreadable job dir: 404.
@@ -88,6 +95,7 @@ enum JobContentError {
 impl fmt::Display for JobContentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSignedUrl => f.write_str("invalid or expired signed URL"),
             Self::InvalidId => f.write_str("job id must be a 26-character Crockford ULID"),
             Self::InvalidName => f.write_str("unknown job content name"),
             Self::NotFound => f.write_str("job content not found"),
@@ -105,6 +113,7 @@ impl fmt::Display for JobContentError {
 impl JobContentError {
     fn code(&self) -> &'static str {
         match self {
+            Self::InvalidSignedUrl => "invalid_signed_url",
             Self::InvalidId => "invalid_job_id",
             Self::InvalidName => "invalid_job_content_name",
             Self::NotFound => "job_content_not_found",
@@ -115,6 +124,7 @@ impl JobContentError {
 
     fn status(&self) -> StatusCode {
         match self {
+            Self::InvalidSignedUrl => StatusCode::UNAUTHORIZED,
             Self::InvalidId | Self::InvalidName => StatusCode::BAD_REQUEST,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
@@ -137,7 +147,7 @@ impl JobContentError {
 }
 
 /// Validate before any filesystem join; a bad id never reaches the disk.
-fn validate_id(id: &str) -> Result<&str, JobContentError> {
+pub(super) fn validate_id(id: &str) -> Result<&str, JobContentError> {
     if id.len() != 26 || ulid::Ulid::from_string(id).is_err() {
         return Err(JobContentError::InvalidId);
     }
@@ -147,6 +157,28 @@ fn validate_id(id: &str) -> Result<&str, JobContentError> {
 /// The bundle directory for a validated id (no data dir → no bundle).
 fn job_dir(config: &AppConfig, id: &str) -> Option<PathBuf> {
     Some(config.data_dir.as_ref()?.join("jobs").join(id))
+}
+
+/// Verify additive signed params when present. Without them the route keeps
+/// the exact bearer path enforced by the router middleware; with them the
+/// bearer header is irrelevant and the HMAC decides. No secret value is logged.
+fn check_signed(
+    id: &str,
+    content: &str,
+    query: &signed_urls::SignedQuery,
+) -> Result<(), JobContentError> {
+    if !query.is_present() {
+        return Ok(());
+    }
+    let (enabled, _, env_name) = runtime_config::signed_url_facts();
+    let secret = super::middleware::env_var(&env_name).unwrap_or_default();
+    if !enabled
+        || secret.is_empty()
+        || !signed_urls::verify_query(secret.as_bytes(), id, content, query)
+    {
+        return Err(JobContentError::InvalidSignedUrl);
+    }
+    Ok(())
 }
 
 /// Resolve a requested name against the bundle's manifest. `manifest.json`
@@ -212,9 +244,15 @@ fn zip_options() -> SimpleFileOptions {
 #[utoipa::path(
     get,
     path = "/v1/jobs/{id}/bundle.zip",
-    params(("id" = String, Path, description = "26-character Crockford ULID of the job bundle")),
+    params(
+        ("id" = String, Path, description = "26-character Crockford ULID of the job bundle"),
+        ("expires" = String, Query, description = "Unix expiry of a signed URL"),
+        ("sig" = String, Query, description = "HMAC-SHA256 signature of this job/content tuple"),
+        ("scope" = String, Query, description = "Scope bound into the signature")
+    ),
     responses(
         (status = 200, description = "Deterministic ZIP of the job bundle", content_type = "application/zip"),
+        (status = 401, description = "Invalid or expired signed URL", body = honkbox_api_types::OpenAiError),
         (status = 400, description = "Malformed job id", body = honkbox_api_types::OpenAiError),
         (status = 404, description = "No such job bundle", body = honkbox_api_types::OpenAiError),
         (status = 413, description = "Bundle exceeds the entry or byte caps", body = honkbox_api_types::OpenAiError)
@@ -223,11 +261,15 @@ fn zip_options() -> SimpleFileOptions {
 pub(super) async fn get_job_bundle(
     State(config): State<AppConfig>,
     AxumPath(id): AxumPath<String>,
+    Query(signed): Query<signed_urls::SignedQuery>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_owned(),
         Err(err) => return err.into_response(),
     };
+    if let Err(err) = check_signed(&id, signed_urls::BUNDLE_CONTENT, &signed) {
+        return err.into_response();
+    }
     let Some(dir) = job_dir(&config, &id) else {
         return JobContentError::NotFound.into_response();
     };
@@ -319,11 +361,15 @@ fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
     path = "/v1/jobs/{id}/content/{name}",
     params(
         ("id" = String, Path, description = "26-character Crockford ULID of the job bundle"),
-        ("name" = String, Path, description = "A file listed in the job's manifest.json: manifest.json or any artifacts[].name")
+        ("name" = String, Path, description = "A file listed in the job's manifest.json: manifest.json or any artifacts[].name"),
+        ("expires" = String, Query, description = "Unix expiry of a signed URL"),
+        ("sig" = String, Query, description = "HMAC-SHA256 signature of this job/content tuple"),
+        ("scope" = String, Query, description = "Scope bound into the signature")
     ),
     responses(
         (status = 200, description = "The requested bundle file", content_type = "application/octet-stream"),
         (status = 400, description = "Malformed job id or disallowed name", body = honkbox_api_types::OpenAiError),
+        (status = 401, description = "Invalid or expired signed URL", body = honkbox_api_types::OpenAiError),
         (status = 404, description = "No such job bundle or file", body = honkbox_api_types::OpenAiError),
         (status = 413, description = "File exceeds the byte cap", body = honkbox_api_types::OpenAiError)
     )
@@ -331,11 +377,15 @@ fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
 pub(super) async fn get_job_content(
     State(config): State<AppConfig>,
     AxumPath((id, name)): AxumPath<(String, String)>,
+    Query(signed): Query<signed_urls::SignedQuery>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_owned(),
         Err(err) => return err.into_response(),
     };
+    if let Err(err) = check_signed(&id, &name, &signed) {
+        return err.into_response();
+    }
     let Some(dir) = job_dir(&config, &id) else {
         return JobContentError::NotFound.into_response();
     };
@@ -379,6 +429,7 @@ mod tests {
             "a\\b",
             "/etc/passwd",
             "C:\\x",
+            "a|b", // `|` is the HMAC field delimiter
             "",
             too_long.as_str(),
         ] {

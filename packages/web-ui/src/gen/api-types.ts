@@ -1475,6 +1475,11 @@ export type JobEvent = {
    * Artifact byte length (`job_result` only).
    */
   size_bytes: bigint | null;
+  /**
+   * NSFW annotations attached to the job's output, when a classifier
+   * ran. Absent when no annotation was produced.
+   */
+  annotations: Array<NsfwAnnotation> | null;
 };
 export type Pill = "ok" | "slow" | "fail";
 export type CatalogLocal = {
@@ -1673,6 +1678,35 @@ export type Capabilities = {
    */
   storage: StorageCapability | null;
   /**
+   * Texture post-processing surface (`oiiotool`/`maketx`): whether the
+   * server can run texture conversion passes, and which tool versions
+   * are present. Additive optional field per the version policy above.
+   */
+  texture_postprocess: TexturePostprocessCapability | null;
+  /**
+   * NSFW classification surface: the policy in effect, the model
+   * version, and the score threshold. Additive optional field per the
+   * version policy above.
+   */
+  nsfw: NsfwCapability | null;
+  /**
+   * External mesh surface: what is enabled, which upstreams and models
+   * are known, and how fresh the observation is. Additive optional field
+   * per the version policy above.
+   */
+  mesh: MeshExternalCapability | null;
+  /**
+   * Signed-URL delivery surface: whether signed URLs are enabled and
+   * their time-to-live. Additive optional field per the version policy
+   * above.
+   */
+  signed_urls: SignedUrlCapability | null;
+  /**
+   * Scope surface: whether scoped credentials are enabled and which
+   * scopes exist. Additive optional field per the version policy above.
+   */
+  scopes: ScopeCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1746,6 +1780,21 @@ export type FeatureFlags = {
    * promises delivery the server cannot perform.
    */
   artifact_delivery: boolean;
+  /**
+   * Rerank surface (`POST /v1/rerank`): whether a rerank route is
+   * mounted and backed by a model.
+   */
+  rerank: boolean;
+  /**
+   * Python sidecar surface: whether a Python worker sidecar is
+   * available to this build.
+   */
+  python_sidecar: boolean;
+  /**
+   * Texture post-processing: whether `oiiotool`/`maketx` passes can
+   * run in this build.
+   */
+  texture_postprocess: boolean;
 };
 export type VisionFeature = {
   /**
@@ -2295,4 +2344,192 @@ export type BlenderJobCompletionProgress = {
    * What happened: `start`, `done` or `cancelled`.
    */
   event: string;
+};
+export type NsfwCapability = {
+  /**
+   * `true` when NSFW classification is available in this build.
+   */
+  available: boolean;
+  /**
+   * Policy applied to scores (for example `"flag"` or `"block"`).
+   */
+  policy: string;
+  /**
+   * Version of the classifier model in use.
+   */
+  model_version: string;
+  /**
+   * Score threshold above which content is flagged.
+   */
+  threshold: number;
+};
+export type MeshExternalCapability = {
+  /**
+   * `true` when the external mesh surface is enabled.
+   */
+  enabled: boolean;
+  /**
+   * Number of reachable upstreams.
+   */
+  upstreams: number;
+  /**
+   * Known external mesh model ids.
+   */
+  models: Array<string>;
+  /**
+   * Age of the last successful observation, Unix milliseconds; absent
+   * when no observation has been made yet.
+   */
+  last_observation_ms: bigint | null;
+  /**
+   * `true` when the last observation is older than the freshness
+   * bound, i.e. the upstream view may be out of date.
+   */
+  stale: boolean;
+};
+export type SignedUrlCapability = {
+  /**
+   * `true` when signed URLs are enabled.
+   */
+  enabled: boolean;
+  /**
+   * Signature time-to-live in seconds.
+   */
+  ttl_secs: bigint;
+};
+export type ScopeCapability = {
+  /**
+   * `true` when scoped credentials are enabled.
+   */
+  enabled: boolean;
+  /**
+   * Recognized scope names.
+   */
+  scopes: Array<string>;
+};
+export type NsfwAnnotation = {
+  /**
+   * Classifier score for the annotated content (higher is more likely
+   * NSFW).
+   */
+  score: number;
+  /**
+   * Classes the classifier assigned.
+   */
+  classes: Array<string>;
+  /**
+   * Version of the classifier model that produced the annotation.
+   */
+  model_version: string;
+};
+export type QueueJob = {
+  /**
+   * Public job id, when the ticket has one; absent for queued ledger
+   * tickets that have not been admitted yet.
+   */
+  id: string | null;
+  /**
+   * Job kind (for example `"chat"` or `"images"`).
+   */
+  kind: string;
+  /**
+   * Model slug the job runs against, when known.
+   */
+  model: string | null;
+  /**
+   * Current lifecycle state of the ticket.
+   */
+  state: string;
+  /**
+   * Zero-based position in the queue.
+   */
+  position: number;
+  /**
+   * Time-to-live of the queued ticket in seconds.
+   */
+  ttl_secs: bigint;
+};
+export type QueueSnapshot = {
+  /**
+   * Queued tickets, in queue order.
+   */
+  jobs: Array<QueueJob>;
+  /**
+   * Number of GPU slots the server has.
+   */
+  gpu_slots: bigint;
+  /**
+   * Aggregate pending count from the ledger queue depth.
+   */
+  queued: bigint;
+  /**
+   * Current queue wait bound in seconds.
+   */
+  queue_wait_secs: bigint;
+};
+export type RerankRequest = {
+  /**
+   * The query the candidates are scored against.
+   */
+  query: string;
+  /**
+   * Candidate texts to rerank.
+   */
+  texts: Array<string> | null;
+  /**
+   * Candidate documents to rerank.
+   */
+  documents: Array<string> | null;
+  /**
+   * How many results to keep.
+   */
+  top_n: number | null;
+  /**
+   * Rerank model slug, when the caller wants a specific one.
+   */
+  model: string | null;
+  /**
+   * Whether each result carries the original text back.
+   */
+  return_text: boolean | null;
+};
+export type RerankItem = {
+  /**
+   * Index of the candidate in the request's input order.
+   */
+  index: number;
+  /**
+   * Relevance score for the candidate.
+   */
+  score: number;
+  /**
+   * The candidate's text, present only when `return_text` was
+   * requested.
+   */
+  text: string | null;
+};
+export type RerankResult = {
+  /**
+   * Scored candidates, most relevant first.
+   */
+  results: Array<RerankItem>;
+  /**
+   * The rerank model that produced the scores.
+   */
+  model: string;
+};
+export type TexturePostprocessCapability = {
+  /**
+   * `true` when the texture post-processing tools are present and
+   * usable.
+   */
+  available: boolean;
+  /**
+   * Version of the `oiiotool` binary, when found.
+   */
+  oiiotool_version: string | null;
+  /**
+   * Version of the `maketx` binary, when found.
+   */
+  maketx_version: string | null;
 };

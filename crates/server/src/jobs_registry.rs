@@ -60,7 +60,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use honkbox_api_types::{JobEvent, JobEventType, JobInfo};
+use honkbox_api_types::{JobEvent, JobEventType, JobInfo, NsfwAnnotation};
 
 /// Broadcast capacity for lifecycle events, in events (not bytes). A
 /// subscriber that falls further behind is `Lagged` — surfaced honestly by
@@ -157,6 +157,7 @@ impl JobEntry {
             artifact_id: None,
             sha256: None,
             size_bytes: None,
+            annotations: None,
         }
     }
 }
@@ -239,6 +240,7 @@ impl Registry {
             artifact_id: None,
             sha256: None,
             size_bytes: None,
+            annotations: None,
         });
         JobGuard {
             entries: Arc::clone(&self.entries),
@@ -340,6 +342,24 @@ impl Registry {
         event.artifact_id = Some(artifact_id.to_owned());
         event.sha256 = Some(sha256.to_owned());
         event.size_bytes = Some(size_bytes);
+        let _ = self.events.send(event);
+    }
+
+    /// Re-emit a live job's `job_result` frame carrying its NSFW
+    /// annotations. Reuses the same event path as `emit_result` — fire and
+    /// forget, unknown id is a no-op — so no other emitter changes.
+    pub(crate) fn emit_annotations(&self, id: &str, annotations: Vec<NsfwAnnotation>) {
+        let mut event = {
+            let entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(entry) = entries.get(id) else {
+                return;
+            };
+            entry.to_event(JobEventType::Result, false)
+        };
+        event.annotations = Some(annotations);
         let _ = self.events.send(event);
     }
 }

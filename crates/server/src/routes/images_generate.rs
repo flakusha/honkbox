@@ -3,9 +3,11 @@
 //! The router registration and the `OpenAPI` `paths(...)` entry stay in
 //! `routes.rs`; only the handler and its private helpers live here.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -22,7 +24,50 @@ use super::chat_prep::{admit_then_register, with_job_id};
 use super::images_controlnet::resolve_controlnet;
 use super::images_inputs::{DeliveryMode, resolve_loras, validate_images_request};
 use super::images_recipe::resolve_sd_model;
+use super::request_cache::RequestCache;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
+use crate::jobs::determinism::canonical_hash;
+
+/// Inline-only canonical-request cache: identical requests replay the first
+/// response without ever acquiring a GPU lease. Artifact delivery is excluded
+/// because each run mints fresh job/artifact ids.
+///
+/// Caches are scoped to the serving pipeline/catalog pair, never
+/// process-global: distinct `AppConfig` setups in one process must not replay
+/// each other's responses. The map keeps strong `Arc`s to both while the
+/// cache holds live entries, so those addresses cannot be recycled into a
+/// different config and collide with the same key.
+struct ScopedGenerationCache {
+    /// Pin both addresses while responses may still be replayed.
+    _pipeline: Arc<dyn honkbox_sd_core::SdPipeline>,
+    _catalog: Arc<std::sync::RwLock<Arc<honkbox_api_types::ModelCatalog>>>,
+    cache: RequestCache<serde_json::Value>,
+}
+
+static GENERATION_CACHES: LazyLock<Mutex<HashMap<(usize, usize), Arc<ScopedGenerationCache>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Cache for this config's pipeline/catalog pair. Empty (expired) caches are
+/// reclaimed, and with them the address pins: recycled addresses start fresh.
+fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
+    let key = (
+        Arc::as_ptr(&config.sd) as *const () as usize,
+        Arc::as_ptr(&config.catalog) as *const () as usize,
+    );
+    let mut caches = GENERATION_CACHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    caches.retain(|_, cache| !cache.cache.is_empty());
+    Arc::clone(
+        caches.entry(key).or_insert_with(|| {
+            Arc::new(ScopedGenerationCache {
+                _pipeline: Arc::clone(&config.sd),
+                _catalog: Arc::clone(&config.catalog),
+                cache: RequestCache::new(64, Duration::from_secs(300)),
+            })
+        }),
+    )
+}
 
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
 /// failure never fails an otherwise successful generation).
@@ -288,6 +333,27 @@ pub(super) async fn post_images_generations(
             }
         };
     let catalog = config.catalog_snapshot();
+    // Canonical hash of the validated request under the serving catalog; a
+    // cache hit replays the first response before admission, so identical
+    // inline work consumes no slot. The catalog hash keeps a refresh (new
+    // models/controlnet entries) from replaying a pre-refresh answer; backend
+    // and model identity travel with the instance-scoped key as well.
+    let cache = matches!(delivery, DeliveryMode::Inline)
+        .then(|| scoped_generation_cache(&config));
+    let cache_key = cache.as_ref().map(|_| {
+        format!(
+            "{}:{}:{}:{}",
+            config.sd.backend_id(),
+            config.sd_model.as_deref().unwrap_or(""),
+            canonical_hash(&serde_json::to_value(&*catalog).unwrap_or(serde_json::Value::Null)),
+            canonical_hash(&serde_json::to_value(&req).unwrap_or(serde_json::Value::Null)),
+        )
+    });
+    if let (Some(cache), Some(key)) = (cache.as_ref(), cache_key.as_deref()) {
+        if let Some(hit) = cache.cache.get(key) {
+            return axum::Json((*hit).clone()).into_response();
+        }
+    }
     let (pipeline_loras, lora_records, lora_warnings) =
         match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
             Ok(resolved) => resolved,
@@ -455,6 +521,37 @@ pub(super) async fn post_images_generations(
                 );
             }
         };
+        let nsfw = match super::nsfw::classify(&bytes, format.extension()) {
+            Ok(decision) => decision,
+            Err(message) => {
+                return with_job_id(
+                    super::openai_error_response(
+                        StatusCode::NOT_IMPLEMENTED,
+                        message,
+                        Some("nsfw_classifier_unavailable"),
+                    ),
+                    job.id(),
+                );
+            }
+        };
+        let annotations = match nsfw {
+            super::nsfw::Decision::Skipped => Vec::new(),
+            super::nsfw::Decision::Allowed(annotation) => vec![annotation],
+            super::nsfw::Decision::Blocked => {
+                return with_job_id(
+                    super::openai_error_response(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "image blocked by the configured NSFW policy".to_string(),
+                        Some("nsfw_blocked"),
+                    ),
+                    job.id(),
+                );
+            }
+        };
+        let bundle_annotations = annotations
+            .iter()
+            .map(super::nsfw::bundle_annotation)
+            .collect();
         let bundle_inputs = crate::jobs::BundleInputs {
             model_slug: slug.clone(),
             prompt: prompt.clone(),
@@ -482,6 +579,7 @@ pub(super) async fn post_images_generations(
                 scale: fix.scale,
                 denoising_strength: fix.denoising_strength,
             }),
+            annotations: bundle_annotations,
         };
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match delivery {
@@ -531,6 +629,9 @@ pub(super) async fn post_images_generations(
                     &info.sha256,
                     info.size_bytes,
                 );
+                if !annotations.is_empty() {
+                    crate::jobs_registry::global().emit_annotations(job.id(), annotations.clone());
+                }
                 artifacts.push(ImageArtifact {
                     artifact_id: info.id,
                     content_type: info.content_type,
@@ -546,16 +647,20 @@ pub(super) async fn post_images_generations(
         }
     }
     drop(lease);
-    with_job_id(
-        Json(ImagesGenerationResponse {
-            created: epoch_secs(),
-            data: images,
-            warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
-            artifacts: (!artifacts.is_empty()).then_some(artifacts),
-            bundle,
-            job_id: (delivery == DeliveryMode::Artifact).then(|| job.id().to_owned()),
-        })
-        .into_response(),
-        job.id(),
-    )
+    let response = ImagesGenerationResponse {
+        created: epoch_secs(),
+        data: images,
+        warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
+        artifacts: (!artifacts.is_empty()).then_some(artifacts),
+        bundle,
+        job_id: (delivery == DeliveryMode::Artifact).then(|| job.id().to_owned()),
+    };
+    if let (Some(cache), Some(key), Ok(value)) = (
+        cache.as_ref(),
+        cache_key.as_deref(),
+        serde_json::to_value(&response),
+    ) {
+        cache.cache.put(key.to_owned(), value);
+    }
+    with_job_id(Json(response).into_response(), job.id())
 }

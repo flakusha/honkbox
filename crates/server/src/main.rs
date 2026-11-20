@@ -18,6 +18,7 @@ mod raster;
 mod routes;
 mod svg;
 mod swap;
+mod texture_postprocess;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -458,6 +459,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // Config loads BEFORE logging: the file-refined data dir relocates
     // the log too, and config-parse errors go to stderr via `or_exit`.
     let loaded = or_exit(config::load(config, data_dir_flag));
+    // Publish the read-only runtime facts snapshot before any `loaded`
+    // field moves, so every feature lane reads one complete configuration.
+    routes::runtime_config::configure(&loaded);
     let data_dir = loaded.data_dir;
     logging::init(log_file, data_dir.as_deref());
     emit_config_warnings(&loaded.warnings);
@@ -476,6 +480,16 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // TASK-external-tool-registry: probe once at startup. The capabilities
     // document and `/v1/external-tools*` read this cached snapshot.
     routes::init_external_tools(loaded.tools).await;
+    // Mesh discovery observes configured upstreams; it never reserves a slot.
+    let (mesh_enabled, _, mesh_ttl, mesh_cap) = routes::runtime_config::mesh_facts();
+    if mesh_enabled {
+        routes::mesh_discovery::configure(
+            mesh_enabled,
+            loaded.mesh.upstreams.len(),
+            mesh_ttl,
+            mesh_cap,
+        );
+    }
     // Mesh proxy (TASK-mesh-client-spike): opt-in via `[mesh]`. Startup
     // line names upstreams only — bearer tokens are never logged. Route
     // consumption of the client lands with the reroute ticket.
@@ -823,6 +837,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
             strength: None,
             recipe: None,
             hires: None,
+            annotations: Vec::new(),
         },
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

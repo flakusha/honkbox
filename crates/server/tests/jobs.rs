@@ -44,6 +44,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -765,6 +768,58 @@ impl honkbox_sd_core::SdPipeline for CapturingSd {
     fn backend_id(&self) -> &'static str {
         honkbox_sd_core::SD_CPP_BACKEND_ID
     }
+}
+
+/// Distinct backend returning a fixed red 1x1 image, so a replayed response
+/// is visible in the returned b64 rather than only in pipeline call counts.
+struct SentinelSd;
+
+impl honkbox_sd_core::SdPipeline for SentinelSd {
+    fn generate(
+        &self,
+        _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        Ok(honkbox_sd_core::GeneratedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+        })
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "sentinel-sd"
+    }
+}
+
+/// The same inline request against two different configs must render twice:
+/// a process-global cache would replay config 1's image for config 2 and skip
+/// config 2's pipeline entirely (the collision behind the 501/cancel tests).
+#[tokio::test]
+async fn identical_request_on_two_configs_does_not_replay() {
+    let _slot = SLOT_LOCK.lock().await;
+    let body = json!({"prompt": "a honk", "size": "64x64"});
+
+    let first = test_app(Arc::new(SentinelSd));
+    let (status, _, first_body) = images(first, body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first_body}");
+
+    let sd = Arc::new(CapturingSd {
+        captured: Mutex::new(None),
+    });
+    let second = test_app(sd.clone());
+    let (status, _, second_body) = images(second, body).await;
+    assert_eq!(status, StatusCode::OK, "{second_body}");
+    assert!(
+        sd.captured.lock().expect("capture lock").is_some(),
+        "second config must reach its own pipeline: {second_body}"
+    );
+    let first_json: Value = serde_json::from_str(&first_body).unwrap();
+    let second_json: Value = serde_json::from_str(&second_body).unwrap();
+    assert_ne!(
+        first_json["data"][0]["b64_json"], second_json["data"][0]["b64_json"],
+        "cross-config replay"
+    );
 }
 
 /// Fully valid controlnet inputs are accepted-and-validated, then honestly
