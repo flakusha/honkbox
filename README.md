@@ -52,7 +52,7 @@ alias hbx=honkbox
 | `dev:web`       | Vite dev server only (:5173)                        |
 | `dev:server`    | Server under `cargo watch` (`serve --dev`)          |
 | `build`         | Full build (vendor + web + server)                  |
-| `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen:check |
+| `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen:check + docs:api:check |
 | `format`        | `dprint check`                                      |
 | `lint`          | oxlint over `scripts packages`                      |
 | `typecheck`     | `tsc --noEmit`                                      |
@@ -61,6 +61,7 @@ alias hbx=honkbox
 | `deny`          | `cargo deny` licenses/bans/advisories               |
 | `spdx`          | `reuse lint`                                        |
 | `codegen:check` | Generated TS bindings fresh vs `api-types`          |
+| `docs:api`      | TypeDoc HTML reference from generated TS comments   |
 | `audit:gpu-slot`| Fails when a server test takes the GPU slot without serializing on a lock |
 | `ci`            | `check` + `test` + `build`                          |
 
@@ -227,10 +228,14 @@ moving anything.
 ## Docs
 
 `AGENTS.md` is the authoritative repository contract and `.plan/` tracks work
-items. The API reference is generated from the server source and served live
-at `GET /v1/openapi.json` (also checked in under `packages/web-ui/src/gen/`)
-— read it instead of a copied endpoint list; it is drift-gated by
-`bun run codegen:check`. `bun run doc:rs` builds the Rust API docs.
+items. The machine-readable API reference is generated from the server source
+and served live at `GET /v1/openapi.json` (also checked in under
+`packages/web-ui/src/gen/`); it is drift-gated by `bun run codegen:check`.
+`bun run docs:api` generates the HTML type reference from the same source doc
+comments into `web-dist/api-docs/`, served at `/api-docs/index.html` and linked
+from `/api/version`. Generation runs in `build:web` and `check`; a thin page
+means a missing source doc comment, not a generator failure. `bun run doc:rs`
+builds the Rust API docs.
 `.tmp/research/Reviewed*.md` is the local design record (gitignored scratch on
 this machine, not a published doc).
 

@@ -330,6 +330,10 @@ async fn version_advertises_canonical_contract_links() {
         links.contains("</v1/capabilities>; rel=\"service-meta\""),
         "{links}"
     );
+    assert!(
+        links.contains("</api-docs/index.html>; rel=\"help\""),
+        "{links}"
+    );
 }
 
 /// The version policy is discoverable WITHOUT prose: the generated `OpenAPI`

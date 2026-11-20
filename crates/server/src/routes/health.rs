@@ -63,11 +63,13 @@ fn note_media_type(media_type: &str, plain_q: &mut Option<f32>, json_q: &mut Opt
 }
 
 /// Discovery links from the legacy version probe to the canonical contract.
-/// The body stays byte-compatible; clients get one place to follow for both
-/// the machine-readable capabilities document and the `OpenAPI` schema.
+/// The body stays byte-compatible; clients get one place to follow for the
+/// machine-readable capabilities document, the `OpenAPI` schema, and the
+/// generated HTML API reference.
 const DISCOVERY_LINKS: &str = concat!(
     "</v1/openapi.json>; rel=\"service-desc\"; type=\"application/json\", ",
-    "</v1/capabilities>; rel=\"service-meta\"; type=\"application/json\"",
+    "</v1/capabilities>; rel=\"service-meta\"; type=\"application/json\", ",
+    "</api-docs/index.html>; rel=\"help\"; type=\"text/html\"",
 );
 
 /// Binary name + version.
