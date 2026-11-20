@@ -113,14 +113,11 @@ pub(crate) fn bundle_annotation(annotation: &NsfwAnnotation) -> crate::jobs::Bun
 }
 
 #[cfg(unix)]
-fn run_classifier(
-    bin: &Path,
-    bytes: &[u8],
-    extension: &str,
-) -> Result<ClassifierOutput, String> {
+fn run_classifier(bin: &Path, bytes: &[u8], extension: &str) -> Result<ClassifierOutput, String> {
     // The vendor reads images from the filesystem; stage the exact rendered
     // bytes under a unique name and remove it on every exit path.
-    let image = std::env::temp_dir().join(format!("honkbox-nsfw-{}.{extension}", ulid::Ulid::new()));
+    let image =
+        std::env::temp_dir().join(format!("honkbox-nsfw-{}.{extension}", ulid::Ulid::new()));
     let staged = std::fs::write(&image, bytes);
     let result = match staged {
         Ok(()) => run_on_image(bin, &image),

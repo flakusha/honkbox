@@ -13,9 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use honkbox_residency::ResourceKind;
 use serde::{Deserialize, Serialize};
 
-use super::runtime_config::{
-    python_allowlist, python_enabled, python_timeout_secs, python_venv,
-};
+use super::runtime_config::{python_allowlist, python_enabled, python_timeout_secs, python_venv};
 
 #[cfg(unix)]
 use super::supervisor::{self, Spec, Termination};
@@ -102,7 +100,12 @@ async fn run_job(
 ) -> Result<Vec<f64>, String> {
     let job_path = dir.join("job.json");
     let result_path = dir.join("result.json");
-    let job = RankJob { op: "rank", query, texts, model };
+    let job = RankJob {
+        op: "rank",
+        query,
+        texts,
+        model,
+    };
     let payload =
         serde_json::to_vec(&job).map_err(|err| format!("cannot encode sidecar job: {err}"))?;
     fs::write(&job_path, payload).map_err(|err| format!("cannot write sidecar job: {err}"))?;
@@ -130,7 +133,10 @@ async fn run_job(
     match outcome.termination {
         Termination::Exited(0) => {}
         Termination::Exited(code) => {
-            return Err(format!("sidecar exited with code {code}: {}", outcome.stderr));
+            return Err(format!(
+                "sidecar exited with code {code}: {}",
+                outcome.stderr
+            ));
         }
         other => return Err(format!("sidecar {other:?}: {}", outcome.stderr)),
     }

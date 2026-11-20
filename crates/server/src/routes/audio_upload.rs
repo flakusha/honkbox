@@ -20,7 +20,7 @@ use honkbox_audio_worker::{
     decode_wav, encode_wav,
 };
 
-use super::chat_prep::{admit_then_register, TranscribeQuery, clamp_ttl_seconds, with_job_id};
+use super::chat_prep::{TranscribeQuery, admit_then_register, clamp_ttl_seconds, with_job_id};
 // The multipart helpers now live in `audio_multipart`; re-exported so the
 // sibling `audio_transcriptions` routes keep a single import path.
 

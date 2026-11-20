@@ -26,6 +26,7 @@ use super::images_inputs::{DeliveryMode, resolve_loras, validate_images_request}
 use super::images_recipe::resolve_sd_model;
 use super::request_cache::RequestCache;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
+use crate::catalog::license_gate::LicenseRefusal;
 use crate::jobs::determinism::canonical_hash;
 
 /// Inline-only canonical-request cache: identical requests replay the first
@@ -401,7 +402,7 @@ pub(super) async fn post_images_generations(
         crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
     {
         return super::openai_error_response(
-            refusal.status(),
+            LicenseRefusal::status(),
             refusal.message(),
             Some(refusal.code()),
         );

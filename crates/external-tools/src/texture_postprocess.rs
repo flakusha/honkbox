@@ -248,11 +248,7 @@ pub struct OiioTool {
 /// version probe fails is [`Unavailable::ProbeFailed`]. Both are returned, not
 /// swallowed, so a caller can answer a named `501` instead of silently
 /// skipping the post-process stage.
-pub fn probe(
-    oiiotool: &Path,
-    maketx: &Path,
-    timeout: Duration,
-) -> Result<OiioTool, Unavailable> {
+pub fn probe(oiiotool: &Path, maketx: &Path, timeout: Duration) -> Result<OiioTool, Unavailable> {
     Ok(OiioTool {
         oiiotool_version: tool_version(oiiotool, timeout)?,
         maketx_version: tool_version(maketx, timeout)?,
@@ -319,14 +315,7 @@ pub fn run(
         });
     }
 
-    let orm_pack = pack_orm(
-        job,
-        oiiotool,
-        maketx,
-        timeout,
-        &mut commands,
-        &mut warnings,
-    )?;
+    let orm_pack = pack_orm(job, oiiotool, maketx, timeout, &mut commands, &mut warnings)?;
 
     let manifest = PostprocessManifest {
         manifest: MANIFEST_VERSION,
@@ -407,7 +396,12 @@ fn pack_orm(
     let png = job.output_dir.join(format!("{}_orm.png", job.name));
     let tx = job.output_dir.join(format!("{}_orm.tx", job.name));
     let (width, height) = dimensions(oiiotool, ao, timeout, commands)?;
-    invoke(oiiotool, &orm_args(ao, rough, metal, &png), timeout, commands)?;
+    invoke(
+        oiiotool,
+        &orm_args(ao, rough, metal, &png),
+        timeout,
+        commands,
+    )?;
     invoke(
         maketx,
         &maketx_args(&png, &tx, ColorSpace::Linear, job.tile_size),
@@ -747,13 +741,15 @@ mod tests {
             ColorSpace::Srgb,
             64,
         );
-        assert!(args
-            .windows(2)
-            .any(|w| w[0] == "--sattrib" && w[1] == "oiio:ColorSpace"));
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--sattrib" && w[1] == "oiio:ColorSpace")
+        );
         assert!(args.iter().any(|a| a.as_str() == "srgb"));
-        assert!(args
-            .windows(3)
-            .any(|w| w[0] == "--tile" && w[1] == "64" && w[2] == "64"));
+        assert!(
+            args.windows(3)
+                .any(|w| w[0] == "--tile" && w[1] == "64" && w[2] == "64")
+        );
         assert!(!args.iter().any(|a| a.as_str() == "--nomipmap"));
 
         let args = orm_args(
@@ -767,14 +763,16 @@ mod tests {
             2
         );
         for name in ["R", "G", "B"] {
-            assert!(args
-                .windows(2)
-                .any(|w| w[0] == "--chnames" && w[1] == name));
+            assert!(args.windows(2).any(|w| w[0] == "--chnames" && w[1] == name));
         }
-        assert!(args.iter().position(|a| a.as_str() == "ao.png").unwrap()
-            < args.iter().position(|a| a.as_str() == "rough.png").unwrap());
-        assert!(args.iter().position(|a| a.as_str() == "rough.png").unwrap()
-            < args.iter().position(|a| a.as_str() == "metal.png").unwrap());
+        assert!(
+            args.iter().position(|a| a.as_str() == "ao.png").unwrap()
+                < args.iter().position(|a| a.as_str() == "rough.png").unwrap()
+        );
+        assert!(
+            args.iter().position(|a| a.as_str() == "rough.png").unwrap()
+                < args.iter().position(|a| a.as_str() == "metal.png").unwrap()
+        );
     }
 
     #[test]
@@ -808,7 +806,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let scratch = Scratch::new(tag);
         let path = scratch.path().join("tool");
-        let tmp = scratch.path().join(format!("tool.tmp.{}", std::process::id()));
+        let tmp = scratch
+            .path()
+            .join(format!("tool.tmp.{}", std::process::id()));
         std::fs::write(&tmp, script).expect("fake tool");
         let mut perms = std::fs::metadata(&tmp).expect("stat").permissions();
         perms.set_mode(0o755);
@@ -833,8 +833,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_present_but_broken_binary_is_a_probe_failed_status() {
-        let (_fail_dir, failing) =
-            fake_tool("probe-fail", "#!/bin/sh\necho 'boom' >&2\nexit 3\n");
+        let (_fail_dir, failing) = fake_tool("probe-fail", "#!/bin/sh\necho 'boom' >&2\nexit 3\n");
         let err = probe(&failing, &failing, Duration::from_secs(2)).expect_err("must fail");
         assert!(matches!(err, Unavailable::ProbeFailed(_)), "{err:?}");
         assert_eq!(

@@ -21,20 +21,17 @@ use honkbox_external_tools::{OiioTool, Unavailable, probe_texture_tools};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The frozen probe outcome: the probed toolchain, or why it is unusable.
-static PROBE: LazyLock<Result<OiioTool, Unavailable>> = LazyLock::new(|| {
-    probe_texture_tools(&oiiotool_bin(), &maketx_bin(), PROBE_TIMEOUT)
-});
+static PROBE: LazyLock<Result<OiioTool, Unavailable>> =
+    LazyLock::new(|| probe_texture_tools(&oiiotool_bin(), &maketx_bin(), PROBE_TIMEOUT));
 
 /// The `oiiotool` binary: `HONKBOX_OIIO_BIN`, else the name on `PATH`.
 fn oiiotool_bin() -> PathBuf {
-    std::env::var_os("HONKBOX_OIIO_BIN")
-        .map_or_else(|| PathBuf::from("oiiotool"), PathBuf::from)
+    std::env::var_os("HONKBOX_OIIO_BIN").map_or_else(|| PathBuf::from("oiiotool"), PathBuf::from)
 }
 
 /// The `maketx` binary: `HONKBOX_MAKETX_BIN`, else the name on `PATH`.
 fn maketx_bin() -> PathBuf {
-    std::env::var_os("HONKBOX_MAKETX_BIN")
-        .map_or_else(|| PathBuf::from("maketx"), PathBuf::from)
+    std::env::var_os("HONKBOX_MAKETX_BIN").map_or_else(|| PathBuf::from("maketx"), PathBuf::from)
 }
 
 /// The capability row: available only when BOTH binaries passed their probe.

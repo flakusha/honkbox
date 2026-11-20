@@ -11,8 +11,8 @@ use axum::{
 use honkbox_api_types::OpenAiError;
 
 use super::middleware;
-use super::signed_urls;
 use super::runtime_config;
+use super::signed_urls;
 use crate::jobs_registry;
 
 /// Request body: one job ULID plus a manifest name or `bundle.zip`.
@@ -33,7 +33,14 @@ pub(crate) struct ContentUrlResponse {
 }
 
 fn error(status: StatusCode, message: &str, code: &str) -> Response {
-    (status, Json(OpenAiError::new(status.as_u16(), message.to_owned(), Some(code.to_owned()))))
+    (
+        status,
+        Json(OpenAiError::new(
+            status.as_u16(),
+            message.to_owned(),
+            Some(code.to_owned()),
+        )),
+    )
         .into_response()
 }
 
@@ -59,7 +66,7 @@ pub(crate) async fn post_content_urls(Json(req): Json<ContentUrlRequest>) -> Res
                 StatusCode::BAD_REQUEST,
                 "job id must be a 26-character Crockford ULID",
                 "invalid_job_id",
-            )
+            );
         }
     };
     let content = if req.content_name == signed_urls::BUNDLE_CONTENT {
@@ -72,13 +79,17 @@ pub(crate) async fn post_content_urls(Json(req): Json<ContentUrlRequest>) -> Res
                     StatusCode::BAD_REQUEST,
                     "unknown job content name",
                     "invalid_job_content_name",
-                )
+                );
             }
         }
     };
     // Registry liveness only: no bundle file read here. A finished job's URL
     // stops working when its bundle is removed, like any other content URL.
-    if !jobs_registry::global().list().iter().any(|job| job.id == id) {
+    if !jobs_registry::global()
+        .list()
+        .iter()
+        .any(|job| job.id == id)
+    {
         return error(StatusCode::NOT_FOUND, "no such job", "job_not_found");
     }
     let (enabled, ttl, env_name) = runtime_config::signed_url_facts();

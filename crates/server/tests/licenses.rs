@@ -126,7 +126,7 @@ fn inline_manifest_fixture_round_trips_into_records() {
         recs[3].attribution_text.as_deref(),
         Some("fixture attribution")
     );
-    assert!(recs[4].license.is_empty());
+    assert_eq!(recs[4].license, "");
     assert!(is_redistributable(&recs[0]));
     assert!(!is_redistributable(&recs[1]));
     assert!(!is_redistributable(&recs[2]));
@@ -158,7 +158,7 @@ fn missing_record_refusal_is_named_412() {
     .unwrap_err();
     assert_eq!(refusal, LicenseRefusal::MissingRecord);
     assert_eq!(refusal.code(), "model_license_missing");
-    assert_eq!(refusal.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(LicenseRefusal::status(), StatusCode::PRECONDITION_FAILED);
     assert!(refusal.to_string().contains("model_license_missing"));
 }
 
@@ -219,7 +219,7 @@ fn gated_refusal_names_terms_and_missing_token() {
         other => panic!("expected gated refusal, got {other:?}"),
     }
     assert_eq!(refusal.code(), "model_license_gated");
-    assert_eq!(refusal.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(LicenseRefusal::status(), StatusCode::PRECONDITION_FAILED);
     assert!(refusal.message().contains("flux2"));
 }
 
@@ -228,7 +228,7 @@ fn non_commercial_refuses_commercial_but_research_can_opt_out() {
     let nc = record("cc-by-nc-4.0", "non-commercial");
     let refusal = check("zero123", Some(nc.clone()), &config::Config::default()).unwrap_err();
     assert_eq!(refusal.code(), "model_license_non_commercial");
-    assert_eq!(refusal.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(LicenseRefusal::status(), StatusCode::PRECONDITION_FAILED);
     assert!(refusal.message().contains("zero123"));
     assert!(refusal.message().contains("https://example.test/license"));
     let research = config::Config {

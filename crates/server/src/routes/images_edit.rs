@@ -28,6 +28,8 @@ use super::images_recipe::{resolve_sd_model, validate_recipe};
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
 
+use crate::catalog::license_gate::LicenseRefusal;
+
 /// Output dimensions from a PNG's IHDR (big-endian `u32` at offsets 16/20).
 /// Only called on registry-verified bytes (`require_png_bytes` /
 /// `crate::formats::identify_png` own the magic check); `None` for
@@ -406,7 +408,11 @@ pub(super) async fn post_images_edits(
     if let Err(refusal) =
         crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
     {
-        return openai_error_response(refusal.status(), refusal.message(), Some(refusal.code()));
+        return openai_error_response(
+            LicenseRefusal::status(),
+            refusal.message(),
+            Some(refusal.code()),
+        );
     }
     // Shared admission gate (REQ-6 Option A): same slot acquisition as the
     // generations route (lease dropped at the route ends below).

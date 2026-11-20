@@ -61,10 +61,7 @@ pub(super) async fn require_bearer(
             // Minting a signed content URL is a write that hands back a READ
             // credential; a write-only consumer must not be able to mint one.
             if mints_read_credential(req.method(), req.uri().path())
-                && !matches!(
-                    scoped_key_verdict(provided, &scope_map, "read"),
-                    Some(true)
-                )
+                && !matches!(scoped_key_verdict(provided, &scope_map, "read"), Some(true))
             {
                 return insufficient_scope_response("read");
             }

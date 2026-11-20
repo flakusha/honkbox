@@ -1,6 +1,6 @@
 //! Serving gates for curated model licenses (TASK-model-license-registry).
 //!
-//! One refusal shape, mapped to the OpenAI error envelope by the route
+//! One refusal shape, mapped to the `OpenAI` error envelope by the route
 //! (412 + named code). The gate runs before GPU admission and before any
 //! bundle write, so a refusal leaves no job, no lease and no partial bundle.
 //!
@@ -49,7 +49,7 @@ impl LicenseRefusal {
 
     /// Every license refusal is a failed precondition: the deployment has not
     /// declared the territory/token/commercial posture the weights require.
-    pub(crate) fn status(&self) -> StatusCode {
+    pub(crate) fn status() -> StatusCode {
         StatusCode::PRECONDITION_FAILED
     }
 
@@ -67,11 +67,11 @@ impl LicenseRefusal {
                 token_missing,
             } => format!(
                 "model {slug:?}: gated weights require an accepted HF token (token_missing={token_missing}); terms: {}",
-                terms_text(terms_url)
+                terms_text(terms_url.as_ref())
             ),
             Self::NonCommercial { slug, terms_url } => format!(
                 "model {slug:?}: non-commercial weights cannot serve a commercial pipeline; terms: {}",
-                terms_text(terms_url)
+                terms_text(terms_url.as_ref())
             ),
         }
     }
@@ -83,8 +83,8 @@ impl fmt::Display for LicenseRefusal {
     }
 }
 
-fn terms_text(url: &Option<String>) -> &str {
-    url.as_deref()
+fn terms_text(url: Option<&String>) -> &str {
+    url.map(String::as_str)
         .filter(|url| !url.trim().is_empty())
         .unwrap_or("the model's source terms")
 }

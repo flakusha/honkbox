@@ -148,11 +148,13 @@ pub fn signed_url_facts() -> (bool, u64, String) {
             DEFAULT_SIGNED_URL_TTL_SECS,
             DEFAULT_SIGNED_URL_SECRET_ENV.to_owned(),
         ),
-        |f| (
-            f.signed_url_enabled,
-            f.signed_url_ttl_secs,
-            f.signed_url_secret_env.clone(),
-        ),
+        |f| {
+            (
+                f.signed_url_enabled,
+                f.signed_url_ttl_secs,
+                f.signed_url_secret_env.clone(),
+            )
+        },
     )
 }
 

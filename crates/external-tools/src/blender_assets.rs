@@ -541,7 +541,10 @@ fn planned_targets(job: &AssetJob) -> Result<(Vec<BakeTarget>, u32), AssetError>
     let mut resolution = 0;
     let mut targets: Vec<BakeTarget> = Vec::new();
     let mut claim = |path: PathBuf, role: &str| -> Result<(), AssetError> {
-        if targets.iter().any(|target: &BakeTarget| target.path == path) {
+        if targets
+            .iter()
+            .any(|target: &BakeTarget| target.path == path)
+        {
             return Err(AssetError::InvalidJob(format!(
                 "overlapping bake targets: {}",
                 path.display()
@@ -570,18 +573,23 @@ fn planned_targets(job: &AssetJob) -> Result<(Vec<BakeTarget>, u32), AssetError>
                 }
                 resolution = *edge;
                 if resolution == 0 {
-                    return Err(AssetError::InvalidJob("bake resolution must be positive".into()));
+                    return Err(AssetError::InvalidJob(
+                        "bake resolution must be positive".into(),
+                    ));
                 }
                 for map in maps {
                     claim(
-                        job.output_dir.join(format!("{}_{}.png", job.prefix, map.name())),
+                        job.output_dir
+                            .join(format!("{}_{}.png", job.prefix, map.name())),
                         map.role().as_str(),
                     )?;
                 }
             }
             AssetStage::Turntable { frames, .. } => {
                 if *frames == 0 {
-                    return Err(AssetError::InvalidJob("turntable needs at least one view".into()));
+                    return Err(AssetError::InvalidJob(
+                        "turntable needs at least one view".into(),
+                    ));
                 }
                 claim(
                     job.output_dir.join(format!("{}_turntable.png", job.prefix)),
@@ -590,7 +598,9 @@ fn planned_targets(job: &AssetJob) -> Result<(Vec<BakeTarget>, u32), AssetError>
             }
             AssetStage::Thumbnail { frames, .. } => {
                 if *frames == 0 {
-                    return Err(AssetError::InvalidJob("thumbnail needs at least one view".into()));
+                    return Err(AssetError::InvalidJob(
+                        "thumbnail needs at least one view".into(),
+                    ));
                 }
                 claim(
                     job.output_dir.join(format!("{}_thumbnail.png", job.prefix)),
@@ -618,7 +628,9 @@ fn validate_job(job: &AssetJob) -> Result<(), AssetError> {
         return Err(AssetError::InputMissing(path.display().to_string()));
     }
     if job.prefix.is_empty() {
-        return Err(AssetError::InvalidJob("the artifact prefix is empty".into()));
+        return Err(AssetError::InvalidJob(
+            "the artifact prefix is empty".into(),
+        ));
     }
     planned_targets(job).map(|_| ())
 }
@@ -1289,13 +1301,7 @@ mod tests {
         let bytes = png(16, 16);
         std::fs::write(&map, &bytes).expect("map");
         let bin = writing_blender(&dir, &result(&[(&map, "map")], false));
-        run(
-            &job,
-            &bin,
-            Duration::from_secs(5),
-            &AtomicBool::new(false),
-        )
-        .expect("run");
+        run(&job, &bin, Duration::from_secs(5), &AtomicBool::new(false)).expect("run");
 
         let raw = std::fs::read_to_string(job.output_dir.join("bake-manifest.json"))
             .expect("bake sidecar on disk");
@@ -1318,7 +1324,12 @@ mod tests {
         assert_eq!(bake.contract.recipe_version, RECIPE_VERSION);
         assert_eq!(bake.contract.recipe_sha256, recipe_sha256());
         assert_eq!(bake.contract.argv[0], bin.display().to_string());
-        assert!(bake.contract.argv.iter().any(|arg| arg == "--python-exit-code"));
+        assert!(
+            bake.contract
+                .argv
+                .iter()
+                .any(|arg| arg == "--python-exit-code")
+        );
     }
 
     #[test]
@@ -1366,24 +1377,34 @@ mod tests {
             .map(|(path, kind)| (path.as_path(), *kind))
             .collect();
         let bin = writing_blender(&dir, &result(&refs, false));
-        run(
-            &job,
-            &bin,
-            Duration::from_secs(5),
-            &AtomicBool::new(false),
-        )
-        .expect("run");
+        run(&job, &bin, Duration::from_secs(5), &AtomicBool::new(false)).expect("run");
 
         let raw = std::fs::read_to_string(job.output_dir.join("bake-manifest.json"))
             .expect("bake sidecar on disk");
         let bake: BakeManifest = serde_json::from_str(&raw).expect("decode sidecar");
-        let roles: HashSet<_> = bake.artifacts.iter().map(|item| item.role.as_str()).collect();
+        let roles: HashSet<_> = bake
+            .artifacts
+            .iter()
+            .map(|item| item.role.as_str())
+            .collect();
         assert_eq!(
             roles,
-            HashSet::from(["albedo", "normal", "rough", "metal", "ao", "height", "thumbnail"])
+            HashSet::from([
+                "albedo",
+                "normal",
+                "rough",
+                "metal",
+                "ao",
+                "height",
+                "thumbnail"
+            ])
         );
         assert_eq!(bake.artifacts.len(), 9);
-        assert!(bake.artifacts.iter().all(|item| item.width == 8 && item.height == 8));
+        assert!(
+            bake.artifacts
+                .iter()
+                .all(|item| item.width == 8 && item.height == 8)
+        );
     }
 
     #[test]

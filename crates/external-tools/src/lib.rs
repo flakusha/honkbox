@@ -69,7 +69,7 @@ pub enum ToolId {
     SplatRenderer,
     /// The external headless shader compile validator.
     ShaderValidator,
-    /// The external UniRig auto-rigger (external binary).
+    /// The external `UniRig` auto-rigger (external binary).
     Unirig,
 }
 

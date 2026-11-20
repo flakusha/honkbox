@@ -56,8 +56,7 @@ impl ShaderReport {
 #[must_use]
 pub fn binary() -> PathBuf {
     std::env::var_os(SHADER_VALIDATOR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_VALIDATOR))
+        .map_or_else(|| PathBuf::from(DEFAULT_VALIDATOR), PathBuf::from)
 }
 
 /// Probe the validator's version.
@@ -159,7 +158,7 @@ mod tests {
         let status = status(&bin, Duration::from_secs(2));
         assert_eq!(status.id, ToolId::ShaderValidator);
         assert_eq!(status.unavailable, Some(Unavailable::NotInstalled));
-        assert!(status.capabilities.is_empty());
+        assert_eq!(status.capabilities, Vec::new());
     }
 
     #[cfg(unix)]
@@ -226,6 +225,6 @@ mod tests {
         std::fs::write(&shader, "shader_type spatial;\n").expect("staged shader");
         let report = validate(&bin, &shader, Duration::from_secs(2)).expect("validate");
         assert!(report.is_valid());
-        assert!(report.issues.is_empty());
+        assert_eq!(report.issues, Vec::new());
     }
 }

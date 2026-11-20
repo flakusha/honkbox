@@ -288,15 +288,12 @@ pub(crate) fn resolve_licenses(
     warnings: &mut Vec<String>,
 ) -> Config {
     let mut territory = file_territory
-        .map(|value| value.trim())
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_LICENSE_TERRITORY)
         .to_owned();
-    if let Some(value) = territory_env
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        territory = value.to_owned();
+    if let Some(value) = territory_env.map(str::trim).filter(|v| !v.is_empty()) {
+        value.clone_into(&mut territory);
     }
     let mut commercial = file_commercial.unwrap_or(true);
     if let Some(value) = commercial_env {

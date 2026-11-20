@@ -56,8 +56,7 @@ const DEFAULT_FILENAME: &str = "shader.gdshader";
 
 fn binary() -> PathBuf {
     super::middleware::env_var(SHADER_VALIDATOR_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(shader_validate::binary)
+        .map_or_else(shader_validate::binary, PathBuf::from)
 }
 
 fn unavailable(reason: &str) -> Response {
@@ -197,10 +196,10 @@ pub(super) async fn post_shader_validate(
 mod tests {
     use super::*;
     use axum::body::to_bytes;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use tokio::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
     static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
     /// Restores the env override even when a test panics; the lock is held
@@ -238,14 +237,11 @@ mod tests {
         path
     }
 
-    fn request(
-        shader: &str,
-        filename: Option<&str>,
-    ) -> Result<Json<ShaderValidateRequest>, JsonRejection> {
-        Ok(Json(ShaderValidateRequest {
+    fn request(shader: &str, filename: Option<&str>) -> Json<ShaderValidateRequest> {
+        Json(ShaderValidateRequest {
             shader: shader.to_owned(),
             filename: filename.map(str::to_owned),
-        }))
+        })
     }
 
     async fn body(response: Response) -> (StatusCode, serde_json::Value) {
@@ -258,14 +254,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_absent_validator_is_a_named_501() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK.lock().await;
         let _restore = EnvRestore(SHADER_VALIDATOR_ENV);
         let missing = scratch("missing").join("no-such-validator");
         super::super::set_env_var(SHADER_VALIDATOR_ENV, Some(&missing.to_string_lossy()));
         let (status, value) =
-            body(post_shader_validate(request("shader_type spatial;", None)).await).await;
+            body(post_shader_validate(Ok(request("shader_type spatial;", None))).await).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(value["error"]["code"], "shader_validator_unavailable");
         assert!(
@@ -279,9 +273,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_diagnostic_from_the_validator_names_the_shader_and_line() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK.lock().await;
         let _restore = EnvRestore(SHADER_VALIDATOR_ENV);
         let bin = fake_binary(
             "diagnostic",
@@ -290,7 +282,7 @@ mod tests {
         let staged_dir = bin.parent().expect("parent").to_string_lossy().into_owned();
         super::super::set_env_var(SHADER_VALIDATOR_ENV, Some(&bin.to_string_lossy()));
         let (status, value) = body(
-            post_shader_validate(request("shader_type spatial;", Some("hero.gdshader"))).await,
+            post_shader_validate(Ok(request("shader_type spatial;", Some("hero.gdshader")))).await,
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{value}");
@@ -306,9 +298,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_clean_shader_returns_a_named_result() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK.lock().await;
         let _restore = EnvRestore(SHADER_VALIDATOR_ENV);
         let bin = fake_binary(
             "clean",
@@ -316,7 +306,7 @@ mod tests {
         );
         super::super::set_env_var(SHADER_VALIDATOR_ENV, Some(&bin.to_string_lossy()));
         let (status, value) =
-            body(post_shader_validate(request("shader_type spatial;", None)).await).await;
+            body(post_shader_validate(Ok(request("shader_type spatial;", None))).await).await;
         assert_eq!(status, StatusCode::OK, "{value}");
         assert_eq!(value["valid"], true);
         assert_eq!(value["version"], "2.0");
@@ -326,14 +316,16 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_path_like_filename_is_a_named_400() {
-        let _guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = ENV_LOCK.lock().await;
         let _restore = EnvRestore(SHADER_VALIDATOR_ENV);
         let bin = fake_binary("bad-name", "#!/bin/sh\necho 'validator 2.0'\n");
         super::super::set_env_var(SHADER_VALIDATOR_ENV, Some(&bin.to_string_lossy()));
         let (status, value) = body(
-            post_shader_validate(request("shader_type spatial;", Some("../evil.gdshader"))).await,
+            post_shader_validate(Ok(request(
+                "shader_type spatial;",
+                Some("../evil.gdshader"),
+            )))
+            .await,
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);

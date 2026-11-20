@@ -80,7 +80,12 @@ fn candidates(body: &RerankBody) -> Vec<String> {
     }
     body.documents
         .as_ref()
-        .map(|docs| docs.iter().cloned().map(RerankDocument::into_text).collect())
+        .map(|docs| {
+            docs.iter()
+                .cloned()
+                .map(RerankDocument::into_text)
+                .collect()
+        })
         .unwrap_or_default()
 }
 

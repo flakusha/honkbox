@@ -1,6 +1,6 @@
-//! UniRig auto-rig probe (TASK-unirig-probe).
+//! `UniRig` auto-rig probe (TASK-unirig-probe).
 //!
-//! Upstream UniRig is MIT; loop-lore's ComfyUI wrapper is GPL-3.0, so honkbox
+//! Upstream `UniRig` is MIT; loop-lore's `ComfyUI` wrapper is GPL-3.0, so honkbox
 //! drives only a direct, operator-supplied binary. It is opt-in via
 //! `HONKBOX_UNIRIG` (default `unirig` on `PATH`), never linked or vendored, and
 //! never runs mesh fixtures at discovery time. The probe proves the binary
@@ -21,9 +21,7 @@ pub const DEFAULT_UNIRIG: &str = "unirig";
 /// The configured rigger binary (never a value from a request).
 #[must_use]
 pub fn binary() -> PathBuf {
-    std::env::var_os(UNIRIG_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_UNIRIG))
+    std::env::var_os(UNIRIG_ENV).map_or_else(|| PathBuf::from(DEFAULT_UNIRIG), PathBuf::from)
 }
 
 /// Probe the rigger's version.
@@ -76,7 +74,7 @@ mod tests {
         let status = status(&bin, Duration::from_secs(2));
         assert_eq!(status.id, ToolId::Unirig);
         assert_eq!(status.unavailable, Some(Unavailable::NotInstalled));
-        assert!(status.capabilities.is_empty());
+        assert_eq!(status.capabilities, Vec::new());
     }
 
     #[cfg(unix)]

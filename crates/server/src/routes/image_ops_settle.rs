@@ -7,8 +7,8 @@ use axum::http::StatusCode;
 use base64::Engine as _;
 use honkbox_api_types::{ImageOpOutput, ImageOpRequest, ImageOpResponse};
 
-use super::chat_prep::admit_then_register;
 use super::AppConfig;
+use super::chat_prep::admit_then_register;
 use super::image_ops_dedup::{ImageOpSettled, op_label, sha256_hex};
 use super::image_ops_exec::{
     ImageOpWork, ImageOpWorkError, admit_op_inputs, image_op_pre_admission_join_failure,

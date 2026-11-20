@@ -25,6 +25,7 @@ use super::chat_prep::{
 };
 use super::openai_constraints::{llm_error_class, openai_error_response, resolve_constraints};
 use super::openai_stream::{completions_stream, id_frame};
+use crate::catalog::license_gate::LicenseRefusal;
 
 /// Owning catalog entry for a request `model` value (the alias `id` or the
 /// registry `slug`); [`super::resolve_model_slug`] reads the slug off it.
@@ -133,7 +134,11 @@ pub(super) async fn post_chat_completions(
     if let Err(refusal) =
         crate::catalog::license_gate::gate(&slug, &catalog, crate::config::licenses())
     {
-        return openai_error_response(refusal.status(), refusal.message(), Some(refusal.code()));
+        return openai_error_response(
+            LicenseRefusal::status(),
+            refusal.message(),
+            Some(refusal.code()),
+        );
     }
     // REQ-4 + REQ-8 request gates (see [`completions_request_gates`]).
     if let Some(response) = completions_request_gates(entry, model, &req.messages) {

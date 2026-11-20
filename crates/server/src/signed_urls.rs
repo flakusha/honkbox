@@ -154,7 +154,12 @@ mod tests {
         };
         assert!(verify_query(secret, job, "out.png", &parsed));
         // A URL for another job or another name must not authorize this one.
-        assert!(!verify_query(secret, "01J00000000000000000000001", "out.png", &parsed));
+        assert!(!verify_query(
+            secret,
+            "01J00000000000000000000001",
+            "out.png",
+            &parsed
+        ));
         assert!(!verify_query(secret, job, "other.png", &parsed));
         // An already-elapsed expiry is rejected even with a valid signature.
         let expired_query = SignedQuery {
@@ -162,6 +167,11 @@ mod tests {
             ..parsed
         };
         assert!(!verify_query(secret, job, "out.png", &expired_query));
-        assert!(!verify_query(secret, job, "out.png", &SignedQuery::default()));
+        assert!(!verify_query(
+            secret,
+            job,
+            "out.png",
+            &SignedQuery::default()
+        ));
     }
 }

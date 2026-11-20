@@ -69,11 +69,7 @@ fn unavailable() -> Response {
 /// Split from the handler so the exact 501 contract is testable without the
 /// process-wide frozen probe.
 fn gate(available: bool) -> Option<Response> {
-    if available {
-        None
-    } else {
-        Some(unavailable())
-    }
+    if available { None } else { Some(unavailable()) }
 }
 
 /// `POST /v1/texture-postprocess`: post-process a PBR map set and publish the
@@ -103,7 +99,10 @@ pub(super) async fn post_texture_postprocess(
         Err(rejection) => {
             return openai_error_response(
                 StatusCode::BAD_REQUEST,
-                format!("invalid texture post-process request: {}", rejection.body_text()),
+                format!(
+                    "invalid texture post-process request: {}",
+                    rejection.body_text()
+                ),
                 Some("invalid_texture_postprocess_request"),
             );
         }
@@ -237,9 +236,8 @@ fn publish_bundle(
                         if let Some(raw) = arg.as_str()
                             && Path::new(raw).is_absolute()
                         {
-                            *arg = serde_json::Value::String(
-                                file_name(Path::new(raw))?.to_string(),
-                            );
+                            *arg =
+                                serde_json::Value::String(file_name(Path::new(raw))?.to_string());
                         }
                     }
                 }

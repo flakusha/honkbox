@@ -31,9 +31,7 @@ pub const SEQUENCEFILE_CONTRACT: &str = "sequencefile .cfg: SEQUENCE blocks; \
 /// The configured renderer binary (never a value from a request).
 #[must_use]
 pub fn binary() -> PathBuf {
-    std::env::var_os(VKGS_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_VKGS))
+    std::env::var_os(VKGS_ENV).map_or_else(|| PathBuf::from(DEFAULT_VKGS), PathBuf::from)
 }
 
 /// Probe the binary's version and record what a renderer job can drive.
@@ -129,7 +127,7 @@ mod tests {
         assert_eq!(status.id, ToolId::SplatRenderer);
         assert_eq!(status.unavailable, Some(Unavailable::NotInstalled));
         assert!(status.version.is_none());
-        assert!(status.capabilities.is_empty());
+        assert_eq!(status.capabilities, Vec::new());
     }
 
     #[cfg(unix)]

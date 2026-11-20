@@ -141,7 +141,8 @@ pub(super) async fn post_audio_transcriptions(
             );
         }
     };
-    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await {
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await
+    {
         Ok(out) => out,
         Err((code, message)) => return openai_error_response(code, message, None),
     };
@@ -269,7 +270,8 @@ pub(super) async fn post_audio_translations(
             );
         }
     };
-    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await {
+    let out = match run_transcription(config.stt.clone(), worker_req, sample_rate, pcm, lease).await
+    {
         Ok(out) => out,
         Err((code, message)) => return openai_error_response(code, message, None),
     };
@@ -433,9 +435,11 @@ pub(super) async fn post_audio_transcriptions_stream(
         );
     }
     let catalog = config.catalog_snapshot();
-    if let Err(message) =
-        validate_model(upload.model.as_deref(), config.stt_model.as_deref(), &catalog)
-    {
+    if let Err(message) = validate_model(
+        upload.model.as_deref(),
+        config.stt_model.as_deref(),
+        &catalog,
+    ) {
         return openai_error_response(StatusCode::BAD_REQUEST, message, None);
     }
     let (sample_rate, pcm) = match decode_upload_audio(&content_type, &bytes, upload.sample_rate) {
@@ -453,9 +457,7 @@ pub(super) async fn post_audio_transcriptions_stream(
     if total_ms > STREAM_TOTAL_MS {
         return openai_error_response(
             StatusCode::BAD_REQUEST,
-            format!(
-                "audio is {total_ms} ms; streaming accepts at most {STREAM_TOTAL_MS} ms"
-            ),
+            format!("audio is {total_ms} ms; streaming accepts at most {STREAM_TOTAL_MS} ms"),
             None,
         );
     }
@@ -590,7 +592,10 @@ mod stream_tests {
         let samples = ms_to_samples(STREAM_TOTAL_MS, 16_000);
         assert_eq!(samples_to_ms(samples, 16_000), STREAM_TOTAL_MS);
         let windows = fixed_windows(samples, 16_000, STREAM_WINDOW_MS);
-        assert_eq!(windows.len(), usize::try_from(STREAM_TOTAL_MS / STREAM_WINDOW_MS).unwrap());
+        assert_eq!(
+            windows.len(),
+            usize::try_from(STREAM_TOTAL_MS / STREAM_WINDOW_MS).unwrap()
+        );
         assert!(windows.len() <= STREAM_MAX_FRAMES);
     }
 

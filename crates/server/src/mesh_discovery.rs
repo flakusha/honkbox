@@ -215,9 +215,10 @@ pub(crate) fn configure(enabled: bool, upstream_count: usize, ttl_secs: u64, cap
 /// Read the current state, tolerating a poisoned lock (a panic elsewhere
 /// must not take down capability rendering).
 fn read_state() -> Option<RwLockReadGuard<'static, State>> {
-    STATE
-        .get()
-        .map(|slot| slot.read().unwrap_or_else(std::sync::PoisonError::into_inner))
+    STATE.get().map(|slot| {
+        slot.read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
 }
 
 /// Refresh every configured upstream into the global slot. No lock is held
@@ -244,7 +245,11 @@ pub(crate) async fn refresh_into(cache: &mut DiscoveryCache, upstreams: &[MeshUp
         Ok(client) => client,
         Err(e) => {
             for upstream in upstreams {
-                cache.fail(&upstream.name, format!("client build failed: {e}"), now_ms());
+                cache.fail(
+                    &upstream.name,
+                    format!("client build failed: {e}"),
+                    now_ms(),
+                );
             }
             return;
         }
@@ -273,7 +278,11 @@ pub(crate) async fn refresh_into(cache: &mut DiscoveryCache, upstreams: &[MeshUp
             }
         };
         if !response.status().is_success() {
-            cache.fail(name, format!("upstream status {}", response.status()), now_ms());
+            cache.fail(
+                name,
+                format!("upstream status {}", response.status()),
+                now_ms(),
+            );
             continue;
         }
         match response.json::<ModelsResponse>().await {
@@ -302,7 +311,9 @@ fn discovery_url(base: &Url) -> Result<Url, String> {
 /// Install the refreshed cache, tolerating a poisoned lock.
 fn write_back(cache: DiscoveryCache) {
     if let Some(slot) = STATE.get() {
-        let mut state = slot.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = slot
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.cache = cache;
     }
 }
