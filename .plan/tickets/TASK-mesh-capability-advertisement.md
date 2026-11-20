@@ -1,6 +1,6 @@
 # TASK: Advertise external mesh providers
 
-Status: proposed
+Status: done (2026-11-20, mesh discovery lane)
 Priority: P1
 Epic: epic-mesh-integration
 Owner: unassigned

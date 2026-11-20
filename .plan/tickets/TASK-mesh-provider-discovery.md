@@ -1,6 +1,6 @@
 # TASK: Mesh provider discovery cache
 
-Status: proposed
+Status: done (2026-11-20, mesh discovery lane)
 Priority: P2
 Epic: epic-mesh-integration
 Owner: unassigned

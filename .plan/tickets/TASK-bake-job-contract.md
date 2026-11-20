@@ -1,6 +1,6 @@
 # TASK: Bake job contract
 
-Status: proposed
+Status: done (2026-11-20, bake lane)
 Priority: P2
 Epic: epic-model-feedback
 Owner: unassigned

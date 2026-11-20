@@ -1,6 +1,6 @@
 # FEAT: rerank endpoint
 
-Status: proposed
+Status: done (2026-11-20, rerank sidecar lane)
 Priority: P2
 Epic: epic-llm-expansion
 Owner: unassigned

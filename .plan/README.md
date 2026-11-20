@@ -65,6 +65,8 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-model-feedback.md](epics/epic-model-feedback.md)
 - [epic-editor-integration.md](epics/epic-editor-integration.md)
 - [epic-binary-formats.md](epics/epic-binary-formats.md)
+- [epic-trust-safety.md](epics/epic-trust-safety.md)
+- [epic-authn-authz.md](epics/epic-authn-authz.md)
 
 ## Research promotion map
 
@@ -104,6 +106,13 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `ReviewedCreative-BakingModels.md`, `ReviewedCreative-FeedbackLoop.md` | `epic-model-feedback` + 5 tickets |
 | `ReviewedImageEdit-*.md` (4 docs) | `epic-editor-integration` + 7 tickets |
 | `ReviewedBinaryFormats.md` | `epic-binary-formats` + 6 tickets |
+| `content-experience-gaps-2026-11-20.md` | `epic-trust-safety` + auth tickets (`epic-authn-authz`) |
+| `python-sidecar-pytorch-2026-11-20.md` | `TASK-python-sidecar-subprocess` |
+| `comfyui-uv-pytorch-build-cycle-2026-11-20.md` | `FEAT-comfyui-workflow-pipeline` (uv env + sync discipline) |
+| `splat-generation-rendering-idol-vkgs-2026-11-20.md` | `epic-3d-capture` + 5 tickets (idol spike, vkgs probe, turntable, flythrough, camera-path schema) |
+| `gen-flows-props-characters-locations-2026-11-20.md` | `epic-3d-capture` + 4 tickets (props, panorama, hunyuanworld, mesh-watch) + `TASK-unirig-probe` (`epic-blender-assets`) |
+| `shaders-materials-uiux-asset-pipeline-2026-11-20.md` | `TASK-cc0-pack-fetch` + `TASK-shader-validate-hook` (`epic-game-engine-export`) |
+| `product-licenses-include-vs-api-2026-11-20.md` | `epic-binary-formats` + 3 tickets (license registry, qal guard, nc gate) |
 
 ## Support expansion order (2026-11-17)
 
