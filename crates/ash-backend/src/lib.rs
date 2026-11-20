@@ -13,8 +13,8 @@
 //! - [`raw`]: the single `unsafe` boundary — thin 1:1 wrappers over ash FFI.
 //! - [`device`]: [`device::VulkanDevice`] (loader + headless instance +
 //!   logical device + compute queue) and physical-device selection
-//!   (discrete > integrated > cpu, then VRAM), exposing properties, limits,
-//!   and device-local VRAM for future capacity math.
+//!   (discrete > integrated > cpu, then VRAM), plus capacity admission
+//!   ([`device::PhysicalDeviceInfo::admit`]) and limit-bounded dispatch plans.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` returns a clear unimplemented error for now.
 //! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
@@ -41,6 +41,15 @@ pub enum VkError {
     Instance(String),
     /// Logical-device failure (`vkCreateDevice`, queue retrieval).
     Device(String),
+    /// A required device feature or limit is absent or too small.
+    InsufficientCapacity {
+        /// Capability name (`storageBuffer8BitAccess`, `subgroupSize`, ...).
+        capability: &'static str,
+        /// Requested amount (`1` for a required boolean feature).
+        required: u64,
+        /// Reported amount (`0` for an absent feature).
+        available: u64,
+    },
     /// No physical device is present.
     NoDevices,
     /// Physical devices exist but none exposes a compute-capable queue family.
@@ -67,6 +76,21 @@ impl std::fmt::Display for VkError {
             Self::Loader(e) => write!(f, "vulkan loader failed to load: {e}"),
             Self::Instance(e) => write!(f, "vulkan instance error: {e}"),
             Self::Device(e) => write!(f, "vulkan device error: {e}"),
+            Self::InsufficientCapacity {
+                capability,
+                required,
+                available,
+            } if *required == 1 && *available == 0 => {
+                write!(f, "vulkan device lacks required capability '{capability}'")
+            }
+            Self::InsufficientCapacity {
+                capability,
+                required,
+                available,
+            } => write!(
+                f,
+                "vulkan device capability '{capability}': need {required}, available {available}"
+            ),
             Self::NoDevices => write!(f, "no vulkan physical devices found"),
             Self::NoComputeQueue => write!(f, "no physical device with a compute queue family"),
         }

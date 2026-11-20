@@ -93,6 +93,39 @@ pub fn queue_family_properties(
     unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
 }
 
+/// Storage-buffer 8/16-bit access bits of `physical_device`, queried via the
+/// core 1.1 `vkGetPhysicalDeviceFeatures2` with both storage-feature structs
+/// chained into `p_next`; the driver fills `storage8` / `storage16`.
+pub fn physical_device_storage_features(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    storage8: &mut vk::PhysicalDevice8BitStorageFeatures<'_>,
+    storage16: &mut vk::PhysicalDevice16BitStorageFeatures<'_>,
+) {
+    let mut features2 = vk::PhysicalDeviceFeatures2::default()
+        .push_next(storage8)
+        .push_next(storage16);
+    // SAFETY: `physical_device` was enumerated from this live `instance`;
+    // `features2` chains only the two caller-owned structs, alive across
+    // the call. Pure query.
+    unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
+}
+
+/// Subgroup properties of `physical_device`, queried via the core 1.1
+/// `vkGetPhysicalDeviceProperties2` with the subgroup struct chained into
+/// `p_next`; the driver fills `subgroup`.
+pub fn physical_device_subgroup_properties(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    subgroup: &mut vk::PhysicalDeviceSubgroupProperties<'_>,
+) {
+    let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(subgroup);
+    // SAFETY: `physical_device` was enumerated from this live `instance`;
+    // `properties2` chains only the caller-owned subgroup struct, alive
+    // across the call. Pure query.
+    unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
+}
+
 /// Create a logical device owning exactly one compute queue from
 /// `queue_family`, and retrieve that queue.
 pub fn create_logical_device(

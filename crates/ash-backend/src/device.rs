@@ -1,6 +1,6 @@
 //! [`VulkanDevice`]: loader + headless instance + logical device + compute
 //! queue, with explicit physical-device selection (properties, limits,
-//! device-local VRAM) feeding future capacity math.
+//! device-local VRAM) feeding capacity admission and bounded dispatch.
 //!
 //! P0 groundwork per `.tmp/research/ReviewedAsh-DirectVulkan.md` §6: init,
 //! selection, and compute-queue acquisition only — no buffers, pools, or
@@ -44,8 +44,44 @@ impl DeviceType {
     }
 }
 
+/// Capability bits reported by the driver and consumed by the ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceFeatures {
+    /// `storageBuffer8BitAccess` (VK_KHR_8bit_storage).
+    pub storage_8_bit: bool,
+    /// `storageBuffer16BitAccess` (VK_KHR_16bit_storage).
+    pub storage_16_bit: bool,
+    /// Driver-reported subgroup size (`0` on pre-1.1 devices).
+    pub subgroup_size: u32,
+}
+
+/// Minimum capabilities a model needs on the selected device before its
+/// load is reserved. Defaults mean "no additional requirement".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CapacityRequirements {
+    /// Require 8-bit storage-buffer access.
+    pub storage_8_bit: bool,
+    /// Require 16-bit storage-buffer access.
+    pub storage_16_bit: bool,
+    /// Minimum subgroup size (`0` disables the check).
+    pub subgroup_size: u32,
+    /// Largest per-axis workgroup count the model will dispatch.
+    pub workgroup_count: [u32; 3],
+    /// Largest single storage-buffer binding the model will use.
+    pub storage_range: u64,
+}
+
+/// A dispatch already clamped to the selected device's reported limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchPlan {
+    /// Per-axis workgroup counts, each within `maxComputeWorkGroupCount`.
+    pub workgroups: [u32; 3],
+    /// Storage binding size, within `maxStorageBufferRange`.
+    pub storage_range: u64,
+}
+
 /// One physical device as the instance sees it: identity plus the numbers
-/// the future capacity ledger needs (device-local VRAM, limits).
+/// the capacity ledger needs (device-local VRAM, limits, features).
 #[derive(Debug, Clone)]
 pub struct PhysicalDeviceInfo {
     /// `VkPhysicalDevice` handle (valid while the creating instance lives).
@@ -64,9 +100,17 @@ pub struct PhysicalDeviceInfo {
     pub properties: vk::PhysicalDeviceProperties,
     /// Full limit block (`max_compute_*`, `max_storage_buffer_range`, ...).
     pub limits: vk::PhysicalDeviceLimits,
+    /// Feature bits the admission gates check.
+    pub features: DeviceFeatures,
     /// First queue family exposing `VK_QUEUE_COMPUTE_BIT`, if any.
     pub compute_queue_family: Option<u32>,
 }
+
+const WORKGROUP_AXES: [&str; 3] = [
+    "maxComputeWorkGroupCount.x",
+    "maxComputeWorkGroupCount.y",
+    "maxComputeWorkGroupCount.z",
+];
 
 impl PhysicalDeviceInfo {
     /// Query every physical device visible to `instance`.
@@ -76,6 +120,7 @@ impl PhysicalDeviceInfo {
             .iter()
             .map(|handle| {
                 let properties = raw::physical_device_properties(instance, *handle);
+                let features = query_features(instance, *handle, properties.api_version);
                 let name = device_name(&properties);
                 let memory = raw::physical_device_memory_properties(instance, *handle);
                 let vram_bytes = (0..memory.memory_heap_count)
@@ -100,10 +145,83 @@ impl PhysicalDeviceInfo {
                     vram_bytes,
                     properties,
                     limits: properties.limits,
+                    features,
                     compute_queue_family,
                 }
             })
             .collect())
+    }
+
+    /// Reject `req` when this device cannot satisfy it, naming the first
+    /// missing feature or limit in [`VkError::InsufficientCapacity`].
+    pub fn admit(&self, req: &CapacityRequirements) -> Result<(), VkError> {
+        if self.compute_queue_family.is_none() {
+            return Err(VkError::NoComputeQueue);
+        }
+        if req.storage_8_bit && !self.features.storage_8_bit {
+            return Err(VkError::InsufficientCapacity {
+                capability: "storageBuffer8BitAccess",
+                required: 1,
+                available: 0,
+            });
+        }
+        if req.storage_16_bit && !self.features.storage_16_bit {
+            return Err(VkError::InsufficientCapacity {
+                capability: "storageBuffer16BitAccess",
+                required: 1,
+                available: 0,
+            });
+        }
+        if req.subgroup_size > self.features.subgroup_size {
+            return Err(VkError::InsufficientCapacity {
+                capability: "subgroupSize",
+                required: u64::from(req.subgroup_size),
+                available: u64::from(self.features.subgroup_size),
+            });
+        }
+        for (axis, &needed) in req.workgroup_count.iter().enumerate() {
+            let available = self.limits.max_compute_work_group_count[axis];
+            if needed > available {
+                return Err(VkError::InsufficientCapacity {
+                    capability: WORKGROUP_AXES[axis],
+                    required: u64::from(needed),
+                    available: u64::from(available),
+                });
+            }
+        }
+        let available = u64::from(self.limits.max_storage_buffer_range);
+        if req.storage_range > available {
+            return Err(VkError::InsufficientCapacity {
+                capability: "maxStorageBufferRange",
+                required: req.storage_range,
+                available,
+            });
+        }
+        Ok(())
+    }
+
+    /// Clamp a proposed dispatch to this device's reported limits.
+    ///
+    /// Returns `None` for an empty dispatch or a device without a compute
+    /// queue; the plan can never exceed `maxComputeWorkGroupCount` or
+    /// `maxStorageBufferRange`.
+    pub fn bound_dispatch(
+        &self,
+        workgroups: [u32; 3],
+        storage_range: u64,
+    ) -> Option<DispatchPlan> {
+        if self.compute_queue_family.is_none() || workgroups.iter().any(|&n| n == 0) {
+            return None;
+        }
+        let max = self.limits.max_compute_work_group_count;
+        Some(DispatchPlan {
+            workgroups: [
+                workgroups[0].min(max[0]),
+                workgroups[1].min(max[1]),
+                workgroups[2].min(max[2]),
+            ],
+            storage_range: storage_range.min(u64::from(self.limits.max_storage_buffer_range)),
+        })
     }
 }
 
@@ -118,6 +236,34 @@ fn device_name(properties: &vk::PhysicalDeviceProperties) -> String {
     CStr::from_bytes_until_nul(&bytes)
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Query the capability bits the ledger gates on. Same 1:1 audited-query
+/// shape as [`crate::raw`]; only plain data is read, no device objects made.
+fn query_features(
+    instance: &Instance,
+    handle: vk::PhysicalDevice,
+    api_version: u32,
+) -> DeviceFeatures {
+    // `vkGetPhysicalDeviceFeatures2` / `vkGetPhysicalDeviceProperties2` are
+    // core only from Vulkan 1.1; no extension queries are enabled here.
+    if api_version < vk::API_VERSION_1_1 {
+        return DeviceFeatures {
+            storage_8_bit: false,
+            storage_16_bit: false,
+            subgroup_size: 0,
+        };
+    }
+    let mut storage8 = vk::PhysicalDevice8BitStorageFeatures::default();
+    let mut storage16 = vk::PhysicalDevice16BitStorageFeatures::default();
+    raw::physical_device_storage_features(instance, handle, &mut storage8, &mut storage16);
+    let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
+    raw::physical_device_subgroup_properties(instance, handle, &mut subgroup);
+    DeviceFeatures {
+        storage_8_bit: storage8.storage_buffer8_bit_access != 0,
+        storage_16_bit: storage16.storage_buffer16_bit_access != 0,
+        subgroup_size: subgroup.subgroup_size,
+    }
 }
 
 /// Selection policy (ReviewedAsh-FeaturePlan §6): prefer discrete over
@@ -225,6 +371,12 @@ impl VulkanDevice {
     pub fn physical(&self) -> vk::PhysicalDevice {
         self.info.handle
     }
+
+    /// Build a dispatch that cannot exceed the selected device's reported
+    /// workgroup-count or storage-range limits.
+    pub fn dispatch_plan(&self, workgroups: [u32; 3], storage_range: u64) -> Option<DispatchPlan> {
+        self.info.bound_dispatch(workgroups, storage_range)
+    }
 }
 
 impl Drop for VulkanDevice {
@@ -260,6 +412,11 @@ mod tests {
             vram_bytes: vram,
             properties: vk::PhysicalDeviceProperties::default(),
             limits: vk::PhysicalDeviceLimits::default(),
+            features: DeviceFeatures {
+                storage_8_bit: true,
+                storage_16_bit: true,
+                subgroup_size: 8,
+            },
             compute_queue_family: compute.then_some(0),
         }
     }
@@ -324,6 +481,136 @@ mod tests {
         assert!(matches!(select_device(&[]), Err(VkError::NoDevices)));
     }
 
+    fn demanding_req() -> CapacityRequirements {
+        CapacityRequirements {
+            storage_8_bit: true,
+            storage_16_bit: true,
+            subgroup_size: 8,
+            workgroup_count: [8, 8, 1],
+            storage_range: 1024,
+        }
+    }
+
+    #[test]
+    fn admit_accepts_default_requirements() {
+        let dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        assert_eq!(dev.admit(&CapacityRequirements::default()), Ok(()));
+    }
+
+    #[test]
+    fn admit_names_missing_8_bit_storage() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.features.storage_8_bit = false;
+        assert_eq!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "storageBuffer8BitAccess",
+                required: 1,
+                available: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn admit_names_missing_16_bit_storage() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.features.storage_16_bit = false;
+        assert!(matches!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "storageBuffer16BitAccess",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn admit_names_small_subgroup_size() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.features.subgroup_size = 4;
+        assert_eq!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "subgroupSize",
+                required: 8,
+                available: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn admit_names_workgroup_count_over_limit() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.limits.max_compute_work_group_count = [4, 8, 8];
+        assert_eq!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "maxComputeWorkGroupCount.x",
+                required: 8,
+                available: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn admit_names_storage_range_over_limit() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.limits.max_compute_work_group_count = [16, 16, 16];
+        dev.limits.max_storage_buffer_range = 512;
+        assert_eq!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "maxStorageBufferRange",
+                required: 1024,
+                available: 512,
+            })
+        );
+    }
+
+    #[test]
+    fn admit_rejects_device_without_compute_queue() {
+        let dev = info(DeviceType::Cpu, 1 << 30, 1, false);
+        assert_eq!(dev.admit(&demanding_req()), Err(VkError::NoComputeQueue));
+    }
+
+    #[test]
+    fn bound_dispatch_clamps_to_reported_limits() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.limits.max_compute_work_group_count = [4, 8, 16];
+        dev.limits.max_storage_buffer_range = 512;
+        assert_eq!(
+            dev.bound_dispatch([9, 5, 2], 4096),
+            Some(DispatchPlan {
+                workgroups: [4, 5, 2],
+                storage_range: 512,
+            })
+        );
+    }
+
+    #[test]
+    fn bound_dispatch_rejects_empty_or_queue_less() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        assert_eq!(dev.bound_dispatch([0, 1, 1], 0), None);
+        dev.compute_queue_family = None;
+        assert_eq!(dev.bound_dispatch([1, 1, 1], 0), None);
+    }
+
+    #[test]
+    fn insufficient_capacity_error_names_capability() {
+        let err = VkError::InsufficientCapacity {
+            capability: "storageBuffer8BitAccess",
+            required: 1,
+            available: 0,
+        };
+        assert!(err.to_string().contains("storageBuffer8BitAccess"));
+        let err = VkError::InsufficientCapacity {
+            capability: "maxStorageBufferRange",
+            required: 1024,
+            available: 512,
+        };
+        assert!(err.to_string().contains("maxStorageBufferRange"));
+    }
+
     #[test]
     fn headless_init_smoke() {
         // P0 smoke: loader → instance → select → compute queue. Skips
@@ -350,7 +637,9 @@ mod tests {
                 eprintln!("skipping headless smoke: no usable Vulkan environment");
             }
             // Real API failures indicate a bug in this crate: fail loudly.
-            Err(e @ (VkError::Instance(_) | VkError::Device(_))) => {
+            Err(e @ (VkError::Instance(_)
+                | VkError::Device(_)
+                | VkError::InsufficientCapacity { .. })) => {
                 panic!("vulkan api failed during headless smoke: {e:?}")
             }
         }

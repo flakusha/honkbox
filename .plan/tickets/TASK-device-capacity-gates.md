@@ -1,6 +1,6 @@
 # TASK: Device capacity gates in the ledger
 
-Status: proposed
+Status: done (2026-11-20, ash capacity-gates lane)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned

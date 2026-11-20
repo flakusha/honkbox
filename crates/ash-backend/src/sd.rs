@@ -7,7 +7,7 @@
 //! [`honkbox_sd_core::SdCppPipeline`] stays the default backend; callers
 //! swap the constructor, never the call sites.
 
-use crate::device::VulkanDevice;
+use crate::device::{CapacityRequirements, VulkanDevice};
 use honkbox_sd_core::{GeneratedImage, SdError, SdPipeline, Txt2ImgRequest};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -34,6 +34,12 @@ impl AshSdPipeline {
     /// The device this pipeline will execute on.
     pub fn device(&self) -> &VulkanDevice {
         &self.device
+    }
+
+    /// Admission gate: call before any model load is reserved on this
+    /// pipeline, so an unsupported device is named before work is queued.
+    pub fn admit(&self, req: &CapacityRequirements) -> Result<(), crate::VkError> {
+        self.device.info.admit(req)
     }
 }
 
@@ -74,6 +80,31 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::VkError;
+
+    #[test]
+    fn admit_gates_on_the_selected_device() {
+        let device = match VulkanDevice::headless() {
+            Ok(device) => Arc::new(device),
+            Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => {
+                eprintln!("skipping: no usable Vulkan environment");
+                return;
+            }
+            Err(e) => panic!("vulkan api failed: {e:?}"),
+        };
+        let pipeline = AshSdPipeline::new(device);
+        assert_eq!(pipeline.admit(&CapacityRequirements::default()), Ok(()));
+        let impossible = CapacityRequirements {
+            subgroup_size: u32::MAX,
+            ..CapacityRequirements::default()
+        };
+        assert!(matches!(
+            pipeline.admit(&impossible),
+            Err(VkError::InsufficientCapacity {
+                capability: "subgroupSize",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn generate_is_a_clear_unimplemented_error() {
