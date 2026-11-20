@@ -6,12 +6,14 @@
 
 use axum::{Json, extract::State};
 use honkbox_api_types::{
-    AuthCapabilities, Capabilities, CompressionRange, ControlNetFeature, FeatureFlags,
-    FormatLimits, Formats, ImageOpKind, ImageOpsCapability, LicenseCapability, LicenseSummaryRow,
-    ModelKind, OutputFormatCapability, QueueCapabilities, QueueKindCapacity, RecognitionFeature,
-    ServerInfo, StorageCapability, ToolCallingCapability, VisionFeature,
+    AudioCppCapabilities, AuthCapabilities, Capabilities, CompressionRange, ControlNetFeature,
+    FeatureFlags, FormatLimits, Formats, ImageOpKind, ImageOpsCapability, LicenseCapability,
+    LicenseSummaryRow, ModelKind, OutputFormatCapability, QueueCapabilities, QueueKindCapacity,
+    RecognitionFeature, ServerInfo, StorageCapability, ToolCallingCapability, VisionFeature,
 };
-use honkbox_audio_worker::VAD_COMPILED;
+use honkbox_audio_worker::{
+    AUDIOCPP_COMPILED, AUDIOCPP_STT_FAMILIES, AUDIOCPP_TTS_FAMILIES, VAD_COMPILED,
+};
 use honkbox_recognition_worker::{BARCODE_COMPILED, RecKind as WorkerRecKind};
 
 /// `GET /v1/capabilities`: the machine-readable server contract (FEAT-
@@ -157,6 +159,23 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             lora: true,
             // No video job class exists; the FEAT ticket pins this `false`.
             video: false,
+            // No system-one decision endpoint exists yet; the flag stays
+            // false until one lands (FEAT-model-modality-advertisement).
+            decisions: false,
+            // Compile-time audio.cpp surface from the worker's OWN features,
+            // never a prose copy: the family lists are the same constants
+            // the named load error cites, so no family here is unloadable.
+            audio_cpp: AudioCppCapabilities {
+                built: AUDIOCPP_COMPILED,
+                stt_families: AUDIOCPP_STT_FAMILIES
+                    .iter()
+                    .map(|family| (*family).to_owned())
+                    .collect(),
+                tts_families: AUDIOCPP_TTS_FAMILIES
+                    .iter()
+                    .map(|family| (*family).to_owned())
+                    .collect(),
+            },
             // Unconditional routes (`GET /v1/jobs`, `GET /v1/events`); the
             // contract test cross-checks both against the OpenAPI paths.
             jobs: true,

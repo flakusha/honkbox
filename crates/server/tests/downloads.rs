@@ -38,14 +38,14 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 // Included only so `routes.rs`'s `crate::swap` paths resolve in this test
 // binary; the swap module itself is not exercised here.
 #[allow(dead_code)]
@@ -1150,6 +1150,7 @@ async fn catalog_route_merges_snapshot_and_budget() {
             thinking: false,
             tool_calling: false,
             modalities: vec!["text".to_owned()],
+            modality: honkbox_api_types::ModelModalities::empty(),
             capabilities: honkbox_api_types::ModelCapabilities::for_kind(
                 honkbox_api_types::ModelKind::Llm,
             ),

@@ -44,9 +44,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -55,6 +52,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -155,6 +155,7 @@ impl LlmPipeline for ParkOnceLlm {
 
 fn entry(id: &str) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: id.to_owned(),
         kind: ModelKind::Llm,

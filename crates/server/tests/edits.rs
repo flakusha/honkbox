@@ -42,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -53,6 +50,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -75,6 +75,7 @@ static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::syn
 /// One SD catalog entry (registry-scan shape: id == slug here).
 fn sd_entry(id: &str) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: id.to_owned(),
         kind: ModelKind::Sd,
@@ -638,6 +639,7 @@ async fn output_format_and_compression_parity() {
 /// `/v1/images/generations` tests.
 fn lora_entry(id: &str, path: &str) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         kind: ModelKind::Lora,
         capabilities: ModelCapabilities::for_kind(ModelKind::Lora),
         modalities: vec!["image".to_owned()],

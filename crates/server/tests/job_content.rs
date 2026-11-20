@@ -39,9 +39,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -50,6 +47,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -229,7 +229,8 @@ async fn zip_bytes_are_deterministic_across_runs() {
 #[tokio::test]
 async fn content_route_serves_only_allowlisted_names() {
     let root = tmp_dir("allowlist");
-    let manifest = br#"{"manifest":1,"artifacts":[{"name":"output.glb"},{"name":"output_turntable.webp"}]}"#;
+    let manifest =
+        br#"{"manifest":1,"artifacts":[{"name":"output.glb"},{"name":"output_turntable.webp"}]}"#;
     bundle(
         &root,
         ID_A,

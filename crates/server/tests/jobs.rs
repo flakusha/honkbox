@@ -44,9 +44,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -55,6 +52,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -652,6 +652,7 @@ const CONTROL_PNG_B64: &str = "iVBORw0KGgo=";
 /// One `controlnet`-kind catalog entry for the app catalog.
 fn controlnet_entry() -> honkbox_api_types::ModelCatalogEntry {
     honkbox_api_types::ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: "comfy:controlnet/c.safetensors".to_owned(),
         slug: "comfy:controlnet/c.safetensors".to_owned(),
         kind: ModelKind::ControlNet,

@@ -69,7 +69,9 @@ use axum::{
     http::{Request, StatusCode},
 };
 use base64::Engine as _;
-use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
+use honkbox_api_types::{
+    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelModalities,
+};
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_external_tools::{Config as ProbeConfig, Registry, Status, ToolId, Unavailable};
 use honkbox_llm_worker::StubLlm;
@@ -102,6 +104,10 @@ fn llm_entry(id: &str, vision: bool) -> ModelCatalogEntry {
         } else {
             vec!["text".to_owned()]
         },
+        modality: ModelModalities {
+            input: vec!["text".to_owned()],
+            output: vec!["text".to_owned()],
+        },
         capabilities: ModelCapabilities {
             chat: true,
             completion: true,
@@ -128,6 +134,10 @@ fn sd_entry(id: &str) -> ModelCatalogEntry {
         thinking: false,
         tool_calling: false,
         modalities: vec!["image".to_owned()],
+        modality: ModelModalities {
+            input: vec!["text".to_owned()],
+            output: vec!["image".to_owned()],
+        },
         capabilities: ModelCapabilities::for_kind(ModelKind::Sd),
         category: "root".to_owned(),
         path: format!("/models/{id}"),
@@ -148,6 +158,10 @@ fn controlnet_entry(id: &str) -> ModelCatalogEntry {
         thinking: false,
         tool_calling: false,
         modalities: vec!["image".to_owned()],
+        modality: ModelModalities {
+            input: Vec::new(),
+            output: Vec::new(),
+        },
         capabilities: ModelCapabilities::for_kind(ModelKind::ControlNet),
         category: "root".to_owned(),
         path: format!("/models/{id}"),
@@ -584,6 +598,7 @@ async fn flags_cross_check_the_openapi_document() {
     assert_eq!(doc["features"]["events"], true);
     assert_eq!(doc["features"]["lora"], true);
     assert_eq!(doc["features"]["video"], false);
+    assert_eq!(doc["features"]["decisions"], false);
 
     let (_, openapi) = get_json(&app, "/v1/openapi.json").await;
     let paths = openapi["paths"].as_object().expect("openapi paths");
@@ -606,6 +621,8 @@ async fn flags_cross_check_the_openapi_document() {
     assert!(schemas.contains_key("Capabilities"));
     assert!(schemas.contains_key("QueueCapabilities"));
     assert!(schemas.contains_key("OutputFormatCapability"));
+    assert!(schemas.contains_key("AudioCppCapabilities"));
+    assert!(schemas.contains_key("ModelModalities"));
 }
 
 /// The auth mode reflects runtime config; the key VALUE never appears.
@@ -892,10 +909,189 @@ async fn opt_in_external_tools_are_named_and_unavailable() {
     let body: Value = serde_json::from_slice(&bytes).expect("json 501");
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
     assert_eq!(body["error"]["code"], "shader_validator_unavailable");
+    // The route probes the real binary per request; on a host where a
+    // validator exists but its probe fails, the named reason is a probe
+    // failure rather than "not installed". Both are honest absence.
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("not installed")),
+        body["error"]["message"].as_str().is_some_and(|message| {
+            message.contains("not installed") || message.contains("probe failed")
+        }),
         "{body}"
     );
+}
+
+/// Default (feature-off) snapshot: no decision endpoint and no audio.cpp
+/// family this binary cannot load.
+#[cfg(not(feature = "audio-cpp"))]
+#[tokio::test]
+async fn audio_cpp_feature_off_snapshot_is_honest() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["decisions"], false);
+    // rerank remains bound to the Python sidecar (the route is mounted);
+    // pin it so the stale "default false" ticket premise cannot regress.
+    assert_eq!(doc["features"]["rerank"], doc["features"]["python_sidecar"]);
+    assert_eq!(
+        doc["features"]["audio_cpp"],
+        json!({"built": false, "stt_families": [], "tts_families": []})
+    );
+}
+
+/// Feature-on assertion (run with `--features audio-cpp`): the one compiled
+/// ASR family is advertised; no TTS family is invented.
+#[cfg(feature = "audio-cpp")]
+#[tokio::test]
+async fn audio_cpp_feature_on_snapshot_is_honest() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["audio_cpp"]["built"], true);
+    assert_eq!(
+        doc["features"]["audio_cpp"]["stt_families"],
+        json!(["qwen3_asr"])
+    );
+    assert_eq!(doc["features"]["audio_cpp"]["tts_families"], json!([]));
+}
+
+/// Drift guard for either feature set: the wire document reads the worker's
+/// own compile tables, never a hand-written copy.
+#[tokio::test]
+async fn audio_cpp_families_come_from_the_worker_tables() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    let audio = &doc["features"]["audio_cpp"];
+    assert_eq!(
+        audio["built"],
+        json!(honkbox_audio_worker::AUDIOCPP_COMPILED)
+    );
+    assert_eq!(
+        audio["stt_families"],
+        json!(honkbox_audio_worker::AUDIOCPP_STT_FAMILIES)
+    );
+    assert_eq!(
+        audio["tts_families"],
+        json!(honkbox_audio_worker::AUDIOCPP_TTS_FAMILIES)
+    );
+    assert_eq!(
+        audio["tts_families"]
+            .as_array()
+            .expect("tts list")
+            .as_slice(),
+        &[] as &[serde_json::Value]
+    );
+}
+
+/// The additive modality block follows the on-disk kind and the resolved
+/// capabilities; the loop-lore flat list stays untouched. Unknown kinds
+/// degrade to empty lists instead of an error.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one contract table, one flat-list assertion
+async fn catalog_modalities_match_kinds_and_keep_the_flat_list() {
+    let dir = std::env::temp_dir().join(format!(
+        "honkbox-modalities-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    for rel in [
+        "llm/chat.gguf",
+        "llm/vision.gguf",
+        "comfy/checkpoints/sd.safetensors",
+        "comfy/embeddings/embed.bin",
+        "comfy/controlnet/control.safetensors",
+        "comfy/vae/vae.safetensors",
+        "comfy/loras/lora.safetensors",
+        "stt/whisper.gguf",
+        "tts/kokoro.safetensors",
+    ] {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("model dir");
+        std::fs::write(path, b"x").expect("model file");
+    }
+
+    let mut app_config = base_config(
+        ModelCatalog {
+            object: "list".to_owned(),
+            data: Vec::new(),
+        },
+        Arc::new(honkbox_sd_core::StubPipeline),
+    );
+    app_config.roots = honkbox_registry::ModelRoots {
+        llm_dirs: vec![dir.join("llm")],
+        comfyui_dirs: vec![dir.join("comfy")],
+        stt_dirs: vec![dir.join("stt")],
+        tts_dirs: vec![dir.join("tts")],
+    };
+    app_config.model_entries = vec![config::ModelEntryConfig {
+        slug: Some("llm:vision.gguf".to_owned()),
+        file_match: None,
+        aliases: Vec::new(),
+        capabilities: config::ModelCapabilitiesOverride {
+            vision: Some(true),
+            ..Default::default()
+        },
+    }];
+    let app = app(app_config);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/models/refresh")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let (status, body) = get_json(&app, "/v1/models").await;
+    assert_eq!(status, StatusCode::OK);
+    let entry = |slug: &str| {
+        body["data"]
+            .as_array()
+            .expect("catalog data")
+            .iter()
+            .find(|entry| entry["slug"] == slug)
+            .unwrap_or_else(|| panic!("missing {slug}"))
+    };
+    let modality = |slug: &str| entry(slug)["modality"].clone();
+
+    assert_eq!(
+        modality("llm:chat.gguf"),
+        json!({"input":["text"],"output":["text"]})
+    );
+    assert_eq!(entry("llm:chat.gguf")["modalities"], json!(["text"]));
+    assert_eq!(
+        modality("llm:vision.gguf"),
+        json!({"input":["text","image"],"output":["text"]})
+    );
+    assert_eq!(
+        entry("llm:vision.gguf")["modalities"],
+        json!(["text", "vision"])
+    );
+    assert_eq!(
+        modality("comfy:checkpoints/sd.safetensors"),
+        json!({"input":["text"],"output":["image"]})
+    );
+    assert_eq!(
+        modality("stt:whisper.gguf"),
+        json!({"input":["audio"],"output":["text"]})
+    );
+    assert_eq!(
+        modality("tts:kokoro.safetensors"),
+        json!({"input":["text"],"output":["audio"]})
+    );
+    assert_eq!(
+        modality("comfy:embeddings/embed.bin"),
+        json!({"input":["text"],"output":[]})
+    );
+    for slug in [
+        "comfy:controlnet/control.safetensors",
+        "comfy:vae/vae.safetensors",
+        "comfy:loras/lora.safetensors",
+    ] {
+        assert_eq!(modality(slug), json!({"input":[],"output":[]}), "{slug}");
+    }
+    std::fs::remove_dir_all(&dir).expect("cleanup");
 }

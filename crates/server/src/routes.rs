@@ -106,6 +106,14 @@ pub(super) mod job_content;
 #[path = "routes/texture_postprocess.rs"]
 mod texture_postprocess;
 
+#[path = "routes/mesh.rs"]
+mod mesh;
+
+#[allow(unused_imports)] // main.rs installs the operator config at startup
+pub(crate) use self::mesh::install_mesh_config;
+#[allow(unused_imports)] // the OpenApi derive references the generated path symbol
+use self::mesh::{__path_post_mesh_reroute, post_mesh_reroute};
+
 #[path = "routes/shader_validate.rs"]
 mod shader_validate;
 
@@ -342,6 +350,11 @@ use self::recognition::{__path_post_recognize, post_recognize, recognition_501_m
 
 /// Build the full router.
 pub fn app(config: AppConfig) -> Router {
+    let mesh_router = Router::new()
+        .route(mesh::MESH_REROUTE_PATH, post(post_mesh_reroute))
+        .with_state(std::sync::Arc::new(
+            mesh::RerouteState::new(mesh::runtime_mesh_config()).expect("mesh proxy client builds"),
+        ));
     Router::new()
         .route("/health", get(health))
         .route("/api/version", get(get_version))
@@ -423,6 +436,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/rerank/", post(post_rerank_slash))
         .route("/v1/content-urls", post(post_content_urls))
         .route("/metrics", get(metrics_endpoint))
+        .merge(mesh_router)
         .route_layer(axum_middleware::from_fn_with_state(
             config.clone(),
             middleware::require_bearer,

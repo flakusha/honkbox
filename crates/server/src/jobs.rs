@@ -151,6 +151,7 @@ fn license_catalog() -> honkbox_api_types::ModelCatalog {
         data: crate::catalog::manifest()
             .iter()
             .map(|row| ModelCatalogEntry {
+                modality: honkbox_api_types::ModelModalities::empty(),
                 id: row.id.clone(),
                 slug: row.id.clone(),
                 kind: row.kind,

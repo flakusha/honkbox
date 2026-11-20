@@ -794,6 +794,7 @@ mod tests {
                 thinking: false,
                 tool_calling: false,
                 modalities: vec!["text".to_owned()],
+                modality: honkbox_api_types::ModelModalities::empty(),
                 capabilities: honkbox_api_types::ModelCapabilities::for_kind(ModelKind::Llm),
                 category: "root".to_owned(),
                 path: "/models/a.gguf".to_owned(),

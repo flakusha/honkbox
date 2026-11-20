@@ -47,9 +47,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -58,6 +55,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -83,6 +83,7 @@ static SLOT_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::syn
 /// catalog the same way the native routes do).
 fn entry(id: &str) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: id.to_owned(),
         kind: ModelKind::Llm,

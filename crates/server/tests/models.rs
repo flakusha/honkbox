@@ -37,14 +37,14 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 // Included only so `routes.rs`'s `crate::swap` paths resolve in this test
 // binary; the swap module itself is not exercised here.
 #[allow(dead_code)]
@@ -80,6 +80,7 @@ fn catalog_with(slugs: &[&str]) -> ModelCatalog {
 #[allow(clippy::too_many_arguments)]
 fn entry_with(id: &str, slug: &str) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: slug.to_owned(),
         kind: ModelKind::Llm,
@@ -210,7 +211,7 @@ async fn models_list_shape() {
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     assert_eq!(
         body.as_ref(),
-        br#"{"object":"list","data":[{"id":"llm:a.gguf","slug":"llm:a.gguf","kind":"llm","owned_by":"local","context_length":null,"max_output":null,"thinking":false,"tool_calling":false,"modalities":["text"],"capabilities":{"chat":true,"completion":true,"tool_calling":false,"vision":false,"embeddings":false},"category":"root","path":"/models/llm:a.gguf","bytes":1}]}"#
+        br#"{"object":"list","data":[{"id":"llm:a.gguf","slug":"llm:a.gguf","kind":"llm","owned_by":"local","context_length":null,"max_output":null,"thinking":false,"tool_calling":false,"modalities":["text"],"modality":{"input":[],"output":[]},"capabilities":{"chat":true,"completion":true,"tool_calling":false,"vision":false,"embeddings":false},"category":"root","path":"/models/llm:a.gguf","bytes":1}]}"#
     );
 }
 

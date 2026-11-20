@@ -204,6 +204,10 @@ mod tests {
             thinking: false,
             tool_calling: false,
             modalities: vec!["text".to_owned()],
+            modality: honkbox_api_types::ModelModalities {
+                input: Vec::new(),
+                output: Vec::new(),
+            },
             capabilities: honkbox_api_types::ModelCapabilities::for_kind(kind),
             category: "root".to_owned(),
             path: path.to_owned(),

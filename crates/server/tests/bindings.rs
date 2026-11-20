@@ -43,9 +43,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[allow(dead_code)] // this harness checks type bindings, not route handlers
 #[path = "../src/routes.rs"]
 mod routes;
@@ -55,6 +52,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use crate::config::ModelCapabilitiesOverride;
 use honkbox_api_types::ModelKind;
@@ -149,6 +149,7 @@ fn catalog_loader_resolves_alias_and_slug() {
                 thinking: false,
                 tool_calling: false,
                 modalities: vec!["text".to_owned()],
+                modality: honkbox_api_types::ModelModalities::empty(),
                 capabilities: ModelCapabilities::for_kind(ModelKind::Llm),
                 category: "root".to_owned(),
                 path: "/nonexistent/m.gguf".to_owned(),

@@ -1048,6 +1048,16 @@ export type ModelCapabilities = {
    */
   embeddings: boolean;
 };
+export type ModelModalities = {
+  /**
+   * Accepted input content kinds (`text`, `image`, `audio`).
+   */
+  input: Array<string>;
+  /**
+   * Produced output content kinds (`text`, `image`, `audio`).
+   */
+  output: Array<string>;
+};
 export type GgufMetadata = {
   /**
    * GGUF spec version.
@@ -1117,6 +1127,11 @@ export type ModelCatalogEntry = {
    * Content modalities (`["text"]`, plus `"vision"` when declared).
    */
   modalities: Array<string>;
+  /**
+   * Input/output modality sets derived from the on-disk kind and
+   * capabilities; unknown kinds degrade to empty lists.
+   */
+  modality: ModelModalities;
   /**
    * Feature flags (also mirrored into the flat fields above).
    */
@@ -1777,6 +1792,20 @@ export type ServerInfo = {
    */
   version: string;
 };
+export type AudioCppCapabilities = {
+  /**
+   * The audio.cpp engine is compiled into this binary.
+   */
+  built: boolean;
+  /**
+   * Speech-to-text families compiled in (empty when `built` is false).
+   */
+  stt_families: Array<string>;
+  /**
+   * Text-to-speech families compiled in (empty: no audio.cpp TTS exists).
+   */
+  tts_families: Array<string>;
+};
 export type FeatureFlags = {
   /**
    * Vision chat (mtmd/mmproj image parts).
@@ -1795,6 +1824,15 @@ export type FeatureFlags = {
    * class; a client must not probe for video routes.
    */
   video: boolean;
+  /**
+   * System-one decision endpoint. `false` until that endpoint lands.
+   */
+  decisions: boolean;
+  /**
+   * Compile-time audio.cpp surface. Default builds report `built: false`
+   * and empty family lists.
+   */
+  audio_cpp: AudioCppCapabilities;
   /**
    * Job registry (`GET /v1/jobs`, cancel/delete routes).
    */

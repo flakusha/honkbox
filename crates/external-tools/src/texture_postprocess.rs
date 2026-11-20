@@ -25,6 +25,17 @@ const MANIFEST_VERSION: u32 = 1;
 /// Tile edge length used when a job does not specify one (in pixels).
 pub const DEFAULT_TILE_SIZE: u32 = 256;
 
+/// The canonical complete PBR set. A job may ship any subset: `maps` is the
+/// explicit declaration of what it carries, and omissions are reported in the
+/// sidecar rather than silently treated as a complete set.
+const REQUIRED_MAP_ROLES: [MapRole; 5] = [
+    MapRole::Albedo,
+    MapRole::Normal,
+    MapRole::Rough,
+    MapRole::Metal,
+    MapRole::Ao,
+];
+
 /// Colorspace a map is tagged with in the sidecar and in the texture metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -190,6 +201,12 @@ pub struct PostprocessManifest {
     pub orm_pack: Option<OrmPack>,
     /// Non-fatal notes (for example, why no ORM pack was emitted).
     pub warnings: Vec<String>,
+    /// Required PBR roles the job did not provide. Partial sets are allowed;
+    /// this is the explicit "what is missing" answer for a client.
+    pub missing_required_maps: Vec<MapRole>,
+    /// Roles whose bit depth the probe could not assert. Never claim a depth
+    /// check succeeded for these.
+    pub bit_depth_unvalidated: Vec<MapRole>,
 }
 
 /// Why a post-process job did not finish.
@@ -200,6 +217,9 @@ pub enum PostprocessError {
     Unavailable(Status),
     /// The job is invalid (bad colorspace claim, missing input, empty set).
     InvalidJob(String),
+    /// Dimensions or bit depth disagree across the map set, or a role is
+    /// listed twice. A named 400 at the route.
+    InvalidMapSet(String),
     /// A subprocess failed after a passing probe.
     ToolFailed(String),
     /// A filesystem error.
@@ -214,6 +234,7 @@ impl fmt::Display for PostprocessError {
                 None => f.write_str("texture post-process tool unavailable"),
             },
             Self::InvalidJob(reason) => write!(f, "invalid post-process job: {reason}"),
+            Self::InvalidMapSet(reason) => write!(f, "invalid PBR map set: {reason}"),
             Self::ToolFailed(reason) => write!(f, "texture tool failed: {reason}"),
             Self::Io(reason) => write!(f, "post-process I/O failed: {reason}"),
         }
@@ -289,12 +310,23 @@ pub fn run(
 
     let mut commands = Vec::new();
     let mut warnings = Vec::new();
-    let mut maps = Vec::with_capacity(job.maps.len());
+
+    let missing = missing_required_roles(job);
+
+    // Probe every input before writing anything: a mismatched set must not
+    // leave half a map series in the bundle.
+    let mut probed = Vec::with_capacity(job.maps.len());
     for map in &job.maps {
+        let (width, height, bit_depth) = dimensions(oiiotool, &map.path, timeout, &mut commands)?;
+        probed.push((map.role, width, height, bit_depth));
+    }
+    let bit_depth_unvalidated = check_map_set(&probed)?;
+
+    let mut maps = Vec::with_capacity(job.maps.len());
+    for (map, (_, width, height, _)) in job.maps.iter().zip(&probed) {
         let output = job
             .output_dir
             .join(format!("{}_{}.tx", job.name, map.role.as_str()));
-        let (width, height) = dimensions(oiiotool, &map.path, timeout, &mut commands)?;
         let cs = map.role.colorspace();
         invoke(
             maketx,
@@ -307,10 +339,10 @@ pub fn run(
             role: map.role,
             path: output,
             sha256: sha256_hex(&bytes),
-            width,
-            height,
+            width: *width,
+            height: *height,
             colorspace: cs,
-            mip_levels: mip_levels(width, height),
+            mip_levels: mip_levels(*width, *height),
             bytes: bytes.len(),
         });
     }
@@ -326,6 +358,8 @@ pub fn run(
         maps,
         orm_pack,
         warnings,
+        missing_required_maps: missing,
+        bit_depth_unvalidated,
     };
     let raw = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| PostprocessError::Io(format!("cannot encode the sidecar: {e}")))?;
@@ -333,11 +367,64 @@ pub fn run(
     Ok(manifest)
 }
 
+/// Verify one map series. Dimensions and probed bit depth must agree; a depth
+/// the probe did not report is returned for the sidecar to name as unvalidated.
+fn check_map_set(
+    probed: &[(MapRole, u32, u32, Option<String>)],
+) -> Result<Vec<MapRole>, PostprocessError> {
+    let (first_role, first_width, first_height, _) = &probed[0];
+    let mut bit_depth_unvalidated = Vec::new();
+    // Compare against the first REPORTED depth, not the first map: an unknown
+    // first depth must not hide a mismatch between later maps.
+    let mut first_reported: Option<(&MapRole, &str)> = None;
+    for (role, width, height, depth) in probed {
+        if width != first_width || height != first_height {
+            return Err(PostprocessError::InvalidMapSet(format!(
+                "{role} map is {width}x{height} but {first_role} is {first_width}x{first_height}"
+            )));
+        }
+        if let Some(depth) = depth.as_deref() {
+            if let Some((reported_role, first)) = first_reported {
+                if depth != first {
+                    return Err(PostprocessError::InvalidMapSet(format!(
+                        "{role} bit depth {depth} differs from {reported_role} ({first})"
+                    )));
+                }
+            } else {
+                first_reported = Some((role, depth));
+            }
+        } else {
+            bit_depth_unvalidated.push(*role);
+        }
+    }
+    Ok(bit_depth_unvalidated)
+}
+
+/// Roles of the canonical PBR set a partial job leaves out.
+fn missing_required_roles(job: &PostprocessJob) -> Vec<MapRole> {
+    REQUIRED_MAP_ROLES
+        .iter()
+        .copied()
+        .filter(|role| !job.maps.iter().any(|map| map.role == *role))
+        .collect()
+}
+
 /// Reject jobs that cannot produce an honest sidecar before spawning anything.
 fn validate(job: &PostprocessJob) -> Result<(), PostprocessError> {
     let bad = |reason: String| PostprocessError::InvalidJob(reason);
     if job.maps.is_empty() {
         return Err(bad("no maps to post-process".to_string()));
+    }
+    for (index, map) in job.maps.iter().enumerate() {
+        if job.maps[..index]
+            .iter()
+            .any(|earlier| earlier.role == map.role)
+        {
+            return Err(PostprocessError::InvalidMapSet(format!(
+                "duplicate map role: {}",
+                map.role
+            )));
+        }
     }
     let tile = job.tile_size;
     if tile == 0 {
@@ -353,14 +440,15 @@ fn validate(job: &PostprocessJob) -> Result<(), PostprocessError> {
         if let Some(claimed) = map.colorspace
             && claimed != expected
         {
+            // Name only the role: the input path is host state and must
+            // never reach a client error body.
             return Err(bad(format!(
-                "{} map {} is tagged {claimed} but must be {expected}",
+                "{} map is tagged {claimed} but must be {expected}",
                 map.role,
-                map.path.display(),
             )));
         }
         if !map.path.is_file() {
-            return Err(bad(format!("input map not found: {}", map.path.display())));
+            return Err(bad(format!("{} input map not found", map.role)));
         }
     }
     Ok(())
@@ -395,7 +483,7 @@ fn pack_orm(
 
     let png = job.output_dir.join(format!("{}_orm.png", job.name));
     let tx = job.output_dir.join(format!("{}_orm.tx", job.name));
-    let (width, height) = dimensions(oiiotool, ao, timeout, commands)?;
+    let (width, height, _) = dimensions(oiiotool, ao, timeout, commands)?;
     invoke(
         oiiotool,
         &orm_args(ao, rough, metal, &png),
@@ -443,16 +531,38 @@ fn dimensions(
     image: &Path,
     timeout: Duration,
     commands: &mut Vec<Vec<String>>,
-) -> Result<(u32, u32), PostprocessError> {
+) -> Result<(u32, u32, Option<String>), PostprocessError> {
     let args = vec!["--info".to_string(), image.to_string_lossy().into_owned()];
     let out = invoke(oiiotool, &args, timeout, commands)?;
-    parse_dimensions(&out).ok_or_else(|| {
-        PostprocessError::ToolFailed(format!(
-            "cannot read dimensions of {}: {}",
-            image.display(),
-            out.trim()
-        ))
-    })
+    let bit_depth = parse_bit_depth(&out).map(str::to_string);
+    parse_dimensions(&out)
+        .map(|(width, height)| (width, height, bit_depth))
+        // Neither the image path nor raw tool output belongs in an error
+        // body: both can carry the operator's host layout.
+        .ok_or_else(|| PostprocessError::ToolFailed("cannot read map dimensions".to_owned()))
+}
+
+/// Bit-depth token in an `oiiotool --info` line, when the probe reports one.
+/// A format we cannot recognise is not a successful check: the caller records
+/// the map as unvalidated instead.
+fn parse_bit_depth(info: &str) -> Option<&str> {
+    info.split_whitespace()
+        .map(|token| token.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+        .find(|token| {
+            matches!(
+                *token,
+                "uint8"
+                    | "uint16"
+                    | "uint32"
+                    | "uint64"
+                    | "int8"
+                    | "int16"
+                    | "int32"
+                    | "half"
+                    | "float"
+                    | "double"
+            )
+        })
 }
 
 /// Parse the `<width> x <height>` token out of an `oiiotool --info` line.
@@ -460,14 +570,21 @@ fn parse_dimensions(info: &str) -> Option<(u32, u32)> {
     let tokens: Vec<&str> = info.split_whitespace().collect();
     for pair in tokens.windows(3) {
         if pair[1] == "x" {
-            let width = pair[0]
+            // A stray `x` token is not a dimension pair; keep scanning.
+            let Some(width) = pair[0]
                 .trim_matches(|c: char| !c.is_ascii_digit())
                 .parse()
-                .ok()?;
-            let height = pair[2]
+                .ok()
+            else {
+                continue;
+            };
+            let Some(height) = pair[2]
                 .trim_matches(|c: char| !c.is_ascii_digit())
                 .parse()
-                .ok()?;
+                .ok()
+            else {
+                continue;
+            };
             return Some((width, height));
         }
     }
@@ -651,7 +768,7 @@ mod tests {
         let path = dir.join("normal.png");
         std::fs::write(&path, b"not a real image").expect("fixture");
         let mut normal = input(MapRole::Normal, dir);
-        normal.path = path;
+        normal.path = path.clone();
         normal.colorspace = Some(ColorSpace::Srgb);
         let task = job(dir, vec![normal]);
 
@@ -664,6 +781,10 @@ mod tests {
         .expect_err("must fail before any probe");
         assert!(matches!(err, PostprocessError::InvalidJob(_)), "{err:?}");
         assert!(err.to_string().contains("must be linear"), "{err}");
+        assert!(
+            !err.to_string().contains(path.to_string_lossy().as_ref()),
+            "host path leaked into the error: {err}"
+        );
         assert!(err.tool_status().is_none());
     }
 
@@ -905,6 +1026,7 @@ mod tests {
         let manifest = run(&task, &oiiotool, &maketx, Duration::from_secs(120)).expect("manifest");
 
         assert_eq!(manifest.maps.len(), 5);
+        assert_eq!(manifest.missing_required_maps, [] as [MapRole; 0]);
         // 5 dims + 5 maketx + 1 ORM dims + 2 ORM invocations = 13.
         assert_eq!(manifest.commands.len(), 13);
         assert_eq!(manifest.maps[0].colorspace, ColorSpace::Srgb);
@@ -967,5 +1089,111 @@ mod tests {
         assert_eq!(manifest.warnings.len(), 1);
         assert!(manifest.warnings[0].contains("ORM pack omitted"));
         assert_eq!(manifest.maps.len(), 1);
+    }
+
+    #[test]
+    fn bit_depth_is_only_claimed_when_the_probe_reports_it() {
+        assert_eq!(
+            parse_bit_depth("map.png : 1024 x 512, 3 channel, uint16 png"),
+            Some("uint16")
+        );
+        assert_eq!(parse_bit_depth("map.png : 8 x 8, 3 channel, png"), None);
+    }
+
+    #[test]
+    fn unknown_first_depth_does_not_hide_a_later_mismatch() {
+        let probed = [
+            (MapRole::Albedo, 8, 8, None),
+            (MapRole::Normal, 8, 8, Some("uint8".to_owned())),
+            (MapRole::Rough, 8, 8, Some("uint16".to_owned())),
+        ];
+        let err = check_map_set(&probed).expect_err("two reported depths disagree");
+        assert!(err.to_string().contains("uint16"), "{err}");
+    }
+
+    #[test]
+    fn dimensions_skip_a_stray_x_token() {
+        assert_eq!(parse_dimensions("map.png : x 8 x 8 png"), Some((8, 8)));
+    }
+
+    #[test]
+    fn duplicate_roles_are_a_named_map_set_error() {
+        let scratch = Scratch::new("dup-roles");
+        let dir = scratch.path();
+        let mut first = input(MapRole::Albedo, dir);
+        std::fs::write(&first.path, b"x").expect("fixture");
+        first.colorspace = Some(ColorSpace::Srgb);
+        let task = job(dir, vec![first, input(MapRole::Albedo, dir)]);
+
+        let err = run(
+            &task,
+            Path::new("oiiotool"),
+            Path::new("maketx"),
+            Duration::from_secs(1),
+        )
+        .expect_err("two maps with one role overwrite each other's output");
+        assert!(matches!(err, PostprocessError::InvalidMapSet(_)), "{err:?}");
+        assert!(err.to_string().contains("duplicate map role"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mismatched_dimensions_are_a_named_map_set_error() {
+        let (_dir, oiiotool) = fake_tool(
+            "dims-mismatch",
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.5.18';; --info) case \"$2\" in *albedo*) echo 'a.png : 8 x 8, 3 channel, uint8 png';; *normal*) echo 'n.png : 16 x 16, 3 channel, uint8 png';; esac;; esac\n",
+        );
+        let scratch = Scratch::new("dims-job");
+        let dir = scratch.path();
+        let albedo = input(MapRole::Albedo, dir);
+        let normal = input(MapRole::Normal, dir);
+        std::fs::write(&albedo.path, b"x").expect("fixture");
+        std::fs::write(&normal.path, b"x").expect("fixture");
+        let task = job(dir, vec![albedo, normal]);
+
+        let err = run(&task, &oiiotool, &oiiotool, Duration::from_secs(2))
+            .expect_err("a mismatched set must not produce a bundle");
+        assert!(matches!(err, PostprocessError::InvalidMapSet(_)), "{err:?}");
+        assert!(err.to_string().contains("16x16"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreported_bit_depth_is_recorded_as_unvalidated() {
+        let (_dir, oiiotool) = fake_tool(
+            "depth-unvalidated",
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.5.18';; --info) echo 'map.png : 8 x 8, 3 channel, png';; esac\n",
+        );
+        let (_tool_dir, maketx) = fake_tool(
+            "depth-maketx",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '7.1.0'; exit 0; fi\nwhile [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then shift; printf 'fake-tx' > \"$1\"; exit 0; fi; shift; done\nexit 1\n",
+        );
+        let scratch = Scratch::new("depth-job");
+        let dir = scratch.path();
+        let albedo = input(MapRole::Albedo, dir);
+        let normal = input(MapRole::Normal, dir);
+        std::fs::write(&albedo.path, b"x").expect("fixture");
+        std::fs::write(&normal.path, b"x").expect("fixture");
+        let task = job(dir, vec![albedo, normal]);
+
+        let manifest = run(&task, &oiiotool, &maketx, Duration::from_secs(2)).expect("manifest");
+        assert_eq!(
+            manifest.bit_depth_unvalidated,
+            vec![MapRole::Albedo, MapRole::Normal]
+        );
+        assert_eq!(
+            manifest.missing_required_maps,
+            vec![MapRole::Rough, MapRole::Metal, MapRole::Ao]
+        );
+        assert_eq!(manifest.maps.len(), 2);
+        assert!(
+            manifest
+                .maps
+                .iter()
+                .all(|m| m.sha256 == sha256_hex(b"fake-tx")),
+            "per-map hash of the published output"
+        );
+        assert_eq!(manifest.oiiotool_version, "2.5.18");
+        assert_eq!(manifest.maketx_version, "7.1.0");
     }
 }

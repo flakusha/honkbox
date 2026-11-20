@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use honkbox_api_types::{
     GgufMetadata, ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata,
-    SafetensorsMetadata,
+    ModelModalities, SafetensorsMetadata,
 };
 use tokio::sync::Notify;
 
@@ -225,11 +225,54 @@ pub(super) fn catalog_entry(
         } else {
             vec!["text".to_owned()]
         },
+        // Additive nested modality from the (possibly reclassified) kind and
+        // the resolved capabilities; the flat `modalities` above stays as-is
+        // for loop-lore (its `vision` is a different vocabulary).
+        modality: modality_for(kind, capabilities),
         capabilities,
         category: entry.category,
         path: entry.path.display().to_string(),
         bytes: entry.bytes,
         metadata: entry.metadata.map(catalog_metadata),
+    }
+}
+
+/// Input/output modalities from the (possibly reclassified) on-disk kind and
+/// resolved capabilities. Unknown kinds degrade to empty lists, never a
+/// made-up modality.
+fn modality_for(kind: ModelKind, capabilities: ModelCapabilities) -> ModelModalities {
+    match kind {
+        ModelKind::Llm => {
+            let mut input = vec!["text".to_owned()];
+            if capabilities.vision {
+                input.push("image".to_owned());
+            }
+            ModelModalities {
+                input,
+                output: vec!["text".to_owned()],
+            }
+        }
+        ModelKind::Sd => ModelModalities {
+            input: vec!["text".to_owned()],
+            output: vec!["image".to_owned()],
+        },
+        ModelKind::Stt => ModelModalities {
+            input: vec!["audio".to_owned()],
+            output: vec!["text".to_owned()],
+        },
+        ModelKind::Tts => ModelModalities {
+            input: vec!["text".to_owned()],
+            output: vec!["audio".to_owned()],
+        },
+        ModelKind::Embedding => ModelModalities {
+            input: vec!["text".to_owned()],
+            output: Vec::new(),
+        },
+        // ControlNet/LoRA/VAE have no I/O content contract today.
+        ModelKind::ControlNet | ModelKind::Lora | ModelKind::Vae => ModelModalities {
+            input: Vec::new(),
+            output: Vec::new(),
+        },
     }
 }
 

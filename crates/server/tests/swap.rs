@@ -42,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -52,6 +49,9 @@ mod routes;
 mod svg;
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -188,6 +188,7 @@ fn catalog_with(entries: &[(&str, ModelKind)]) -> ModelCatalog {
                 thinking: false,
                 tool_calling: false,
                 modalities: vec!["text".to_owned()],
+                modality: honkbox_api_types::ModelModalities::empty(),
                 capabilities: honkbox_api_types::ModelCapabilities::for_kind(*kind),
                 category: "root".to_owned(),
                 path: "/dev/null-fake-weights".to_owned(),

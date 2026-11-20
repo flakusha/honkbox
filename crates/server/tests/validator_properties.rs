@@ -87,9 +87,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -98,6 +95,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -232,6 +232,7 @@ fn entry(
     capabilities.embeddings = embeddings;
     capabilities.vision = vision;
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: slug.to_owned(),
         kind,

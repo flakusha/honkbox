@@ -182,6 +182,19 @@ pub struct StorageCapability {
     pub data_dir_present: bool,
 }
 
+/// Compile-time audio.cpp surface (`Capabilities::features.audio_cpp`).
+/// Family lists come from the audio-worker crate's own features, so the
+/// document cannot advertise a family this binary cannot load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct AudioCppCapabilities {
+    /// The audio.cpp engine is compiled into this binary.
+    pub built: bool,
+    /// Speech-to-text families compiled in (empty when `built` is false).
+    pub stt_families: Vec<String>,
+    /// Text-to-speech families compiled in (empty: no audio.cpp TTS exists).
+    pub tts_families: Vec<String>,
+}
+
 /// Server identity (`Capabilities::server`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ServerInfo {
@@ -207,6 +220,11 @@ pub struct FeatureFlags {
     /// Video generation. Always `false` today — there is no video job
     /// class; a client must not probe for video routes.
     pub video: bool,
+    /// System-one decision endpoint. `false` until that endpoint lands.
+    pub decisions: bool,
+    /// Compile-time audio.cpp surface. Default builds report `built: false`
+    /// and empty family lists.
+    pub audio_cpp: AudioCppCapabilities,
     /// Job registry (`GET /v1/jobs`, cancel/delete routes).
     pub jobs: bool,
     /// Server-sent event stream (`GET /v1/events`).
@@ -2021,6 +2039,28 @@ impl ModelCapabilities {
     }
 }
 
+/// Input/output modality sets for one catalog entry. Additive to the legacy
+/// flat `modalities` list so existing loop-lore consumers keep working.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ModelModalities {
+    /// Accepted input content kinds (`text`, `image`, `audio`).
+    pub input: Vec<String>,
+    /// Produced output content kinds (`text`, `image`, `audio`).
+    pub output: Vec<String>,
+}
+
+impl ModelModalities {
+    /// Honest empty set for projections that do not derive modalities from
+    /// an on-disk catalog entry (curated manifest rows and test fixtures).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            input: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+}
+
 /// One discovered model in the catalog (`GET /v1/models`).
 ///
 /// `id` is the operator alias when one is configured for the file, else the
@@ -2049,6 +2089,9 @@ pub struct ModelCatalogEntry {
     pub tool_calling: bool,
     /// Content modalities (`["text"]`, plus `"vision"` when declared).
     pub modalities: Vec<String>,
+    /// Input/output modality sets derived from the on-disk kind and
+    /// capabilities; unknown kinds degrade to empty lists.
+    pub modality: ModelModalities,
     /// Feature flags (also mirrored into the flat fields above).
     pub capabilities: ModelCapabilities,
     /// Directory category (`checkpoints`, `loras`, LLM parent dir, or `root`).
@@ -2912,6 +2955,7 @@ mod tests {
             ModelDeleteResult::decl(&config),
             ModelKind::decl(&config),
             ModelCapabilities::decl(&config),
+            ModelModalities::decl(&config),
             GgufMetadata::decl(&config),
             SafetensorsMetadata::decl(&config),
             ModelMetadata::decl(&config),
@@ -2948,6 +2992,7 @@ mod tests {
             LicenseSummaryRow::decl(&config),
             StorageCapability::decl(&config),
             ServerInfo::decl(&config),
+            AudioCppCapabilities::decl(&config),
             FeatureFlags::decl(&config),
             VisionFeature::decl(&config),
             ControlNetFeature::decl(&config),

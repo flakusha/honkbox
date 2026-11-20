@@ -205,11 +205,7 @@ impl PhysicalDeviceInfo {
     /// Returns `None` for an empty dispatch or a device without a compute
     /// queue; the plan can never exceed `maxComputeWorkGroupCount` or
     /// `maxStorageBufferRange`.
-    pub fn bound_dispatch(
-        &self,
-        workgroups: [u32; 3],
-        storage_range: u64,
-    ) -> Option<DispatchPlan> {
+    pub fn bound_dispatch(&self, workgroups: [u32; 3], storage_range: u64) -> Option<DispatchPlan> {
         if self.compute_queue_family.is_none() || workgroups.iter().any(|&n| n == 0) {
             return None;
         }
@@ -637,9 +633,11 @@ mod tests {
                 eprintln!("skipping headless smoke: no usable Vulkan environment");
             }
             // Real API failures indicate a bug in this crate: fail loudly.
-            Err(e @ (VkError::Instance(_)
+            Err(
+                e @ (VkError::Instance(_)
                 | VkError::Device(_)
-                | VkError::InsufficientCapacity { .. })) => {
+                | VkError::InsufficientCapacity { .. }),
+            ) => {
                 panic!("vulkan api failed during headless smoke: {e:?}")
             }
         }

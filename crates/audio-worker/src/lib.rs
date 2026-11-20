@@ -37,6 +37,21 @@ pub const AUDIOCPP_COMPILED: bool = cfg!(feature = "audio-cpp");
 /// `audio-cpp` feature.
 pub const AUDIOCPP_DEFAULT_FAMILY: &str = "qwen3_asr";
 
+/// STT families compiled into THIS build (TASK-audiocpp-capabilities).
+/// `qwen3_asr` needs both the engine and its weak loader feature:
+/// `audio-cpp` alone has no ASR loader, so an engine-only build reports
+/// no family.
+pub const AUDIOCPP_STT_FAMILIES: &[&str] =
+    if cfg!(all(feature = "audio-cpp", feature = "audio-cpp-qwen3-asr")) {
+        &["qwen3_asr"]
+    } else {
+        &[]
+    };
+
+/// TTS families compiled into THIS build: none — `make_tts` has no
+/// audio.cpp arm, so the list stays empty with every audio.cpp feature on.
+pub const AUDIOCPP_TTS_FAMILIES: &[&str] = &[];
+
 use flacenc::error::Verify as _;
 
 use std::fmt;

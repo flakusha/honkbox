@@ -37,12 +37,34 @@
 
 #![allow(dead_code)] // TASK-reroute-policy mounts the routes that consume this client; the spike ships the foundation + tests only.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use reqwest::Url;
 use tokio_stream::StreamExt as _;
+
+/// Routing hints the reroute layer reads BEFORE forwarding. They are absent
+/// from [`FORWARDED_REQUEST_HEADERS`], so the client strips them on every hop.
+pub(crate) const MESH_SCOPE_HEADER: &str = "x-mesh-scope";
+pub(crate) const MESH_TARGET_HEADER: &str = "x-mesh-target";
+pub(crate) const MESH_EXCLUDE_HEADER: &str = "x-mesh-exclude";
+
+/// Scope markers (`@private` in a model/upstream name, `x-mesh-scope:
+/// private`, `/private/v1` in a path). Any one of them makes the request
+/// private; private requests never fall back to public providers.
+pub(crate) const PRIVATE_SCOPE_MARKER: &str = "private";
+pub(crate) const PRIVATE_PATH_PREFIX: &str = "/private/v1";
+
+/// "Retry budget" is the TOTAL number of forwards one request may make,
+/// including the first try. The cap keeps a routing loop from multiplying
+/// traffic even if an operator tunes the policy upward.
+pub(crate) const DEFAULT_ATTEMPT_BUDGET: usize = 3;
+pub(crate) const MAX_ATTEMPT_BUDGET: usize = 4;
+pub(crate) const DEFAULT_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Request headers forwarded to an upstream, by exact (lowercase) name — the
 /// whole allowlist. Values are copied from the inbound request; everything
@@ -130,6 +152,26 @@ pub(crate) enum MeshError {
     /// The relayed body crossed the configured byte cap mid-stream —
     /// rejected, never silently truncated.
     StreamLimitExceeded(u64),
+    /// A routing/scope header failed syntax validation (400). Named header,
+    /// never the raw value: no URL/token is echoed.
+    InvalidHeader(&'static str),
+    /// The request body could not be read for routing (400).
+    InvalidBody,
+    /// Targets conflict with the configured set or with each other (409).
+    TargetConflict(String),
+    /// A pinned provider exists but is cooling down (502): never reroute.
+    TargetUnavailable,
+    /// No provider is available for this request (502).
+    NoUpstream,
+    /// Private scope has no private provider (502): fail closed.
+    PrivateScopeBlocked,
+    /// The explicit attempt budget was consumed without success (502).
+    RetryBudgetExhausted {
+        /// Number of forwards actually made.
+        attempts: usize,
+    },
+    /// Mesh is disabled in config (502): no silent local fallback.
+    Disabled,
 }
 
 impl std::fmt::Display for MeshError {
@@ -142,6 +184,18 @@ impl std::fmt::Display for MeshError {
             Self::StreamLimitExceeded(limit) => {
                 write!(f, "mesh upstream body exceeded the {limit} byte cap")
             }
+            Self::InvalidHeader(name) => write!(f, "invalid {name} header"),
+            Self::InvalidBody => write!(f, "mesh request body is unreadable"),
+            Self::TargetConflict(name) => write!(f, "mesh target {name:?} conflicts"),
+            Self::TargetUnavailable => write!(f, "pinned mesh target is unavailable"),
+            Self::NoUpstream => write!(f, "no mesh upstream is available"),
+            Self::PrivateScopeBlocked => {
+                write!(f, "private scope has no private mesh upstream")
+            }
+            Self::RetryBudgetExhausted { attempts } => {
+                write!(f, "mesh retry budget exhausted after {attempts} attempts")
+            }
+            Self::Disabled => write!(f, "mesh is disabled"),
         }
     }
 }
@@ -154,13 +208,33 @@ impl MeshError {
         match self {
             Self::UpstreamUnreachable { .. } | Self::UpstreamRead(_) => "upstream_unavailable",
             Self::StreamLimitExceeded(_) => "upstream_stream_limit",
+            Self::InvalidHeader(MESH_TARGET_HEADER) => "mesh_invalid_target",
+            Self::InvalidHeader(MESH_EXCLUDE_HEADER) => "mesh_invalid_exclude",
+            Self::InvalidHeader(MESH_SCOPE_HEADER) => "mesh_invalid_scope",
+            Self::InvalidHeader(_) => "mesh_invalid_header",
+            Self::InvalidBody => "mesh_invalid_body",
+            Self::TargetConflict(_) => "mesh_target_conflict",
+            Self::TargetUnavailable => "mesh_target_unavailable",
+            Self::NoUpstream => "mesh_no_upstream",
+            Self::PrivateScopeBlocked => "mesh_private_scope_blocked",
+            Self::RetryBudgetExhausted { .. } => "mesh_retry_budget_exhausted",
+            Self::Disabled => "mesh_disabled",
         }
     }
 
-    /// HTTP status a route layer should render for this error. Mesh failures
-    /// are the upstream's fault, not the caller's: always 502-class.
+    /// HTTP status for transport failures (keeps the client's 502 pin).
     pub(crate) fn status() -> StatusCode {
         StatusCode::BAD_GATEWAY
+    }
+
+    /// Status for the house envelope: bad routing hints are 400, conflicting
+    /// targets 409, everything else is an upstream-class 502.
+    pub(crate) fn response_status(&self) -> StatusCode {
+        match self {
+            Self::InvalidHeader(_) | Self::InvalidBody => StatusCode::BAD_REQUEST,
+            Self::TargetConflict(_) => StatusCode::CONFLICT,
+            _ => Self::status(),
+        }
     }
 }
 
@@ -357,6 +431,12 @@ impl MeshProxy {
         self.upstreams.iter().find(|u| u.name == name)
     }
 
+    /// The configured list, for the reroute policy's pure selector. The
+    /// list is immutable after construction and ordered by config.
+    pub(crate) fn upstreams(&self) -> &[MeshUpstream] {
+        &self.upstreams
+    }
+
     /// Forward ONE framed request to the named upstream and return the
     /// relayed response. The body streams through under the byte cap;
     /// dropping the returned body aborts the upstream connection (cancel
@@ -525,6 +605,297 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
         .parse::<u64>()
         .ok()
         .map(Duration::from_secs)
+}
+
+/// Request scope — a closed two-value vocabulary. Private is sticky: any
+/// private marker forces it, and nothing widens it back to public.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeshScope {
+    Public,
+    Private,
+}
+
+/// Closed outcome vocabulary for reroute metrics. The label is the only
+/// value that reaches a metric — never a name, URL, path, model or token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeshMetricKind {
+    Selected,
+    Retry,
+    Cooldown,
+    Rejected,
+    PrivateBlocked,
+    Exhausted,
+}
+
+impl MeshMetricKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Selected => "selected",
+            Self::Retry => "retry",
+            Self::Cooldown => "cooldown",
+            Self::Rejected => "rejected",
+            Self::PrivateBlocked => "private_blocked",
+            Self::Exhausted => "exhausted",
+        }
+    }
+}
+
+/// The complete label set, fixed at compile time (six bounded series).
+pub(crate) const MESH_METRIC_KINDS: [&str; 6] = [
+    "selected",
+    "retry",
+    "cooldown",
+    "rejected",
+    "private_blocked",
+    "exhausted",
+];
+static MESH_METRIC_COUNTS: [AtomicU64; MESH_METRIC_KINDS.len()] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+/// Record one bounded `kind` outcome. No dynamic label can reach this grid.
+pub(crate) fn record_mesh_metric(kind: MeshMetricKind) {
+    MESH_METRIC_COUNTS[kind as usize].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Counter readout for the metric contract tests.
+pub(crate) fn mesh_metric_count(kind: MeshMetricKind) -> u64 {
+    MESH_METRIC_COUNTS[kind as usize].load(Ordering::Relaxed)
+}
+
+/// Validated, fully resolved inputs to provider selection. Pure data: no
+/// headers, client or clock cross this boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RerouteHints {
+    pub scope: MeshScope,
+    pub group: Option<String>,
+    pub targets: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+/// `@private` / `private:` tag detection on a name segment. Byte-prefix
+/// comparison avoids a lowercase allocation and rejects non-ASCII mimics.
+fn private_tag(part: &str) -> bool {
+    part.as_bytes()
+        .get(..PRIVATE_SCOPE_MARKER.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PRIVATE_SCOPE_MARKER.as_bytes()))
+}
+
+/// A model id `group@private` is a private-scope marker.
+pub(crate) fn model_is_private(model: &str) -> bool {
+    model.split('@').skip(1).any(private_tag)
+}
+
+/// Model group is the part before `@` (`chat@private` -> `chat`).
+pub(crate) fn model_group(model: &str) -> &str {
+    model
+        .split_once('@')
+        .map_or(model, |(group, _)| group)
+        .trim()
+}
+
+/// Upstreams are tagged private by a `@private*` name segment, a `private:`
+/// name prefix, or a `/private/v1` base path. No config changes needed: the
+/// operator's existing label is the scope declaration.
+pub(crate) fn upstream_is_private(upstream: &MeshUpstream) -> bool {
+    upstream.name.split('@').skip(1).any(private_tag)
+        || upstream.name.split(':').next().is_some_and(private_tag)
+        || upstream.base_url.path().starts_with(PRIVATE_PATH_PREFIX)
+}
+
+/// Upstream group is the part of its name before `@`.
+pub(crate) fn upstream_group(upstream: &MeshUpstream) -> &str {
+    upstream
+        .name
+        .split_once('@')
+        .map_or(upstream.name.as_str(), |(group, _)| group)
+}
+
+/// Resolve scope from the explicit header, the request path and the model.
+/// Any private marker wins; an unknown header value is a named 400, never a
+/// silent public default.
+pub(crate) fn parse_scope(
+    value: Option<&HeaderValue>,
+    path: &str,
+    model: Option<&str>,
+) -> Result<MeshScope, MeshError> {
+    let header_scope = match value {
+        None => MeshScope::Public,
+        Some(value) => match value.to_str().ok().map(str::trim) {
+            Some(raw) if raw.eq_ignore_ascii_case(PRIVATE_SCOPE_MARKER) => MeshScope::Private,
+            Some(raw) if raw.eq_ignore_ascii_case("public") => MeshScope::Public,
+            _ => return Err(MeshError::InvalidHeader(MESH_SCOPE_HEADER)),
+        },
+    };
+    if header_scope == MeshScope::Private
+        || path.starts_with(PRIVATE_PATH_PREFIX)
+        || model.is_some_and(model_is_private)
+    {
+        Ok(MeshScope::Private)
+    } else {
+        Ok(MeshScope::Public)
+    }
+}
+
+/// Parse a comma-separated provider-name header. Strict syntax: no empty
+/// entries, whitespace, path separators or oversized labels. The RAW value is
+/// never echoed into the named error (it could carry a token).
+pub(crate) fn parse_name_list(
+    value: Option<&HeaderValue>,
+    header: &'static str,
+) -> Result<Vec<String>, MeshError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let invalid = || MeshError::InvalidHeader(header);
+    let raw = value.to_str().map_err(|_| invalid())?;
+    if raw.trim().is_empty() {
+        return Err(invalid());
+    }
+    let mut names = Vec::new();
+    for part in raw.split(',') {
+        let name = part.trim();
+        if name.is_empty()
+            || name.len() > 128
+            || name.chars().any(char::is_whitespace)
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'@' | b':'))
+        {
+            return Err(invalid());
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
+}
+
+/// Per-provider failure cooldown. Keys are configured upstream names only,
+/// so the map is bounded by config size; every method is deterministic given
+/// an injected `Instant` (no hidden clock in the policy helpers).
+#[derive(Debug, Default)]
+pub(crate) struct Cooldowns {
+    until: Mutex<HashMap<String, Instant>>,
+}
+
+/// A pathological config value must not pin a provider for days.
+const MAX_COOLDOWN: Duration = Duration::from_secs(3600);
+
+impl Cooldowns {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn is_cooling(&self, name: &str, now: Instant) -> bool {
+        self.until
+            .lock()
+            .ok()
+            .and_then(|until| until.get(name).copied())
+            .is_some_and(|until| until > now)
+    }
+
+    pub(crate) fn record_failure(&self, name: &str, ttl: Duration, now: Instant) {
+        if let Ok(mut until) = self.until.lock() {
+            let until_at = now.checked_add(ttl.min(MAX_COOLDOWN)).unwrap_or(now);
+            until.insert(name.to_owned(), until_at);
+        }
+    }
+
+    pub(crate) fn clear(&self, name: &str) {
+        if let Ok(mut until) = self.until.lock() {
+            until.remove(name);
+        }
+    }
+}
+
+/// Pure provider selection. Given the hints, a cooling predicate and a clock
+/// snapshot it returns at most `budget` upstreams in fallback order, or a
+/// named error. No network, no side effects. Pinned targets are never
+/// widened: a cooling pin fails closed instead of silently rerouting.
+pub(crate) fn select_upstreams<'a>(
+    upstreams: &'a [MeshUpstream],
+    hints: &RerouteHints,
+    cooling: impl Fn(&str) -> bool,
+    budget: usize,
+) -> Result<Vec<&'a MeshUpstream>, MeshError> {
+    let budget = budget.clamp(1, MAX_ATTEMPT_BUDGET);
+    for name in hints.targets.iter().chain(hints.exclude.iter()) {
+        if !upstreams.iter().any(|u| &u.name == name) {
+            return Err(MeshError::TargetConflict(name.clone()));
+        }
+    }
+    if hints
+        .targets
+        .iter()
+        .enumerate()
+        .any(|(index, name)| hints.targets[..index].contains(name))
+    {
+        let name = hints
+            .targets
+            .last()
+            .expect("duplicate implies entries")
+            .clone();
+        return Err(MeshError::TargetConflict(name));
+    }
+    if let Some(name) = hints
+        .targets
+        .iter()
+        .find(|name| hints.exclude.contains(*name))
+    {
+        return Err(MeshError::TargetConflict(name.clone()));
+    }
+
+    let pinned = !hints.targets.is_empty();
+    // A private request may never be pinned to a public provider: fail closed
+    // instead of letting a caller-supplied target widen the scope.
+    if pinned
+        && hints.scope == MeshScope::Private
+        && hints.targets.iter().any(|name| {
+            upstreams
+                .iter()
+                .find(|upstream| &upstream.name == name)
+                .is_none_or(|upstream| !upstream_is_private(upstream))
+        })
+    {
+        return Err(MeshError::PrivateScopeBlocked);
+    }
+    let mut candidates: Vec<&MeshUpstream> = if pinned {
+        if hints.targets.iter().any(|name| cooling(name)) {
+            return Err(MeshError::TargetUnavailable);
+        }
+        hints
+            .targets
+            .iter()
+            .filter_map(|name| upstreams.iter().find(|u| &u.name == name))
+            .collect()
+    } else {
+        upstreams
+            .iter()
+            .filter(|u| !hints.exclude.contains(&u.name))
+            // Scope is a strict partition: private requests see private
+            // providers only, public requests see public ones only.
+            .filter(|u| upstream_is_private(u) == (hints.scope == MeshScope::Private))
+            .filter(|u| !cooling(&u.name))
+            .collect()
+    };
+    if candidates.is_empty() {
+        return Err(if hints.scope == MeshScope::Private {
+            MeshError::PrivateScopeBlocked
+        } else {
+            MeshError::NoUpstream
+        });
+    }
+    if !pinned && let Some(group) = hints.group.as_deref() {
+        // Stable sort: matching model group first, config order within
+        // a group. This is the documented fallback order.
+        candidates.sort_by_key(|u| std::cmp::Reverse(upstream_group(u) == group));
+    }
+    candidates.truncate(budget);
+    Ok(candidates)
 }
 
 /// A stream wrapper enforcing the response byte cap MID-STREAM: once the
@@ -836,5 +1207,211 @@ mod tests {
         let rendered = format!("{cfg:?}");
         assert!(!rendered.contains("super-secret-value"));
         assert!(rendered.contains("<redacted>"));
+    }
+
+    /// One configured provider for the policy tests. Names are the scope /
+    /// group declaration, so no new config field is needed.
+    fn peer(name: &str) -> MeshUpstream {
+        MeshUpstream {
+            name: name.to_owned(),
+            base_url: Url::parse("http://peer.example").expect("valid base"),
+            bearer_token: None,
+        }
+    }
+
+    fn hints(scope: MeshScope, group: Option<&str>) -> RerouteHints {
+        RerouteHints {
+            scope,
+            group: group.map(str::to_owned),
+            targets: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn scope_markers_are_sticky_and_unknown_is_named() {
+        assert_eq!(
+            parse_scope(None, "/v1/chat", None).unwrap(),
+            MeshScope::Public
+        );
+        assert_eq!(
+            parse_scope(Some(&HeaderValue::from_static("private")), "/v1/chat", None).unwrap(),
+            MeshScope::Private
+        );
+        assert_eq!(
+            parse_scope(None, "/private/v1/chat", None).unwrap(),
+            MeshScope::Private
+        );
+        assert_eq!(
+            parse_scope(None, "/v1/chat", Some("chat@private")).unwrap(),
+            MeshScope::Private
+        );
+        // A public header cannot widen a request that carries a private marker.
+        assert_eq!(
+            parse_scope(
+                Some(&HeaderValue::from_static("public")),
+                "/private/v1/chat",
+                Some("chat@private")
+            )
+            .unwrap(),
+            MeshScope::Private
+        );
+        let bad =
+            parse_scope(Some(&HeaderValue::from_static("bogus")), "/v1/chat", None).unwrap_err();
+        assert_eq!(bad.code(), "mesh_invalid_scope");
+        assert_eq!(bad.response_status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn provider_name_lists_are_strict_without_echoing_values() {
+        assert_eq!(
+            parse_name_list(None, MESH_TARGET_HEADER).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_name_list(
+                Some(&HeaderValue::from_static(" chat@one , peer-two ")),
+                MESH_TARGET_HEADER
+            )
+            .unwrap(),
+            ["chat@one", "peer-two"]
+        );
+        for raw in ["a,,b", "a b", "", "http://x", ",a"] {
+            let err = parse_name_list(
+                Some(&HeaderValue::from_str(raw).unwrap()),
+                MESH_TARGET_HEADER,
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), "mesh_invalid_target", "raw {raw:?}");
+            assert_eq!(err.response_status(), StatusCode::BAD_REQUEST);
+            if !raw.is_empty() {
+                assert!(!err.to_string().contains(raw), "raw value never echoed");
+            }
+        }
+        let err = parse_name_list(Some(&HeaderValue::from_static("a,,b")), MESH_EXCLUDE_HEADER)
+            .unwrap_err();
+        assert_eq!(err.code(), "mesh_invalid_exclude");
+    }
+
+    #[test]
+    fn scope_and_group_derived_from_existing_config_labels() {
+        assert!(upstream_is_private(&peer("chat@private")));
+        assert!(upstream_is_private(&peer("chat@private-2")));
+        assert!(upstream_is_private(&peer("private:chat")));
+        assert!(!upstream_is_private(&peer("chat@peer-a")));
+        let mut path_private = peer("peer");
+        path_private.base_url = Url::parse("http://peer.example/private/v1").unwrap();
+        assert!(upstream_is_private(&path_private));
+        assert_eq!(upstream_group(&peer("chat@peer-a")), "chat");
+        assert_eq!(model_group("chat@private"), "chat");
+        assert!(model_is_private("chat@private"));
+        assert!(!model_is_private("chat@peer-a"));
+    }
+
+    #[test]
+    fn selection_orders_groups_filters_scope_and_caps_budget() {
+        let upstreams = vec![
+            peer("other@public-a"),
+            peer("chat@public-b"),
+            peer("chat@private"),
+        ];
+        let public = hints(MeshScope::Public, Some("chat"));
+        let plan = select_upstreams(&upstreams, &public, |_| false, 2).unwrap();
+        assert_eq!(
+            plan.iter().map(|u| u.name.as_str()).collect::<Vec<_>>(),
+            ["chat@public-b", "other@public-a"],
+            "matching model group first, config order within a group"
+        );
+        assert!(plan.len() <= 2, "budget is a hard cap");
+
+        let private = hints(MeshScope::Private, None);
+        let plan =
+            select_upstreams(&upstreams, &private, |_| false, DEFAULT_ATTEMPT_BUDGET).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].name, "chat@private");
+        assert!(plan.iter().all(|u| upstream_is_private(u)));
+
+        let mut excluded = hints(MeshScope::Public, None);
+        excluded.exclude.push("chat@public-b".to_owned());
+        let plan = select_upstreams(&upstreams, &excluded, |_| false, 4).unwrap();
+        assert_eq!(plan.len(), 1, "excluded provider never selected");
+        assert_eq!(plan[0].name, "other@public-a");
+
+        let cooling = |name: &str| name == "chat@private";
+        let err = select_upstreams(&upstreams, &private, cooling, 3).unwrap_err();
+        assert_eq!(err.code(), "mesh_private_scope_blocked");
+        assert_eq!(err.response_status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn pinned_targets_fail_closed_on_conflict_or_cooldown() {
+        let upstreams = vec![peer("chat@public-a"), peer("chat@private")];
+        let mut pinned = hints(MeshScope::Public, Some("chat"));
+        pinned.targets.push("ghost".to_owned());
+        let err = select_upstreams(&upstreams, &pinned, |_| false, 3).unwrap_err();
+        assert_eq!(err.code(), "mesh_target_conflict");
+        assert_eq!(err.response_status(), StatusCode::CONFLICT);
+
+        pinned.targets = vec!["chat@public-a".to_owned()];
+        pinned.exclude = vec!["chat@public-a".to_owned()];
+        assert_eq!(
+            select_upstreams(&upstreams, &pinned, |_| false, 3)
+                .unwrap_err()
+                .code(),
+            "mesh_target_conflict"
+        );
+
+        pinned.exclude.clear();
+        pinned.targets.push("chat@public-a".to_owned());
+        assert_eq!(
+            select_upstreams(&upstreams, &pinned, |_| false, 3)
+                .unwrap_err()
+                .code(),
+            "mesh_target_conflict"
+        );
+
+        pinned.targets.pop();
+        let cooling = |name: &str| name == "chat@public-a";
+        let err = select_upstreams(&upstreams, &pinned, cooling, 3).unwrap_err();
+        assert_eq!(err.code(), "mesh_target_unavailable");
+        assert_eq!(err.response_status(), StatusCode::BAD_GATEWAY);
+
+        let plan = select_upstreams(&upstreams, &pinned, |_| false, 1).unwrap();
+        assert_eq!(plan.len(), 1, "pins keep declaration order");
+        assert_eq!(plan[0].name, "chat@public-a");
+    }
+
+    #[test]
+    fn cooldown_is_clock_injected_bounded_and_clearable() {
+        let now = Instant::now();
+        let cooldowns = Cooldowns::new();
+        assert!(!cooldowns.is_cooling("peer", now));
+        cooldowns.record_failure("peer", Duration::from_secs(5), now);
+        assert!(cooldowns.is_cooling("peer", now));
+        assert!(cooldowns.is_cooling("peer", now + Duration::from_secs(4)));
+        assert!(!cooldowns.is_cooling("peer", now + Duration::from_secs(6)));
+        cooldowns.clear("peer");
+        assert!(!cooldowns.is_cooling("peer", now));
+        // Even an absurd config ttl cannot pin a provider for long.
+        cooldowns.record_failure("peer", Duration::from_secs(u64::MAX), now);
+        assert!(!cooldowns.is_cooling("peer", now + Duration::from_secs(3601)));
+    }
+
+    #[test]
+    fn metric_labels_are_a_closed_bounded_set() {
+        let kinds = [
+            MeshMetricKind::Selected,
+            MeshMetricKind::Retry,
+            MeshMetricKind::Cooldown,
+            MeshMetricKind::Rejected,
+            MeshMetricKind::PrivateBlocked,
+            MeshMetricKind::Exhausted,
+        ];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            assert_eq!(kind.label(), MESH_METRIC_KINDS[index]);
+        }
+        let before = mesh_metric_count(MeshMetricKind::Selected);
+        record_mesh_metric(MeshMetricKind::Selected);
+        assert_eq!(mesh_metric_count(MeshMetricKind::Selected), before + 1);
     }
 }

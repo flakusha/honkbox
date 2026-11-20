@@ -604,6 +604,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         data_dir.clone(),
         loaded.artifact_max_bytes,
     ));
+    // TASK-reroute-policy: install the resolved [mesh] config once before the
+    // router is built; the mounted reroute handler reads it from this slot.
+    routes::install_mesh_config(loaded.mesh.clone());
     let app_config = AppConfig {
         dev,
         web_dist_dir,

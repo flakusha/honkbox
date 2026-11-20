@@ -42,9 +42,6 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
-#[allow(dead_code)]
-#[path = "../src/texture_postprocess.rs"]
-mod texture_postprocess;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
@@ -53,6 +50,9 @@ mod svg;
 #[allow(dead_code)]
 #[path = "../src/swap.rs"]
 mod swap;
+#[allow(dead_code)]
+#[path = "../src/texture_postprocess.rs"]
+mod texture_postprocess;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -160,6 +160,7 @@ fn settings(ttl: Duration, max_loaded: usize, pinned: &[&str]) -> SwapSettings {
 /// Catalog entries with distinct served `id` (alias) and registry `slug`.
 fn entry(id: &str, slug: &str, kind: ModelKind) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        modality: honkbox_api_types::ModelModalities::empty(),
         id: id.to_owned(),
         slug: slug.to_owned(),
         kind,

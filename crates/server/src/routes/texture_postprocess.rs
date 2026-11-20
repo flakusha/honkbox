@@ -87,6 +87,7 @@ fn gate(available: bool) -> Option<Response> {
         (status = 503, description = "No data dir: job bundles disabled", body = honkbox_api_types::OpenAiError)
     )
 )]
+#[allow(clippy::too_many_lines)] // one validation + staging + sidecar flow by design
 pub(super) async fn post_texture_postprocess(
     State(config): State<AppConfig>,
     body: Result<Json<TexturePostprocessRequest>, JsonRejection>,
@@ -154,6 +155,13 @@ pub(super) async fn post_texture_postprocess(
                 StatusCode::BAD_REQUEST,
                 format!("invalid texture post-process job: {reason}"),
                 Some("invalid_texture_postprocess_request"),
+            );
+        }
+        Ok(Err(PostprocessError::InvalidMapSet(reason))) => {
+            return openai_error_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid PBR map set: {reason}"),
+                Some("pbr_map_set_mismatch"),
             );
         }
         Ok(Err(err)) => {
@@ -229,6 +237,17 @@ fn publish_bundle(
     // audit trail without leaking the host layout through the API.
     if let Some(object) = value.as_object_mut() {
         object.remove("job");
+        if let Some(maps) = object.get_mut("maps").and_then(|v| v.as_array_mut()) {
+            for map in maps {
+                if let Some(map) = map.as_object_mut() {
+                    redact_path(map, "path")?;
+                }
+            }
+        }
+        if let Some(orm) = object.get_mut("orm_pack").and_then(|v| v.as_object_mut()) {
+            redact_path(orm, "path")?;
+            redact_path(orm, "packed_png")?;
+        }
         if let Some(commands) = object.get_mut("commands").and_then(|v| v.as_array_mut()) {
             for command in commands.iter_mut() {
                 if let Some(args) = command.as_array_mut() {
@@ -250,6 +269,19 @@ fn publish_bundle(
         .map_err(|err| format!("cannot encode the bundle manifest: {err}"))?;
     crate::jobs::write_atomic(bundle, "manifest.json", &bytes)?;
     Ok((value, names))
+}
+
+/// Replace a published host path with its file name.
+fn redact_path(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<(), String> {
+    let Some(raw) = object.get(field).and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let name = file_name(Path::new(raw))?.to_owned();
+    object.insert(field.to_owned(), serde_json::Value::String(name));
+    Ok(())
 }
 
 /// A bundle entry must be a plain file name, never a path.
@@ -351,5 +383,60 @@ mod tests {
             .expect("read the 501 body");
         let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON error body");
         assert_eq!(body["error"]["code"], "texture_postprocess_unavailable");
+    }
+
+    #[test]
+    fn published_manifest_never_carries_host_paths() {
+        use honkbox_external_tools::{OrmPack, OutputMap};
+
+        let dir = std::env::temp_dir().join(format!("honkbox-redact-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("bundle dir");
+        let albedo = dir.join("albedo.tx");
+        let manifest = PostprocessManifest {
+            manifest: 1,
+            oiiotool_version: "2.5".to_owned(),
+            maketx_version: "7.1".to_owned(),
+            job: PostprocessJob {
+                name: "set".to_owned(),
+                maps: Vec::new(),
+                output_dir: dir.clone(),
+                tile_size: 256,
+            },
+            commands: vec![vec![
+                "/usr/bin/oiiotool".to_owned(),
+                albedo.to_string_lossy().into_owned(),
+            ]],
+            maps: vec![OutputMap {
+                role: MapRole::Albedo,
+                path: albedo,
+                sha256: "hash".to_owned(),
+                width: 8,
+                height: 8,
+                colorspace: ColorSpace::Srgb,
+                mip_levels: 4,
+                bytes: 1,
+            }],
+            orm_pack: Some(OrmPack {
+                path: dir.join("orm.tx"),
+                packed_png: dir.join("orm.png"),
+                sha256: "hash".to_owned(),
+                width: 8,
+                height: 8,
+                mip_levels: 4,
+                bytes: 1,
+                sources: [MapRole::Ao, MapRole::Rough, MapRole::Metal],
+            }),
+            warnings: Vec::new(),
+            missing_required_maps: Vec::new(),
+            bit_depth_unvalidated: Vec::new(),
+        };
+
+        let (value, _) = publish_bundle(&dir, &manifest).expect("published manifest");
+        let host = dir.to_string_lossy();
+        assert!(!value.to_string().contains(host.as_ref()), "{value}");
+        assert_eq!(value["maps"][0]["path"], "albedo.tx");
+        assert_eq!(value["orm_pack"]["path"], "orm.tx");
+        assert_eq!(value["orm_pack"]["packed_png"], "orm.png");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -134,10 +134,19 @@ pub fn make_stt(
             let family = family.unwrap_or(honkbox_audio_worker::AUDIOCPP_DEFAULT_FAMILY);
             #[cfg(not(feature = "audio-cpp"))]
             {
+                // Name the families THIS build actually has (none without
+                // the engine) instead of leaving the request hanging.
+                let compiled = if honkbox_audio_worker::AUDIOCPP_STT_FAMILIES.is_empty() {
+                    "none".to_owned()
+                } else {
+                    honkbox_audio_worker::AUDIOCPP_STT_FAMILIES.join(", ")
+                };
                 eprintln!(
                     "error: --stt-backend audio-cpp requires the `audio-cpp` cargo feature, \
-                     which is not compiled into this build (family `{family}` requested); \
-                     rebuild with `cargo build -p honkbox-server --features audio-cpp` \
+                     which is not compiled into this build (family `{family}` requested; \
+                     compiled families: {compiled} — enable `audio-cpp` + \
+                     `audio-cpp-qwen3-asr` for `qwen3_asr`); rebuild with \
+                     `cargo build -p honkbox-server --features audio-cpp` \
                      after `bun scripts/vendor-patches.ts sync`"
                 );
                 std::process::exit(1);
