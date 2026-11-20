@@ -1,6 +1,6 @@
 # TASK: Texture post-process (mip/tile/colorspace/ORM via oiiotool)
 
-Status: proposed
+Status: done (2026-11-20, OIIO post-process lane)
 Priority: P0
 Epic: epic-output-formats
 Owner: unassigned

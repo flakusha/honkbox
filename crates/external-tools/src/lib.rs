@@ -29,12 +29,18 @@ use std::time::{Duration, Instant};
 
 mod blender_addons;
 mod blender_assets;
+mod texture_postprocess;
 
 pub use blender_addons::{AddonInfo, AddonTier, BlenderAddons, OperatorInfo};
 pub use blender_assets::{
     AssetArtifact, AssetError, AssetJob, AssetManifest, AssetSource, AssetStage, BakeMap,
     MeshFormat, Primitive, ProgressEvent, RECIPE_VERSION, RecipeFiles, build_manifest, prepare,
     recipe_sha256, run as run_asset_job,
+};
+pub use texture_postprocess::{
+    ColorSpace, DEFAULT_TILE_SIZE, InputMap, MapRole, OiioTool, OrmPack, OutputMap,
+    PostprocessError, PostprocessJob, PostprocessManifest, probe as probe_texture_tools,
+    run as run_texture_postprocess, status as texture_tools_status,
 };
 
 /// Default `ComfyUI` base URL (loopback — honkbox is local-first).
@@ -53,10 +59,12 @@ pub enum ToolId {
     Blender,
     /// `ComfyUI`, driven through its HTTP API.
     ComfyUi,
+    /// The OIIO texture toolchain (`oiiotool` + `maketx`), driven as binaries.
+    Oiio,
 }
 
 impl ToolId {
-    /// Every known tool, in a stable order.
+    /// Every tool the registry probes at discovery, in a stable order.
     pub const ALL: [ToolId; 2] = [ToolId::Blender, ToolId::ComfyUi];
 
     /// Stable lowercase identifier (never user data).
@@ -64,6 +72,7 @@ impl ToolId {
         match self {
             Self::Blender => "blender",
             Self::ComfyUi => "comfyui",
+            Self::Oiio => "oiio",
         }
     }
 }
@@ -87,6 +96,8 @@ pub enum Capability {
     Addon(String),
     /// A probed operator that runs headless (`"op:<id>"`).
     Operator(String),
+    /// Tiled, MIP-mapped texture post-process (`oiiotool` + `maketx`).
+    TexturePostprocess,
 }
 
 impl Capability {
@@ -97,6 +108,7 @@ impl Capability {
             Self::Cycles => "cycles",
             Self::Workflow => "workflow",
             Self::Addon(id) | Self::Operator(id) => id.as_str(),
+            Self::TexturePostprocess => "texture_postprocess",
         }
     }
 
@@ -248,6 +260,9 @@ impl Registry {
             statuses.push(match id {
                 ToolId::Blender => blender_status.clone(),
                 ToolId::ComfyUi => comfyui.clone(),
+                // OIIO is a job tool with its own probe (`texture_tools_status`),
+                // not a registry-discovered capability; it is never in `ALL`.
+                ToolId::Oiio => unreachable!("OIIO is not registry-discovered"),
             });
         }
         self.statuses = statuses;
@@ -636,11 +651,16 @@ echo 'no cycles here'
     #[cfg(unix)]
     fn write_fake_blender(tag: &str, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let path = scratch_dir(tag).join("blender");
-        std::fs::write(&path, script).expect("fake blender");
-        let mut perms = std::fs::metadata(&path).expect("stat").permissions();
+        let dir = scratch_dir(tag);
+        let path = dir.join("blender");
+        let tmp = dir.join(format!("blender.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, script).expect("fake blender");
+        let mut perms = std::fs::metadata(&tmp).expect("stat").permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).expect("chmod");
+        std::fs::set_permissions(&tmp, perms).expect("chmod");
+        // Rename into place so a concurrent exec never sees a half-written
+        // script; the rename carries the mode across.
+        std::fs::rename(&tmp, &path).expect("rename");
         path
     }
 
