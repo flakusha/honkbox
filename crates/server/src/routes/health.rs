@@ -62,13 +62,25 @@ fn note_media_type(media_type: &str, plain_q: &mut Option<f32>, json_q: &mut Opt
     }
 }
 
+/// Discovery links from the legacy version probe to the canonical contract.
+/// The body stays byte-compatible; clients get one place to follow for both
+/// the machine-readable capabilities document and the `OpenAPI` schema.
+const DISCOVERY_LINKS: &str = concat!(
+    "</v1/openapi.json>; rel=\"service-desc\"; type=\"application/json\", ",
+    "</v1/capabilities>; rel=\"service-meta\"; type=\"application/json\"",
+);
+
 /// Binary name + version.
 #[utoipa::path(get, path = "/api/version", responses((status = 200, description = "Binary name and version", body = Version)))]
-pub(super) async fn get_version() -> Json<Version> {
-    Json(Version {
-        name: "honkbox".to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-    })
+pub(super) async fn get_version() -> Response {
+    (
+        [(header::LINK, DISCOVERY_LINKS)],
+        Json(Version {
+            name: "honkbox".to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+        }),
+    )
+        .into_response()
 }
 
 /// `OpenAPI` 3.1 document as JSON.

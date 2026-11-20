@@ -300,6 +300,37 @@ async fn api_version_is_the_wire_contract() {
     assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
 }
 
+/// The legacy probe is also the discovery entry point: RFC 8631/9727 link
+/// relations point at the one canonical contract, never a second inventory.
+#[tokio::test]
+async fn version_advertises_canonical_contract_links() {
+    let app = app_with(catalog_with(&[]));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/version")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("infallible");
+    assert_eq!(response.status(), StatusCode::OK);
+    let links = response
+        .headers()
+        .get("link")
+        .expect("discovery link header")
+        .to_str()
+        .expect("ascii links");
+    assert!(
+        links.contains("</v1/openapi.json>; rel=\"service-desc\""),
+        "{links}"
+    );
+    assert!(
+        links.contains("</v1/capabilities>; rel=\"service-meta\""),
+        "{links}"
+    );
+}
+
 /// The version policy is discoverable WITHOUT prose: the generated `OpenAPI`
 /// `Capabilities` schema description carries the rule (bump on an
 /// incompatible wire change, additive optional fields under the current
