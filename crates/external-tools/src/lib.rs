@@ -493,15 +493,32 @@ pub(crate) fn run_tool(
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, Unavailable> {
-    let mut child = Command::new(bin)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => Unavailable::NotInstalled,
-            _ => Unavailable::ProbeFailed(format!("spawn failed: {err}")),
-        })?;
+    // Linux can return ETXTBSY when two probes of the same script race its
+    // interpreter releasing the file. Retry that transient case only.
+    let mut attempts = 0;
+    let mut child = loop {
+        match Command::new(bin)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(err) if err.raw_os_error() == Some(26) && attempts < 3 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => {
+                return Err(match err.kind() {
+                    std::io::ErrorKind::NotFound => Unavailable::NotInstalled,
+                    _ => Unavailable::ProbeFailed(format!(
+                        "spawn failed: {err} ({})",
+                        bin.display()
+                    )),
+                });
+            }
+        }
+    };
 
     // Drain both pipes on their own threads: a full pipe would block the
     // child, and the timeout below would then kill a healthy tool.
