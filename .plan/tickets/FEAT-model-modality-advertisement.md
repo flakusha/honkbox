@@ -1,6 +1,6 @@
 # FEAT: per-model modality advertisement
 
-Status: proposed
+Status: done
 Priority: P2
 Epic: epic-capabilities-contract
 Owner: unassigned
@@ -18,3 +18,13 @@ Resources: per-test config + temp catalog dirs
 ## Acceptance detail
 
 Contract tests pin one entry per model kind (chat, vision, decision, reranker, image) and the flags/catalog agreement; unknown kinds degrade to empty modality lists, not errors.
+
+## Verification Notes (2026-11-20)
+
+The legacy flat `modalities` list is unchanged; the additive nested field is
+`modality: {input, output}` (content-kind vocabulary) because the flat list's
+`vision` value is a different vocabulary used by existing loop-lore consumers.
+`FeatureFlags.decisions` is present and false until the endpoint lands;
+`rerank` already existed. One contract entry per model kind plus the
+flat-list/flag agreement is asserted. Full `bun run test` and `bun run check`
+pass, including regenerated TS/OpenAPI.

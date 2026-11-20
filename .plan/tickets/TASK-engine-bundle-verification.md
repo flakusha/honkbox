@@ -22,3 +22,12 @@ Resources: throwaway engine projects and temp export dirs per test; no shared en
 
 Verification is external to honkbox; no engine SDK, build command, or MCP
 concept enters honkbox code or DTOs.
+
+## Verification Notes (2026-11-20)
+
+Status remains `proposed`: external-fixture acceptance is not satisfiable here.
+`which godot godot4 renpy gltf-transform unirig` finds only `/usr/bin/godot`;
+Ren'Py, gltf-transform and UniRig are absent. No engine project, SDK pin, or
+external command was added to honkbox code or DTOs. Keep the ticket blocked
+until a pinned Ren'Py SDK and the Bevy allowlist checker are available; Godot
+presence alone is not enough for the stated acceptance.

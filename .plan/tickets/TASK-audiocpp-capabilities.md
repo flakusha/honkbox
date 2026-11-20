@@ -1,6 +1,6 @@
 # TASK: audio.cpp capability advertisement
 
-Status: proposed
+Status: done
 Priority: P2
 Epic: epic-capabilities-contract
 Owner: unassigned
@@ -26,3 +26,10 @@ Resources: none beyond existing test infrastructure
 Both snapshots (feature on/off) are contract-tested; a family listed in
 `/v1/capabilities` but not compiled is a test failure (drift guard), matching
 the existing controlnet/lora honesty posture.
+
+## Verification Notes (2026-11-20)
+
+Audio worker exports `AUDIOCPP_STT_FAMILIES` / `AUDIOCPP_TTS_FAMILIES`; the
+same constants feed the capabilities document and the named load error.
+Both feature-on and feature-off snapshots are asserted in the capabilities
+contract. Full `bun run test` and `bun run check` pass.

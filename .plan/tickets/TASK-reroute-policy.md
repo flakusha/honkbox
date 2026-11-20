@@ -1,6 +1,6 @@
 # TASK: Bounded reroute policy
 
-Status: proposed
+Status: done
 Priority: P2
 Epic: epic-mesh-integration
 Owner: unassigned
@@ -21,3 +21,11 @@ Resources: multiple mesh stubs on assigned ports; per-test cooldown state
 
 Retry budget is never exceeded; a blocked target produces a named error; metrics
 carry only bounded `kind` labels, never URLs or tokens.
+
+## Verification Notes (2026-11-20)
+
+Implemented `POST /v1/mesh/reroute`: capped budget (1..4), model-group fallback
+order, per-provider cooldown, private scope fail-closed on unknown/public pins,
+strict header parsing without echo, and bounded metric kinds. `bun run check`,
+`bun run test:server`, and the 73-test `mesh_reroute` contract pass. Budget means
+distinct candidates per turn; one dead upstream is not re-hit within a turn.
