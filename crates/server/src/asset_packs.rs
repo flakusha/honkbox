@@ -39,7 +39,7 @@ pub(crate) struct PackEntry {
     /// Published digest, only when the source actually published one.
     #[serde(default)]
     pub sha256: Option<String>,
-    /// Published md5 (PolyHaven publishes one per asset); integrity
+    /// Published md5 (`PolyHaven` publishes one per asset); integrity
     /// cross-check metadata, never a substitute for the local sha256.
     #[serde(default)]
     pub source_md5: Option<String>,
@@ -69,13 +69,13 @@ pub(crate) enum PackRefusal {
 }
 
 impl PackRefusal {
-    /// Wire code in the OpenAI-style error envelope.
-    pub(crate) fn code(&self) -> &'static str {
+    /// Wire code in the `OpenAI`-style error envelope.
+    pub(crate) fn code() -> &'static str {
         "pack_license_restricted"
     }
 
     /// The deployment asked for a redistribution the license forbids.
-    pub(crate) fn status(&self) -> StatusCode {
+    pub(crate) fn status() -> StatusCode {
         StatusCode::PRECONDITION_FAILED
     }
 
@@ -98,7 +98,7 @@ impl PackRefusal {
 
 impl fmt::Display for PackRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.code(), self.message())
+        write!(f, "{}: {}", Self::code(), self.message())
     }
 }
 
@@ -121,12 +121,67 @@ pub(crate) fn guard_pack(pack_id: &str) -> Result<(), PackRefusal> {
     }
 }
 
+/// Operator-configured mirror origin for pack bytes. The client never gets
+/// to choose an arbitrary fetch target: a URL is trusted only when its origin
+/// is the curated publisher or this mirror.
+pub(crate) const MIRROR_ENV: &str = "HONKBOX_ASSET_PACK_MIRROR";
+
+#[cfg(test)]
+static MIRROR_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Test-only override; integration tests include this module with `cfg(test)`.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn set_mirror_override(base: Option<&str>) {
+    let mut slot = MIRROR_OVERRIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = base.map(str::to_owned);
+}
+
+fn mirror_base() -> Option<String> {
+    #[cfg(test)]
+    {
+        let slot = MIRROR_OVERRIDE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(base) = slot.clone() {
+            return Some(base);
+        }
+    }
+    std::env::var(MIRROR_ENV).ok()
+}
+
+fn same_origin(a: &reqwest::Url, b: &reqwest::Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// A fetch URL is accepted only on the curated publisher origin or the
+/// operator mirror origin. Userinfo is rejected as another redirect trick.
+pub(crate) fn source_allowed(pack: &PackEntry, raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return false;
+    }
+    let curated = reqwest::Url::parse(&pack.source_url).ok();
+    let mirror = mirror_base().and_then(|base| reqwest::Url::parse(&base).ok());
+    curated.is_some_and(|p| same_origin(&p, &url)) || mirror.is_some_and(|m| same_origin(&m, &url))
+}
+
 /// Request body for `POST /v1/asset-packs/fetch`.
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 pub(crate) struct FetchRequest {
     /// Curated pack id.
     pub pack_id: String,
-    /// Direct source URL for this fetch.
+    /// Fetch URL: the curated publisher origin or the operator mirror.
     pub source_url: String,
     /// Safe artifact id used for the stored bytes and license sidecar.
     pub artifact_id: String,
@@ -141,7 +196,7 @@ pub(crate) struct FetchRecord {
     pub license: String,
     /// Curated publisher page from the reviewed pack list.
     pub source_url: String,
-    /// Actual URL the bytes were fetched from (may be an operator mirror).
+    /// Actual URL the bytes were fetched from (curated or operator mirror).
     pub fetch_url: String,
     /// Locally computed sha256 of the bytes actually stored.
     pub sha256: String,
@@ -169,6 +224,8 @@ pub(crate) struct FetchJob {
 pub(crate) enum FetchError {
     /// License gate refused the pack (no bytes requested).
     Refused(PackRefusal),
+    /// Source URL is neither the curated publisher nor the operator mirror.
+    InvalidSource,
     /// Local filesystem or JSON failure.
     Io(String),
     /// HTTP status outside 2xx.
@@ -183,6 +240,7 @@ impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Refused(refusal) => write!(f, "{refusal}"),
+            Self::InvalidSource => write!(f, "asset pack source URL is not allowed"),
             Self::Io(err) => write!(f, "asset pack IO failed: {err}"),
             Self::Status(code) => write!(f, "asset pack source returned HTTP {code}"),
             Self::Transfer(err) => write!(f, "asset pack transfer failed: {err}"),
@@ -198,6 +256,9 @@ pub(crate) async fn fetch(job: &FetchJob) -> Result<FetchRecord, FetchError> {
     // destination directory, let alone a `.part`.
     guard_pack(&job.pack_id).map_err(FetchError::Refused)?;
     let pack = lookup(&job.pack_id).expect("guard accepted a curated pack");
+    if !source_allowed(pack, &job.source_url) {
+        return Err(FetchError::InvalidSource);
+    }
 
     let dir = job.root.join("asset-packs");
     tokio::fs::create_dir_all(&dir)
@@ -209,6 +270,7 @@ pub(crate) async fn fetch(job: &FetchJob) -> Result<FetchRecord, FetchError> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("honkbox/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()
         .map_err(|err| FetchError::Io(format!("HTTP client: {err}")))?;
@@ -254,14 +316,14 @@ pub(crate) async fn fetch(job: &FetchJob) -> Result<FetchRecord, FetchError> {
     }
 
     let sha256 = sha256_hex(hasher.finalize());
-    if let Some(expected) = &pack.sha256 {
-        if !sha256.eq_ignore_ascii_case(expected) {
-            discard(&part).await;
-            return Err(FetchError::Checksum(format!(
-                "pack {:?}: expected {expected}, got {sha256}",
-                pack.id
-            )));
-        }
+    if let Some(expected) = &pack.sha256
+        && !sha256.eq_ignore_ascii_case(expected)
+    {
+        discard(&part).await;
+        return Err(FetchError::Checksum(format!(
+            "pack {:?}: expected {expected}, got {sha256}",
+            pack.id
+        )));
     }
     tokio::fs::rename(&part, &final_path)
         .await

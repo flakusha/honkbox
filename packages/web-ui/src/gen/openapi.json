@@ -3875,7 +3875,7 @@
           },
           "fetch_url": {
             "type": "string",
-            "description": "Actual URL the bytes were fetched from (may be an operator mirror)."
+            "description": "Actual URL the bytes were fetched from (curated or operator mirror)."
           },
           "license": {
             "type": "string"
@@ -3919,7 +3919,7 @@
           },
           "source_url": {
             "type": "string",
-            "description": "Direct source URL for this fetch."
+            "description": "Fetch URL: the curated publisher origin or the operator mirror."
           }
         }
       },

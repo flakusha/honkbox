@@ -69,6 +69,17 @@ use tower::ServiceExt as _;
 use catalog::asset_packs as packs;
 use catalog::asset_packs::{FetchError, FetchJob};
 
+// The mirror override is process-global; serialize the tests that touch it.
+static MIRROR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct MirrorGuard;
+
+impl Drop for MirrorGuard {
+    fn drop(&mut self) {
+        packs::set_mirror_override(None);
+    }
+}
+
 // ---------------------------------------------------------------- fixture
 
 /// Local one-shot HTTP fixture; `hits` counts GETs (zero on a refusal).
@@ -268,6 +279,9 @@ async fn cc0_fetch_records_sha_and_license_row() {
     let bytes = b"polyhaven fixture bytes v1".to_vec();
     let expected = sha256_hex(&bytes);
     let server = MockServer::new(bytes.clone(), None);
+    let _mirror_lock = MIRROR_LOCK.lock().await;
+    packs::set_mirror_override(Some(&server.base));
+    let _mirror_guard = MirrorGuard;
     let app = routes::app(app_config(&root));
     let response = post_json(
         &app,
@@ -313,6 +327,36 @@ async fn cc0_fetch_records_sha_and_license_row() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+/// A client-chosen URL outside the curated origin and operator mirror is
+/// refused before a request or a destination directory.
+#[tokio::test]
+async fn arbitrary_source_url_is_refused_before_any_request() {
+    let root = temp_root("ssrf-url");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let server = MockServer::new(b"internal".to_vec(), Some(Arc::clone(&hits)));
+    let _mirror_lock = MIRROR_LOCK.lock().await;
+    packs::set_mirror_override(None);
+    let _mirror_guard = MirrorGuard;
+    let app = routes::app(app_config(&root));
+    let response = post_json(
+        &app,
+        json!({
+            "pack_id": "polyhaven-rocks",
+            "source_url": server.url("/metadata"),
+            "artifact_id": "ssrf-fixture"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await["error"]["code"],
+        "invalid_source_url"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert!(!root.join("asset-packs").exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
 /// A refused fetch never requests bytes and never leaves a `.part`.
 #[tokio::test]
 async fn refused_qal_fetch_leaves_no_partial_bytes() {
@@ -327,7 +371,7 @@ async fn refused_qal_fetch_leaves_no_partial_bytes() {
     };
     match packs::fetch(&job).await.expect_err("QAL must refuse") {
         FetchError::Refused(refusal) => {
-            assert_eq!(refusal.code(), "pack_license_restricted");
+            assert_eq!(packs::PackRefusal::code(), "pack_license_restricted");
             assert!(refusal.message().contains("quaternius-ultimate-space-kit"));
             assert!(refusal.message().contains("no redistribution as assets"));
         }

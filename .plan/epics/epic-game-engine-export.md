@@ -20,6 +20,9 @@ external-only. Yield after those five.
 - `TASK-engine-bundle-verification.md` — Godot/Bevy/Ren'Py external verification.
 - `TASK-godot-importer-fixture.md` — engine-owned `EditorImportPlugin` fixture
   (cross-app; honkbox emits the manifest, it does not ship editor code).
+- `TASK-cc0-pack-fetch.md` — curated CC0 pack fetch + local sha/license rows (P1, done 2026-11-20).
+- `TASK-shader-validate-hook.md` — headless `.gdshader` compile hook + 501 (P3, in progress: real Godot binary unverified).
+- `TASK-qal-guard.md` — refuse no-redistribution packs before any request (done 2026-11-20).
 
 ## Acceptance
 

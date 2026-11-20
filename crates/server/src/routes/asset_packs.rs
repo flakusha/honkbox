@@ -1,6 +1,6 @@
 //! `POST /v1/asset-packs/fetch`: fetch one curated CC0 pack by URL.
 //!
-//! Registration stays in `routes.rs` (the OpenAPI coverage gate scans that
+//! Registration stays in `routes.rs` (the `OpenAPI` coverage gate scans that
 //! file); this module holds validation and the refusal mapping only. The
 //! QAL guard runs here at enqueue AND in the fetch write seam, so a refused
 //! pack never produces a request, a directory, or a `.part`.
@@ -99,7 +99,19 @@ pub(super) async fn post_asset_pack_fetch(
 
     // Enqueue-time gate: no HTTP request, no destination directory, no bytes.
     if let Err(refusal) = packs::guard_pack(&req.pack_id) {
-        return error(refusal.status(), &refusal.message(), refusal.code());
+        return error(
+            packs::PackRefusal::status(),
+            &refusal.message(),
+            packs::PackRefusal::code(),
+        );
+    }
+    let pack = packs::lookup(&req.pack_id).expect("guard accepted a curated pack");
+    if !packs::source_allowed(pack, &req.source_url) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "source_url must be the curated publisher origin or HONKBOX_ASSET_PACK_MIRROR",
+            "invalid_source_url",
+        );
     }
 
     let Some(root) = config.data_dir.clone() else {
@@ -117,9 +129,16 @@ pub(super) async fn post_asset_pack_fetch(
     };
     match packs::fetch(&job).await {
         Ok(record) => (StatusCode::OK, Json(record)).into_response(),
-        Err(packs::FetchError::Refused(refusal)) => {
-            error(refusal.status(), &refusal.message(), refusal.code())
-        }
+        Err(packs::FetchError::Refused(refusal)) => error(
+            packs::PackRefusal::status(),
+            &refusal.message(),
+            packs::PackRefusal::code(),
+        ),
+        Err(packs::FetchError::InvalidSource) => error(
+            StatusCode::BAD_REQUEST,
+            "source_url must be the curated publisher origin or HONKBOX_ASSET_PACK_MIRROR",
+            "invalid_source_url",
+        ),
         Err(packs::FetchError::Status(code)) => error(
             StatusCode::BAD_GATEWAY,
             &format!("asset pack source returned HTTP {code}"),
