@@ -44,15 +44,17 @@ struct ScopedGenerationCache {
     cache: RequestCache<serde_json::Value>,
 }
 
-static GENERATION_CACHES: LazyLock<Mutex<HashMap<(usize, usize), Arc<ScopedGenerationCache>>>> =
+type GenerationCaches = HashMap<(usize, usize), Arc<ScopedGenerationCache>>;
+
+static GENERATION_CACHES: LazyLock<Mutex<GenerationCaches>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Cache for this config's pipeline/catalog pair. Empty (expired) caches are
 /// reclaimed, and with them the address pins: recycled addresses start fresh.
 fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
     let key = (
-        Arc::as_ptr(&config.sd) as *const () as usize,
-        Arc::as_ptr(&config.catalog) as *const () as usize,
+        Arc::as_ptr(&config.sd).cast::<()>() as usize,
+        Arc::as_ptr(&config.catalog).cast::<()>() as usize,
     );
     let mut caches = GENERATION_CACHES
         .lock()
@@ -349,10 +351,10 @@ pub(super) async fn post_images_generations(
             canonical_hash(&serde_json::to_value(&req).unwrap_or(serde_json::Value::Null)),
         )
     });
-    if let (Some(cache), Some(key)) = (cache.as_ref(), cache_key.as_deref()) {
-        if let Some(hit) = cache.cache.get(key) {
-            return axum::Json((*hit).clone()).into_response();
-        }
+    if let (Some(cache), Some(key)) = (cache.as_ref(), cache_key.as_deref())
+        && let Some(hit) = cache.cache.get(key)
+    {
+        return axum::Json((*hit).clone()).into_response();
     }
     let (pipeline_loras, lora_records, lora_warnings) =
         match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
