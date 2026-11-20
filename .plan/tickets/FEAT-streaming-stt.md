@@ -1,6 +1,6 @@
 # FEAT: Streaming STT with SSE partials
 
-Status: proposed
+Status: done (2026-11-20, audio-vad/streaming-STT lane)
 Priority: P1
 Epic: epic-audio-streaming
 Owner: unassigned

@@ -353,8 +353,30 @@
     "/v1/audio/transcriptions": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart\nwrapper over the same STT worker as `/v1/transcribe`. `file` is\nrequired (`audio/wav`, RIFF-sniffed `application/octet-stream`, or\n`audio/pcm-s16le` + `sample_rate` form field / query); `model` is\noptional (server default STT); `language` optional; `response_format`\n`json` (default), `verbose_json` (adds the worker's timestamped\nsegments), `srt` or `vtt` (`SubRip` / `WebVTT` subtitles rendered from the\nsame segments; `application/x-subrip` / `text/vtt`). Errors are\n`OpenAI` envelopes; only a request that is not multipart at all gets\naxum's transport-level 400 before the handler runs. The native route is\nunchanged.",
+        "summary": "`POST /v1/audio/transcriptions` (REQ-9): `OpenAI`-shaped multipart\nwrapper over the same STT worker as `/v1/transcribe`. `file` is\nrequired (`audio/wav`, RIFF-sniffed `application/octet-stream`, or\n`audio/pcm-s16le` + `sample_rate` form field / query); `model` is\noptional (server default STT); `language` optional; `response_format`\n`json` (default), `verbose_json` (adds the worker's timestamped\nsegments), `srt` or `vtt` (`SubRip` / `WebVTT` subtitles rendered from the\nsame segments; `application/x-subrip` / `text/vtt`). Errors are\n`OpenAI` envelopes; only a request that is not multipart at all gets\naxum's transport-level 400 before the handler runs. The native route is\nunchanged. `?stream=true` switches to an additive SSE feed of ordered\npartial/final transcript frames over bounded windows; absent/false keeps\nthe file-only response exactly as before.",
         "operationId": "post_audio_transcriptions",
+        "parameters": [
+          {
+            "name": "sample_rate",
+            "in": "query",
+            "description": "Input sample rate in Hz (audio/pcm-s16le uploads only)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "stream",
+            "in": "query",
+            "description": "true → SSE partial/final transcript frames over bounded windows; absent/false → file-only JSON response",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "requestBody": {
           "description": "multipart/form-data: file, model?, language?, response_format? (json|verbose_json|srt|vtt), sample_rate?",
           "content": {
@@ -368,7 +390,7 @@
         },
         "responses": {
           "200": {
-            "description": "Transcription (json / verbose_json / srt / vtt)",
+            "description": "File-only transcription (json / verbose_json / srt / vtt); with stream=true, an SSE stream of ordered partial/final transcript frames",
             "content": {
               "application/json": {
                 "schema": {

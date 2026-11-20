@@ -121,3 +121,101 @@ impl SileroVad {
         Ok(spans)
     }
 }
+
+impl SileroVad {
+    /// Speech spans cut into windows of at most `max_ms` — the bounded view
+    /// the streaming STT chunker consumes. Long VAD spans are split on
+    /// `max_ms` boundaries; empty/inverted spans are dropped. Window count
+    /// is bounded by total speech length, so no input produces unbounded
+    /// buffering.
+    pub fn bounded_spans(
+        &self,
+        pcm16: &[i16],
+        sample_rate: u32,
+        max_ms: u32,
+    ) -> Result<Vec<VadSpan>, VadError> {
+        if max_ms == 0 {
+            return Err(VadError::Format("max window must be non-zero".into()));
+        }
+        Ok(split_bounded(&self.spans(pcm16, sample_rate)?, max_ms))
+    }
+}
+
+/// Split VAD speech spans into bounded windows. Pure and model-free so the
+/// ceiling is unit-testable without an ort session.
+fn split_bounded(spans: &[VadSpan], max_ms: u32) -> Vec<VadSpan> {
+    let mut windows = Vec::new();
+    for span in spans {
+        let mut start = span.start_ms;
+        while start < span.end_ms {
+            let end = span.end_ms.min(start.saturating_add(max_ms));
+            windows.push(VadSpan {
+                start_ms: start,
+                end_ms: end,
+            });
+            start = end;
+        }
+    }
+    windows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_bounded_caps_window_length() {
+        let spans = [VadSpan {
+            start_ms: 100,
+            end_ms: 950,
+        }];
+        let windows = split_bounded(&spans, 300);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(
+            windows[0],
+            VadSpan {
+                start_ms: 100,
+                end_ms: 400
+            }
+        );
+        assert_eq!(
+            windows[1],
+            VadSpan {
+                start_ms: 400,
+                end_ms: 700
+            }
+        );
+        assert_eq!(
+            windows[2],
+            VadSpan {
+                start_ms: 700,
+                end_ms: 950
+            }
+        );
+    }
+
+    #[test]
+    fn split_bounded_drops_empty_and_preserves_short() {
+        let spans = [
+            VadSpan {
+                start_ms: 5,
+                end_ms: 5,
+            },
+            VadSpan {
+                start_ms: 9,
+                end_ms: 4,
+            },
+            VadSpan {
+                start_ms: 20,
+                end_ms: 40,
+            },
+        ];
+        assert_eq!(
+            split_bounded(&spans, 100),
+            vec![VadSpan {
+                start_ms: 20,
+                end_ms: 40
+            }]
+        );
+    }
+}

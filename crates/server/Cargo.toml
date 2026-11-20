@@ -109,4 +109,11 @@ audio-cpp = [
     "honkbox-audio-worker/audio-cpp",
     "honkbox-audio-worker/audio-cpp-qwen3-asr",
 ]
+
+# Silero VAD (TASK-audio-vad-surface): non-default while ort =2.0.0-rc.15
+# clears license/advisory review. Forwarding this one switch makes the
+# worker's `VAD_COMPILED` — and therefore `capabilities.features.vad` —
+# derive from the build, never a hand-written flag. With it off, streaming
+# STT still runs on fixed bounded windows.
+audio-vad = ["honkbox-audio-worker/vad"]
 default = ["vulkan", "llm-vision", "barcode"]

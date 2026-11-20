@@ -1724,6 +1724,34 @@ pub struct TranscriptionVerbose {
     pub segments: Vec<TranscriptSegment>,
 }
 
+/// Phase of a [`TranscriptionStreamEvent`] frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionStreamPhase {
+    /// One bounded audio window was transcribed; more may follow.
+    Partial,
+    /// Terminal frame: all windows done, cancelled, or the deadline hit.
+    Final,
+}
+
+/// One ordered frame of the SSE streaming-transcription feed
+/// (`POST /v1/audio/transcriptions?stream=true`). Frames arrive in strict
+/// `seq` order with no gaps; `final` is always last. Carried as SSE `data:`
+/// on an existing route, so it needs no OpenAPI/TS schema entry of its own.
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptionStreamEvent {
+    /// Monotonic, gap-free frame index (0-based).
+    pub seq: u32,
+    /// `partial` for a window result, `final` for the terminal frame.
+    pub phase: TranscriptionStreamPhase,
+    /// Transcript text for this window (empty for a silent window).
+    pub text: String,
+    /// Window start offset in milliseconds.
+    pub start_ms: u32,
+    /// Window end offset in milliseconds.
+    pub end_ms: u32,
+}
+
 /// `POST /v1/audio/speech` request (REQ-9). `model` is optional (server
 /// default TTS); `response_format` accepts `wav` (default, RIFF/WAVE
 /// container), `pcm` (raw little-endian signed 16-bit mono samples,
