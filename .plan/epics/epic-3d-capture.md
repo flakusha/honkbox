@@ -15,6 +15,9 @@ separate long-running GPU reservation class.
 ## Tickets
 
 - `TASK-splat-viewer-spike.md` — WebGL viewer, no training (first slice).
+- `TASK-splat-render-vkgs-probe.md` — prebuilt vkgs headless render + capability probe (P2, in progress: real binary unverified).
+- `TASK-splat-turntable-job.md` — sequencefile-driven turntable job (P2, follows the vkgs probe).
+- `FEAT-image-to-3d-idol-spike.md` — image-to-3DGS fixture spike (P2, license decision open).
 - `FEAT-3d-training-jobs.md` — postponed pending validated demand.
 
 ## Acceptance

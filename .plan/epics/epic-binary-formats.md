@@ -19,6 +19,8 @@ capabilities from compiled code and configured tools, not from README prose.
 - `TASK-binary-artifact-api.md` — chunked upload + Range download (P2).
 - `TASK-svg-ora-support.md` — safe SVG/ORA read path (P2).
 - `TASK-model-format-validation.md` — GLB/splat validation gate (P2).
+- `TASK-model-license-registry.md` — license registry + product/manifest rendering (done 2026-11-20).
+- `TASK-nc-weight-gate.md` — refuse NC-flagged artifacts + stamp manifests (done 2026-11-20).
 
 ## Acceptance
 
