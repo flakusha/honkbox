@@ -185,3 +185,20 @@ decode GPU test both matched CPU references within 1e-4; clippy `-D warnings`
 clean; fmt clean.
 
 Next: scheduler/sampling slice, then wire into `generate`.
+
+## Landed — slice 13 (2026-11-22, worktree)
+
+`DdimStep::run` adds the DDIM eta=0 update on the shared Vulkan compute
+scaffold: `x_{t-1} = sqrt(a_prev) * (x_t - sqrt(1-a_t) * eps) / sqrt(a_t)
++ sqrt(1-a_prev) * eps`. `DdimAlphas::from_cumprod` derives the four
+coefficients from consecutive cumulative alphas and rejects out-of-range or
+non-finite input. `seeded_uniform_noise` derives a deterministic latent from a
+seed and index using sd-core's `splitmix64` (no second hash copy). `Op` gains a
+`SamplingStep` capability floor. `generate` is unchanged: no model prediction
+exists yet, so it still names the missing pieces instead of faking an image.
+
+Evidence: 43 tests pass on `ash-compute` and 44 on `experimental-ash-sd`; the
+DDIM GPU test matched a CPU reference within 1e-4 on an 8-element latent;
+clippy `-D warnings` clean; fmt clean.
+
+Next: classifier-free guidance + text conditioning, then wire into `generate`.

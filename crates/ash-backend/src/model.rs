@@ -31,6 +31,8 @@ pub enum Op {
     GroupNorm,
     /// NCHW transposed convolution (VAE upsampling).
     ConvTranspose2d,
+    /// One DDIM eta=0 scheduler step over a latent tensor.
+    SamplingStep,
 }
 
 impl Op {
@@ -60,6 +62,11 @@ impl Op {
             Self::GroupNorm => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 24, // six shape u32s
+                ..CapacityRequirements::default()
+            },
+            Self::SamplingStep => CapacityRequirements {
+                workgroup_count: [1, 1, 1],
+                storage_range: 20, // length + four alpha u32s
                 ..CapacityRequirements::default()
             },
         }

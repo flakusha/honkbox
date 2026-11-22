@@ -13,6 +13,7 @@ fn main() {
         ("shaders/silu.comp", "silu.spv"),
         ("shaders/group_norm.comp", "group_norm.spv"),
         ("shaders/conv_transpose.comp", "conv_transpose.spv"),
+        ("shaders/ddim_step.comp", "ddim_step.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

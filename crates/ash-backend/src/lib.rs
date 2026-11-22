@@ -27,6 +27,8 @@
 //! - [`conv_transpose`]: [`conv_transpose::ConvTranspose2d`], transposed conv.
 //! - [`vae_decode`]: [`vae_decode::VaeDecode`], one decoder block composed from
 //!   the kernels above (weights come from the caller, never bundled).
+//! - [`sampler`]: [`sampler::DdimStep`], one DDIM eta=0 scheduler update, plus
+//!   deterministic seed-derived latent noise.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -133,6 +135,8 @@ pub mod model;
 pub mod norm;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
+#[cfg(feature = "ash-compute")]
+pub mod sampler;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;
 #[cfg(feature = "ash-compute")]
