@@ -27,6 +27,8 @@ pub enum Op {
     Conv2d,
     /// Elementwise `SiLU` activation.
     Silu,
+    /// NCHW group normalization.
+    GroupNorm,
 }
 
 impl Op {
@@ -51,6 +53,11 @@ impl Op {
             Self::Conv2d => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 40, // ten shape u32s
+                ..CapacityRequirements::default()
+            },
+            Self::GroupNorm => CapacityRequirements {
+                workgroup_count: [1, 1, 1],
+                storage_range: 24, // six shape u32s
                 ..CapacityRequirements::default()
             },
         }

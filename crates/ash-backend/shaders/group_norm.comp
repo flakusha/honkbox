@@ -1,0 +1,58 @@
+// Provenance: original (NCHW group normalization written from first principles; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation per element; each thread recomputes its group's statistics.
+// ponytail: O(N * group_size) today; add a two-pass reduce when a real UNet
+// makes this the bottleneck.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Affine { float affine[]; }; // gamma,beta per channel
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape {
+    uint dims[6];
+}; // batch, channels, height, width, groups, eps bits
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    uint batch = dims[0];
+    uint channels = dims[1];
+    uint height = dims[2];
+    uint width = dims[3];
+    uint groups = dims[4];
+    uint spatial = height * width;
+    uint total = batch * channels * spatial;
+    if (index >= total) {
+        return;
+    }
+
+    uint cpg = channels / groups;
+    uint group_elems = cpg * spatial;
+    uint n = index / (channels * spatial);
+    uint c = (index / spatial) % channels;
+    uint group = c / cpg;
+    uint first_channel = group * cpg;
+
+    float mean = 0.0;
+    for (uint gc = 0; gc < cpg; ++gc) {
+        uint channel_base = ((n * channels + first_channel + gc) * height) * width;
+        for (uint s = 0; s < spatial; ++s) {
+            mean += values[channel_base + s];
+        }
+    }
+    mean /= float(group_elems);
+
+    float variance = 0.0;
+    for (uint gc = 0; gc < cpg; ++gc) {
+        uint channel_base = ((n * channels + first_channel + gc) * height) * width;
+        for (uint s = 0; s < spatial; ++s) {
+            float delta = values[channel_base + s] - mean;
+            variance += delta * delta;
+        }
+    }
+    variance /= float(group_elems);
+
+    float inv_std = inversesqrt(variance + uintBitsToFloat(dims[5]));
+    result[index] = (values[index] - mean) * inv_std * affine[2 * c] + affine[2 * c + 1];
+}

@@ -155,3 +155,17 @@ reference within 1e-5; clippy `-D warnings` clean; fmt clean.
 
 Next: GroupNorm for UNet conv blocks, then VAE decode slice.
 
+
+## Landed — slice 11 (2026-11-22, worktree)
+
+`GroupNorm::run(values, gamma, beta, shape, eps)` normalizes each `(batch,
+group)` over `C/G × H × W` elements, then applies per-channel affine params.
+New `shaders/group_norm.comp` uses one invocation per element and recomputes
+group statistics per thread — a deliberate O(N × group_size) starting point
+with a two-pass reduce as the upgrade path. GroupNorm joins the `Op` vocabulary
+with a 24-byte static floor; shape validation rejects zero dims, non-divisible
+groups and buffer mismatches.
+
+Evidence: 37 tests pass on `ash-compute`, 41 on `experimental-ash-sd`; GPU test
+on a 1×4×2×2 / 2-group tensor matched a CPU reference within 1e-4;
+clippy `-D warnings` clean; fmt clean.

@@ -23,6 +23,7 @@
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
 //! - [`conv2d`]: [`conv2d::Conv2d`], direct NCHW convolution.
 //! - [`silu`]: [`silu::Silu`], elementwise `SiLU` activation.
+//! - [`group_norm`]: [`group_norm::GroupNorm`], NCHW group normalization.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -117,6 +118,8 @@ pub mod compute;
 pub mod conv2d;
 #[cfg(feature = "ash-compute")]
 pub mod device;
+#[cfg(feature = "ash-compute")]
+pub mod group_norm;
 #[cfg(feature = "ash-compute")]
 pub mod matmul;
 #[cfg(feature = "ash-compute")]
