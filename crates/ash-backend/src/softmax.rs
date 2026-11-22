@@ -24,9 +24,20 @@ impl Softmax {
     }
 
     /// Normalize each row of a `rows × cols` f32 matrix.
+    pub fn run(&self, values: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>, VkError> {
+        self.run_scaled(values, rows, cols, 1.0)
+    }
+
+    /// Scale every score before softmax — attention uses `1/sqrt(head_dim)`.
     ///
     /// The shape is explicit: a flattened buffer cannot tell rows apart.
-    pub fn run(&self, values: &[f32], rows: usize, cols: usize) -> Result<Vec<f32>, VkError> {
+    pub fn run_scaled(
+        &self,
+        values: &[f32],
+        rows: usize,
+        cols: usize,
+        scale: f32,
+    ) -> Result<Vec<f32>, VkError> {
         let invalid = || {
             VkError::Device("softmax: non-empty shape matching the input length required".into())
         };
@@ -53,7 +64,7 @@ impl Softmax {
         })?;
 
         let input = GpuBuffer::new(&self.kernel.device, &f32_bytes(values))?;
-        let spare = GpuBuffer::new(&self.kernel.device, &[0u8; 4])?;
+        let scale = GpuBuffer::new(&self.kernel.device, &scale.to_bits().to_le_bytes())?;
         let output = GpuBuffer::new(&self.kernel.device, &vec![0u8; bytes])?;
         let shape = GpuBuffer::new(
             &self.kernel.device,
@@ -63,7 +74,7 @@ impl Softmax {
                 .collect::<Vec<u8>>(),
         )?;
         let result = self.kernel.dispatch(
-            &[input, spare, output, shape],
+            &[input, scale, output, shape],
             [bytes_u64, 4, bytes_u64, 8],
             2,
             bytes,

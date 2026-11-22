@@ -104,6 +104,16 @@ Evidence: 28 tests pass on `ash-compute`, 32 on `experimental-ash-sd`; GPU test
 ran on RADV (3 rows = partial workgroup, 1000.0 inputs = overflow guard) and
 matched a CPU reference within 1e-6; clippy `-D warnings` clean; fmt clean.
 
-Next: attention kernel (matmul + softmax already exist), then norm and VAE
-slice before sampling can return an image.
+## Landed — slice 7 (2026-11-22, worktree)
+
+`Attention` composes the existing kernels: score matmul → scaled softmax →
+output matmul. `Softmax::run_scaled` uses the previously spare binding as an
+f32 scale (attention passes `1/sqrt(head_dim)`); `AttentionShape` groups the
+four shape values. `K` is supplied pre-transposed — no transpose kernel yet.
+
+Evidence: 30 tests pass on `ash-compute`, 34 on `experimental-ash-sd`; GPU
+attention test matched a CPU reference within 1e-4; clippy `-D warnings` clean;
+fmt clean. `Op::Attention` joins the vocabulary.
+
+Next: norm and VAE/conv slices before sampling can return an image.
 

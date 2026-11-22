@@ -19,6 +19,7 @@
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
 //! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
+//! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -105,6 +106,8 @@ impl std::fmt::Display for VkError {
 #[cfg(feature = "ash-compute")]
 impl std::error::Error for VkError {}
 
+#[cfg(feature = "ash-compute")]
+pub mod attention;
 #[cfg(feature = "ash-compute")]
 pub mod compute;
 #[cfg(feature = "ash-compute")]

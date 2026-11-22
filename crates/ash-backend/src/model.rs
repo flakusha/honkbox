@@ -19,6 +19,8 @@ pub enum Op {
     MatMul,
     /// Stable row-wise normalization.
     Softmax,
+    /// Scaled dot-product attention (composed from matmul + softmax).
+    Attention,
 }
 
 impl Op {
@@ -30,9 +32,9 @@ impl Op {
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()
             },
-            Self::MatMul => CapacityRequirements {
+            Self::MatMul | Self::Attention => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
-                storage_range: 12, // three shape u32s
+                storage_range: 12, // matmul shape buffer
                 ..CapacityRequirements::default()
             },
             Self::Softmax => CapacityRequirements {
