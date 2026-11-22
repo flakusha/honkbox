@@ -32,6 +32,9 @@ use honkbox_api_types::{
     TranscriptionText, TranscriptionVerbose, UnloadAllResult, UnloadResult, Version, VisionFeature,
     Voice, VoiceList,
 };
+use honkbox_api_types::{
+    ComfyUiHistory, ComfyUiProgress, ComfyUiQueue, ComfyUiStatus, ManagedApp, ManagedAppList,
+};
 use rust_embed::Embed;
 use utoipa::OpenApi;
 
@@ -99,7 +102,15 @@ pub struct EmbeddedUi;
         get_fizgig_job,
         cancel_fizgig_job,
         post_content_urls,
-        post_mesh_reroute
+        post_mesh_reroute,
+        get_apps,
+        get_app,
+        post_app_start,
+        post_app_stop,
+        get_comfyui_status,
+        get_comfyui_queue,
+        get_comfyui_history,
+        get_comfyui_view
     ),
     components(schemas(
         Health,
@@ -265,7 +276,13 @@ pub struct EmbeddedUi;
         super::texture_postprocess::TexturePostprocessMap,
         super::texture_postprocess::TexturePostprocessRequest,
         super::texture_postprocess::TexturePostprocessArtifact,
-        super::texture_postprocess::TexturePostprocessResult
+        super::texture_postprocess::TexturePostprocessResult,
+        ManagedApp,
+        ManagedAppList,
+        ComfyUiStatus,
+        ComfyUiQueue,
+        ComfyUiProgress,
+        ComfyUiHistory
     ))
 )]
 pub struct ApiDoc;

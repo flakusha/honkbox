@@ -536,29 +536,11 @@ pub(super) async fn post_images_generations(
                 );
             }
         };
-        let nsfw = match super::nsfw::classify(&bytes, format.extension()) {
-            Ok(decision) => decision,
-            Err(message) => {
+        let annotations = match super::nsfw::classify_for_image(&bytes, format.extension()) {
+            Ok(annotations) => annotations,
+            Err((status, message, code)) => {
                 return with_job_id(
-                    super::openai_error_response(
-                        StatusCode::NOT_IMPLEMENTED,
-                        message,
-                        Some("nsfw_classifier_unavailable"),
-                    ),
-                    job.id(),
-                );
-            }
-        };
-        let annotations = match nsfw {
-            super::nsfw::Decision::Skipped => Vec::new(),
-            super::nsfw::Decision::Allowed(annotation) => vec![annotation],
-            super::nsfw::Decision::Blocked => {
-                return with_job_id(
-                    super::openai_error_response(
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        "image blocked by the configured NSFW policy".to_string(),
-                        Some("nsfw_blocked"),
-                    ),
+                    super::openai_error_response(status, message, Some(code)),
                     job.id(),
                 );
             }

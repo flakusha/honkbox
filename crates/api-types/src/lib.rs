@@ -3106,6 +3106,12 @@ mod tests {
             OcrEngineMeta::decl(&config),
             OcrResult::decl(&config),
             OcrJobAccepted::decl(&config),
+            ManagedApp::decl(&config),
+            ManagedAppList::decl(&config),
+            ComfyUiStatus::decl(&config),
+            ComfyUiQueue::decl(&config),
+            ComfyUiProgress::decl(&config),
+            ComfyUiHistory::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');
@@ -4052,4 +4058,94 @@ pub struct FizgigTrainStatus {
     /// Bounded failure reason, when the run failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// One operator-declared managed CLI app's live state (`GET /v1/apps`).
+/// Every field is derived from config plus the manager's observed process
+/// state; no path or binary from an HTTP request can appear here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ManagedApp {
+    /// Stable app id (`llama_server` / `comfyui`).
+    pub id: String,
+    /// `stopped`, `starting`, `ready`, `failed` or `stopping`.
+    pub state: String,
+    /// Launch mode: `path`, `installation` or `script`.
+    pub launch: String,
+    /// Ledger kind the held lease reserves: `llm` or `comfy`.
+    pub resource_kind: String,
+    /// Loopback URL or `unix:` socket path while the app can serve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Version proved by the start-time `--version` probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Capped failure reason (including a stderr tail), absent when healthy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Declared managed apps and their live state (`GET /v1/apps`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ManagedAppList {
+    /// All declared apps, including disabled ones (reported as `stopped`).
+    pub apps: Vec<ManagedApp>,
+}
+
+/// Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a
+/// passing probe and a live process for a managed app.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ComfyUiStatus {
+    /// Whether the typed `/comfyui` surface can serve right now.
+    pub available: bool,
+    /// Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or
+    /// `detached` when no managed app is declared.
+    pub state: String,
+    /// Truth source: `managed` (health probe at start) or `external-tools`
+    /// (the startup registry probe).
+    pub source: String,
+    /// Version from the same probe that produced `available`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Capabilities proved by that probe (never a hand-written claim).
+    pub capabilities: Vec<String>,
+    /// Always `true`: the upstream is validated loopback-only at config load.
+    pub loopback_only: bool,
+}
+
+/// Typed queue summary read from `ComfyUI`'s internal `/queue` (`GET
+/// /comfyui/queue`). No node graph is ever returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ComfyUiQueue {
+    /// Number of currently executing prompts.
+    pub running: usize,
+    /// Number of queued prompts.
+    pub pending: usize,
+}
+
+/// Progress extracted from `ComfyUI`'s internal history response. No raw
+/// workflow JSON crosses the bearer boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ComfyUiProgress {
+    /// Last executing node, when the history record names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    /// Completed step count, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<usize>,
+    /// Total step count, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+}
+
+/// Typed history summary for a prompt id (`GET /comfyui/history/{id}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ComfyUiHistory {
+    /// The validated prompt id from the path.
+    pub prompt_id: String,
+    /// `queued`, `running` or `completed` (from history status).
+    pub status: String,
+    /// Output node ids present in the history record.
+    pub outputs: Vec<String>,
+    /// Best-effort progress, absent when the record carries none.
+    pub progress: ComfyUiProgress,
 }

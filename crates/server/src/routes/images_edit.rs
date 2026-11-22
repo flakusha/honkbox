@@ -27,7 +27,9 @@ use super::images_generate::{
     GenerateFailure, generate_image_bytes, image_scheduler_name, write_generation_bundle,
     write_generation_bundle_strict,
 };
-use super::images_inputs::{DeliveryMode, parse_output_format, resolve_loras};
+use super::images_inputs::{
+    DeliveryMode, parse_output_format, resolve_loras, validate_prompt_safety,
+};
 use super::images_recipe::{resolve_sd_model, validate_recipe};
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
@@ -284,6 +286,13 @@ pub(super) async fn post_images_edits(
         Ok(edit) => edit,
         Err(response) => return *response,
     };
+    // Same shared prompt gate as `/v1/images/generations`: refuse before
+    // image checks, admission or any pipeline work.
+    if let Some(prompt) = edit.prompt.as_deref()
+        && let Err((message, code)) = validate_prompt_safety(prompt)
+    {
+        return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+    }
     let Some((_, image_bytes)) = edit.image else {
         return openai_error_response(
             StatusCode::BAD_REQUEST,
@@ -549,31 +558,10 @@ pub(super) async fn post_images_edits(
             );
         }
     };
-    let nsfw = match super::nsfw::classify(&bytes, format.extension()) {
-        Ok(decision) => decision,
-        Err(message) => {
-            return with_job_id(
-                openai_error_response(
-                    StatusCode::NOT_IMPLEMENTED,
-                    message,
-                    Some("nsfw_classifier_unavailable"),
-                ),
-                job.id(),
-            );
-        }
-    };
-    let annotations = match nsfw {
-        super::nsfw::Decision::Skipped => Vec::new(),
-        super::nsfw::Decision::Allowed(annotation) => vec![annotation],
-        super::nsfw::Decision::Blocked => {
-            return with_job_id(
-                openai_error_response(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "image blocked by the configured NSFW policy".to_string(),
-                    Some("nsfw_blocked"),
-                ),
-                job.id(),
-            );
+    let annotations = match super::nsfw::classify_for_image(&bytes, format.extension()) {
+        Ok(annotations) => annotations,
+        Err((status, message, code)) => {
+            return with_job_id(openai_error_response(status, message, Some(code)), job.id());
         }
     };
     let bundle_annotations = annotations

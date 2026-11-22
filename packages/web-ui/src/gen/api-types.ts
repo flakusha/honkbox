@@ -2866,3 +2866,109 @@ export type OcrJobAccepted = {
    */
   status: string;
 };
+export type ManagedApp = {
+  /**
+   * Stable app id (`llama_server` / `comfyui`).
+   */
+  id: string;
+  /**
+   * `stopped`, `starting`, `ready`, `failed` or `stopping`.
+   */
+  state: string;
+  /**
+   * Launch mode: `path`, `installation` or `script`.
+   */
+  launch: string;
+  /**
+   * Ledger kind the held lease reserves: `llm` or `comfy`.
+   */
+  resource_kind: string;
+  /**
+   * Loopback URL or `unix:` socket path while the app can serve.
+   */
+  endpoint?: string | null;
+  /**
+   * Version proved by the start-time `--version` probe.
+   */
+  version?: string | null;
+  /**
+   * Capped failure reason (including a stderr tail), absent when healthy.
+   */
+  error?: string | null;
+};
+export type ManagedAppList = {
+  /**
+   * All declared apps, including disabled ones (reported as `stopped`).
+   */
+  apps: Array<ManagedApp>;
+};
+export type ComfyUiStatus = {
+  /**
+   * Whether the typed `/comfyui` surface can serve right now.
+   */
+  available: boolean;
+  /**
+   * Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or
+   * `detached` when no managed app is declared.
+   */
+  state: string;
+  /**
+   * Truth source: `managed` (health probe at start) or `external-tools`
+   * (the startup registry probe).
+   */
+  source: string;
+  /**
+   * Version from the same probe that produced `available`.
+   */
+  version?: string | null;
+  /**
+   * Capabilities proved by that probe (never a hand-written claim).
+   */
+  capabilities: Array<string>;
+  /**
+   * Always `true`: the upstream is validated loopback-only at config load.
+   */
+  loopback_only: boolean;
+};
+export type ComfyUiQueue = {
+  /**
+   * Number of currently executing prompts.
+   */
+  running: number;
+  /**
+   * Number of queued prompts.
+   */
+  pending: number;
+};
+export type ComfyUiProgress = {
+  /**
+   * Last executing node, when the history record names one.
+   */
+  node?: string | null;
+  /**
+   * Completed step count, when known.
+   */
+  completed?: number | null;
+  /**
+   * Total step count, when known.
+   */
+  total?: number | null;
+};
+export type ComfyUiHistory = {
+  /**
+   * The validated prompt id from the path.
+   */
+  prompt_id: string;
+  /**
+   * `queued`, `running` or `completed` (from history status).
+   */
+  status: string;
+  /**
+   * Output node ids present in the history record.
+   */
+  outputs: Array<string>;
+  /**
+   * Best-effort progress, absent when the record carries none.
+   */
+  progress: ComfyUiProgress;
+};

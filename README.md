@@ -234,6 +234,22 @@ Copy it to `<data_dir>/honkbox.toml` and edit; every table is optional.
   `response_format?`) transcribes with whisper's translate task — output
   always English.
 
+### Deployment topology
+
+Three owners can want the same GPU, so keep them apart:
+
+- honkbox's built-in LLM seam (`stub`, `llama.cpp`, attached `llama-server`)
+  — honkbox owns its swap ledger and residency lease.
+- an externally managed `llama-swap` / `llama-server` — the operator owns that
+  process and its VRAM; honkbox only calls it.
+- the managed-app path (`FEAT-cli-app-manager`, still proposed) — honkbox would
+  own the process lifetime instead.
+
+Never point two of them at one bind address: the example honkbox port `9010`
+and an sd.cpp autostart on `9010` collide. Router mode stays an explicit
+non-goal — a second GPU/VRAM scheduler next to honkbox's swap ledger and
+residency lease is two schedulers for one device.
+
 ## Migrating from sd-rip
 
 The binary is now `honkbox` (`sd-rip` is gone); old paths and `SD_RIP_*`

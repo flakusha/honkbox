@@ -115,9 +115,10 @@ Most `.tmp/research/` docs have a plan home below or were triaged as no new honk
 | `product-licenses-include-vs-api-2026-11-20.md` | `epic-binary-formats` + 3 tickets (license registry, qal guard, nc gate) |
 | `fizgig-training-python-sidecar-2026-11-22.md` | `TASK-fizgig-cli-probe` + `FEAT-fizgig-lora-training-jobs` + 6 follow-up tickets (family models, artifact cap, probe honesty, admission tests, training class, weight-license gate) |
 | `cli-app-management-llama-server-2026-11-22.md` | `TASK-llama-server-attach` + `FEAT-llama-server-client-backend` + `FEAT-cli-app-manager` + `FEAT-residency-control-plane` |
-| `cli-app-launch-management-other-apps-2026-11-22.md` | `FEAT-fizgig-lora-training-jobs` + `BUG-fizgig-family-model-resolution` + `BUG-fizgig-artifact-cap-and-gc` |
+| `cli-app-launch-management-other-apps-2026-11-22.md` | `FEAT-fizgig-lora-training-jobs` + `BUG-fizgig-family-model-resolution` + `BUG-fizgig-artifact-cap-and-gc` + `FEAT-cli-app-manager` + README deployment-topology note |
 | `organic-growth-2026-11-20.md` | `epic-full-ai-cycle` + `TASK-generation-replay-endpoint` + `TASK-operability-surfaces` |
 | `multi-gpu-2026-11-20.md` | `epic-external-tools` + `TASK-multi-gpu-device-axis` |
+| `llama-swap-loop-lore-gaps-2026-11-22.md` | `BUG-capabilities-rerank-flag-without-ranker`, `FEAT-residency-control-plane`, `TASK-audio-voices-loaded-backend-truth`, `TASK-images-edits-artifact-delivery-parity`, `TASK-job-result-artifact-selection-metadata`, `FEAT-jobs-snapshot-artifact-ids-and-frame-metadata`; remaining loop-lore-side lanes: capability keys, imgedit provider landing, residency release wiring, NSFW annotation consumption |
 | `next-tickets-implementation-plan-2026-11-22.md` | `BUG-capabilities-rerank-flag-without-ranker`, `TASK-job-result-artifact-selection-metadata`, `TASK-images-edits-artifact-delivery-parity`, `TASK-audio-voices-loaded-backend-truth` |
 | `harness-giwt-vcs-integration-2026-11-20.md` | `TASK-capabilities-golden-fixture`; giwt adoption intentionally not adopted |
 | `media-transport-federation-2026-11-20.md` | `TASK-exr-format-support` |

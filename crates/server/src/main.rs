@@ -1,6 +1,7 @@
 //! `honkbox` binary: serve the HTTP API + UI, or print the `OpenAPI` document.
 
 mod admission;
+
 mod artifacts;
 mod backends;
 mod catalog;
@@ -476,6 +477,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // The attached-backend endpoint is config-only; clone before the tools
     // snapshot moves into the startup probe.
     let attach_url = loaded.tools.llama_server_url.clone();
+    let comfyui_url = loaded.tools.comfyui_url.clone().unwrap_or_else(|| {
+        honkbox_external_tools::DEFAULT_COMFYUI_URL.to_owned()
+    });
     let cfg = loaded.models;
     // REQ-6 Option A: install the resolved admission-queue bound before any
     // route can acquire the GPU slot.
@@ -486,6 +490,15 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // TASK-external-tool-registry: probe once at startup. The capabilities
     // document and `/v1/external-tools*` read this cached snapshot.
     routes::init_external_tools(loaded.tools).await;
+    // Managed CLI apps are declare-only at startup: no process starts until an
+    // admin calls POST /v1/apps/{id}/start. The manager owns readiness, logs,
+    // process-group teardown and the ledger lease for each app lifetime.
+    let apps = Arc::new(or_exit(routes::ManagedAppManager::new(
+        loaded.apps.clone(),
+        data_dir.clone(),
+        &comfyui_url,
+    )));
+    routes::install_manager(Arc::clone(&apps));
     // Mesh discovery observes configured upstreams; it never reserves a slot.
     let (mesh_enabled, _, mesh_ttl, mesh_cap) = routes::runtime_config::mesh_facts();
     if mesh_enabled {
@@ -667,6 +680,8 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     axum::serve(listener, app(app_config).into_make_service())
         .await
         .expect("serve app");
+    // Every managed app dies with the server; no helper survives shutdown.
+    apps.shutdown().await;
 }
 
 /// Emit the non-fatal notices `config::load` collected, now that the

@@ -1,6 +1,7 @@
 # TASK: Minors-facing safety surface for generation
 
-Status: proposed
+Status: done (2026-11-22)
+- Verified 2026-11-22 (`.tmp/minors-prompt-gate-verify.log`): 153-gate tests pass; combined 153+180+174 image suites pass; targeted clippy and rustfmt clean. Consumers map the existing additive `capabilities.nsfw` row (available/policy/threshold), not a new FeatureFlags row; the minors prompt gate is default-deny with a fixed named reason.
 Priority: P1
 Epic: epic-trust-safety
 Owner: unassigned

@@ -33,7 +33,7 @@ use honkbox_api_types::ModelKind;
 /// Known route labels (bounded cardinality); parameterized control routes
 /// collapse to their template, everything else counts under `"other"` so
 /// arbitrary fallback paths cannot explode the series set.
-const ROUTES: [&str; 16] = [
+const ROUTES: [&str; 24] = [
     "/health",
     "/api/version",
     "/v1/openapi.json",
@@ -50,6 +50,14 @@ const ROUTES: [&str; 16] = [
     "/api/models/unload",
     "/api/models/unload/{model}",
     "/metrics",
+    "/v1/apps",
+    "/v1/apps/{id}",
+    "/v1/apps/{id}/start",
+    "/v1/apps/{id}/stop",
+    "/comfyui/status",
+    "/comfyui/queue",
+    "/comfyui/history/{id}",
+    "/comfyui/view",
 ];
 
 /// Status codes tracked verbatim; any other code counts under `"other"`.
@@ -291,6 +299,14 @@ pub(crate) fn route_label(path: &str) -> &'static str {
                 Some("/v1/models/{slug}/unload")
             } else if path.starts_with("/api/models/unload/") {
                 Some("/api/models/unload/{model}")
+            } else if path.starts_with("/v1/apps/") && path.ends_with("/start") {
+                Some("/v1/apps/{id}/start")
+            } else if path.starts_with("/v1/apps/") && path.ends_with("/stop") {
+                Some("/v1/apps/{id}/stop")
+            } else if path.strip_prefix("/v1/apps/").is_some_and(|rest| !rest.contains('/')) {
+                Some("/v1/apps/{id}")
+            } else if path.starts_with("/comfyui/history/") {
+                Some("/comfyui/history/{id}")
             } else {
                 None
             }

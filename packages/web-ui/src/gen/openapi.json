@@ -84,6 +84,121 @@
         }
       }
     },
+    "/comfyui/history/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "Bounded read of one typed history summary (no raw workflow JSON).",
+        "operationId": "get_comfyui_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Validated prompt id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Typed history summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComfyUiHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid prompt id"
+          },
+          "501": {
+            "description": "No probed ready ComfyUI"
+          }
+        }
+      }
+    },
+    "/comfyui/queue": {
+      "get": {
+        "tags": [],
+        "summary": "Bounded read of the `ComfyUI` queue: counts only, no node graph.",
+        "operationId": "get_comfyui_queue",
+        "responses": {
+          "200": {
+            "description": "Queue counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComfyUiQueue"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No probed ready ComfyUI"
+          }
+        }
+      }
+    },
+    "/comfyui/status": {
+      "get": {
+        "tags": [],
+        "summary": "Honest `ComfyUI` readiness, derived from the probe that proved it.",
+        "operationId": "get_comfyui_status",
+        "responses": {
+          "200": {
+            "description": "ComfyUI readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComfyUiStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/comfyui/view": {
+      "get": {
+        "tags": [],
+        "summary": "Validated output/input/temp byte view. Path separators and traversal are\nrejected here; the upstream URL is built with query encoding, never string\ninterpolation of an arbitrary path.",
+        "operationId": "get_comfyui_view",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "Single safe filename",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "output, input or temp",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Output bytes"
+          },
+          "400": {
+            "description": "Invalid filename or kind"
+          },
+          "501": {
+            "description": "No probed ready ComfyUI"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [],
@@ -133,6 +248,133 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/apps": {
+      "get": {
+        "tags": [],
+        "summary": "List declared apps and their live state.",
+        "operationId": "get_apps",
+        "responses": {
+          "200": {
+            "description": "Declared managed apps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedAppList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/apps/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "One declared app's live state.",
+        "operationId": "get_app",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stable app id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One managed app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedApp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown app id"
+          }
+        }
+      }
+    },
+    "/v1/apps/{id}/start": {
+      "post": {
+        "tags": [],
+        "summary": "Explicitly start one declared app (never automatic).",
+        "operationId": "post_app_start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stable app id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Start accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedApp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown app id"
+          },
+          "409": {
+            "description": "App already running"
+          },
+          "501": {
+            "description": "App not enabled or unsupported platform"
+          }
+        }
+      }
+    },
+    "/v1/apps/{id}/stop": {
+      "post": {
+        "tags": [],
+        "summary": "Explicitly stop one app; kills the whole process group.",
+        "operationId": "post_app_stop",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stable app id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stop accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedApp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown app id"
+          },
+          "500": {
+            "description": "Teardown timed out"
           }
         }
       }
@@ -3587,6 +3829,129 @@
           }
         }
       },
+      "ComfyUiHistory": {
+        "type": "object",
+        "description": "Typed history summary for a prompt id (`GET /comfyui/history/{id}`).",
+        "required": [
+          "prompt_id",
+          "status",
+          "outputs",
+          "progress"
+        ],
+        "properties": {
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Output node ids present in the history record."
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ComfyUiProgress",
+            "description": "Best-effort progress, absent when the record carries none."
+          },
+          "prompt_id": {
+            "type": "string",
+            "description": "The validated prompt id from the path."
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running` or `completed` (from history status)."
+          }
+        }
+      },
+      "ComfyUiProgress": {
+        "type": "object",
+        "description": "Progress extracted from `ComfyUI`'s internal history response. No raw\nworkflow JSON crosses the bearer boundary.",
+        "properties": {
+          "completed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Completed step count, when known.",
+            "minimum": 0
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last executing node, when the history record names one."
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Total step count, when known.",
+            "minimum": 0
+          }
+        }
+      },
+      "ComfyUiQueue": {
+        "type": "object",
+        "description": "Typed queue summary read from `ComfyUI`'s internal `/queue` (`GET\n/comfyui/queue`). No node graph is ever returned.",
+        "required": [
+          "running",
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "description": "Number of queued prompts.",
+            "minimum": 0
+          },
+          "running": {
+            "type": "integer",
+            "description": "Number of currently executing prompts.",
+            "minimum": 0
+          }
+        }
+      },
+      "ComfyUiStatus": {
+        "type": "object",
+        "description": "Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a\npassing probe and a live process for a managed app.",
+        "required": [
+          "available",
+          "state",
+          "source",
+          "capabilities",
+          "loopback_only"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether the typed `/comfyui` surface can serve right now."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Capabilities proved by that probe (never a hand-written claim)."
+          },
+          "loopback_only": {
+            "type": "boolean",
+            "description": "Always `true`: the upstream is validated loopback-only at config load."
+          },
+          "source": {
+            "type": "string",
+            "description": "Truth source: `managed` (health probe at start) or `external-tools`\n(the startup registry probe)."
+          },
+          "state": {
+            "type": "string",
+            "description": "Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or\n`detached` when no managed app is declared."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version from the same probe that produced `available`."
+          }
+        }
+      },
       "CompressionRange": {
         "type": "object",
         "description": "Inclusive integer range (`FormatLimits::output_compression`).",
@@ -5498,6 +5863,71 @@
               "null"
             ],
             "description": "Territory restriction tag, when curated."
+          }
+        }
+      },
+      "ManagedApp": {
+        "type": "object",
+        "description": "One operator-declared managed CLI app's live state (`GET /v1/apps`).\nEvery field is derived from config plus the manager's observed process\nstate; no path or binary from an HTTP request can appear here.",
+        "required": [
+          "id",
+          "state",
+          "launch",
+          "resource_kind"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Loopback URL or `unix:` socket path while the app can serve."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Capped failure reason (including a stderr tail), absent when healthy."
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable app id (`llama_server` / `comfyui`)."
+          },
+          "launch": {
+            "type": "string",
+            "description": "Launch mode: `path`, `installation` or `script`."
+          },
+          "resource_kind": {
+            "type": "string",
+            "description": "Ledger kind the held lease reserves: `llm` or `comfy`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`stopped`, `starting`, `ready`, `failed` or `stopping`."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version proved by the start-time `--version` probe."
+          }
+        }
+      },
+      "ManagedAppList": {
+        "type": "object",
+        "description": "Declared managed apps and their live state (`GET /v1/apps`).",
+        "required": [
+          "apps"
+        ],
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedApp"
+            },
+            "description": "All declared apps, including disabled ones (reported as `stopped`)."
           }
         }
       },

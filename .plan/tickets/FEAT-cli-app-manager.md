@@ -1,6 +1,7 @@
 # FEAT: Managed lifecycle for user-installed CLI apps
 
-Status: proposed
+Status: done (2026-11-22)
+- Verified 2026-11-22 (`.tmp/managed-app-verify.log`): `--test apps` 162/162 pass; `cargo check --all-targets` 0 errors; three launch modes (`path`/`installation`/`script`), four `/v1/apps*` admin routes, four typed bearer-gated `/comfyui` read routes, process-group teardown; no router mode, auto-start or auto-restart. `bun run deny` not claimed — pre-existing RUSTSEC advisory.
 Priority: P2
 Epic: epic-external-tools
 Owner: unassigned

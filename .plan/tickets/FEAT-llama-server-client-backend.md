@@ -4,7 +4,7 @@ Status: done (2026-11-22; isolated adapter tests + full server tests + workspace
 Priority: P1
 Epic: epic-llm-expansion
 Owner: unassigned
-Acceptance: when an attached `llama-server` has proved `openai_compat`, an opt-in backend serves the existing chat contract (`/v1/chat`, `/v1/chat/completions`, SSE streams, `abort`) through `/v1/chat/completions` on that server, post-honkbox-bearer and loopback-only. Capabilities advertise chat through this backend only when it is selected and healthy.
+Acceptance: when an attached `llama-server` has proved `openai_compat`, an opt-in backend serves the existing chat contract (`/v1/chat`, `/v1/chat/completions`, SSE streams, `abort`) through `/v1/chat/completions` on that server, post-honkbox-bearer and loopback-only. There is no chat flag for this backend: the `external_tools.openai_compat` row reports only the endpoint/binary probe, and `--llm-backend attached` selects the backend itself — the constructor proves `/health` + `/v1/models.data` at startup, so an unproved server is a startup exit, not a capability claim.
 Verification: isolated adapter harness → 6/6 pass (`.tmp/llama-harness/test2.log`);
 `cargo test --locked --offline -p honkbox-server` → all suites pass and
 `cargo clippy --locked --offline --workspace --all-targets -- -D warnings` clean
@@ -56,8 +56,11 @@ capped at 512 chars.
 - Named 400/502/503 responses when the attached server disappears mid-stream;
   no panics, no blank 200s, no partial replies presented as complete.
 - Request/response bodies bounded; client disconnect stops upstream work.
-- The `FeatureFlags`/capability row stays false while the backend is selected
-  but unhealthy, matching the existing honesty rule (`epic-capabilities-contract`).
+- There is no `FeatureFlags` chat row for this backend: the existing
+  `external_tools.openai_compat` row stays absent while the endpoint is
+  unproved (the probe claims nothing), and the backend itself is only
+  constructible when the startup proof of `/health` + `/v1/models.data`
+  succeeded, matching the existing honesty rule (`epic-capabilities-contract`).
 - Tool calling and JSON-schema constraints are either mapped faithfully or
   refused with a named error — never silently dropped.
 

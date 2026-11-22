@@ -31,8 +31,26 @@ use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate as _
 #[path = "routes/external_tools.rs"]
 mod external_tools;
 
+#[path = "routes/apps.rs"]
+mod apps;
+
+#[allow(unused_imports)] // handler names are used by .route() and the OpenApi derive
+use self::apps::{
+    __path_get_app, __path_get_apps, __path_get_comfyui_history, __path_get_comfyui_queue,
+    __path_get_comfyui_status, __path_get_comfyui_view, __path_post_app_start,
+    __path_post_app_stop, get_app, get_apps, get_comfyui_history, get_comfyui_queue,
+    get_comfyui_status, get_comfyui_view, post_app_start, post_app_stop,
+};
+
 #[allow(unused_imports)] // main.rs is the only caller; #[path] test harnesses omit it
 pub(crate) use self::external_tools::init_external_tools;
+#[allow(unused_imports)] // main.rs installs the managed app manager at startup
+pub(crate) use self::apps::install_manager;
+#[cfg(test)]
+#[allow(dead_code, unused_imports)]
+pub(crate) use self::apps::{set_manager_for_tests, AppState};
+#[allow(unused_imports)] // main.rs constructs the manager for install_manager
+pub(crate) use self::apps::Manager as ManagedAppManager;
 #[cfg(test)] // the fn itself is test-gated; the plain bin build must not see this
 #[allow(unused_imports)] // the capabilities contract test is the only caller
 pub(crate) use self::external_tools::set_registry_for_tests;
@@ -398,6 +416,14 @@ pub fn app(config: AppConfig) -> Router {
             "/v1/external-tools/{id}",
             get(external_tools::get_external_tool),
         )
+        .route("/v1/apps", get(get_apps))
+        .route("/v1/apps/{id}", get(get_app))
+        .route("/v1/apps/{id}/start", post(post_app_start))
+        .route("/v1/apps/{id}/stop", post(post_app_stop))
+        .route("/comfyui/status", get(get_comfyui_status))
+        .route("/comfyui/queue", get(get_comfyui_queue))
+        .route("/comfyui/history/{id}", get(get_comfyui_history))
+        .route("/comfyui/view", get(get_comfyui_view))
         .route("/v1/chat", post(post_chat))
         .route("/v1/chat/stream", post(post_chat_stream))
         .route("/v1/chat/completions", post(post_chat_completions))

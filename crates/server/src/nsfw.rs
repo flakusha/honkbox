@@ -16,6 +16,8 @@ use std::time::Duration;
 
 use honkbox_api_types::NsfwAnnotation;
 
+use axum::http::StatusCode;
+
 // `routes.rs` already loads `supervisor.rs` as `routes::supervisor`; reuse it
 // instead of a second `#[path]` load (clippy::duplicate_mod in every harness).
 #[cfg(unix)]
@@ -35,6 +37,16 @@ pub(crate) struct NsfwFacts {
 
 impl NsfwFacts {
     fn current() -> Self {
+        #[cfg(test)]
+        if let Some((enabled, policy, threshold, classifier_bin)) = test_support::current() {
+            return Self {
+                enabled,
+                policy: policy.trim().to_ascii_lowercase(),
+                model_version: "test-nsfw-v1".to_owned(),
+                threshold,
+                classifier_bin,
+            };
+        }
         let (enabled, policy, model_version, threshold, classifier_bin) =
             super::runtime_config::nsfw_facts();
         Self {
@@ -100,6 +112,30 @@ pub(crate) fn classify(bytes: &[u8], extension: &str) -> Result<Decision, String
     }))
 }
 
+/// The single decision path for BOTH image routes: classify once, then
+/// return the annotations to record or a named refusal. Keeping the policy
+/// match here means generations and edits cannot diverge, and no decision
+/// can be silently dropped by one route.
+pub(crate) fn classify_for_image(
+    bytes: &[u8],
+    extension: &str,
+) -> Result<Vec<NsfwAnnotation>, (StatusCode, String, &'static str)> {
+    match classify(bytes, extension) {
+        Ok(Decision::Skipped) => Ok(Vec::new()),
+        Ok(Decision::Allowed(annotation)) => Ok(vec![annotation]),
+        Ok(Decision::Blocked) => Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "image blocked by the configured NSFW policy".to_owned(),
+            "nsfw_blocked",
+        )),
+        Err(message) => Err((
+            StatusCode::NOT_IMPLEMENTED,
+            message,
+            "nsfw_classifier_unavailable",
+        )),
+    }
+}
+
 /// The named `nsfw` annotation recorded in a bundle's sidecar.
 pub(crate) fn bundle_annotation(annotation: &NsfwAnnotation) -> crate::jobs::BundleAnnotation {
     crate::jobs::BundleAnnotation {
@@ -160,4 +196,53 @@ fn run_classifier(
     _extension: &str,
 ) -> Result<ClassifierOutput, String> {
     Err("nsfw classifier requires a unix host".to_owned())
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // only the focused safety test harness uses these hooks
+pub(crate) mod test_support {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, RwLock};
+
+    type FactsOverride = (bool, String, f64, Option<PathBuf>);
+
+    static FACTS: RwLock<Option<FactsOverride>> = RwLock::new(None);
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// Serializes policy-sensitive tests; the guard clears its override on
+    /// drop. Only compiled into test harnesses that include `nsfw.rs` via
+    /// `routes.rs` — production facts stay read-only.
+    #[allow(dead_code)]
+    pub(crate) struct Scoped(MutexGuard<'static, ()>);
+
+    pub(crate) fn scoped(
+        enabled: bool,
+        policy: &str,
+        threshold: f64,
+        classifier_bin: Option<PathBuf>,
+    ) -> Scoped {
+        let serial = SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *FACTS
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((enabled, policy.to_owned(), threshold, classifier_bin));
+        Scoped(serial)
+    }
+
+    pub(crate) fn current() -> Option<FactsOverride> {
+        FACTS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    impl Drop for Scoped {
+        fn drop(&mut self) {
+            *FACTS
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
 }

@@ -481,6 +481,127 @@ impl Default for PythonConfig {
     }
 }
 
+
+/// How an operator-declared app is launched. Config-only: no HTTP request may
+/// name a binary, installation root or script.
+///
+/// - `path`: an explicit binary, absolute or resolved on `PATH`.
+/// - `installation`: an operator-declared `ComfyUI` repo root; honkbox runs its
+///   `.venv/bin/python main.py` from that root (mirrors the soft-fork's
+///   `scripts/local_common.py` layout).
+/// - `script`: an operator-declared custom launcher (for example the
+///   soft-fork's `scripts/start_local.py`), run with that installation's venv
+///   python. The launcher's own fixed arguments stay inside the operator's
+///   script; honkbox never interpolates a shell string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedAppLaunch {
+    Path,
+    Installation,
+    Script,
+}
+
+impl ManagedAppLaunch {
+    /// Parse the config value; unknown modes are a fatal config error, never
+    /// a best-effort guess at an argv.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "path" => Ok(Self::Path),
+            "installation" => Ok(Self::Installation),
+            "script" => Ok(Self::Script),
+            other => Err(format!("unknown managed app launch mode {other:?}")),
+        }
+    }
+
+    /// Stable lowercase value (`path` / `installation` / `script`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::Installation => "installation",
+            Self::Script => "script",
+        }
+    }
+}
+
+/// Which fixed ledger kind a managed app reserves while it lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedAppResource {
+    Llm,
+    Comfy,
+}
+
+impl ManagedAppResource {
+    /// Parse the config value (`llm` / `comfy`).
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "llm" => Ok(Self::Llm),
+            "comfy" => Ok(Self::Comfy),
+            other => Err(format!("unknown managed app resource kind {other:?}")),
+        }
+    }
+
+    /// Stable lowercase value for status responses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::Comfy => "comfy",
+        }
+    }
+}
+
+/// One managed CLI app. Present in config does not mean running: `enabled`
+/// must be `true` and `POST /v1/apps/{id}/start` must be called explicitly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedAppConfig {
+    pub enabled: bool,
+    pub launch: ManagedAppLaunch,
+    pub binary: Option<PathBuf>,
+    pub installation: Option<PathBuf>,
+    pub script: Option<PathBuf>,
+    pub model: Option<PathBuf>,
+    /// Loopback TCP host, or `unix` for the llama-server socket under
+    /// `<data_dir>/apps/<id>/`. Anything else is a fatal config error.
+    pub host: String,
+    /// Explicit loopback TCP port; `None` asks the OS for an ephemeral one.
+    pub port: Option<u16>,
+    pub health_timeout_secs: u64,
+    pub resource_kind: ManagedAppResource,
+}
+
+impl ManagedAppConfig {
+    /// Defaults for one app kind: off, PATH launch, loopback bind and the
+    /// llama-swap-style 120 s health budget (floor 15 s, applied at resolve).
+    pub fn new(resource_kind: ManagedAppResource) -> Self {
+        Self {
+            enabled: false,
+            launch: ManagedAppLaunch::Path,
+            binary: None,
+            installation: None,
+            script: None,
+            model: None,
+            host: "127.0.0.1".to_owned(),
+            port: None,
+            health_timeout_secs: 120,
+            resource_kind,
+        }
+    }
+}
+
+/// Resolved `[apps]` declarations. Both apps are off unless their table is
+/// present and sets `enabled = true` (no auto-start, no auto-restart).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedAppsConfig {
+    pub llama_server: ManagedAppConfig,
+    pub comfyui: ManagedAppConfig,
+}
+
+impl Default for ManagedAppsConfig {
+    fn default() -> Self {
+        Self {
+            llama_server: ManagedAppConfig::new(ManagedAppResource::Llm),
+            comfyui: ManagedAppConfig::new(ManagedAppResource::Comfy),
+        }
+    }
+}
 /// Resolved `[server]` serving knobs. Currently one: the REQ-6 Option A
 /// admission-queue bound (`queue_wait_secs`); `Duration::ZERO` keeps the
 /// pre-REQ-6 immediate-429 behavior (queueing disabled).
@@ -863,6 +984,8 @@ pub struct LoadedConfig {
     /// default; bearer tokens are redacted in `Debug` (which this struct
     /// derives).
     pub mesh: mesh::MeshConfig,
+    /// `[apps]` managed CLI app declarations (off by default).
+    pub apps: ManagedAppsConfig,
     /// `[tools]` external-engine discovery settings.
     pub tools: ExternalToolsConfig,
     /// `[safety.nsfw]` resolved gate facts.
@@ -1221,6 +1344,7 @@ struct FileStages {
     /// `[mesh]` keys (TASK-mesh-client-spike), resolved in `load`.
     mesh: mesh::FileMesh,
     /// `[tools]` keys (TASK-external-tool-registry), resolved in `load`.
+    apps: FileApps,
     tools: FileTools,
     /// `[safety.nsfw]` keys, resolved in `load`.
     nsfw: FileNsfw,
@@ -1309,6 +1433,7 @@ fn stage_config_file(
     out.queue_wait = file.server.queue_wait_secs;
     out.ledger = file.ledger;
     out.mesh = file.mesh;
+    out.apps = file.apps;
     out.tools = file.tools;
     out.vram_budget = file.models.vram_budget_bytes;
     out.nsfw = file.safety.nsfw;
@@ -1484,6 +1609,7 @@ pub fn load(
         ledger: file_ledger,
         artifacts: artifact_cap_file,
         mesh: file_mesh,
+        apps: file_apps,
         tools: file_tools,
         nsfw: file_nsfw,
         python: file_python,
@@ -1619,6 +1745,7 @@ pub fn load(
         llama_server_url: file_tools.llama_server_url,
         timeout: Duration::from_secs(file_tools.timeout_secs.unwrap_or(5).clamp(1, 3600)),
     };
+    let apps = managed_apps_config(file_apps)?;
     Ok(LoadedConfig {
         models,
         auth,
@@ -1627,6 +1754,7 @@ pub fn load(
         ledger,
         artifact_max_bytes,
         mesh,
+        apps,
         tools,
         nsfw,
         python,
@@ -1892,6 +2020,8 @@ struct FileConfig {
     /// / the loopback `ComfyUI` default, no attached `llama-server` endpoint
     /// and a 5 s probe timeout.
     #[serde(default)]
+    apps: FileApps,
+    #[serde(default)]
     tools: FileTools,
     /// `[licenses]` keys (TASK-model-license-registry); absent table keeps
     /// the defaults (`unknown` / `true`).
@@ -2094,6 +2224,75 @@ struct FileTools {
     comfyui_url: Option<String>,
     llama_server_url: Option<String>,
     timeout_secs: Option<u64>,
+}
+
+/// `[apps]` tables: absent tables keep both apps off.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct FileApps {
+    pub(crate) llama_server: Option<FileApp>,
+    pub(crate) comfyui: Option<FileApp>,
+}
+
+/// One `[apps.<id>]` table. Every location is operator-owned; the HTTP
+/// surface accepts only the app id and the start/stop verb.
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct FileApp {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) launch: Option<String>,
+    pub(crate) binary: Option<String>,
+    pub(crate) installation: Option<String>,
+    pub(crate) script: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) host: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) health_timeout_secs: Option<u64>,
+    pub(crate) resource_kind: Option<String>,
+}
+
+/// Resolve the two optional app tables. Invalid mode/kind/host values are
+/// fatal: an operator typo must not turn into a surprise argv.
+pub(crate) fn managed_apps_config(file: FileApps) -> Result<ManagedAppsConfig, String> {
+    let mut out = ManagedAppsConfig::default();
+    if let Some(raw) = file.llama_server {
+        out.llama_server = managed_app_config(raw, ManagedAppResource::Llm, "apps.llama_server")?;
+    }
+    if let Some(raw) = file.comfyui {
+        out.comfyui = managed_app_config(raw, ManagedAppResource::Comfy, "apps.comfyui")?;
+    }
+    Ok(out)
+}
+
+fn managed_app_config(
+    raw: FileApp,
+    default_kind: ManagedAppResource,
+    table: &str,
+) -> Result<ManagedAppConfig, String> {
+    let launch = ManagedAppLaunch::parse(raw.launch.as_deref().unwrap_or("path"))
+        .map_err(|e| format!("{table}.{e}"))?;
+    let resource_kind = match raw.resource_kind.as_deref() {
+        None => default_kind,
+        Some(value) => ManagedAppResource::parse(value)
+            .map_err(|e| format!("{table}.{e}"))?,
+    };
+    let host = raw.host.unwrap_or_else(|| "127.0.0.1".to_owned());
+    if host != "127.0.0.1" && host != "::1" && host != "localhost" && host != "unix" {
+        return Err(format!("{table}.host must be loopback or \"unix\", got {host:?}"));
+    }
+    if host == "unix" && resource_kind == ManagedAppResource::Comfy {
+        return Err(format!("{table}.host = \"unix\" is not supported by ComfyUI"));
+    }
+    let mut out = ManagedAppConfig::new(resource_kind);
+    out.enabled = raw.enabled.unwrap_or(false);
+    out.launch = launch;
+    out.binary = raw.binary.as_deref().map(expand_home);
+    out.installation = raw.installation.as_deref().map(expand_home);
+    out.script = raw.script.as_deref().map(expand_home);
+    out.model = raw.model.as_deref().map(expand_home);
+    out.host = host;
+    out.port = raw.port;
+    // llama-swap-style health budget: 120 s default, 15 s floor, 1 h ceiling.
+    out.health_timeout_secs = raw.health_timeout_secs.unwrap_or(120).clamp(15, 3600);
+    Ok(out)
 }
 
 impl Default for SwapConfig {
