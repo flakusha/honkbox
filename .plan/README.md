@@ -70,7 +70,7 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 
 ## Research promotion map
 
-Most `.tmp/research/` docs have a plan home below; 15 recent docs remain unmapped and scratch stays reference only.
+Most `.tmp/research/` docs have a plan home below or were triaged as no new honkbox work; scratch stays reference only.
 
 | Research doc | Promoted to |
 | --- | --- |
@@ -119,6 +119,9 @@ Most `.tmp/research/` docs have a plan home below; 15 recent docs remain unmappe
 | `organic-growth-2026-11-20.md` | `epic-full-ai-cycle` + `TASK-generation-replay-endpoint` + `TASK-operability-surfaces` |
 | `multi-gpu-2026-11-20.md` | `epic-external-tools` + `TASK-multi-gpu-device-axis` |
 | `next-tickets-implementation-plan-2026-11-22.md` | `BUG-capabilities-rerank-flag-without-ranker`, `TASK-job-result-artifact-selection-metadata`, `TASK-images-edits-artifact-delivery-parity`, `TASK-audio-voices-loaded-backend-truth` |
+| `harness-giwt-vcs-integration-2026-11-20.md` | `TASK-capabilities-golden-fixture`; giwt adoption intentionally not adopted |
+| `media-transport-federation-2026-11-20.md` | `TASK-exr-format-support` |
+| `ash-vulkan-backend-licensing-extensibility-2026-11-22.md` | `TASK-ash-backend-promote` |
 
 ## Support expansion order (2026-11-17)
 

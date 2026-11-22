@@ -1180,3 +1180,41 @@ async fn catalog_modalities_match_kinds_and_keep_the_flat_list() {
     }
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+/// Cross-repo key-path contract (TASK-capabilities-golden-fixture). Values
+/// vary by feature set and probe state and are asserted by the dedicated
+/// tests above; the path set must not drift silently between repos.
+fn capability_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
+    let Some(map) = value.as_object() else {
+        out.push(prefix.to_owned());
+        return;
+    };
+    for (key, child) in map {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        if child.is_object() {
+            capability_paths(child, &path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+#[tokio::test]
+async fn capabilities_key_paths_match_golden_fixture() {
+    let _guard = SLOT_LOCK.lock().await;
+    let doc = get_capabilities(&app_with(catalog_with(&[]))).await;
+    let mut paths = Vec::new();
+    capability_paths(&doc, "", &mut paths);
+    paths.sort_unstable();
+    let actual = paths.join("\n");
+    let expected = include_str!("fixtures/capabilities-v1.paths");
+    assert_eq!(
+        actual,
+        expected.trim_end(),
+        "\nactual contract paths:\n{actual}\n"
+    );
+}
