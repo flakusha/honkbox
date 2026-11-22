@@ -242,13 +242,14 @@ Three owners can want the same GPU, so keep them apart:
   — honkbox owns its swap ledger and residency lease.
 - an externally managed `llama-swap` / `llama-server` — the operator owns that
   process and its VRAM; honkbox only calls it.
-- the managed-app path (`FEAT-cli-app-manager`, still proposed) — honkbox would
-  own the process lifetime instead.
+- the managed-app path (`FEAT-cli-app-manager`) — honkbox owns the process lifetime for declared `llama_server`/`comfyui` apps via config-only launch modes (`path`, `installation`, `script`), with no auto-start/restart.
 
 Never point two of them at one bind address: the example honkbox port `9010`
 and an sd.cpp autostart on `9010` collide. Router mode stays an explicit
 non-goal — a second GPU/VRAM scheduler next to honkbox's swap ledger and
 residency lease is two schedulers for one device.
+
+`/comfyui/*` is a bearer-gated typed read surface (`status`/`queue`/`history`/`view`), not a raw ComfyUI wire proxy; no raw node-graph submission.
 
 ## Migrating from sd-rip
 
