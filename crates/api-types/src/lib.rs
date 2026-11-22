@@ -249,6 +249,10 @@ pub struct FeatureFlags {
     /// Python sidecar surface: whether a Python worker sidecar is
     /// available to this build.
     pub python_sidecar: bool,
+    /// Fizgig `LoRA` training (`POST /v1/fizgig/train`). `true` only when the
+    /// backend is enabled AND its pinned CLI passed the startup probe;
+    /// the route answers a named 501 otherwise.
+    pub fizgig: bool,
     /// Texture post-processing: whether `oiiotool`/`maketx` passes can
     /// run in this build.
     pub texture_postprocess: bool,
@@ -3039,6 +3043,9 @@ mod tests {
             RerankRequest::decl(&config),
             RerankItem::decl(&config),
             RerankResult::decl(&config),
+            FizgigTrainRequest::decl(&config),
+            FizgigTrainAccepted::decl(&config),
+            FizgigTrainStatus::decl(&config),
             TexturePostprocessCapability::decl(&config),
             OcrIngestMode::decl(&config),
             OcrIngestRequest::decl(&config),
@@ -3935,4 +3942,62 @@ pub struct RerankResult {
     pub results: Vec<RerankItem>,
     /// The rerank model that produced the scores.
     pub model: String,
+}
+
+/// One Fizgig `LoRA` training request (`POST /v1/fizgig/train`).
+///
+/// All paths are operator-confined: the server resolves and allowlists them
+/// before any subprocess starts. The route admits the job asynchronously and
+/// answers `202` with a job id; lifecycle is polled at
+/// `GET /v1/fizgig/jobs/{id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FizgigTrainRequest {
+    /// Fizgig family id (for example `sdxl`); must be allowlisted.
+    pub family: String,
+    /// Directory of images plus `.txt` caption sidecars.
+    pub dataset_dir: String,
+    /// Base checkpoint used as `--dit`.
+    pub dit: String,
+    /// Optional VAE path; SDXL may use the checkpoint's own VAE.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vae: Option<String>,
+    /// Optional text-encoder path; SDXL reads it from the checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_encoder: Option<String>,
+    /// Output basename (letters, digits, `_` and `-` only).
+    pub output_name: String,
+    /// Training epochs (1..=1000).
+    pub epochs: u32,
+    /// `LoRA` rank (1..=256), used for `--network_dim` and `--network_alpha`.
+    pub rank: u32,
+    /// Seed shared by training and previews.
+    #[serde(default)]
+    pub seed: u64,
+}
+
+/// Acknowledgement for an admitted Fizgig training job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct FizgigTrainAccepted {
+    /// Id used by the status and cancel routes.
+    pub job_id: String,
+    /// Lifecycle state at acknowledgement, always `queued`.
+    pub state: String,
+}
+
+/// Live status of one Fizgig training job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct FizgigTrainStatus {
+    /// The job id from [`FizgigTrainAccepted`].
+    pub job_id: String,
+    /// `queued`, `running`, `completed`, `failed` or `cancelled`.
+    pub state: String,
+    /// Current stage: `latents`, `text`, `train`, `done` or `none`.
+    pub stage: String,
+    /// Bundle directory relative to the data dir, once artifacts land.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+    /// Bounded failure reason, when the run failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }

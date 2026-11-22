@@ -204,6 +204,7 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             artifact_delivery: config.data_dir.is_some(),
             rerank: super::runtime_config::python_enabled(),
             python_sidecar: super::runtime_config::python_enabled(),
+            fizgig: super::fizgig::available(),
             texture_postprocess: crate::texture_postprocess::capability().available,
         },
         formats: formats_capability(config),

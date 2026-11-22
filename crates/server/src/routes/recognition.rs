@@ -45,6 +45,9 @@ fn not_served(detail: &str, code: &'static str) -> Response {
 /// backend answer the named 501 `recognition_kind_unsupported` — the same
 /// `kinds()` gate the top-level `recognition` capability advertises, so
 /// honest absence is observable from both directions.
+// The honesty gate, image decode and four error mappings belong to this one
+// route; splitting them would scatter the 501/400 contract across helpers.
+#[allow(clippy::too_many_lines)]
 #[utoipa::path(
     post,
     path = "/v1/recognize",
@@ -93,7 +96,9 @@ pub(super) async fn post_recognize(
         && engine != kind_backend
     {
         return not_served(
-            &format!("recognition engine {engine:?} is not served by this build (backend {kind_backend:?})"),
+            &format!(
+                "recognition engine {engine:?} is not served by this build (backend {kind_backend:?})"
+            ),
             "recognition_engine_unsupported",
         );
     }

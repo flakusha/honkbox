@@ -264,11 +264,23 @@ mod rerank;
 #[path = "routes/python_sidecar.rs"]
 mod python_sidecar;
 
+#[path = "routes/fizgig.rs"]
+mod fizgig;
+
+#[cfg(unix)]
+#[path = "routes/fizgig_run.rs"]
+mod fizgig_run;
+
 #[path = "routes/content_urls.rs"]
 mod content_urls;
 
 #[allow(unused_imports)]
 use self::content_urls::{__path_post_content_urls, post_content_urls};
+#[allow(unused_imports)]
+use self::fizgig::{
+    __path_cancel_fizgig_job, __path_get_fizgig_job, __path_post_fizgig_train, cancel_fizgig_job,
+    get_fizgig_job, post_fizgig_train,
+};
 #[allow(unused_imports)]
 use self::queue::{__path_get_queue, get_queue};
 #[allow(unused_imports)]
@@ -354,6 +366,9 @@ use self::openai_stream::{
 use self::recognition::{__path_post_recognize, post_recognize, recognition_501_message};
 
 /// Build the full router.
+// The route list is the map of the HTTP surface; splitting it for line count
+// hides which handler serves which path from the same view.
+#[allow(clippy::too_many_lines)]
 pub fn app(config: AppConfig) -> Router {
     let mesh_router = Router::new()
         .route(mesh::MESH_REROUTE_PATH, post(post_mesh_reroute))
@@ -440,6 +455,9 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/queue", get(get_queue))
         .route("/v1/rerank", post(post_rerank))
         .route("/v1/rerank/", post(post_rerank_slash))
+        .route("/v1/fizgig/train", post(post_fizgig_train))
+        .route("/v1/fizgig/jobs/{id}", get(get_fizgig_job))
+        .route("/v1/fizgig/jobs/{id}/cancel", post(cancel_fizgig_job))
         .route("/v1/content-urls", post(post_content_urls))
         .route("/metrics", get(metrics_endpoint))
         .merge(mesh_router)

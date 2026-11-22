@@ -1883,6 +1883,12 @@ export type FeatureFlags = {
    */
   python_sidecar: boolean;
   /**
+   * Fizgig `LoRA` training (`POST /v1/fizgig/train`). `true` only when the
+   * backend is enabled AND its pinned CLI passed the startup probe;
+   * the route answers a named 501 otherwise.
+   */
+  fizgig: boolean;
+  /**
    * Texture post-processing: whether `oiiotool`/`maketx` passes can
    * run in this build.
    */
@@ -2611,6 +2617,76 @@ export type RerankResult = {
    * The rerank model that produced the scores.
    */
   model: string;
+};
+export type FizgigTrainRequest = {
+  /**
+   * Fizgig family id (for example `sdxl`); must be allowlisted.
+   */
+  family: string;
+  /**
+   * Directory of images plus `.txt` caption sidecars.
+   */
+  dataset_dir: string;
+  /**
+   * Base checkpoint used as `--dit`.
+   */
+  dit: string;
+  /**
+   * Optional VAE path; SDXL may use the checkpoint's own VAE.
+   */
+  vae?: string | null;
+  /**
+   * Optional text-encoder path; SDXL reads it from the checkpoint.
+   */
+  text_encoder?: string | null;
+  /**
+   * Output basename (letters, digits, `_` and `-` only).
+   */
+  output_name: string;
+  /**
+   * Training epochs (1..=1000).
+   */
+  epochs: number;
+  /**
+   * `LoRA` rank (1..=256), used for `--network_dim` and `--network_alpha`.
+   */
+  rank: number;
+  /**
+   * Seed shared by training and previews.
+   */
+  seed: bigint;
+};
+export type FizgigTrainAccepted = {
+  /**
+   * Id used by the status and cancel routes.
+   */
+  job_id: string;
+  /**
+   * Lifecycle state at acknowledgement, always `queued`.
+   */
+  state: string;
+};
+export type FizgigTrainStatus = {
+  /**
+   * The job id from [`FizgigTrainAccepted`].
+   */
+  job_id: string;
+  /**
+   * `queued`, `running`, `completed`, `failed` or `cancelled`.
+   */
+  state: string;
+  /**
+   * Current stage: `latents`, `text`, `train`, `done` or `none`.
+   */
+  stage: string;
+  /**
+   * Bundle directory relative to the data dir, once artifacts land.
+   */
+  bundle?: string | null;
+  /**
+   * Bounded failure reason, when the run failed.
+   */
+  error?: string | null;
 };
 export type TexturePostprocessCapability = {
   /**
