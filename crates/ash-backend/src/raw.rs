@@ -534,3 +534,37 @@ pub fn submit_and_wait(
     unsafe { device.wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX) }
         .map_err(|res| VkError::device("vkWaitForFences", res))
 }
+
+// --- Capability discovery (queries only; no device objects created). --------
+
+/// Shader float16/int8 support, queried with core `vkGetPhysicalDeviceFeatures2`.
+pub fn physical_device_shader_features(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    shader: &mut vk::PhysicalDeviceShaderFloat16Int8Features<'_>,
+) {
+    let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(shader);
+    // SAFETY: `physical_device` was enumerated from this live `instance`;
+    // `features2` chains only the caller-owned struct, alive across the call.
+    unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
+}
+
+/// Names of all device extensions exposed by `physical_device`.
+pub fn enumerate_device_extensions(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+) -> Result<Vec<String>, VkError> {
+    // SAFETY: `physical_device` was enumerated from this live `instance`;
+    // the call writes only its returned vector. No layer name is requested.
+    let properties = unsafe { instance.enumerate_device_extension_properties(physical_device) }
+        .map_err(|res| VkError::instance("vkEnumerateDeviceExtensionProperties", res))?;
+    Ok(properties
+        .iter()
+        .filter_map(|property| {
+            property
+                .extension_name_as_c_str()
+                .ok()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect())
+}

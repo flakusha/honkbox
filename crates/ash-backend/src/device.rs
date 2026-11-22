@@ -45,24 +45,38 @@ impl DeviceType {
 }
 
 /// Capability bits reported by the driver and consumed by the ledger.
+// Independent Vulkan feature bits, not a state machine; enums would obscure the 1:1 mapping to spec names.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceFeatures {
     /// `storageBuffer8BitAccess` (`VK_KHR_8bit_storage`).
     pub storage_8_bit: bool,
     /// `storageBuffer16BitAccess` (`VK_KHR_16bit_storage`).
     pub storage_16_bit: bool,
+    /// `shaderFloat16` (`VK_KHR_shader_float16_int8`).
+    pub shader_float16: bool,
+    /// `shaderInt8` (`VK_KHR_shader_float16_int8`).
+    pub shader_int8: bool,
     /// Driver-reported subgroup size (`0` on pre-1.1 devices).
     pub subgroup_size: u32,
 }
 
 /// Minimum capabilities a model needs on the selected device before its
 /// load is reserved. Defaults mean "no additional requirement".
+// Each flag maps to a separate driver capability; zero defaults mean "optional".
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CapacityRequirements {
     /// Require 8-bit storage-buffer access.
     pub storage_8_bit: bool,
     /// Require 16-bit storage-buffer access.
     pub storage_16_bit: bool,
+    /// Require float16 arithmetic in shaders.
+    pub shader_float16: bool,
+    /// Require int8 arithmetic in shaders.
+    pub shader_int8: bool,
+    /// Device extensions a model cannot run without.
+    pub required_extensions: &'static [&'static str],
     /// Minimum subgroup size (`0` disables the check).
     pub subgroup_size: u32,
     /// Largest per-axis workgroup count the model will dispatch.
@@ -102,6 +116,8 @@ pub struct PhysicalDeviceInfo {
     pub limits: vk::PhysicalDeviceLimits,
     /// Feature bits the admission gates check.
     pub features: DeviceFeatures,
+    /// Device extension names; optional paths query these directly.
+    pub supported_extensions: Vec<String>,
     /// First queue family exposing `VK_QUEUE_COMPUTE_BIT`, if any.
     pub compute_queue_family: Option<u32>,
 }
@@ -112,11 +128,23 @@ const WORKGROUP_AXES: [&str; 3] = [
     "maxComputeWorkGroupCount.z",
 ];
 
+fn require(needed: bool, present: bool, capability: &'static str) -> Result<(), VkError> {
+    if needed && !present {
+        Err(VkError::InsufficientCapacity {
+            capability,
+            required: 1,
+            available: 0,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 impl PhysicalDeviceInfo {
     /// Query every physical device visible to `instance`.
     pub fn enumerate(instance: &Instance) -> Result<Vec<Self>, VkError> {
         let handles = raw::enumerate_physical_devices(instance)?;
-        Ok(handles
+        handles
             .iter()
             .map(|handle| {
                 let properties = raw::physical_device_properties(instance, *handle);
@@ -136,7 +164,8 @@ impl PhysicalDeviceInfo {
                     .enumerate()
                     .find(|(_, family)| family.queue_flags.contains(vk::QueueFlags::COMPUTE))
                     .map(|(i, _)| u32::try_from(i).expect("queue family count fits u32"));
-                Self {
+                let supported_extensions = raw::enumerate_device_extensions(instance, *handle)?;
+                Ok(Self {
                     handle: *handle,
                     name,
                     vendor_id: properties.vendor_id,
@@ -146,10 +175,17 @@ impl PhysicalDeviceInfo {
                     properties,
                     limits: properties.limits,
                     features,
+                    supported_extensions,
                     compute_queue_family,
-                }
+                })
             })
-            .collect())
+            .collect()
+    }
+
+    /// True when the driver advertises `name`; optional fast paths use this
+    /// to pick a fallback without failing admission.
+    pub fn has_extension(&self, name: &str) -> bool {
+        self.supported_extensions.iter().any(|ext| ext == name)
     }
 
     /// Reject `req` when this device cannot satisfy it, naming the first
@@ -158,19 +194,24 @@ impl PhysicalDeviceInfo {
         if self.compute_queue_family.is_none() {
             return Err(VkError::NoComputeQueue);
         }
-        if req.storage_8_bit && !self.features.storage_8_bit {
-            return Err(VkError::InsufficientCapacity {
-                capability: "storageBuffer8BitAccess",
-                required: 1,
-                available: 0,
-            });
-        }
-        if req.storage_16_bit && !self.features.storage_16_bit {
-            return Err(VkError::InsufficientCapacity {
-                capability: "storageBuffer16BitAccess",
-                required: 1,
-                available: 0,
-            });
+        require(
+            req.storage_8_bit,
+            self.features.storage_8_bit,
+            "storageBuffer8BitAccess",
+        )?;
+        require(
+            req.storage_16_bit,
+            self.features.storage_16_bit,
+            "storageBuffer16BitAccess",
+        )?;
+        require(
+            req.shader_float16,
+            self.features.shader_float16,
+            "shaderFloat16",
+        )?;
+        require(req.shader_int8, self.features.shader_int8, "shaderInt8")?;
+        for &name in req.required_extensions {
+            require(true, self.has_extension(name), name)?;
         }
         if req.subgroup_size > self.features.subgroup_size {
             return Err(VkError::InsufficientCapacity {
@@ -247,17 +288,23 @@ fn query_features(
         return DeviceFeatures {
             storage_8_bit: false,
             storage_16_bit: false,
+            shader_float16: false,
+            shader_int8: false,
             subgroup_size: 0,
         };
     }
     let mut storage8 = vk::PhysicalDevice8BitStorageFeatures::default();
     let mut storage16 = vk::PhysicalDevice16BitStorageFeatures::default();
     raw::physical_device_storage_features(instance, handle, &mut storage8, &mut storage16);
+    let mut shader = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+    raw::physical_device_shader_features(instance, handle, &mut shader);
     let mut subgroup = vk::PhysicalDeviceSubgroupProperties::default();
     raw::physical_device_subgroup_properties(instance, handle, &mut subgroup);
     DeviceFeatures {
         storage_8_bit: storage8.storage_buffer8_bit_access != 0,
         storage_16_bit: storage16.storage_buffer16_bit_access != 0,
+        shader_float16: shader.shader_float16 != 0,
+        shader_int8: shader.shader_int8 != 0,
         subgroup_size: subgroup.subgroup_size,
     }
 }
@@ -416,8 +463,11 @@ mod tests {
             features: DeviceFeatures {
                 storage_8_bit: true,
                 storage_16_bit: true,
+                shader_float16: true,
+                shader_int8: true,
                 subgroup_size: 8,
             },
+            supported_extensions: Vec::new(),
             compute_queue_family: compute.then_some(0),
         }
     }
@@ -486,9 +536,12 @@ mod tests {
         CapacityRequirements {
             storage_8_bit: true,
             storage_16_bit: true,
+            shader_float16: true,
+            shader_int8: true,
             subgroup_size: 8,
             workgroup_count: [8, 8, 1],
             storage_range: 1024,
+            ..CapacityRequirements::default()
         }
     }
 
@@ -523,6 +576,60 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn admit_names_missing_shader_float16() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.features.shader_float16 = false;
+        assert_eq!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "shaderFloat16",
+                required: 1,
+                available: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn admit_names_missing_shader_int8() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.features.shader_int8 = false;
+        assert!(matches!(
+            dev.admit(&demanding_req()),
+            Err(VkError::InsufficientCapacity {
+                capability: "shaderInt8",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn has_extension_matches_advertised_names_only() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        dev.supported_extensions = vec!["VK_KHR_cooperative_matrix".into()];
+        assert!(dev.has_extension("VK_KHR_cooperative_matrix"));
+        assert!(!dev.has_extension("VK_KHR_not_installed"));
+    }
+
+    #[test]
+    fn admit_names_missing_required_extension() {
+        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let req = CapacityRequirements {
+            required_extensions: &["VK_KHR_cooperative_matrix"],
+            ..CapacityRequirements::default()
+        };
+        assert_eq!(
+            dev.admit(&req),
+            Err(VkError::InsufficientCapacity {
+                capability: "VK_KHR_cooperative_matrix",
+                required: 1,
+                available: 0,
+            })
+        );
+        dev.supported_extensions = vec!["VK_KHR_cooperative_matrix".into()];
+        assert_eq!(dev.admit(&req), Ok(()));
     }
 
     #[test]
@@ -625,11 +732,13 @@ mod tests {
                 // soften for exotic drivers reporting zero.
                 assert!(dev.info.vram_bytes > 0 || dev.info.device_type == DeviceType::Cpu);
                 assert_ne!(dev.compute_queue_family(), u32::MAX);
+                assert!(!dev.info.has_extension("VK_HONKBOX_no_such_extension"));
                 eprintln!(
-                    "headless smoke: selected {} ({:?}, {} MiB device-local, instance version {:?})",
+                    "headless smoke: selected {} ({:?}, {} MiB device-local, {} extensions, instance version {:?})",
                     dev.info.name,
                     dev.info.device_type,
                     dev.info.vram_bytes / (1 << 20),
+                    dev.info.supported_extensions.len(),
                     dev.instance_version,
                 );
             }

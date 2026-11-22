@@ -52,6 +52,20 @@ allocation. Evidence: 19 tests pass (`matmul_dispatches` ran on GPU, no skip),
 clippy `-D warnings` clean, fmt clean, `experimental-ash-sd` graph check green
 (1 crate rebuilt incrementally).
 
-Next: capability sets with optional-extension fallbacks, ops registry +
-`ModelSpec`, then `AshSdPipeline::generate` on a real checkpoint.
+## Landed — slice 3 (2026-11-22, worktree)
+
+Capability discovery + admission: `PhysicalDeviceInfo` now records all device
+extension names (185 on RX 7900 XTX) and shader float16/int8 bits from core
+`vkGetPhysicalDeviceFeatures2`. `CapacityRequirements` gains matching required
+flags plus `required_extensions`; `admit` names the first missing capability.
+`has_extension` lets optional fast paths fall back without failing admission —
+no speculative capability enum or config added.
+
+Evidence: 23 tests pass (4 new pure admission tests); headless smoke on real
+GPU reports 185 extensions; clippy `-D warnings` clean; fmt clean;
+`experimental-ash-sd` graph check green.
+
+Next: ops vocabulary + `ModelSpec`, then `AshSdPipeline::generate` on a real
+checkpoint. Optional cooperative-matrix fast path stays a later slice: no
+kernel consumes it yet.
 
