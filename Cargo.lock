@@ -2440,6 +2440,8 @@ dependencies = [
  "honkbox-audio-worker",
  "honkbox-llm-worker",
  "honkbox-sd-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

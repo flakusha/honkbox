@@ -31,6 +31,8 @@
 //!   deterministic seed-derived latent noise.
 //! - [`conditioning`]: [`conditioning::Cfg`] guidance over caller-supplied
 //!   positive/negative text embeddings (no prompt→embedding faking).
+//! - [`checkpoint`]: [`checkpoint::CheckpointMap`], a strict safetensors
+//!   header → tensor slot map; payload bytes are read on demand.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -126,6 +128,8 @@ impl std::error::Error for VkError {}
 
 #[cfg(feature = "ash-compute")]
 pub mod attention;
+#[cfg(feature = "ash-compute")]
+pub mod checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod compute;
 #[cfg(feature = "ash-compute")]

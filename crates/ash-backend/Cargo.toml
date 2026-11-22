@@ -57,6 +57,8 @@ experimental-ash-tts = ["dep:ash", "dep:honkbox-audio-worker", "ash-compute"]
 
 [dependencies]
 ash = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 honkbox-sd-core = { workspace = true, optional = true }
 honkbox-llm-worker = { path = "../llm-worker", optional = true }
 honkbox-audio-worker = { path = "../audio-worker", optional = true }

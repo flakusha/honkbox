@@ -245,3 +245,23 @@ construction); `--features ash-compute` regression → 43 passed; server
 `cargo check --locked` green with and without the feature; workspace
 clippy `--features honkbox-server/experimental-ash-llm -- -D warnings`
 clean; `cargo fmt --check` clean.
+
+## Landed — slice 17 (2026-11-23, worktree)
+
+`checkpoint.rs` adds a strict safetensors header reader: 8-byte length prefix
+bounded like the catalog probe, JSON tensor entries validated for known dtype,
+non-empty non-overflowing shape, offsets matching shape × dtype width, and
+contiguous non-overlapping ranges inside the file. `CheckpointMap` exposes the
+checkpoint key → tensor slot map and reads a tensor's payload on demand; no
+model data is bundled and no GPU work is queued during parsing. `serde` /
+`serde_json` are new direct dependencies (both already workspace-pinned).
+
+This is the tensor-name map the extensibility design calls for: a new model
+family adds a spec over these slots, not new server routes or call sites.
+
+Evidence: 49 tests pass on `ash-compute` and 54 on `experimental-ash-sd`;
+synthetic fixtures cover payload readback and rejection of overlapping ranges,
+unknown dtypes and bad headers; clippy `-D warnings` clean; fmt clean.
+
+Next: wire the tensor map into `AshSdPipeline::generate` admission (real
+checkpoint shape checks before any kernel is scheduled).
