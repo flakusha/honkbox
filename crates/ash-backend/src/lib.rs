@@ -34,8 +34,15 @@
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
-//! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
-//!   `ash-stt`, `ash-tts`); not wired into server state (later ticket).
+//! - [`llm`]: [`llm::AshLlmPipeline`], implementing the `honkbox-llm-worker`
+//!   `LlmPipeline` (backend id `ash-llm`); a placeholder that returns a
+//!   named unimplemented error — no fake output — until transformer decode
+//!   kernels land. Gated by `experimental-ash-llm`.
+//! - [`stubs`]: STT/TTS seam types `stubs::AshSttPipeline` /
+//!   `stubs::AshTtsPipeline` (backend ids `ash-stt`, `ash-tts`); gated
+//!   `experimental-ash-stt` / `experimental-ash-tts`, they implement the
+//!   `honkbox-audio-worker` traits as placeholders returning named
+//!   unimplemented errors — no fake output.
 //!
 //! # Unsafe policy
 //! The workspace forbids `unsafe` everywhere (`unsafe_code = "forbid"`), but
@@ -120,9 +127,9 @@ impl std::error::Error for VkError {}
 #[cfg(feature = "ash-compute")]
 pub mod attention;
 #[cfg(feature = "ash-compute")]
-pub mod conditioning;
-#[cfg(feature = "ash-compute")]
 pub mod compute;
+#[cfg(feature = "ash-compute")]
+pub mod conditioning;
 #[cfg(feature = "ash-compute")]
 pub mod conv2d;
 #[cfg(feature = "ash-compute")]
@@ -131,6 +138,8 @@ pub mod conv_transpose;
 pub mod device;
 #[cfg(feature = "ash-compute")]
 pub mod group_norm;
+#[cfg(feature = "experimental-ash-llm")]
+pub mod llm;
 #[cfg(feature = "ash-compute")]
 pub mod matmul;
 #[cfg(feature = "ash-compute")]

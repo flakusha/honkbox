@@ -1,71 +1,39 @@
-//! Placeholder seam types for the direct-Vulkan LLM/STT/TTS paths.
+//! Direct-Vulkan STT/TTS seams: real worker traits, no inference yet.
 //!
-//! Per `ReviewedAsh-FeaturePlan` §1 the shortcut stack stays canonical for
-//! these modalities (llama.cpp / whisper.cpp are already Vulkan-native; CPU
-//! Kokoro overlaps GPU work), so these stubs only reserve the seams and
-//! backend ids — defined in this crate, NOT wired into `server` state (that
-//! is a later ticket). The DI shape mirrors sd-core: constructible now,
-//! erroring verbs until real implementations exist.
+//! Like [`crate::llm`], these are placeholders on the direct-Vulkan path,
+//! NOT deterministic emulators: behind `experimental-ash-stt` /
+//! `experimental-ash-tts` the types implement the `honkbox-audio-worker`
+//! traits, and every verb returns a named `Model` error from the own
+//! worker enum — no fake transcript text or audio is ever produced. The
+//! module also builds under plain `experimental-ash-sd`, where the types
+//! exist without the worker traits (reservation only, as before).
 
 use crate::device::VulkanDevice;
-use std::fmt;
 use std::sync::Arc;
 
-/// Failure of a placeholder direct-Vulkan seam.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StubError {
-    /// The direct-Vulkan implementation for this modality does not exist yet.
-    Unimplemented(&'static str),
+/// Named reason a direct-Vulkan STT/TTS seam cannot serve a request yet.
+fn unimplemented(modality: &str) -> String {
+    format!(
+        "direct-Vulkan {modality} seam is not implemented yet: \
+         the modality inference kernels land in later slices; no output is faked"
+    )
 }
 
-impl fmt::Display for StubError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unimplemented(modality) => {
-                write!(f, "direct-Vulkan {modality} seam is not implemented yet")
-            }
-        }
-    }
-}
-
-impl std::error::Error for StubError {}
-
-/// Placeholder direct-Vulkan LLM seam (backend id `ash-llm`).
-#[derive(Debug)]
-pub struct AshLlmPipeline {
-    device: Arc<VulkanDevice>,
-}
-
-impl AshLlmPipeline {
-    /// Bind the (future) execution device.
-    pub fn new(device: Arc<VulkanDevice>) -> Self {
-        Self { device }
-    }
-
-    /// The device this seam will execute on.
-    pub fn device(&self) -> &VulkanDevice {
-        &self.device
-    }
-
-    /// Backend tag (`"ash-llm"`).
-    pub fn backend_id(&self) -> &'static str {
-        "ash-llm"
-    }
-
-    /// Placeholder for the future `LlmPipeline`-shaped completion call.
-    pub fn complete(&self) -> Result<(), StubError> {
-        Err(StubError::Unimplemented("llm"))
-    }
-}
-
-/// Placeholder direct-Vulkan STT seam (backend id `ash-stt`).
+/// Direct-Vulkan STT seam (backend id `ash-stt`).
+///
+/// Holds the selected execution device so later slices build kernels on it
+/// without re-plumbing the server seam. With `experimental-ash-stt`, the
+/// [`honkbox_audio_worker::SttPipeline`] impl fails every transcription
+/// with [`honkbox_audio_worker::SttError::Model`] naming the missing
+/// capability — the pipeline has no model, so model-load failure is the
+/// honest classification.
 #[derive(Debug)]
 pub struct AshSttPipeline {
     device: Arc<VulkanDevice>,
 }
 
 impl AshSttPipeline {
-    /// Bind the (future) execution device.
+    /// Bind the execution device.
     pub fn new(device: Arc<VulkanDevice>) -> Self {
         Self { device }
     }
@@ -74,26 +42,36 @@ impl AshSttPipeline {
     pub fn device(&self) -> &VulkanDevice {
         &self.device
     }
+}
 
-    /// Backend tag (`"ash-stt"`).
-    pub fn backend_id(&self) -> &'static str {
-        "ash-stt"
+#[cfg(feature = "experimental-ash-stt")]
+impl honkbox_audio_worker::SttPipeline for AshSttPipeline {
+    fn transcribe(
+        &self,
+        _pcm16: &[i16],
+        _sample_rate: u32,
+        _req: &honkbox_audio_worker::TranscribeRequest,
+    ) -> Result<honkbox_audio_worker::Transcript, honkbox_audio_worker::SttError> {
+        Err(honkbox_audio_worker::SttError::Model(unimplemented("stt")))
     }
 
-    /// Placeholder for the future `SttPipeline`-shaped transcribe call.
-    pub fn transcribe(&self) -> Result<(), StubError> {
-        Err(StubError::Unimplemented("stt"))
+    fn backend_id(&self) -> &'static str {
+        "ash-stt"
     }
 }
 
-/// Placeholder direct-Vulkan TTS seam (backend id `ash-tts`).
+/// Direct-Vulkan TTS seam (backend id `ash-tts`).
+///
+/// Same posture as [`AshSttPipeline`]: with `experimental-ash-tts`, the
+/// [`honkbox_audio_worker::TtsPipeline`] impl fails every synthesis with
+/// [`honkbox_audio_worker::TtsError::Model`] naming the missing capability.
 #[derive(Debug)]
 pub struct AshTtsPipeline {
     device: Arc<VulkanDevice>,
 }
 
 impl AshTtsPipeline {
-    /// Bind the (future) execution device.
+    /// Bind the execution device.
     pub fn new(device: Arc<VulkanDevice>) -> Self {
         Self { device }
     }
@@ -102,15 +80,115 @@ impl AshTtsPipeline {
     pub fn device(&self) -> &VulkanDevice {
         &self.device
     }
+}
 
-    /// Backend tag (`"ash-tts"`).
-    pub fn backend_id(&self) -> &'static str {
-        "ash-tts"
+#[cfg(feature = "experimental-ash-tts")]
+impl honkbox_audio_worker::TtsPipeline for AshTtsPipeline {
+    fn synthesize(
+        &self,
+        _req: &honkbox_audio_worker::SynthesizeRequest,
+    ) -> Result<honkbox_audio_worker::SynthesizedAudio, honkbox_audio_worker::TtsError> {
+        Err(honkbox_audio_worker::TtsError::Model(unimplemented("tts")))
     }
 
-    /// Placeholder for the future `TtsPipeline`-shaped synthesize call.
-    pub fn synthesize(&self) -> Result<(), StubError> {
-        Err(StubError::Unimplemented("tts"))
+    fn backend_id(&self) -> &'static str {
+        "ash-tts"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AshSttPipeline, AshTtsPipeline};
+    use crate::device::VulkanDevice;
+    use crate::VkError;
+    use std::sync::Arc;
+
+    /// One shared device: `None` on loader-less machines (tests skip), a
+    /// panic on real API failures (those are bugs in this crate).
+    fn test_device() -> Option<Arc<VulkanDevice>> {
+        match VulkanDevice::headless() {
+            Ok(dev) => Some(Arc::new(dev)),
+            Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => {
+                eprintln!("skipping: no usable Vulkan environment");
+                None
+            }
+            Err(e) => panic!("device creation failed: {e}"),
+        }
+    }
+
+    #[cfg(feature = "experimental-ash-stt")]
+    mod stt {
+        use super::test_device;
+        use crate::stubs::AshSttPipeline;
+        use honkbox_audio_worker::{SttError, SttPipeline, TranscribeRequest};
+
+        #[test]
+        fn backend_id_is_ash_stt() {
+            let Some(device) = test_device() else {
+                return;
+            };
+            let pipeline = AshSttPipeline::new(device);
+            assert_eq!(SttPipeline::backend_id(&pipeline), "ash-stt");
+        }
+
+        #[test]
+        fn transcribe_returns_named_unimplemented_error() {
+            let Some(device) = test_device() else {
+                return;
+            };
+            let pipeline = AshSttPipeline::new(device);
+            let err = pipeline
+                .transcribe(
+                    &[0, 1, 2, 3],
+                    16_000,
+                    &TranscribeRequest {
+                        model: "test".to_string(),
+                        language: None,
+                        translate: false,
+                    },
+                )
+                .expect_err("placeholder must not serve");
+            assert!(matches!(err, SttError::Model(_)));
+            let message = err.to_string();
+            assert!(message.contains("not implemented"));
+            assert!(message.contains("no output is faked"));
+        }
+    }
+
+    #[cfg(feature = "experimental-ash-tts")]
+    mod tts {
+        use super::test_device;
+        use crate::stubs::AshTtsPipeline;
+        use honkbox_audio_worker::{SynthesizeRequest, TtsError, TtsPipeline};
+
+        #[test]
+        fn backend_id_is_ash_tts() {
+            let Some(device) = test_device() else {
+                return;
+            };
+            let pipeline = AshTtsPipeline::new(device);
+            assert_eq!(TtsPipeline::backend_id(&pipeline), "ash-tts");
+        }
+
+        #[test]
+        fn synthesize_returns_named_unimplemented_error() {
+            let Some(device) = test_device() else {
+                return;
+            };
+            let pipeline = AshTtsPipeline::new(device);
+            let err = pipeline
+                .synthesize(&SynthesizeRequest {
+                    model: "test".to_string(),
+                    text: "hi".to_string(),
+                    voice: None,
+                    sample_rate: None,
+                })
+                .expect_err("placeholder must not serve");
+            assert!(matches!(err, TtsError::Model(_)));
+            let message = err.to_string();
+            assert!(message.contains("not implemented"));
+            assert!(message.contains("no output is faked"));
+        }
     }
 }
 
@@ -118,7 +196,6 @@ impl AshTtsPipeline {
 // that contract on the stubs now so it cannot regress as fields grow.
 const _: () = {
     const fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<AshLlmPipeline>();
     assert_send_sync::<AshSttPipeline>();
     assert_send_sync::<AshTtsPipeline>();
 };

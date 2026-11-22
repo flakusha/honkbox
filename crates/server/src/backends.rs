@@ -20,6 +20,13 @@ pub enum LlmBackend {
     /// Consume an already-running, health-proved `llama-server` over loopback.
     /// The endpoint comes from `[tools] llama_server_url`; no process is started.
     Attached,
+    /// Experimental direct-Vulkan placeholder (slice 8 of the ash lane).
+    /// Requires the `experimental-ash-llm` cargo feature. Construction
+    /// selects a Vulkan device (loud named exit-1 on failure — never a
+    /// silent stub fallback); every completion then returns the named
+    /// unimplemented error. No model slug needed.
+    #[cfg(feature = "experimental-ash-llm")]
+    AshLlm,
 }
 
 /// `--stt-backend` values: instant stub or the real pipeline.
@@ -35,6 +42,13 @@ pub enum SttBackend {
     /// constructor arm is a loud named error (honest absence, same posture
     /// as `controlnet_available` on the SD side).
     AudioCpp,
+    /// Experimental direct-Vulkan placeholder (slice 15 of the ash lane).
+    /// Requires the `experimental-ash-stt` cargo feature. Construction
+    /// selects a Vulkan device (loud named exit-1 on failure — never a
+    /// silent stub fallback); every transcription then returns the named
+    /// unimplemented error. No model slug needed.
+    #[cfg(feature = "experimental-ash-stt")]
+    AshStt,
 }
 
 /// `--tts-backend` values: instant stub or the real kokoro pipeline.
@@ -45,6 +59,13 @@ pub enum TtsBackend {
     Stub,
     /// Real synthesis via kokoro on a registry voice/model file.
     Kokoro,
+    /// Experimental direct-Vulkan placeholder (slice 15 of the ash lane).
+    /// Requires the `experimental-ash-tts` cargo feature. Construction
+    /// selects a Vulkan device (loud named exit-1 on failure — never a
+    /// silent stub fallback); every synthesis then returns the named
+    /// unimplemented error. No model slug needed.
+    #[cfg(feature = "experimental-ash-tts")]
+    AshTts,
 }
 
 /// Chat pipeline: stub, file backend via `resolve` slug→path, or an attached
@@ -94,6 +115,17 @@ pub fn make_llm(
             Arc::new(crate::or_exit(crate::llm_attached::AttachedLlm::new(
                 url, model,
             )))
+        }
+        #[cfg(feature = "experimental-ash-llm")]
+        LlmBackend::AshLlm => {
+            // Device selection happens now: a Vulkan-less environment is a
+            // loud named exit-1 (see `or_exit`), not a degraded stub. The
+            // pipeline itself is the ash-lane placeholder — every verb
+            // returns the named unimplemented error, no fake output.
+            let device = Arc::new(crate::or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Arc::new(honkbox_ash_backend::llm::AshLlmPipeline::new(device))
         }
     }
 }
@@ -180,6 +212,17 @@ pub fn make_stt(
                 )))
             }
         }
+        #[cfg(feature = "experimental-ash-stt")]
+        SttBackend::AshStt => {
+            // Device selection happens now: a Vulkan-less environment is a
+            // loud named exit-1 (see `or_exit`), not a degraded stub. The
+            // pipeline itself is the ash-lane placeholder — every verb
+            // returns the named unimplemented error, no fake transcript.
+            let device = Arc::new(crate::or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Arc::new(honkbox_ash_backend::stubs::AshSttPipeline::new(device))
+        }
     }
 }
 
@@ -199,6 +242,17 @@ pub fn make_tts(
             });
             let path = resolve(slug);
             Arc::new(crate::or_exit(KokoroTts::load(&path)))
+        }
+        #[cfg(feature = "experimental-ash-tts")]
+        TtsBackend::AshTts => {
+            // Device selection happens now: a Vulkan-less environment is a
+            // loud named exit-1 (see `or_exit`), not a degraded stub. The
+            // pipeline itself is the ash-lane placeholder — every verb
+            // returns the named unimplemented error, no fake audio.
+            let device = Arc::new(crate::or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Arc::new(honkbox_ash_backend::stubs::AshTtsPipeline::new(device))
         }
     }
 }
