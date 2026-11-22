@@ -116,6 +116,8 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `fizgig-training-python-sidecar-2026-11-22.md` | `TASK-fizgig-cli-probe` + `FEAT-fizgig-lora-training-jobs` + 2 follow-up tickets |
 | `cli-app-management-llama-server-2026-11-22.md` | `TASK-llama-server-attach` + `FEAT-llama-server-client-backend` + `FEAT-cli-app-manager` |
 | `cli-app-launch-management-other-apps-2026-11-22.md` | `FEAT-fizgig-lora-training-jobs` + `BUG-fizgig-family-model-resolution` + `BUG-fizgig-artifact-cap-and-gc` |
+| `organic-growth-2026-11-20.md` | `epic-full-ai-cycle` + `TASK-generation-replay-endpoint` + `TASK-operability-surfaces` |
+| `multi-gpu-2026-11-20.md` | `epic-external-tools` + `TASK-multi-gpu-device-axis` |
 
 ## Support expansion order (2026-11-17)
 

@@ -21,7 +21,9 @@ args, enforce timeout and CPU/RAM limits, kill on cancel, collect artifacts.
   (landed; six-tool capability contract green).
 - `FEAT-cli-app-manager.md` — managed start/stop lifecycle (proposed).
 - `FEAT-llama-server-client-backend.md` — consume the attached server through
-  the LLM seam (proposed; tracked in `epic-llm-expansion`).
+  the LLM seam (landed; also tracked in `epic-llm-expansion`).
+- `TASK-multi-gpu-device-axis.md` — device ids and affinity on ledger slots,
+  keeping the single-slot default unchanged.
 - `TASK-fizgig-probe-honesty.md` — bounded retry, no blocked axum worker,
   honest capability rows; follow-up to the attach/probe slices.
 - `TASK-training-reservation-class.md` — dedicated training GPU class so

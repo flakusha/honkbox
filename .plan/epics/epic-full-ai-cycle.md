@@ -40,6 +40,14 @@ provider routing (`.tmp/research/ReviewedFullCycle-LoopLore-Acceleration.md`).
   state retention.
 - `TASK-fizgig-admission-contract-tests.md` — path confinement, terminal-state
   cancel, non-unix and `/v1/jobs` contract gaps.
+
+- `FEAT-fizgig-lora-training-jobs.md` + `TASK-fizgig-cli-probe.md` — landed
+  first training slice (the four follow-ups below stay open).
+- `TASK-caption-alt-text-sidecar.md`, `TASK-batch-generation-request.md`,
+  `TASK-generation-record-history-api.md`, `TASK-generation-replay-endpoint.md`,
+  `TASK-operability-surfaces.md` — content-recall and DX gaps from
+  `content-experience-gaps-2026-11-20.md` and `organic-growth-2026-11-20.md`.
+
 ## Non-goals
 
 Engine SDKs/MCP inside honkbox; Blender embedded in-process; byte-identical

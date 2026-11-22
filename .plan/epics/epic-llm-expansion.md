@@ -19,6 +19,10 @@ controls, and remove silent tool-choice surprises. Retrieval/rerank stays in
 - `TASK-llm-tool-choice-contract.md` — document/align tool-choice fidelity (P2).
 - `TASK-remote-vision-url-fetch.md` — opt-in SSRF-safe image URL fetch (P2).
 - `TASK-llm-speculative-decoding-spike.md` — draftless `ngram-mod` spike (P2).
+- `FEAT-llama-server-client-backend.md` — opt-in backend for an attached,
+  user-installed `llama-server` (landed 2026-11-22).
+- `TASK-negative-prompt-preset-library.md` — versioned prompt/style presets
+  served from the model registry.
 
 ## Acceptance
 
