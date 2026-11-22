@@ -25,13 +25,15 @@ pub enum Op {
     LayerNorm,
     /// Direct NCHW convolution.
     Conv2d,
+    /// Elementwise `SiLU` activation.
+    Silu,
 }
 
 impl Op {
     /// Static floor for this pass; per-call shapes are checked again in `run`.
     pub fn requirements(self) -> CapacityRequirements {
         match self {
-            Self::ElementwiseAdd => CapacityRequirements {
+            Self::ElementwiseAdd | Self::Silu => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()

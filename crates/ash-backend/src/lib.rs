@@ -22,6 +22,7 @@
 //! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
 //! - [`conv2d`]: [`conv2d::Conv2d`], direct NCHW convolution.
+//! - [`silu`]: [`silu::Silu`], elementwise `SiLU` activation.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -126,6 +127,8 @@ pub mod norm;
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;
+#[cfg(feature = "ash-compute")]
+pub mod silu;
 #[cfg(feature = "ash-compute")]
 pub mod softmax;
 #[cfg(feature = "experimental-ash-sd")]

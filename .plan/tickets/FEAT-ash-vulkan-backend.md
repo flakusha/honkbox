@@ -142,5 +142,16 @@ Note: a sibling lane added `experimental-ash-llm` to `Cargo.toml` mid-slice,
 forcing an approved offline `Cargo.lock` regeneration. That lock change and
 the sibling's LLM files are deliberately NOT part of this commit.
 
-Next: GroupNorm / activation kernels, then VAE decode slice.
+## Landed — slice 10 (2026-11-22, worktree)
+
+`Silu::run(values)` adds the elementwise `x / (1 + exp(-x))` activation on one
+invocation per element. New `shaders/silu.comp` is offline-compiled and uses
+the shared four-buffer scaffold; `Op::Silu` joins the vocabulary and shares
+the 4-byte static floor with elementwise add.
+
+Evidence: 35 tests pass on `ash-compute`, 39 on `experimental-ash-sd`; GPU test
+on 129 elements (partial workgroup, negative and large inputs) matched a CPU
+reference within 1e-5; clippy `-D warnings` clean; fmt clean.
+
+Next: GroupNorm for UNet conv blocks, then VAE decode slice.
 
