@@ -157,6 +157,21 @@ fn png_data_uri(width: u32, height: u32) -> String {
     )
 }
 
+
+/// A linear 2x2 EXR with an HDR red sample (4.0), via the same `image`
+/// encoder the registry probe compiles in. Scanline container, RGBA float.
+fn exr_data_uri() -> String {
+    let buf = image::ImageBuffer::from_pixel(2, 2, image::Rgba([4.0f32, 1.0, 0.25, 1.0]));
+    let img = image::DynamicImage::ImageRgba32F(buf);
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::OpenExr)
+        .expect("exr encodes");
+    format!(
+        "data:image/x-exr;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(out.into_inner())
+    )
+}
+
 /// Serializes the image-op requests of this binary: the job registry is
 /// PROCESS-GLOBAL, so two concurrent image-op requests would list each
 /// other's jobs on `GET /v1/jobs` (and the cancel test would cancel a
@@ -949,6 +964,66 @@ async fn events_stream_carries_image_ops_lifecycle() {
     assert_eq!(registered["kind"], "image_ops", "{registered}");
     let finished = frame_for(&mut stream, "job_finished", &job_id).await;
     assert_eq!(finished["kind"], "image_ops", "{finished}");
+}
+
+/// EXR ingest: magic sniff admits it, decode compresses HDR floats into LDR
+/// pixels, and the job emits both the original `map` and its tonemapped
+/// `preview` as content-addressed artifacts.
+#[tokio::test]
+async fn exr_input_is_tonemapped_and_emits_map_and_preview() {
+    let dir = fresh_data_dir("exr");
+    let app = app_with(Some(&dir));
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let mut stream = sse.into_body().into_data_stream();
+
+    let (status, headers, body) = image_ops(
+        app,
+        json!({
+            "command": "format",
+            "inputs": [{"data_uri": exr_data_uri()}],
+            "request_id": "exr-ingest-1",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let job_id = headers
+        .get("x-job-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(body["outputs"][0]["b64_json"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "output is an LDR PNG");
+    let decoded = image::load_from_memory(&png).expect("output decodes");
+    assert_eq!((decoded.width(), decoded.height()), (2, 2));
+    let red = decoded.to_rgba8().get_pixel(0, 0).0[0];
+    assert!((200..250).contains(&red), "HDR 4.0 compressed, not clipped: {red}");
+
+    let mut kinds = Vec::new();
+    while kinds.len() < 2 {
+        let (name, frame) = next_frame(&mut stream).await;
+        if name == "job_result" && frame["id"].as_str() == Some(job_id.as_str()) {
+            assert!(frame["artifact_id"].as_str().is_some(), "{frame}");
+            kinds.push(frame["artifact_kind"].as_str().unwrap().to_owned());
+        }
+    }
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["map", "preview"]);
+
+    std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
 /// The capabilities advertisement lists the closed op vocabulary (the

@@ -83,6 +83,8 @@ const _: Option<image::codecs::webp::WebPDecoder<std::io::Empty>> = None;
 const _: Option<image::codecs::png::PngEncoder<std::io::Sink>> = None;
 const _: Option<image::codecs::jpeg::JpegEncoder<std::io::Sink>> = None;
 const _: Option<image::codecs::webp::WebPEncoder<std::io::Sink>> = None;
+/// EXR decoder (scanline and tiled, half/float RGB(A)); no general encoder.
+const _: Option<image::codecs::openexr::OpenExrDecoder<std::io::Cursor<&'static [u8]>>> = None;
 
 /// What family a container belongs to — the registry's grouping for the
 /// capabilities advertisement, route admission, and the budget semantics.
@@ -229,6 +231,9 @@ const PNG_SIG: Signature = &[(0, b"\x89PNG\r\n\x1a\n")];
 const JPEG_SIG: Signature = &[(0, b"\xFF\xD8\xFF")];
 /// WebP: a RIFF container whose form type at offset 8 is `WEBP`.
 const WEBP_SIG: Signature = &[(0, b"RIFF"), (8, b"WEBP")];
+/// `OpenEXR`: all versions open with `v/1` + the 0x01 format byte (the
+/// version and tiled/multipart flags follow, so they are not part of magic).
+const EXR_SIG: Signature = &[(0, b"v/1\x01")];
 /// Netpbm frames: `P6` (pixmap) / `P5` (graymap) followed by whitespace.
 const PPM_SIG: Signature = &[(0, b"P6")];
 const PGM_SIG: Signature = &[(0, b"P5")];
@@ -260,8 +265,9 @@ const FBX_SIG: Signature = &[(0, b"Kaydara FBX Binary  \x00\x1a\x00")];
 /// The registry. Order is the advertisement order (`formats.write` derives
 /// from the `output` column in this order, locked to `OutputFormat::ALL`).
 ///
-/// Accepted today: `png` (SD ingest + image-ops) and `jpeg`/`webp`
-/// (image-ops inputs + encoders). The 3D-model rows are pure structural
+/// Accepted today: `png` (SD ingest + image-ops), `jpeg`/`webp`
+/// (image-ops inputs + encoders), and `exr` (image-ops HDR ingest, decoded to
+/// an LDR preview; never a general output). The 3D-model rows are structural
 /// rows — no codec probe applies to them: `glb`/`ply`/`splat`/`spz` carry
 /// `model_export` (the [`MODEL_EXPORT_FORMATS`] allowlist, structurally
 /// validated by [`crate::model_formats`]), while `fbx`/`usd`/`obj` are
@@ -269,7 +275,7 @@ const FBX_SIG: Signature = &[(0, b"Kaydara FBX Binary  \x00\x1a\x00")];
 /// silently accepted in-process. Every other row is a designed extension
 /// point: capabilities stay `false`/`None` until its owning ticket wires
 /// the codec and flips the columns — flipping is the whole integration.
-static FORMATS: [FormatInfo; 15] = [
+static FORMATS: [FormatInfo; 16] = [
     FormatInfo {
         kind: FormatKind::Image,
         name: "png",
@@ -308,6 +314,20 @@ static FORMATS: [FormatInfo; 15] = [
         sd_image_ingest: false,
         image_ops_input: true,
         output: true,
+        output_compression: false,
+        model_export: false,
+        external_only: false,
+    },
+    FormatInfo {
+        kind: FormatKind::Image,
+        name: "exr",
+        mime: "image/x-exr",
+        extensions: &["exr"],
+        magic: &[EXR_SIG],
+        budget: RASTER_BUDGET,
+        sd_image_ingest: false,
+        image_ops_input: true,
+        output: false,
         output_compression: false,
         model_export: false,
         external_only: false,
@@ -705,6 +725,30 @@ mod tests {
         out.into_inner()
     }
 
+    /// Linear half/float fixture: the EXR encoder only accepts 32-bit float
+    /// channels, so it cannot share the 8-bit `encoded` helper above.
+    fn encoded_exr() -> Vec<u8> {
+        let buf = image::ImageBuffer::from_pixel(2, 2, image::Rgba([0.5f32, 0.25, 1.0, 1.0]));
+        let img = image::DynamicImage::ImageRgba32F(buf);
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::OpenExr)
+            .expect("1x1 exr encode");
+        out.into_inner()
+    }
+
+    #[test]
+    fn exr_bytes_sniff_to_the_hdr_row() {
+        let bytes = encoded_exr();
+        let row = sniff(&bytes).expect("encoded exr must identify");
+        assert_eq!(row.name, "exr");
+        assert_eq!(row.mime, "image/x-exr");
+        assert!(row.image_ops_input, "exr is an image-ops input");
+        assert!(!row.output, "exr is not a general output");
+        assert!(!row.sd_image_ingest, "sd ingest stays PNG-only");
+        assert_eq!(sniff(b"v/1\x01rest").map(|row| row.name), Some("exr"));
+        assert!(sniff(b"v/1\x02rest").is_none(), "0x01 is part of the magic");
+    }
+
     /// The compiled encoders' bytes sniff back to their own registry rows:
     /// the magic table agrees with what the build actually produces. The
     /// encoders here are the compiled `image` codecs — the exact ones the
@@ -828,7 +872,7 @@ mod tests {
         let rows: Vec<&FormatInfo> = image_ops_inputs().collect();
         assert_eq!(
             rows.iter().map(|row| row.name).collect::<Vec<_>>(),
-            ["png", "jpeg", "webp", "svg", "ora"]
+            ["png", "jpeg", "webp", "exr", "svg", "ora"]
         );
         let mut mimes: Vec<&str> = rows.iter().map(|row| row.mime).collect();
         mimes.sort_unstable();
@@ -852,7 +896,7 @@ mod tests {
         // accepted data-URI declaration.
         assert_eq!(image_ops_by_mime("application/octet-stream"), None);
         let exts: Vec<&str> = image_ops_extensions().collect();
-        assert_eq!(exts, ["png", "jpeg", "jpg", "webp", "svg", "ora"]);
+        assert_eq!(exts, ["png", "jpeg", "jpg", "webp", "exr", "svg", "ora"]);
     }
 
     /// Signature matching honors offsets and lengths: partial signatures

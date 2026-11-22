@@ -208,8 +208,9 @@ pub(super) fn check_admitted_container(
 }
 
 /// Decode one admitted input into pixels: the SVG rasterizer and the ORA
-/// flattener for the vector and layered rows, the `image` crate reader for
-/// the flat raster rows. The limits come from the sniffed registry row.
+/// flattener for the vector and layered rows, a bounded tonemapped read for
+/// EXR, and the `image` crate reader for the other flat raster rows. The
+/// limits come from the sniffed registry row.
 pub(super) fn decode_admitted_input(
     admitted: &AdmittedOpInput,
 ) -> Result<image::DynamicImage, ImageOpWorkError> {
@@ -217,6 +218,9 @@ pub(super) fn decode_admitted_input(
         message,
         code: "invalid_image_op_inputs",
     };
+    if admitted.row.name == "exr" {
+        return decode_exr(&admitted.raw);
+    }
     match admitted.row.kind {
         crate::formats::FormatKind::Svg => {
             crate::svg::rasterize_svg(&admitted.raw, &svg_read_limits(admitted.row))
@@ -244,12 +248,146 @@ pub(super) fn decode_admitted_input(
     }
 }
 
+
+/// Map linear EXR scene-referred floats to display-referred LDR pixels:
+/// Reinhard compression (`v / (1 + v)`), then sRGB transfer. Values are
+/// clamped defensively so NaN/infinite EXR samples cannot poison the byte
+/// buffer. Alpha is already normalized, so only its range is clamped.
+// The clamp above bounds the cast to 0..=255 by construction.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn exr_channel(value: f32, alpha: bool) -> u8 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let linear = if alpha {
+        value.clamp(0.0, 1.0)
+    } else {
+        (value.max(0.0) / (1.0 + value.max(0.0))).clamp(0.0, 1.0)
+    };
+    let srgb = if linear <= 0.003_130_8 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// EXR decodes to 32-bit float RGB(A). Convert once here so every consumer
+/// (ops, bundle bytes, preview) sees the same bounded LDR pixels.
+fn tonemap_exr(decoded: image::DynamicImage) -> image::DynamicImage {
+    let (width, height) = (decoded.width(), decoded.height());
+    let mut out = image::RgbaImage::new(width, height);
+    match decoded {
+        image::DynamicImage::ImageRgb32F(buffer) => {
+            for (x, y, pixel) in buffer.enumerate_pixels() {
+                let [r, g, b] = pixel.0;
+                out.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        exr_channel(r, false),
+                        exr_channel(g, false),
+                        exr_channel(b, false),
+                        255,
+                    ]),
+                );
+            }
+        }
+        image::DynamicImage::ImageRgba32F(buffer) => {
+            for (x, y, pixel) in buffer.enumerate_pixels() {
+                let [r, g, b, a] = pixel.0;
+                out.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        exr_channel(r, false),
+                        exr_channel(g, false),
+                        exr_channel(b, false),
+                        exr_channel(a, true),
+                    ]),
+                );
+            }
+        }
+        other => return other,
+    }
+    image::DynamicImage::ImageRgba8(out)
+}
+
+/// Bounded EXR read: the reader limits reject absurd canvases before
+/// decode; the registry pixel cap is applied by the caller as for every
+/// other raster input.
+fn decode_exr(raw: &[u8]) -> Result<image::DynamicImage, ImageOpWorkError> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(raw));
+    reader.set_format(image::ImageFormat::OpenExr);
+    reader.limits(image_decode_limits());
+    let decoded = reader
+        .decode()
+        .map_err(|e| ImageOpWorkError::Bad {
+            message: format!("cannot decode exr image: {e}"),
+            code: "invalid_image_op_inputs",
+        })?;
+    Ok(tonemap_exr(decoded))
+}
+
+/// The LDR preview every EXR input carries: a PNG of the tonemapped source,
+/// before any op is applied, in the same `preview` vocabulary Blender jobs use.
+fn exr_preview_png(decoded: &image::DynamicImage) -> Result<Vec<u8>, ImageOpWorkError> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    decoded
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| ImageOpWorkError::Failed(format!("exr preview encode failed: {e}")))?;
+    Ok(out.into_inner())
+}
+
+/// Publish the EXR bytes as a `map` artifact and their LDR PNG as the
+/// `preview` artifact, both as live job results. Storage is best-effort:
+/// a server without a data dir still serves the op output, just without
+/// content-addressed handles.
+fn emit_exr_artifacts(
+    artifacts: &crate::artifacts::Registry,
+    job_id: &str,
+    index: usize,
+    raw: &[u8],
+    preview: &[u8],
+) {
+    let base = format!("exr_{index:02}");
+    let rows = [
+        (
+            format!("{base}_preview.png"),
+            preview,
+            "image/png",
+            "preview",
+            false,
+        ),
+        (format!("{base}_map.exr"), raw, "image/x-exr", "map", true),
+    ];
+    for (emit_index, (name, bytes, content_type, kind, primary)) in rows.into_iter().enumerate() {
+        match artifacts.put_bytes(bytes, content_type) {
+            Ok(info) => crate::jobs_registry::global().emit_result(
+                job_id,
+                &info.id,
+                &info.sha256,
+                info.size_bytes,
+                crate::jobs_registry::ArtifactFrameMeta {
+                    name: &name,
+                    kind,
+                    index: u32::try_from(index * 2 + emit_index).unwrap_or(u32::MAX),
+                    primary,
+                },
+            ),
+            Err(err) => tracing::warn!(%err, %name, "exr artifact promotion skipped"),
+        }
+    }
+}
+
 pub(super) fn run_image_op_units(
     command: &ImageOpCommand,
     inputs: &[AdmittedOpInput],
     format: honkbox_sd_core::OutputFormat,
     jpeg_quality: Option<u8>,
     token: &tokio_util::sync::CancellationToken,
+    artifacts: &crate::artifacts::Registry,
+    job_id: &str,
 ) -> Result<(Vec<ImageOpUnitOutput>, Vec<crate::jobs::OpsInputRecord>), ImageOpWorkError> {
     let mut outputs = Vec::with_capacity(inputs.len());
     let mut records = Vec::with_capacity(inputs.len());
@@ -260,6 +398,11 @@ pub(super) fn run_image_op_units(
             return Err(ImageOpWorkError::Cancelled { completed: i });
         }
         let decoded = decode_admitted_input(admitted)?;
+        let exr_preview = if admitted.row.name == "exr" {
+            Some(exr_preview_png(&decoded)?)
+        } else {
+            None
+        };
         let pixels = u64::from(decoded.width()) * u64::from(decoded.height());
         let pixel_cap = admitted
             .row
@@ -297,6 +440,9 @@ pub(super) fn run_image_op_units(
             sha256: sha256_hex(&bytes),
             bytes,
         });
+        if let Some(preview) = exr_preview {
+            emit_exr_artifacts(artifacts, job_id, i, &admitted.raw, &preview);
+        }
     }
     Ok((outputs, records))
 }

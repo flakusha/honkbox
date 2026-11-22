@@ -109,8 +109,18 @@ pub(super) async fn execute_image_op(
     };
     let command = req.command.clone();
     let token = job.token().clone();
+    let artifacts = config.artifacts.clone();
+    let job_id = job.id().to_owned();
     let work = tokio::task::spawn_blocking(move || {
-        run_image_op_units(&command, &admitted, format, jpeg_quality, &token)
+        run_image_op_units(
+            &command,
+            &admitted,
+            format,
+            jpeg_quality,
+            &token,
+            &artifacts,
+            &job_id,
+        )
     })
     .await;
     drop(lease);
