@@ -47,19 +47,20 @@ impl AttachedLlm {
     /// advertising a backend that cannot serve. Non-loopback URLs are refused:
     /// the app key must never travel over an untrusted network.
     pub fn new(base: &str, model: Option<&str>) -> Result<Self, LlmError> {
-        let base = base.trim().trim_end_matches('/').to_owned();
-        let authority = base
-            .strip_prefix("http://")
-            .unwrap_or("")
-            .split('/')
-            .next()
-            .unwrap_or("");
-        let host = authority
-            .rsplit_once(':')
-            .map_or(authority, |(host, _)| host);
-        if !matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
-            return Err(upstream(502, "attached llama-server URL must be loopback"));
+        let parsed = reqwest::Url::parse(base)
+            .map_err(|err| upstream(502, format!("invalid llama-server URL: {err}")))?;
+        let loopback = matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+        if parsed.scheme() != "http"
+            || !loopback
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(upstream(
+                502,
+                "attached llama-server URL must be credential-free loopback HTTP",
+            ));
         }
+        let base = parsed.to_string().trim_end_matches('/').to_owned();
         let builder = reqwest::blocking::Client::builder()
             .timeout(TIMEOUT)
             .connect_timeout(Duration::from_secs(3));
@@ -517,6 +518,21 @@ mod tests {
     fn non_loopback_url_refused() {
         let err = AttachedLlm::new("https://example.invalid", None).expect_err("refused");
         assert!(matches!(err, LlmError::Upstream { status: 502, .. }));
+    }
+
+    #[test]
+    fn userinfo_cannot_spoof_loopback() {
+        for url in [
+            "http://127.0.0.1:80@evil.invalid",
+            "http://[::1]:80@evil.invalid",
+            "http://user@127.0.0.1:1",
+        ] {
+            let err = AttachedLlm::new(url, None).expect_err("refused");
+            assert!(
+                matches!(err, LlmError::Upstream { status: 502, .. }),
+                "{url} was accepted"
+            );
+        }
     }
 
     #[test]
