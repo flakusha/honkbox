@@ -1,6 +1,6 @@
 # EPIC: External tool registry and process supervision
 
-Status: done (2026-11-19 — both tickets landed: `a86fcb6` registry, `fa0fefb` supervisor)
+Status: in progress (2026-11-22 — registry/supervisor landed; CLI-app follow-ups open)
 Priority: P0
 Owner: unassigned
 Research: `.tmp/research/ReviewedFullCycle-Tool-Management.md`,
@@ -17,6 +17,15 @@ args, enforce timeout and CPU/RAM limits, kill on cancel, collect artifacts.
 
 - `TASK-external-tool-registry.md` — capability discovery + 501 on missing tool.
 - `TASK-process-supervisor.md` — lifecycle, limits, cancel, artifact dir.
+- `TASK-llama-server-attach.md` — attach a user-installed `llama-server`
+  (landed; six-tool capability contract green).
+- `FEAT-cli-app-manager.md` — managed start/stop lifecycle (proposed).
+- `FEAT-llama-server-client-backend.md` — consume the attached server through
+  the LLM seam (proposed; tracked in `epic-llm-expansion`).
+- `TASK-fizgig-probe-honesty.md` — bounded retry, no blocked axum worker,
+  honest capability rows; follow-up to the attach/probe slices.
+- `TASK-training-reservation-class.md` — dedicated training GPU class so
+  capability rows never reserve a hidden route.
 
 ## Acceptance
 

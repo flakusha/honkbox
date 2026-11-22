@@ -32,6 +32,14 @@ provider routing (`.tmp/research/ReviewedFullCycle-LoopLore-Acceleration.md`).
 
 `bun run check`, `bun run test`, `bun run codegen:check`, `bun run lint:rs`.
 
+## Current follow-ups (2026-11-22)
+
+- `BUG-fizgig-family-model-resolution.md` — family-aware VAE/text-encoder
+  resolution and pre-admission rejection.
+- `BUG-fizgig-artifact-cap-and-gc.md` — bounded bundles, work-dir GC, resume
+  state retention.
+- `TASK-fizgig-admission-contract-tests.md` — path confinement, terminal-state
+  cancel, non-unix and `/v1/jobs` contract gaps.
 ## Non-goals
 
 Engine SDKs/MCP inside honkbox; Blender embedded in-process; byte-identical
