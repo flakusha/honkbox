@@ -197,7 +197,7 @@ seed and index using sd-core's `splitmix64` (no second hash copy). `Op` gains a
 `SamplingStep` capability floor. `generate` is unchanged: no model prediction
 exists yet, so it still names the missing pieces instead of faking an image.
 
-Evidence: 43 tests pass on `ash-compute` and 48 on `experimental-ash-sd`; the
+Evidence: 43 tests pass on `ash-compute` and 44 on `experimental-ash-sd`; the
 DDIM GPU test matched a CPU reference within 1e-4 on an 8-element latent;
 clippy `-D warnings` clean; fmt clean.
 
@@ -205,19 +205,26 @@ Next: classifier-free guidance + text conditioning, then wire into `generate`.
 
 ## Landed — slice 14 (2026-11-22, worktree)
 
-`Cfg::run` applies classifier-free guidance on the Vulkan compute scaffold:
-`uncond + scale * (cond - uncond)`, with scale validated as finite and >= 1.
-`TextConditioning` holds caller-supplied positive/negative token embeddings
-with a `(tokens, dim)` shape contract and finite-value checks; its `guided`
-method routes through the CFG pipeline. No prompt→embedding conversion exists
-here: CLIP tokenization needs vocab/merge assets and an encoder checkpoint, so
-nothing is derived from a prompt string. `Op::ClassifierFreeGuidance` joins the
-vocabulary with an 8-byte floor. `generate` remains unchanged until a text
-encoder and diffusion backbone exist.
+The LLM placeholder becomes a real worker seam: `llm.rs` (new, gated
+`experimental-ash-llm`) hosts `AshLlmPipeline` implementing the
+`honkbox-llm-worker` `LlmPipeline` trait; `stubs.rs` keeps only the STT/TTS
+placeholders. Semantics: this is a placeholder on the direct-Vulkan path,
+NOT a deterministic emulator — `complete` and `complete_stream` (and the
+cancellable forward) return `LlmError::Load("direct-Vulkan chat is not
+implemented yet: ... no output is faked")`; the token sink is never
+invoked. `backend_id()` is `"ash-llm"`. No generation ever starts, so
+`abort` stays the trait-default no-op and `complete_stream_cancellable`
+keeps the documented legacy path. `server/experimental-ash-llm` forwards
+to the crate feature; `--llm-backend ash-llm` exists only in feature builds
+and constructs `VulkanDevice::headless()` at startup — device failure is a
+loud named exit-1, never a silent stub fallback. No new config keys.
+`honkbox-llm-worker` is declared by path in both crates (the workspace
+dependencies table does not carry it).
 
-Evidence: 47 tests pass on `ash-compute` and 52 on `experimental-ash-sd`; the
-CFG GPU test matched a CPU reference within 1e-4 at scale 7.5, and scale 1.0
-preserved the conditional vector within 1e-6; clippy `-D warnings` clean; fmt
-clean.
-
-Next: text encoder seam (tokenizer + embedding assets), then `generate` wiring.
+Evidence: `cargo test --locked -p honkbox-ash-backend --features
+experimental-ash-llm` → 48 passed (5 new: backend id, named unimplemented
+complete, stream-without-tokens, cancellable legacy path, device-in-a-box
+construction); `--features ash-compute` regression → 43 passed; server
+`cargo check --locked` green with and without the feature; workspace
+clippy `--features honkbox-server/experimental-ash-llm -- -D warnings`
+clean; `cargo fmt --check` clean.
