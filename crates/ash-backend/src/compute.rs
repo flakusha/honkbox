@@ -25,6 +25,8 @@ pub(crate) static CONV2D_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), 
 pub(crate) static SILU_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/silu.spv"));
 pub(crate) static GROUP_NORM_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/group_norm.spv"));
+pub(crate) static CONV_TRANSPOSE_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/conv_transpose.spv"));
 
 /// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
 pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {
@@ -349,6 +351,10 @@ mod tests {
         assert_eq!(spirv_words(CONV2D_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(SILU_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(GROUP_NORM_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(
+            spirv_words(CONV_TRANSPOSE_SPIRV).first(),
+            Some(&SPIRV_MAGIC)
+        );
     }
 
     #[test]

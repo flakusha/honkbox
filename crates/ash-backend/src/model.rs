@@ -29,6 +29,8 @@ pub enum Op {
     Silu,
     /// NCHW group normalization.
     GroupNorm,
+    /// NCHW transposed convolution (VAE upsampling).
+    ConvTranspose2d,
 }
 
 impl Op {
@@ -50,7 +52,7 @@ impl Op {
                 storage_range: 8, // two shape u32s
                 ..CapacityRequirements::default()
             },
-            Self::Conv2d => CapacityRequirements {
+            Self::Conv2d | Self::ConvTranspose2d => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 40, // ten shape u32s
                 ..CapacityRequirements::default()

@@ -24,6 +24,9 @@
 //! - [`conv2d`]: [`conv2d::Conv2d`], direct NCHW convolution.
 //! - [`silu`]: [`silu::Silu`], elementwise `SiLU` activation.
 //! - [`group_norm`]: [`group_norm::GroupNorm`], NCHW group normalization.
+//! - [`conv_transpose`]: [`conv_transpose::ConvTranspose2d`], transposed conv.
+//! - [`vae_decode`]: [`vae_decode::VaeDecode`], one decoder block composed from
+//!   the kernels above (weights come from the caller, never bundled).
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -117,6 +120,8 @@ pub mod compute;
 #[cfg(feature = "ash-compute")]
 pub mod conv2d;
 #[cfg(feature = "ash-compute")]
+pub mod conv_transpose;
+#[cfg(feature = "ash-compute")]
 pub mod device;
 #[cfg(feature = "ash-compute")]
 pub mod group_norm;
@@ -136,3 +141,5 @@ pub mod silu;
 pub mod softmax;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod stubs;
+#[cfg(feature = "ash-compute")]
+pub mod vae_decode;

@@ -169,3 +169,19 @@ groups and buffer mismatches.
 Evidence: 37 tests pass on `ash-compute`, 41 on `experimental-ash-sd`; GPU test
 on a 1×4×2×2 / 2-group tensor matched a CPU reference within 1e-4;
 clippy `-D warnings` clean; fmt clean.
+
+## Landed — slice 12 (2026-11-22, worktree)
+
+`ConvTranspose2d::run` adds NCHW transposed convolution for VAE upsampling:
+weights `[in_c, out_c, k, k]`, bias `[out_c]`, derived output-size validation,
+and one invocation per output element (no atomics for overlapping strides).
+`VaeDecode` composes it with `GroupNorm`, `Silu` and a 1×1 `Conv2d` into one
+decoder block; all weights come from the caller, so no image is faked and no
+model data is bundled. `Op::ConvTranspose2d` joins the vocabulary.
+
+Evidence: 40 tests pass on `ash-compute`, 44 on `experimental-ash-sd`; the
+transposed-conv GPU test (2×2 latent → 4×4, kernel 2, stride 2) and the full
+decode GPU test both matched CPU references within 1e-4; clippy `-D warnings`
+clean; fmt clean.
+
+Next: scheduler/sampling slice, then wire into `generate`.

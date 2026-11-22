@@ -1,0 +1,67 @@
+// Provenance: original (NCHW transposed convolution written from first principles; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation per output element; loops over contributing inputs, so
+// overlapping stride/kernels need no atomics and stay deterministic.
+// ponytail: direct O(C_in × k²) per output; add tiling when a real VAE needs it.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Params { float params[]; }; // weights, then bias
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape {
+    uint dims[10];
+}; // batch, in_c, out_c, in_h, in_w, out_h, out_w, kernel, stride, padding
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    uint batch = dims[0];
+    uint in_c = dims[1];
+    uint out_c = dims[2];
+    uint in_h = dims[3];
+    uint in_w = dims[4];
+    uint out_h = dims[5];
+    uint out_w = dims[6];
+    uint kernel = dims[7];
+    uint stride = dims[8];
+    uint padding = dims[9];
+    uint plane = out_h * out_w;
+    uint total = batch * out_c * plane;
+    if (index >= total) {
+        return;
+    }
+
+    uint n = index / (out_c * plane);
+    uint oc = (index / plane) % out_c;
+    uint oh = (index % plane) / out_w;
+    uint ow = index % out_w;
+    float sum = params[in_c * out_c * kernel * kernel + oc];
+
+    for (uint ic = 0; ic < in_c; ++ic) {
+        for (uint kh = 0; kh < kernel; ++kh) {
+            int numerator_h = int(oh) + int(padding) - int(kh * stride);
+            if (numerator_h < 0 || numerator_h % int(stride) != 0) {
+                continue;
+            }
+            uint ih = uint(numerator_h / int(stride));
+            if (ih >= in_h) {
+                continue;
+            }
+            for (uint kw = 0; kw < kernel; ++kw) {
+                int numerator_w = int(ow) + int(padding) - int(kw * stride);
+                if (numerator_w < 0 || numerator_w % int(stride) != 0) {
+                    continue;
+                }
+                uint iw = uint(numerator_w / int(stride));
+                if (iw >= in_w) {
+                    continue;
+                }
+                uint in_index = ((n * in_c + ic) * in_h + ih) * in_w + iw;
+                uint weight_index = ((ic * out_c + oc) * kernel + kh) * kernel + kw;
+                sum += values[in_index] * params[weight_index];
+            }
+        }
+    }
+    result[index] = sum;
+}

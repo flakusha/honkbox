@@ -12,6 +12,7 @@ fn main() {
         ("shaders/conv2d.comp", "conv2d.spv"),
         ("shaders/silu.comp", "silu.spv"),
         ("shaders/group_norm.comp", "group_norm.spv"),
+        ("shaders/conv_transpose.comp", "conv_transpose.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");
