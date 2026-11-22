@@ -1,31 +1,28 @@
-//! First real compute op on the Vulkan device: elementwise f32 add.
+//! Shared Vulkan compute scaffold plus the first elementwise kernel.
 //!
-//! One shader, one descriptor layout, one pipeline. Later ops reuse the same
-//! buffer/pipeline/dispatch scaffolding; this slice proves the path end to
-//! end (host bytes → storage buffers → GPU dispatch → host readback).
+//! [`Kernel`] owns the shader, pipeline, descriptor set and command buffer;
+//! each op only validates, uploads, dispatches and decodes. All Vulkan calls
+//! go through [`crate::raw`], so unsafe stays confined to that module.
 //!
-//! All Vulkan calls go through [`crate::raw`]; this module only owns handles
-//! and decides lifetimes.
-//!
-//! ponytail: host-visible buffers for all four bindings — no staging or
-//! dedicated device-local memory yet; add those when transfer throughput
-//! matters, not for the first kernel.
+//! ponytail: host-visible buffers for every binding — no staging or
+//! device-local memory yet; add those when transfer throughput matters.
 
 use crate::{VkError, device::CapacityRequirements, device::VulkanDevice, raw};
 use ash::vk;
 use std::sync::{Arc, Mutex};
 
-/// `local_size_x` from `shaders/elementwise_add.comp`.
-const LOCAL_SIZE: u32 = 64;
-/// SPIR-V magic number (stream header).
 const SPIRV_MAGIC: u32 = 0x0723_0203;
+/// `local_size_x` of `shaders/elementwise_add.comp`.
+const ELEMENTWISE_LOCAL_SIZE: u32 = 64;
 
-static SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/elementwise_add.spv"));
+pub(crate) static ELEMENTWISE_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/elementwise_add.spv"));
+pub(crate) static MATMUL_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/matmul.spv"));
 
-/// Reinterpret the little-endian SPIR-V byte stream as Vulkan words.
-fn spirv_words() -> Vec<u32> {
-    assert_eq!(SPIRV.len() % 4, 0, "SPIR-V must be word-aligned");
-    let (words, trailing) = SPIRV.as_chunks::<4>();
+/// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
+pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {
+    assert_eq!(bytes.len() % 4, 0, "SPIR-V must be word-aligned");
+    let (words, trailing) = bytes.as_chunks::<4>();
     assert!(trailing.is_empty(), "SPIR-V must be word-aligned");
     let words: Vec<u32> = words.iter().map(|c| u32::from_le_bytes(*c)).collect();
     assert_eq!(
@@ -36,19 +33,34 @@ fn spirv_words() -> Vec<u32> {
     words
 }
 
-fn f32_bytes(values: &[f32]) -> Vec<u8> {
+pub(crate) fn f32_bytes(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
+/// Decode a GPU output buffer into f32 values.
+pub(crate) fn f32_from_bytes(bytes: &[u8]) -> Vec<f32> {
+    assert_eq!(
+        bytes.len() % size_of::<f32>(),
+        0,
+        "f32 output is word-aligned"
+    );
+    bytes
+        .as_chunks::<{ size_of::<f32>() }>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
+}
+
 /// A host-visible storage buffer, bound and uploaded on construction.
-struct GpuBuffer<'a> {
+pub(crate) struct GpuBuffer<'a> {
     device: &'a VulkanDevice,
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) memory: vk::DeviceMemory,
 }
 
 impl<'a> GpuBuffer<'a> {
-    fn new(device: &'a VulkanDevice, bytes: &[u8]) -> Result<Self, VkError> {
+    pub(crate) fn new(device: &'a VulkanDevice, bytes: &[u8]) -> Result<Self, VkError> {
         let size =
             u64::try_from(bytes.len()).map_err(|_| VkError::Device("buffer too large".into()))?;
         let buffer =
@@ -99,12 +111,14 @@ impl Drop for GpuBuffer<'_> {
     }
 }
 
-/// Reusable Vulkan pipeline for `result[i] = lhs[i] + rhs[i]`.
-pub struct ElementwiseAdd {
-    // Descriptor set and command buffer are mutable GPU resources: at most
-    // one dispatch may re-record/submit them at a time.
+/// Reusable pipeline for a four-binding storage-buffer shader.
+///
+/// Binding 2 is the output in both current shaders; binding 3 carries shape
+/// metadata (element count or matrix dimensions). At most one dispatch may
+/// run at a time because the descriptor set and command buffer are reused.
+pub(crate) struct Kernel {
     dispatch_lock: Mutex<()>,
-    device: Arc<VulkanDevice>,
+    pub(crate) device: Arc<VulkanDevice>,
     module: vk::ShaderModule,
     layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
@@ -115,11 +129,9 @@ pub struct ElementwiseAdd {
     command: vk::CommandBuffer,
 }
 
-impl ElementwiseAdd {
-    /// Compile-time-embedded SPIR-V → shader module, layout and pipeline.
-    pub fn new(device: Arc<VulkanDevice>) -> Result<Self, VkError> {
-        let words = spirv_words();
-        let module = raw::create_shader_module(device.logical(), &words)?;
+impl Kernel {
+    pub(crate) fn new(device: Arc<VulkanDevice>, words: &[u32]) -> Result<Self, VkError> {
+        let module = raw::create_shader_module(device.logical(), words)?;
         let layout = match raw::create_descriptor_set_layout(device.logical()) {
             Ok(layout) => layout,
             Err(e) => {
@@ -205,15 +217,80 @@ impl ElementwiseAdd {
         raw::destroy_shader_module(device.logical(), module);
     }
 
-    /// Dispatch the add on the device's compute queue and return the result.
-    ///
-    /// Rejects empty and unequal-length inputs; element count is passed to the
-    /// shader so a non-multiple of `LOCAL_SIZE` does not write out of bounds.
-    pub fn run(&self, lhs: &[f32], rhs: &[f32]) -> Result<Vec<f32>, VkError> {
+    /// Bind `buffers` to the four bindings, dispatch, fence-wait, read output.
+    pub(crate) fn dispatch(
+        &self,
+        buffers: &[GpuBuffer<'_>],
+        sizes: [u64; 4],
+        output: usize,
+        output_len: usize,
+        workgroups: [u32; 3],
+    ) -> Result<Vec<u8>, VkError> {
         let _guard = self
             .dispatch_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(buffers.len(), 4, "shaders declare four bindings");
+        assert!(output < buffers.len(), "output binding must exist");
+        let handles = [
+            buffers[0].buffer,
+            buffers[1].buffer,
+            buffers[2].buffer,
+            buffers[3].buffer,
+        ];
+        raw::write_storage_descriptors(self.device.logical(), self.set, handles, sizes);
+        raw::reset_command_buffer(self.device.logical(), self.command)?;
+        raw::record_dispatch(
+            self.device.logical(),
+            self.command,
+            self.pipeline,
+            self.pipeline_layout,
+            self.set,
+            workgroups,
+        )?;
+        let fence = raw::create_fence(self.device.logical())?;
+        let submitted = raw::submit_and_wait(
+            self.device.logical(),
+            self.device.compute_queue(),
+            self.command,
+            fence,
+        );
+        raw::destroy_fence(self.device.logical(), fence);
+        submitted?;
+        raw::read_host_memory(self.device.logical(), buffers[output].memory, output_len)
+    }
+}
+
+impl Drop for Kernel {
+    fn drop(&mut self) {
+        let device = self.device.logical();
+        raw::destroy_command_pool(device, self.command_pool);
+        raw::destroy_descriptor_pool(device, self.pool);
+        raw::destroy_pipeline(device, self.pipeline);
+        raw::destroy_pipeline_layout(device, self.pipeline_layout);
+        raw::destroy_descriptor_set_layout(device, self.layout);
+        raw::destroy_shader_module(device, self.module);
+    }
+}
+
+/// Reusable Vulkan pipeline for `result[i] = lhs[i] + rhs[i]`.
+pub struct ElementwiseAdd {
+    kernel: Kernel,
+}
+
+impl ElementwiseAdd {
+    /// Compile-time-embedded SPIR-V → shader module, layout and pipeline.
+    pub fn new(device: Arc<VulkanDevice>) -> Result<Self, VkError> {
+        Ok(Self {
+            kernel: Kernel::new(device, &spirv_words(ELEMENTWISE_SPIRV))?,
+        })
+    }
+
+    /// Dispatch the add on the device's compute queue and return the result.
+    ///
+    /// Rejects empty and unequal-length inputs; element count is passed to the
+    /// shader so a non-multiple of the local size does not write out of bounds.
+    pub fn run(&self, lhs: &[f32], rhs: &[f32]) -> Result<Vec<f32>, VkError> {
         if lhs.is_empty() || lhs.len() != rhs.len() {
             return Err(VkError::Device(
                 "elementwise_add: inputs must be non-empty and equal length".into(),
@@ -225,81 +302,30 @@ impl ElementwiseAdd {
             .len()
             .checked_mul(size_of::<f32>())
             .ok_or_else(|| VkError::Device("elementwise_add: byte length overflow".into()))?;
-        let local_size = usize::try_from(LOCAL_SIZE).expect("64 fits usize");
+        let local_size = usize::try_from(ELEMENTWISE_LOCAL_SIZE).expect("64 fits usize");
         let workgroups = u32::try_from(lhs.len().div_ceil(local_size))
             .map_err(|_| VkError::Device("elementwise_add: too many workgroups".into()))?;
         let byte_len_u64 = u64::try_from(byte_len)
             .map_err(|_| VkError::Device("elementwise_add: buffer too large".into()))?;
 
-        // Same capacity gate a model load will use: no dispatch may exceed
-        // the selected device's reported limits.
-        self.device.info.admit(&CapacityRequirements {
+        self.kernel.device.info.admit(&CapacityRequirements {
             workgroup_count: [workgroups, 1, 1],
             storage_range: byte_len_u64,
             ..CapacityRequirements::default()
         })?;
 
-        let left = GpuBuffer::new(&self.device, &f32_bytes(lhs))?;
-        let right = GpuBuffer::new(&self.device, &f32_bytes(rhs))?;
-        let output = GpuBuffer::new(&self.device, &vec![0u8; byte_len])?;
-        let length = GpuBuffer::new(&self.device, &count.to_le_bytes())?;
-
-        raw::write_storage_descriptors(
-            self.device.logical(),
-            self.set,
-            [left.buffer, right.buffer, output.buffer, length.buffer],
-            [
-                byte_len_u64,
-                byte_len_u64,
-                byte_len_u64,
-                u64::try_from(size_of::<u32>()).expect("usize fits u64"),
-            ],
-        );
-        raw::reset_command_buffer(self.device.logical(), self.command)?;
-        raw::record_dispatch(
-            self.device.logical(),
-            self.command,
-            self.pipeline,
-            self.pipeline_layout,
-            self.set,
+        let left = GpuBuffer::new(&self.kernel.device, &f32_bytes(lhs))?;
+        let right = GpuBuffer::new(&self.kernel.device, &f32_bytes(rhs))?;
+        let output = GpuBuffer::new(&self.kernel.device, &vec![0u8; byte_len])?;
+        let length = GpuBuffer::new(&self.kernel.device, &count.to_le_bytes())?;
+        let bytes = self.kernel.dispatch(
+            &[left, right, output, length],
+            [byte_len_u64, byte_len_u64, byte_len_u64, 4],
+            2,
+            byte_len,
             [workgroups, 1, 1],
         )?;
-        let fence = raw::create_fence(self.device.logical())?;
-        let submitted = raw::submit_and_wait(
-            self.device.logical(),
-            self.device.compute_queue(),
-            self.command,
-            fence,
-        );
-        raw::destroy_fence(self.device.logical(), fence);
-        submitted?;
-
-        let bytes = raw::read_host_memory(self.device.logical(), output.memory, byte_len)?;
-        assert_eq!(
-            bytes.len() % size_of::<f32>(),
-            0,
-            "f32 output is word-aligned"
-        );
-        Ok(bytes
-            .as_chunks::<{ size_of::<f32>() }>()
-            .0
-            .iter()
-            .map(|c| f32::from_le_bytes(*c))
-            .collect())
-    }
-}
-
-impl Drop for ElementwiseAdd {
-    fn drop(&mut self) {
-        // The Arc keeps the device alive while its children are destroyed.
-        // Command buffers die with `command_pool`, sets with `pool`.
-        let device = self.device.logical();
-        raw::destroy_command_pool(device, self.command_pool);
-        raw::destroy_descriptor_pool(device, self.pool);
-        raw::destroy_pipeline(device, self.pipeline);
-        raw::destroy_pipeline_layout(device, self.pipeline_layout);
-        raw::destroy_descriptor_set_layout(device, self.layout);
-        raw::destroy_shader_module(device, self.module);
+        Ok(f32_from_bytes(&bytes))
     }
 }
 
@@ -308,13 +334,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_shader_is_valid_spirv() {
-        let words = spirv_words();
-        assert_eq!(
-            words.first(),
-            Some(&SPIRV_MAGIC),
-            "build.rs must embed SPIR-V"
-        );
+    fn embedded_shaders_are_valid_spirv() {
+        assert_eq!(spirv_words(ELEMENTWISE_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(MATMUL_SPIRV).first(), Some(&SPIRV_MAGIC));
     }
 
     #[test]
@@ -332,9 +354,10 @@ mod tests {
         // exercises the shader's count guard and the workgroup ceil.
         let lhs = vec![1.5_f32; 4097];
         let rhs = vec![2.25_f32; 4097];
-        let out = kernel.run(&lhs, &rhs).expect("gpu dispatch");
-        assert_eq!(out, vec![3.75_f32; 4097]);
-
+        assert_eq!(
+            kernel.run(&lhs, &rhs).expect("gpu dispatch"),
+            vec![3.75; 4097]
+        );
         assert!(matches!(kernel.run(&[], &[]), Err(VkError::Device(_))));
     }
 }

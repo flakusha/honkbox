@@ -15,7 +15,8 @@
 //!   logical device + compute queue) and physical-device selection
 //!   (discrete > integrated > cpu, then VRAM), plus capacity admission
 //!   ([`device::PhysicalDeviceInfo::admit`]) and limit-bounded dispatch plans.
-//! - [`compute`]: [`compute::ElementwiseAdd`], the first real GPU dispatch.
+//! - [`compute`]: [`compute::ElementwiseAdd`] and the shared [`compute::Kernel`].
+//! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` returns a clear unimplemented error for now.
 //! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
@@ -105,6 +106,8 @@ impl std::error::Error for VkError {}
 pub mod compute;
 #[cfg(feature = "ash-compute")]
 pub mod device;
+#[cfg(feature = "ash-compute")]
+pub mod matmul;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]

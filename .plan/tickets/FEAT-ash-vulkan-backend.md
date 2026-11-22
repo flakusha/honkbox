@@ -27,7 +27,7 @@ Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md` 
 CUDA/ROCm backends, tensor/model parallelism, bundled weights, byte-level
 equality with stable-diffusion.cpp, API/DTO changes.
 
-## Landed — slice 1 (2026-11-22, uncommitted)
+## Landed — slice 1 (commit a32829a)
 
 `elementwise_add` runs on the selected Vulkan device end to end: GLSL source,
 offline glslang compile, embedded SPIR-V, descriptor set + compute pipeline,
@@ -42,5 +42,16 @@ Evidence: `cargo test --locked -p honkbox-ash-backend --features ash-compute`
 clean. `experimental-ash-sd` full-graph check green: 233 crates compiled,
 `Finished dev profile` (13m25s).
 
-Next: ops vocabulary + `ModelSpec`, capability sets with optional-extension
-fallbacks, then `AshSdPipeline::generate` on a real checkpoint.
+## Landed — slice 2 (2026-11-22, worktree)
+
+`MatMul` adds row-major GEMM on the same pipeline scaffold. `compute::Kernel`
+now owns the shader/pipeline/descriptors/command buffer and is shared by both
+ops; `GpuBuffer` and SPIR-V decoding are shared too. New `shaders/matmul.comp`
+uses an 8×8 tile with a shape guard; shape mismatch is rejected before any GPU
+allocation. Evidence: 19 tests pass (`matmul_dispatches` ran on GPU, no skip),
+clippy `-D warnings` clean, fmt clean, `experimental-ash-sd` graph check green
+(1 crate rebuilt incrementally).
+
+Next: capability sets with optional-extension fallbacks, ops registry +
+`ModelSpec`, then `AshSdPipeline::generate` on a real checkpoint.
+
