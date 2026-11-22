@@ -19,7 +19,8 @@
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
-//!   `SdPipeline`; `generate` returns a clear unimplemented error for now.
+//!   `SdPipeline`; `generate` validates request, device and checkpoint, then
+//!   stops with a named sampling error until diffusion kernels land.
 //! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
 //!   `ash-stt`, `ash-tts`); not wired into server state (later ticket).
 //!

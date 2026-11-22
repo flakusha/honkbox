@@ -77,6 +77,21 @@ Evidence: 27 tests pass (4 new pure model tests, including a failing-capability
 case); clippy `-D warnings` clean; fmt clean; `experimental-ash-sd` graph check
 green.
 
-Next: `AshSdPipeline::generate` on a real checkpoint. Optional cooperative-
-matrix fast path stays a later slice: no kernel consumes it yet.
+## Landed — slice 5 (2026-11-22, worktree)
+
+`generate` now runs its front half: edge/dimension checks, cancel-before-work,
+`ModelSpec` admission on the selected device, and real checkpoint container
+validation (safetensors header length, GGUF magic, non-empty regular file).
+The pipeline holds a resolved checkpoint path via `new(device, path)`. A valid
+checkpoint then hits a named "sampling not implemented" error — no fake image.
+
+Actual sampling remains out of reach in one slice: it needs text encoders,
+diffusion backbone, VAE and a scheduler. No stubs for those added.
+
+Evidence: 31 tests pass (4 new: supported formats, bad inputs, full generate
+ordering); generate test ran on the real GPU; clippy `-D warnings` clean;
+fmt clean; full `experimental-ash-sd` test build and graph check green.
+
+Next: diffusion kernels (norm/softmax, attention, VAE slice) before sampling
+can return an image. Optional cooperative-matrix fast path stays later still.
 
