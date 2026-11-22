@@ -54,6 +54,11 @@ pub(super) fn llm_error_class(err: &LlmError) -> (StatusCode, &'static str, Stri
             },
             format!("chat failed: {err}"),
         ),
+        LlmError::Cancelled => (
+            StatusCode::REQUEST_TIMEOUT,
+            "cancelled",
+            "chat cancelled".to_owned(),
+        ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
@@ -199,5 +204,13 @@ mod tests {
             message: "gone".to_owned(),
         };
         assert_eq!(llm_error_class(&gone).0, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn cancellation_is_an_explicit_marker() {
+        let (status, code, message) = llm_error_class(&LlmError::Cancelled);
+        assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(code, "cancelled");
+        assert_eq!(message, "chat cancelled");
     }
 }

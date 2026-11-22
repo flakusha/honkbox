@@ -13,7 +13,9 @@ use honkbox_api_types::{
     ChatRole, DeltaFunction, DeltaToolCall, FinishReason, OpenAiChunk, OpenAiChunkChoice,
     OpenAiDelta, OpenAiError, ToolCallType,
 };
-use honkbox_llm_worker::{ChatRequest as WorkerChatRequest, LlmPipeline, ToolCallOut};
+use honkbox_llm_worker::{
+    ChatRequest as WorkerChatRequest, LlmPipeline, RequestCancel, ToolCallOut,
+};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -56,10 +58,13 @@ pub(super) fn completions_stream(
 ) -> Response {
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    let cancel = RequestCancel::new();
     // Normal end must not abort the shared pipeline when the body drops.
     let done = Arc::new(AtomicBool::new(false));
     let lease_slot = Arc::new(Mutex::new(None::<crate::admission::GpuLease>));
     let abort_pipe = Arc::clone(&pipe);
+    let worker_cancel = cancel.clone();
+    let body_cancel = cancel.clone();
     let worker_cancelled = cancelled.clone();
     let worker_done = done.clone();
     let job_token = job.token().clone();
@@ -82,26 +87,33 @@ pub(super) fn completions_stream(
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         let mut first = true;
         let mut buffered: Vec<String> = Vec::new();
-        let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-            if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
-                // Disconnect, or `POST /v1/jobs/{id}/cancel` (NEW-3): abort
-                // the FFI loop itself, not just delivery.
-                pipe.abort();
-                free_gpu_lease(&lease_slot);
-                return;
-            }
-            if tool_streaming {
-                buffered.push(token.to_owned());
-                return;
-            }
-            let delivered = send_token_delta(&tx, &id, created, &frame_model, &mut first, token);
-            if !delivered {
-                // Receiver gone without the drop guard (drop raced the send).
-                worker_cancelled.store(true, Ordering::Relaxed);
-                pipe.abort();
-                free_gpu_lease(&lease_slot);
-            }
-        });
+        let result = pipe.complete_stream_cancellable(
+            &worker_req,
+            &mut |token: &str| {
+                if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
+                    // Disconnect, or `POST /v1/jobs/{id}/cancel` (NEW-3): abort
+                    // the FFI loop itself, not just delivery.
+                    worker_cancel.cancel();
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                    return;
+                }
+                if tool_streaming {
+                    buffered.push(token.to_owned());
+                    return;
+                }
+                let delivered =
+                    send_token_delta(&tx, &id, created, &frame_model, &mut first, token);
+                if !delivered {
+                    // Receiver gone without the drop guard (drop raced the send).
+                    worker_cancelled.store(true, Ordering::Relaxed);
+                    worker_cancel.cancel();
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                }
+            },
+            &worker_cancel,
+        );
         // Mark the run finished before sending terminal frames: the SSE
         // body can drop the instant `[DONE]` is consumed.
         worker_done.store(true, Ordering::Relaxed);
@@ -166,6 +178,7 @@ pub(super) fn completions_stream(
             cancelled,
             done,
             pipe: abort_pipe,
+            cancel: body_cancel,
             _worker: worker,
         })
         .into_response(),

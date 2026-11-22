@@ -255,10 +255,10 @@ pub(super) async fn completions_json(
     .map_err(|err| format!("chat task failed: {err}"));
     let reply = match reply {
         Ok(Ok(reply)) => reply,
-        Ok(Err((StatusCode::BAD_REQUEST, code, message))) => {
-            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        Ok(Err((status, code, message))) => {
+            return openai_error_response(status, message, Some(code));
         }
-        Ok(Err((_, _, message))) | Err(message) => {
+        Err(message) => {
             return openai_error_response(StatusCode::INTERNAL_SERVER_ERROR, message, None);
         }
     };

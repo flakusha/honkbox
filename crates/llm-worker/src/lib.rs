@@ -8,7 +8,7 @@ pub use embed::LlamaCppEmbed;
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Role of a single chat message.
@@ -346,6 +346,9 @@ pub enum LlmError {
     Vision(String),
     /// Request is unusable (e.g. no messages).
     InvalidRequest(String),
+    /// The caller cancelled this request (client disconnect or job cancel).
+    /// Never a partial reply presented as a completed generation.
+    Cancelled,
     /// Attached HTTP backend failed (upstream status + bounded reason).
     Upstream {
         /// Upstream HTTP status (400/502/503 classes).
@@ -367,12 +370,45 @@ impl fmt::Display for LlmError {
             Self::Upstream { status, message } => {
                 write!(f, "upstream llama-server {status}: {message}")
             }
+            Self::Cancelled => write!(f, "chat cancelled"),
             Self::InvalidRequest(e) => write!(f, "invalid request: {e}"),
         }
     }
 }
 
 impl std::error::Error for LlmError {}
+
+/// Per-request cancellation token for [`LlmPipeline::complete_stream_cancellable`].
+///
+/// Clones share one flag. A fresh token is not cancelled; [`Self::cancel`]
+/// affects only streams started with that token, never other requests
+/// sharing the same pipeline. Backends that cannot observe it keep the
+/// legacy [`LlmPipeline::complete_stream`] behavior.
+#[derive(Clone, Debug, Default)]
+pub struct RequestCancel {
+    flag: Arc<AtomicBool>,
+}
+
+impl RequestCancel {
+    /// Create an uncancelled token for one request.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Mark this request cancelled. Idempotent; safe from any thread.
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether this request was cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+}
 
 /// Sync LLM pipeline: full completion plus token-streaming completion.
 pub trait LlmPipeline: Send + Sync {
@@ -398,10 +434,25 @@ pub trait LlmPipeline: Send + Sync {
     ///   an abort arriving before the run captures its generation may be
     ///   missed (the caller still owns shutdown semantics).
     ///
-    /// Backends return the partial result as `Ok` rather than an error: the
-    /// caller requested the cancellation, so a mid-stream error event would
-    /// be noise for an already-disconnected client.
+    /// Legacy backends return the partial result as `Ok` rather than an
+    /// error; a backend using [`Self::complete_stream_cancellable`] instead
+    /// reports [`LlmError::Cancelled`], never a partial reply as complete.
     fn abort(&self) {}
+    /// Stream one completion with a per-request cancellation token.
+    ///
+    /// A backend that observes `cancel` returns [`LlmError::Cancelled`] once
+    /// cancellation is seen — never a partial reply as `Ok`. The default
+    /// forwards to [`Self::complete_stream`], preserving legacy behavior for
+    /// backends without a per-request seam.
+    fn complete_stream_cancellable(
+        &self,
+        req: &ChatRequest,
+        sink: &mut dyn FnMut(&str),
+        cancel: &RequestCancel,
+    ) -> Result<ChatResponse, LlmError> {
+        let _ = cancel;
+        self.complete_stream(req, sink)
+    }
     /// Backend id (`stub-llm` | `llama-cpp-vulkan` | `llama-cpp-cuda`).
     fn backend_id(&self) -> &'static str;
 }

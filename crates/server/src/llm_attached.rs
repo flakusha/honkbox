@@ -8,12 +8,13 @@
 //! A generated per-app API key lives only in the client's default headers;
 //! honkbox's bearer never crosses this boundary.
 
-use std::io::{BufRead, BufReader, Read};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::io::Read;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use honkbox_llm_worker::{ChatRequest, ChatResponse, LlmError, LlmPipeline, Role, ToolCallOut};
+use honkbox_llm_worker::{
+    ChatRequest, ChatResponse, LlmError, LlmPipeline, RequestCancel, Role, ToolCallOut,
+};
 use serde_json::{Value, json};
 
 /// Backend id reported to callers and capabilities.
@@ -22,13 +23,17 @@ pub const BACKEND_ID: &str = "llama-server-http";
 const MAX_RESPONSE_BYTES: u64 = 1 << 20;
 const MAX_SSE_LINE: usize = 64 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(300);
+/// How often a stalled SSE read yields to the per-request cancel check.
+const CANCEL_POLL: Duration = Duration::from_millis(25);
 
 /// A proved, loopback-only `llama-server` endpoint.
 pub struct AttachedLlm {
     base: String,
     model: String,
     client: reqwest::blocking::Client,
-    generation: Arc<AtomicU64>,
+    /// Async twin used only for SSE: its read future can be dropped on
+    /// cancellation, which closes the upstream socket immediately.
+    async_client: reqwest::Client,
 }
 
 impl std::fmt::Debug for AttachedLlm {
@@ -54,16 +59,17 @@ impl AttachedLlm {
             || !loopback
             || !parsed.username().is_empty()
             || parsed.password().is_some()
+            || parsed.query().is_some_and(|query| !query.is_empty())
+            || parsed
+                .fragment()
+                .is_some_and(|fragment| !fragment.is_empty())
         {
             return Err(upstream(
                 502,
-                "attached llama-server URL must be credential-free loopback HTTP",
+                "attached llama-server URL must be credential-free loopback HTTP without query or fragment",
             ));
         }
         let base = parsed.to_string().trim_end_matches('/').to_owned();
-        let builder = reqwest::blocking::Client::builder()
-            .timeout(TIMEOUT)
-            .connect_timeout(Duration::from_secs(3));
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(key) = std::env::var("LLAMA_API_KEY")
             && !key.is_empty()
@@ -72,7 +78,19 @@ impl AttachedLlm {
                 .map_err(|err| upstream(502, err.to_string()))?;
             headers.insert(reqwest::header::AUTHORIZATION, value);
         }
-        let client = builder
+        // No redirects: a loopback 3xx must never move a probe or a prompt
+        // to another host, and readiness must answer from this listener.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(TIMEOUT)
+            .connect_timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
+            .default_headers(headers.clone())
+            .build()
+            .map_err(|err| upstream(502, err.to_string()))?;
+        let async_client = reqwest::Client::builder()
+            .timeout(TIMEOUT)
+            .connect_timeout(Duration::from_secs(3))
+            .redirect(reqwest::redirect::Policy::none())
             .default_headers(headers)
             .build()
             .map_err(|err| upstream(502, err.to_string()))?;
@@ -83,13 +101,19 @@ impl AttachedLlm {
         if ready.status().as_u16() != 200 {
             return Err(upstream(503, "attached llama-server is not ready"));
         }
-        let models: Value = client
+        let listed = client
             .get(format!("{base}/v1/models"))
             .send()
-            .and_then(reqwest::blocking::Response::error_for_status)
-            .map_err(|err| upstream(503, err.to_string()))?
-            .json()
             .map_err(|err| upstream(503, err.to_string()))?;
+        if listed.status().as_u16() != 200 {
+            return Err(upstream(
+                503,
+                "attached llama-server returned no model list",
+            ));
+        }
+        let bytes = bounded_body(listed).map_err(|err| upstream(503, err.to_string()))?;
+        let models: Value =
+            serde_json::from_slice(&bytes).map_err(|err| upstream(503, err.to_string()))?;
         if !models.get("data").is_some_and(Value::is_array) {
             return Err(upstream(
                 503,
@@ -100,7 +124,7 @@ impl AttachedLlm {
             base,
             model: model.unwrap_or_default().to_owned(),
             client,
-            generation: Arc::new(AtomicU64::new(0)),
+            async_client,
         })
     }
 
@@ -207,125 +231,260 @@ impl LlmPipeline for AttachedLlm {
         let started = Instant::now();
         let mut body = self.body(req, false)?;
         body.as_object_mut().and_then(|body| body.remove("stream"));
-        let value: Value = self
-            .post(&body)?
-            .json()
-            .map_err(|err| upstream(502, err.to_string()))?;
-        reply(self, &value, String::new(), &[], started)
+        let bytes = bounded_body(self.post(&body)?)?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|err| upstream(502, err.to_string()))?;
+        reply(BACKEND_ID, &value, String::new(), &[], started)
     }
+
     fn complete_stream(
         &self,
         req: &ChatRequest,
         sink: &mut dyn FnMut(&str),
     ) -> Result<ChatResponse, LlmError> {
+        self.complete_stream_cancellable(req, sink, &RequestCancel::default())
+    }
+
+    fn complete_stream_cancellable(
+        &self,
+        req: &ChatRequest,
+        sink: &mut dyn FnMut(&str),
+        cancel: &RequestCancel,
+    ) -> Result<ChatResponse, LlmError> {
+        if cancel.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
         let started = Instant::now();
-        let generation = Arc::clone(&self.generation);
-        let captured = generation.load(Ordering::Relaxed);
-        let response = self.post(&self.body(req, true)?)?;
-        let mut reader = BufReader::new(response.take(MAX_RESPONSE_BYTES));
-        let mut line = String::new();
-        let mut text = String::new();
-        let mut tool_deltas: Vec<(usize, String, String, String)> = Vec::new();
-        let mut usage = Usage::default();
+        let body = self.body(req, true)?;
+        let url = format!("{}/v1/chat/completions", self.base);
+        let client = self.async_client.clone();
+        let task_cancel = cancel.clone();
+        let (tx, rx) = mpsc::channel::<StreamMsg>();
+        let done_tx = tx.clone();
+        // One short-lived runtime per stream: dropping the async read future
+        // on cancel closes the upstream socket instead of parking in a
+        // blocking `read_line` until the 300 s client timeout. Built here,
+        // never stored, so it is always dropped from a sync context
+        // (spawn_blocking worker or CLI) without a runtime drop panic.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|err| upstream(502, format!("stream runtime: {err}")))?;
+        runtime.spawn(async move {
+            let result = stream_sse(client, url, body, task_cancel, tx, started).await;
+            let _ = done_tx.send(StreamMsg::Done(result));
+        });
         loop {
-            // Dropping the reader when the generation changes closes the
-            // upstream connection: abort cancels work, not just delivery.
-            if generation.load(Ordering::Relaxed) != captured {
-                break;
-            }
-            line.clear();
-            if reader
-                .read_line(&mut line)
-                .map_err(|err| upstream(502, err.to_string()))?
-                == 0
-            {
-                break;
-            }
-            if line.len() > MAX_SSE_LINE {
-                return Err(upstream(502, "upstream SSE line too long"));
-            }
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data == "[DONE]" {
-                break;
-            }
-            let event: Value = serde_json::from_str(data)
-                .map_err(|err| upstream(502, format!("invalid upstream SSE: {err}")))?;
-            if let Some(error) = event.get("error") {
-                return Err(upstream(502, bounded_message(error)));
-            }
-            usage.read(&event);
-            let Some(choice) = event
-                .get("choices")
-                .and_then(Value::as_array)
-                .and_then(|choices| choices.first())
-            else {
-                continue;
-            };
-            let delta = choice.get("delta").or_else(|| choice.get("message"));
-            if let Some(content) = delta.and_then(|d| d.get("content")).and_then(Value::as_str) {
-                text.push_str(content);
-                sink(content);
-            }
-            if let Some(calls) = delta
-                .and_then(|d| d.get("tool_calls"))
-                .and_then(Value::as_array)
-            {
-                for call in calls {
-                    let index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
-                    if index > 64 {
-                        return Err(upstream(502, "upstream tool-call index out of range"));
+            match rx.recv_timeout(CANCEL_POLL) {
+                Ok(StreamMsg::Token(token)) => sink(&token),
+                Ok(StreamMsg::Done(result)) => return result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if cancel.is_cancelled() {
+                        return Err(LlmError::Cancelled);
                     }
-                    let index = usize::try_from(index).unwrap_or(0);
-                    if tool_deltas.len() <= index {
-                        tool_deltas.resize_with(index + 1, || {
-                            (0, String::new(), String::new(), String::new())
-                        });
-                    }
-                    let slot = &mut tool_deltas[index];
-                    if let Some(id) = call.get("id").and_then(Value::as_str) {
-                        slot.1.push_str(id);
-                    }
-                    let function = call.get("function");
-                    if let Some(name) = function.and_then(|f| f.get("name")).and_then(Value::as_str)
-                    {
-                        slot.2.push_str(name);
-                    }
-                    if let Some(args) = function
-                        .and_then(|f| f.get("arguments"))
-                        .and_then(Value::as_str)
-                    {
-                        slot.3.push_str(args);
-                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(upstream(502, "upstream stream stopped"));
                 }
             }
         }
-        let tools: Vec<ToolCallOut> = tool_deltas
-            .into_iter()
-            .filter(|call| !call.2.is_empty())
-            .map(|(_, _, name, arguments)| ToolCallOut { name, arguments })
-            .collect();
-        reply(
-            self,
-            &json!({
-                "usage": usage.to_json(),
-                "choices": [{"message": {"content": text}}],
-            }),
-            String::new(),
-            &tools,
-            started,
-        )
-    }
-
-    fn abort(&self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     fn backend_id(&self) -> &'static str {
         BACKEND_ID
     }
+}
+
+/// One message from the async SSE reader to the sync caller.
+/// Tokens are forwarded through the caller's `sink` on its own thread.
+enum StreamMsg {
+    Token(String),
+    Done(Result<ChatResponse, LlmError>),
+}
+
+/// Turn the per-request atomic flag into a one-shot signal `select!` can
+/// await without polling (and cancelling) the in-flight network future.
+fn cancel_signal(cancel: &RequestCancel) -> tokio::sync::oneshot::Receiver<()> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let watch = cancel.clone();
+    tokio::spawn(async move {
+        loop {
+            if watch.is_cancelled() {
+                let _ = tx.send(());
+                return;
+            }
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+    });
+    rx
+}
+
+/// Bounded async SSE read. Cancellation drops both the request/body future
+/// and the response, closing the upstream socket immediately.
+async fn stream_sse(
+    client: reqwest::Client,
+    url: String,
+    body: Value,
+    cancel: RequestCancel,
+    tx: mpsc::Sender<StreamMsg>,
+    started: Instant,
+) -> Result<ChatResponse, LlmError> {
+    let mut cancel_rx = cancel_signal(&cancel);
+    let response = tokio::select! {
+        _ = &mut cancel_rx => return Err(LlmError::Cancelled),
+        sent = client.post(url).json(&body).send() => {
+            sent.map_err(|err| upstream(502, err.to_string()))?
+        }
+    };
+    let status = response.status().as_u16();
+    if status != 200 {
+        let bytes = tokio::select! {
+            _ = &mut cancel_rx => return Err(LlmError::Cancelled),
+            bytes = bounded_async_body(response) => bytes.unwrap_or_default(),
+        };
+        let message = bounded_text(&String::from_utf8_lossy(&bytes));
+        return Err(classify_status(status, message));
+    }
+    let mut response = response;
+    let mut text = String::new();
+    let mut tool_deltas: Vec<(usize, String, String, String)> = Vec::new();
+    let mut usage = Usage::default();
+    let mut pending: Vec<u8> = Vec::new();
+    let mut total = 0usize;
+    let mut sink = |token: &str| {
+        let _ = tx.send(StreamMsg::Token(token.to_owned()));
+    };
+    let mut stopped = false;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+        tokio::select! {
+            _ = &mut cancel_rx => return Err(LlmError::Cancelled),
+            chunk = response.chunk() => {
+                let Some(chunk) = chunk.map_err(|err| upstream(502, err.to_string()))? else {
+                    break;
+                };
+                total = total.saturating_add(chunk.len());
+                if u64::try_from(total).unwrap_or(u64::MAX) > MAX_RESPONSE_BYTES {
+                    return Err(upstream(502, "upstream response too large"));
+                }
+                pending.extend_from_slice(&chunk);
+                while let Some(pos) = pending.iter().position(|byte| *byte == b'\n') {
+                    let bytes: Vec<u8> = pending.drain(..=pos).collect();
+                    let line = String::from_utf8(bytes)
+                        .map_err(|err| upstream(502, format!("invalid upstream SSE: {err}")))?;
+                    if !sse_line(&line, &mut text, &mut tool_deltas, &mut usage, &mut sink)? {
+                        stopped = true;
+                        break;
+                    }
+                }
+                if stopped {
+                    break;
+                }
+            }
+        }
+    }
+    if !stopped && !pending.is_empty() {
+        let line = String::from_utf8(pending)
+            .map_err(|err| upstream(502, format!("invalid upstream SSE: {err}")))?;
+        let _ = sse_line(&line, &mut text, &mut tool_deltas, &mut usage, &mut sink)?;
+    }
+    let tools: Vec<ToolCallOut> = tool_deltas
+        .into_iter()
+        .filter(|call| !call.2.is_empty())
+        .map(|(_, _, name, arguments)| ToolCallOut { name, arguments })
+        .collect();
+    reply(
+        BACKEND_ID,
+        &json!({
+            "usage": usage.to_json(),
+            "choices": [{"message": {"content": text}}],
+        }),
+        String::new(),
+        &tools,
+        started,
+    )
+}
+
+/// Decode one complete SSE line. Returns `false` on `[DONE]`.
+fn sse_line(
+    line: &str,
+    text: &mut String,
+    tool_deltas: &mut Vec<(usize, String, String, String)>,
+    usage: &mut Usage,
+    sink: &mut dyn FnMut(&str),
+) -> Result<bool, LlmError> {
+    if line.len() > MAX_SSE_LINE {
+        return Err(upstream(502, "upstream SSE line too long"));
+    }
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(true);
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(false);
+    }
+    let event: Value = serde_json::from_str(data)
+        .map_err(|err| upstream(502, format!("invalid upstream SSE: {err}")))?;
+    if let Some(error) = event.get("error") {
+        return Err(upstream(502, bounded_message(error)));
+    }
+    usage.read(&event);
+    let Some(choice) = event
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+    else {
+        return Ok(true);
+    };
+    let delta = choice.get("delta").or_else(|| choice.get("message"));
+    if let Some(content) = delta.and_then(|d| d.get("content")).and_then(Value::as_str) {
+        text.push_str(content);
+        sink(content);
+    }
+    if let Some(calls) = delta
+        .and_then(|d| d.get("tool_calls"))
+        .and_then(Value::as_array)
+    {
+        for call in calls {
+            apply_tool_call(call, tool_deltas)?;
+        }
+    }
+    Ok(true)
+}
+
+/// Accumulate one streamed tool-call delta into its indexed slot.
+fn apply_tool_call(
+    call: &Value,
+    tool_deltas: &mut Vec<(usize, String, String, String)>,
+) -> Result<(), LlmError> {
+    let index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
+    if index > 64 {
+        return Err(upstream(502, "upstream tool-call index out of range"));
+    }
+    let index = usize::try_from(index).unwrap_or(0);
+    if tool_deltas.len() <= index {
+        tool_deltas.resize_with(index + 1, || {
+            (0, String::new(), String::new(), String::new())
+        });
+    }
+    let slot = &mut tool_deltas[index];
+    if let Some(id) = call.get("id").and_then(Value::as_str) {
+        slot.1.push_str(id);
+    }
+    let function = call.get("function");
+    if let Some(name) = function.and_then(|f| f.get("name")).and_then(Value::as_str) {
+        slot.2.push_str(name);
+    }
+    if let Some(args) = function
+        .and_then(|f| f.get("arguments"))
+        .and_then(Value::as_str)
+    {
+        slot.3.push_str(args);
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -360,6 +519,16 @@ fn set<T: serde::Serialize>(body: &mut Value, key: &str, value: Option<T>) {
     }
 }
 
+fn classify_status(status: u16, message: String) -> LlmError {
+    if status == 400 {
+        LlmError::InvalidRequest(message)
+    } else if status == 503 {
+        upstream(503, message)
+    } else {
+        upstream(502, message)
+    }
+}
+
 fn classify(
     response: reqwest::blocking::Response,
 ) -> Result<reqwest::blocking::Response, LlmError> {
@@ -367,14 +536,38 @@ fn classify(
     if status == 200 {
         return Ok(response);
     }
-    let message = bounded_text(&response.text().unwrap_or_default());
-    if status == 400 {
-        return Err(LlmError::InvalidRequest(message));
+    let bytes = bounded_body(response).unwrap_or_default();
+    let message = bounded_text(&String::from_utf8_lossy(&bytes));
+    Err(classify_status(status, message))
+}
+
+/// Read at most `MAX_RESPONSE_BYTES` from an upstream body: no raw
+/// `.text()`/`.json()` on a local server we do not control.
+fn bounded_body(response: reqwest::blocking::Response) -> Result<Vec<u8>, LlmError> {
+    let mut bytes = Vec::new();
+    response
+        .take(MAX_RESPONSE_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|err| upstream(502, err.to_string()))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) >= MAX_RESPONSE_BYTES {
+        return Err(upstream(502, "upstream response too large"));
     }
-    if status == 503 {
-        return Err(upstream(503, message));
+    Ok(bytes)
+}
+
+async fn bounded_async_body(mut response: reqwest::Response) -> Result<Vec<u8>, LlmError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|err| upstream(502, err.to_string()))?
+    {
+        bytes.extend_from_slice(&chunk);
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) >= MAX_RESPONSE_BYTES {
+            return Err(upstream(502, "upstream response too large"));
+        }
     }
-    Err(upstream(502, message))
+    Ok(bytes)
 }
 
 fn bounded_message(value: &Value) -> String {
@@ -398,7 +591,7 @@ fn upstream(status: u16, message: impl Into<String>) -> LlmError {
 }
 
 fn reply(
-    backend: &AttachedLlm,
+    backend_id: &str,
     value: &Value,
     text: String,
     tool_calls: &[ToolCallOut],
@@ -445,7 +638,7 @@ fn reply(
             .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
     };
     Ok(ChatResponse {
-        backend_id: backend.backend_id().to_owned(),
+        backend_id: backend_id.to_owned(),
         text,
         tokens: count("completion_tokens"),
         prompt_tokens: count("prompt_tokens"),
@@ -460,6 +653,8 @@ mod tests {
     use honkbox_llm_worker::ChatMessage;
     use std::io::Write;
     use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::mpsc;
 
     fn fake_server(body: &'static str, sse: bool) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake");
@@ -545,8 +740,176 @@ mod tests {
             base: "http://127.0.0.1:1".to_owned(),
             model: "local".to_owned(),
             client: reqwest::blocking::Client::new(),
-            generation: Arc::new(AtomicU64::new(0)),
+            async_client: reqwest::Client::new(),
         }
+    }
+
+    /// SSE server: health + models, then `chats` streams that emit one
+    /// token, pause long enough for a cancel to be observed, then `[DONE]`.
+    fn stalling_server(chats: usize) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming().take(2 + chats) {
+                let Ok(mut stream) = stream else { return };
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    request.extend_from_slice(&chunk[..n]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let text = String::from_utf8_lossy(&request);
+                if text.contains("/health") {
+                    let payload = r#"{"status":"ok"}"#;
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = stream.write_all(reply.as_bytes());
+                } else if text.contains("/v1/models") {
+                    let payload = r#"{"data":[{"id":"local"}]}"#;
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = stream.write_all(reply.as_bytes());
+                } else {
+                    let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(headers.as_bytes());
+                    let _ = stream.flush();
+                    std::thread::sleep(Duration::from_millis(100));
+                    let _ = stream
+                        .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
+                    let _ = stream.flush();
+                    std::thread::sleep(Duration::from_secs(2));
+                    let _ = stream.write_all(b"data: [DONE]\n\n");
+                }
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[test]
+    fn cancel_is_request_scoped() {
+        let (url, server) = stalling_server(2);
+        let llm = Arc::new(AttachedLlm::new(&url, Some("local")).expect("probe"));
+        let token_a = RequestCancel::new();
+        let token_b = RequestCancel::new();
+        let (tx, rx) = mpsc::channel::<String>();
+        let a = {
+            let llm = Arc::clone(&llm);
+            let token = token_a.clone();
+            std::thread::spawn(move || {
+                llm.complete_stream_cancellable(
+                    &ChatRequest::default(),
+                    &mut |piece| {
+                        let _ = tx.send(piece.to_owned());
+                    },
+                    &token,
+                )
+            })
+        };
+        let b = {
+            let llm = Arc::clone(&llm);
+            let token = token_b.clone();
+            std::thread::spawn(move || {
+                llm.complete_stream_cancellable(&ChatRequest::default(), &mut |_| {}, &token)
+            })
+        };
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(3)).expect("token a"),
+            "hi"
+        );
+        token_a.cancel();
+        let err = a.join().expect("thread a").expect_err("cancelled a");
+        assert!(matches!(err, LlmError::Cancelled), "{err:?}");
+        assert!(!token_b.is_cancelled(), "sibling request was cancelled");
+        let reply = b.join().expect("thread b").expect("b completes");
+        assert_eq!(reply.text, "hi");
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn cancel_interrupts_stalled_stream() {
+        let (url, server) = stalling_server(1);
+        let llm = AttachedLlm::new(&url, Some("local")).expect("probe");
+        let token = RequestCancel::new();
+        let (tx, rx) = mpsc::channel::<String>();
+        let started = Instant::now();
+        let worker = {
+            let token = token.clone();
+            std::thread::spawn(move || {
+                llm.complete_stream_cancellable(
+                    &ChatRequest::default(),
+                    &mut |piece| {
+                        let _ = tx.send(piece.to_owned());
+                    },
+                    &token,
+                )
+            })
+        };
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(3))
+                .expect("first token"),
+            "hi"
+        );
+        token.cancel();
+        let err = worker.join().expect("worker").expect_err("cancelled");
+        assert!(matches!(err, LlmError::Cancelled), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "cancel took {:?}",
+            started.elapsed()
+        );
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn query_and_fragment_refused() {
+        for url in [
+            "http://127.0.0.1:8080/?x=1",
+            "http://127.0.0.1:8080/#part",
+            "http://127.0.0.1:8080/prefix?x=1",
+        ] {
+            let err = AttachedLlm::new(url, None).expect_err("refused");
+            assert!(
+                matches!(err, LlmError::Upstream { status: 502, .. }),
+                "{url} was accepted: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn probe_does_not_follow_redirects() {
+        let target = TcpListener::bind("127.0.0.1:0").expect("bind target");
+        target.set_nonblocking(true).expect("nonblocking");
+        let target_port = target.local_addr().expect("addr").port();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake");
+        let port = listener.local_addr().expect("addr").port();
+        let server = std::thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let Ok(mut stream) = stream else { return };
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let reply = format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/health\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        let err = AttachedLlm::new(&format!("http://127.0.0.1:{port}"), None).expect_err("refused");
+        assert!(
+            matches!(err, LlmError::Upstream { status: 503, .. }),
+            "{err:?}"
+        );
+        match target.accept() {
+            Ok((_, _)) => panic!("redirect was followed"),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(err) => panic!("unexpected target accept error: {err}"),
+        }
+        server.join().expect("server");
     }
 
     #[test]

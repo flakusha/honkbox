@@ -1376,3 +1376,65 @@ async fn native_chat_rejects_image_parts_plain_400() {
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("is not vision-capable"), "{text}");
 }
+
+struct UpstreamFailingLlm;
+
+impl LlmPipeline for UpstreamFailingLlm {
+    fn complete(&self, _req: &WorkerChatRequest) -> Result<ChatResponse, LlmError> {
+        Err(LlmError::Upstream {
+            status: 503,
+            message: "loading model".to_owned(),
+        })
+    }
+
+    fn complete_stream(
+        &self,
+        req: &WorkerChatRequest,
+        _sink: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse, LlmError> {
+        self.complete(req)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "upstream-failing-test"
+    }
+}
+
+/// A retryable upstream 503 must not be flattened into a 500 (audit #4).
+#[tokio::test]
+async fn upstream_503_keeps_status_and_code() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app_with_llm(
+        catalog_with(&["llm:fake.gguf"]),
+        Arc::new(UpstreamFailingLlm),
+    );
+    let (status, _, body) = completions(app, completion_body("llm:fake.gguf", &json!({}))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let parsed: Value = serde_json::from_str(&body).expect("envelope");
+    assert_eq!(parsed["error"]["code"], "upstream_unavailable");
+}
+
+/// The native route keeps its plain-text body but shares the classifier.
+#[tokio::test]
+async fn native_route_classifies_invalid_request() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = test_app_with_llm(catalog_with(&["llm:fake.gguf"]), Arc::new(FailingLlm));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"model": "llm:fake.gguf", "messages": [{"role": "user", "content": "hi"}]})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("prompt does not fit"), "{text}");
+}

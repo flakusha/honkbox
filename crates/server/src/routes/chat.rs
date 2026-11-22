@@ -16,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response, sse::Event, sse::Sse},
 };
 use honkbox_api_types::{ChatRequest, ChatResponse};
-use honkbox_llm_worker::LlmPipeline;
+use honkbox_llm_worker::{LlmPipeline, RequestCancel};
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, wrappers::UnboundedReceiverStream};
 
@@ -100,10 +100,8 @@ pub(super) async fn post_chat(
     let reply = tokio::task::spawn_blocking(move || {
         let _lease = lease;
         pipe.complete(&worker_req).map_err(|err| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("chat failed: {err}"),
-            )
+            let (status, _, message) = super::openai_constraints::llm_error_class(&err);
+            (status, message)
         })
     })
     .await
@@ -150,6 +148,8 @@ pub(super) struct CancelOnDrop<S> {
     /// Pipeline `abort` hook (atomics-only state: cannot deadlock with the
     /// blocking worker, which holds no lock across `complete_stream`).
     pub(super) pipe: Arc<dyn LlmPipeline>,
+    /// Per-request cancel token: only this stream's reader is interrupted.
+    pub(super) cancel: RequestCancel,
     /// Blocking worker task feeding `inner`.
     pub(super) _worker: tokio::task::JoinHandle<()>,
 }
@@ -168,6 +168,7 @@ impl<S> Drop for CancelOnDrop<S> {
             return;
         }
         self.cancelled.store(true, Ordering::Relaxed);
+        self.cancel.cancel();
         self.pipe.abort();
     }
 }
@@ -231,6 +232,7 @@ pub(super) async fn post_chat_stream(
     .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
     let (tx, rx) = mpsc::unbounded_channel::<Result<Event, Infallible>>();
     let cancelled = Arc::new(AtomicBool::new(false));
+    let cancel = RequestCancel::new();
     // Set by the worker after the terminal frame: a normal end must not
     // abort the shared pipeline when the SSE body is dropped.
     let done = Arc::new(AtomicBool::new(false));
@@ -260,6 +262,8 @@ pub(super) async fn post_chat_stream(
     // Separate handle for the SSE body: the worker closure consumes its own
     // clone, the drop path calls `abort` through this one.
     let abort_pipe = Arc::clone(&pipe);
+    let worker_cancel = cancel.clone();
+    let body_cancel = cancel.clone();
     let worker_cancelled = cancelled.clone();
     let job_token = job.token().clone();
     let worker_done = done.clone();
@@ -273,22 +277,28 @@ pub(super) async fn post_chat_stream(
         *lease_slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
-        let result = pipe.complete_stream(&worker_req, &mut |token: &str| {
-            if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
-                // Also abort the FFI loop itself, not just delivery
-                // (disconnect, or `POST /v1/jobs/{id}/cancel`).
-                pipe.abort();
-                free_gpu_lease(&lease_slot);
-                return;
-            }
-            let data = serde_json::json!({ "token": token }).to_string();
-            if tx.send(Ok(Event::default().data(data))).is_err() {
-                // Receiver gone without the drop guard (drop raced the send).
-                worker_cancelled.store(true, Ordering::Relaxed);
-                pipe.abort();
-                free_gpu_lease(&lease_slot);
-            }
-        });
+        let result = pipe.complete_stream_cancellable(
+            &worker_req,
+            &mut |token: &str| {
+                if worker_cancelled.load(Ordering::Relaxed) || job_token.is_cancelled() {
+                    // Also abort the FFI loop itself, not just delivery
+                    // (disconnect, or `POST /v1/jobs/{id}/cancel`).
+                    worker_cancel.cancel();
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                    return;
+                }
+                let data = serde_json::json!({ "token": token }).to_string();
+                if tx.send(Ok(Event::default().data(data))).is_err() {
+                    // Receiver gone without the drop guard (drop raced the send).
+                    worker_cancelled.store(true, Ordering::Relaxed);
+                    worker_cancel.cancel();
+                    pipe.abort();
+                    free_gpu_lease(&lease_slot);
+                }
+            },
+            &worker_cancel,
+        );
         // Set before terminal frames: the body can drop as `[DONE]` is read.
         worker_done.store(true, Ordering::Relaxed);
         // A disconnect between the last token and completion frees here.
@@ -308,6 +318,7 @@ pub(super) async fn post_chat_stream(
             cancelled,
             done,
             pipe: abort_pipe,
+            cancel: body_cancel,
             _worker: worker,
         })
         .into_response(),

@@ -566,14 +566,36 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         let snapshot = catalog.read().expect("catalog lock");
         cache_policy.for_request(&snapshot, llm_model.as_deref().unwrap_or(""))
     };
-    let llm = backends::make_llm(
-        llm_backend,
-        llm_model.as_deref(),
-        attach_url.as_deref(),
-        &resolve,
-        llm_cache,
-        vram_budget,
-    );
+    let llm = if matches!(llm_backend, backends::LlmBackend::Attached) {
+        // Attached construction probes loopback HTTP with a blocking client;
+        // keep it off the async startup worker. Other backends (and the sync
+        // CLI `make_llm` call) keep their existing inline path.
+        let url = attach_url.clone();
+        let model = llm_model.clone();
+        let found = found.clone();
+        or_exit(
+            tokio::task::spawn_blocking(move || {
+                backends::make_llm(
+                    backends::LlmBackend::Attached,
+                    model.as_deref(),
+                    url.as_deref(),
+                    &|slug| resolve_model(&found, slug),
+                    llm_cache,
+                    vram_budget,
+                )
+            })
+            .await,
+        )
+    } else {
+        backends::make_llm(
+            llm_backend,
+            llm_model.as_deref(),
+            attach_url.as_deref(),
+            &resolve,
+            llm_cache,
+            vram_budget,
+        )
+    };
     let stt = backends::make_stt(
         stt_backend,
         stt_model.as_deref(),
