@@ -17,6 +17,8 @@ pub enum Op {
     ElementwiseAdd,
     /// Row-major `C = A * B`.
     MatMul,
+    /// Stable row-wise normalization.
+    Softmax,
 }
 
 impl Op {
@@ -31,6 +33,11 @@ impl Op {
             Self::MatMul => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 12, // three shape u32s
+                ..CapacityRequirements::default()
+            },
+            Self::Softmax => CapacityRequirements {
+                workgroup_count: [1, 1, 1],
+                storage_range: 8, // two shape u32s
                 ..CapacityRequirements::default()
             },
         }
@@ -74,6 +81,7 @@ mod tests {
     fn ops_declare_their_static_floor() {
         assert_eq!(Op::ElementwiseAdd.requirements().storage_range, 4);
         assert_eq!(Op::MatMul.requirements().storage_range, 12);
+        assert_eq!(Op::Softmax.requirements().storage_range, 8);
     }
 
     #[test]

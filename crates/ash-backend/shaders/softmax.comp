@@ -1,0 +1,35 @@
+// Provenance: original (row-wise stable softmax written from first principles; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation handles a whole row. Correctness first: tile/subgroup
+// reductions arrive only when attention throughput needs them.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Spare { uint spare[]; };
+layout(std430, binding = 2) buffer Output { float probabilities[]; };
+layout(std430, binding = 3) readonly buffer Shape { uint dims[2]; }; // rows, cols
+
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    uint rows = dims[0];
+    uint cols = dims[1];
+    if (row >= rows) {
+        return;
+    }
+    uint base = row * cols;
+    float maximum = values[base];
+    for (uint i = 1; i < cols; ++i) {
+        maximum = max(maximum, values[base + i]);
+    }
+    float total = 0.0;
+    for (uint i = 0; i < cols; ++i) {
+        float weight = exp(values[base + i] - maximum);
+        probabilities[base + i] = weight;
+        total += weight;
+    }
+    for (uint i = 0; i < cols; ++i) {
+        probabilities[base + i] /= total;
+    }
+}

@@ -18,6 +18,7 @@
 //! - [`compute`]: [`compute::ElementwiseAdd`] and the shared [`compute::Kernel`].
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
+//! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -116,5 +117,7 @@ pub mod model;
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;
+#[cfg(feature = "ash-compute")]
+pub mod softmax;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod stubs;

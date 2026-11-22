@@ -7,6 +7,7 @@ fn main() {
     let shaders = [
         ("shaders/elementwise_add.comp", "elementwise_add.spv"),
         ("shaders/matmul.comp", "matmul.spv"),
+        ("shaders/softmax.comp", "softmax.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

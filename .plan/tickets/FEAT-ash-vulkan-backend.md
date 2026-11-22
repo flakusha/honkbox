@@ -92,6 +92,18 @@ Evidence: 31 tests pass (4 new: supported formats, bad inputs, full generate
 ordering); generate test ran on the real GPU; clippy `-D warnings` clean;
 fmt clean; full `experimental-ash-sd` test build and graph check green.
 
-Next: diffusion kernels (norm/softmax, attention, VAE slice) before sampling
-can return an image. Optional cooperative-matrix fast path stays later still.
+## Landed — slice 6 (2026-11-22, worktree)
+
+First diffusion kernel: `Softmax::run(values, rows, cols)` does stable row-wise
+softmax with one invocation per row (max subtraction before exp, then
+normalize). New `shaders/softmax.comp` carries the required provenance line and
+is compiled offline by `build.rs`; the Rust op uses the shared `Kernel`
+scaffold and `Op::Softmax` joins the vocabulary. No subgroup optimization yet.
+
+Evidence: 28 tests pass on `ash-compute`, 32 on `experimental-ash-sd`; GPU test
+ran on RADV (3 rows = partial workgroup, 1000.0 inputs = overflow guard) and
+matched a CPU reference within 1e-6; clippy `-D warnings` clean; fmt clean.
+
+Next: attention kernel (matmul + softmax already exist), then norm and VAE
+slice before sampling can return an image.
 
