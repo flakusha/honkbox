@@ -1703,8 +1703,9 @@ pub enum ImageOpCommand {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOpInput {
-    /// `data:image/png;base64,…` — only `image/png`, `image/jpeg`, and
-    /// `image/webp` payloads are accepted (magic-sniffed after decode).
+    /// `data:image/png;base64,…` — only `image/png`, `image/jpeg`,
+    /// `image/webp`, and `image/x-exr` payloads are accepted (magic-sniffed
+    /// after decode; EXR HDR samples are tonemapped for LDR outputs).
     DataUri(String),
     /// A prior bundle's output artifact (see [`ImageOpArtifact`]).
     Artifact(ImageOpArtifact),

@@ -5030,14 +5030,14 @@
         "oneOf": [
           {
             "type": "object",
-            "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`, and\n`image/webp` payloads are accepted (magic-sniffed after decode).",
+            "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`,\n`image/webp`, and `image/x-exr` payloads are accepted (magic-sniffed\nafter decode; EXR HDR samples are tonemapped for LDR outputs).",
             "required": [
               "data_uri"
             ],
             "properties": {
               "data_uri": {
                 "type": "string",
-                "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`, and\n`image/webp` payloads are accepted (magic-sniffed after decode)."
+                "description": "`data:image/png;base64,…` — only `image/png`, `image/jpeg`,\n`image/webp`, and `image/x-exr` payloads are accepted (magic-sniffed\nafter decode; EXR HDR samples are tonemapped for LDR outputs)."
               }
             }
           },
