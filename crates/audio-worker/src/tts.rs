@@ -1,14 +1,17 @@
 //! TTS backends: deterministic [`StubTts`] sine + any-tts [`KokoroTts`].
 
-use super::{SynthesizeRequest, SynthesizedAudio, TtsError, TtsPipeline, resample_f32};
+use super::{
+    KOKORO_BACKEND_ID, SynthesizeRequest, SynthesizedAudio, TtsError, TtsPipeline, resample_f32,
+};
 use std::f32::consts::PI;
 use std::path::Path;
 
 /// The supported Kokoro voice set (Kokoro-82M v1.0, the documented
 /// shipping voice list). any-tts cannot enumerate a model's voices at
 /// runtime, so this static list **is** the supported set: `/v1/audio/voices`
-/// serves it verbatim, and a `voice` outside it is passed through to the
-/// backend unchanged (backend-defined failure, not silently accepted).
+/// serves it only when the loaded backend is Kokoro (other backends get an
+/// empty list), and a `voice` outside it is passed through to the backend
+/// unchanged (backend-defined failure, not silently accepted).
 /// A future any-tts enumeration surface should replace this list.
 pub const KOKORO_VOICES: &[&str] = &[
     "af_heart",
@@ -178,7 +181,7 @@ impl TtsPipeline for KokoroTts {
     }
 
     fn backend_id(&self) -> &'static str {
-        "kokoro-cpu"
+        KOKORO_BACKEND_ID
     }
 }
 

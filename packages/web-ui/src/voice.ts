@@ -79,9 +79,9 @@ export function mountVoice(host: HTMLElement): void {
   slug.addEventListener("change", () => localStorage.setItem(MODEL_KEY, slug.value));
   const lang = document.createElement("input");
   lang.placeholder = "language (optional)";
-  // TTS voice picker: populated from GET /v1/audio/voices (the server's
-  // statically documented supported Kokoro set). Left empty = backend
-  // default voice.
+  // TTS voice picker: populated from GET /v1/audio/voices (the loaded
+  // backend's voice set; empty when that backend cannot enumerate voices).
+  // Left empty = backend default voice.
   const voice = document.createElement("select");
   voice.append(new Option("voice (default)", ""));
   fetch("/v1/audio/voices")

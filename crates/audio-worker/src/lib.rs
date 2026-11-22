@@ -22,6 +22,11 @@ pub use tts::{KOKORO_VOICES, KokoroTts, StubTts};
 #[cfg(feature = "vad")]
 pub use vad::{SileroVad, VadSpan};
 
+/// Backend id reported by [`KokoroTts`] and matched by the
+/// `GET /v1/audio/voices` route. Shared so a rename cannot silently drift
+/// the worker id from the route comparison.
+pub const KOKORO_BACKEND_ID: &str = "kokoro-cpu";
+
 /// `true` when THIS build compiles Silero VAD (`vad` feature) — the same
 /// compile probe the capability advertisement reports as `features.vad`, so
 /// the document cannot drift from the binary.

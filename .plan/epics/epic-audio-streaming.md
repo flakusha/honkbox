@@ -16,6 +16,7 @@ Existing input-cap and output-format tickets stay in `epic-output-formats`.
 - `TASK-audio-vad-surface.md` — forward `audio-worker/vad` from server (P1).
 - `FEAT-streaming-stt.md` — SSE partial transcripts over bounded windows (P1).
 - `TASK-audio-resampler-quality.md` — windowed-sinc or audited crate (P2).
+- `TASK-audio-voices-loaded-backend-truth.md` — loaded-backend voice truth for `/v1/audio/voices` (P2, done 2026-11-22).
 
 ## Acceptance
 
