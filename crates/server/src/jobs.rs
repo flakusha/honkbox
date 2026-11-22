@@ -487,6 +487,12 @@ pub fn copy_file_atomic(dir: &Path, name: &str, src: &Path) -> Result<u64, Strin
 pub fn gc_jobs(jobs_root: Option<&Path>, max_age: Duration, max_bytes: u64) {
     if let Some(root) = jobs_root {
         gc_dir(root, max_age, max_bytes);
+        // Sidecar work dirs (`fizgig/<id>`) hold caches and resume state.
+        // Sweep them with the same retention so a long training run's leftovers
+        // cannot grow forever; each root has its own size cap.
+        if let Some(base) = root.parent() {
+            gc_dir(&base.join("fizgig"), max_age, max_bytes);
+        }
     }
     sweep_stale_temp_pngs(max_age, SystemTime::now());
 }
@@ -933,6 +939,21 @@ mod tests {
         assert!(!job.join("run.log.part").exists(), "job part swept");
         assert!(job.exists(), "fresh job kept");
         fs::remove_dir_all(&root).ok();
+    }
+
+    /// Fizgig work dirs share the job retention policy.
+    #[test]
+    fn gc_jobs_sweeps_fizgig_work_dirs() {
+        let base = fresh_root("fizgig-gc");
+        let jobs = base.join("jobs");
+        let work = base.join("fizgig").join("job_OLD");
+        fs::create_dir_all(&jobs).expect("jobs root");
+        fs::create_dir_all(&work).expect("work dir");
+        fs::write(work.join("cache.bin"), [0_u8; 16]).expect("cache");
+        backdate(&work.join("cache.bin"), 7200);
+        gc_jobs(Some(&jobs), Duration::from_secs(1), u64::MAX);
+        assert!(!work.exists(), "expired fizgig work dir removed");
+        fs::remove_dir_all(&base).ok();
     }
 
     /// F5: the artifact is committed before any sidecar. Forcing the

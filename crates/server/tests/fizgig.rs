@@ -121,11 +121,45 @@ fn fake_cli(root: &Path) {
     std::fs::write(families.join("train.py"), b"# pinned CLI marker\n").unwrap();
     let python = root.join("venv/bin/python");
     std::fs::create_dir_all(python.parent().unwrap()).expect("venv dir");
-    std::fs::write(
-        &python,
-        b"#!/bin/sh\ncase \" $* \" in\n  *\" --help \"*) echo 'usage: train.py'; exit 0;;\nesac\nout=''\ncfg=''\nname='model'\nprev=''\nfor arg in \"$@\"; do\n  case \"$prev\" in\n    --dataset_config) cfg=\"$arg\";;\n    --output_dir) out=\"$arg\";;\n    --output_name) name=\"$arg\";;\n  esac\n  prev=\"$arg\"\ndone\nif [ -z \"$out\" ] && [ -n \"$cfg\" ]; then\n  out=\"$(dirname \"$cfg\")/out\"\nfi\nif [ -n \"$out\" ]; then\n  echo \"stage $*\"\n  printf '%s\\n' \"$*\" >> \"$out/argv.log\"\n  case \" $* \" in\n    *\" --dit \"*) sleep 1; printf 'fake lora' > \"$out/$name-000001.safetensors\";;\n  esac\nfi\nexit 0\n",
-    )
-    .unwrap();
+    let script = br#"#!/bin/sh
+case " $* " in
+  *" --help "*) echo 'usage: train.py'; exit 0;;
+esac
+out=''
+cfg=''
+name='model'
+prev=''
+for arg in "$@"; do
+  case "$prev" in
+    --dataset_config) cfg="$arg";;
+    --output_dir) out="$arg";;
+    --output_name) name="$arg";;
+  esac
+  prev="$arg"
+done
+if [ -z "$out" ] && [ -n "$cfg" ]; then
+  out="$(dirname "$cfg")/out"
+fi
+if [ -n "$out" ]; then
+  echo "stage $*"
+  printf '%s\n' "$*" >> "$out/argv.log"
+  case " $* " in
+    *" --dit "*)
+      sleep 1
+      i=1
+      while [ "$i" -le 5 ]; do
+        printf 'fake lora %s' "$i" > "$out/$name-00000$i.safetensors"
+        i=$((i + 1))
+      done
+      printf 'fake final' > "$out/$name.safetensors"
+      mkdir -p "$out/state"
+      printf 'fake state' > "$out/state/optimizer.pt"
+      ;;
+  esac
+fi
+exit 0
+"#;
+    std::fs::write(&python, script).unwrap();
     std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
@@ -176,6 +210,23 @@ async fn wait_state(app: &axum::Router, id: &str, wanted: &str) -> Value {
     }
 }
 
+/// The probe is refreshed on the blocking pool, so capability flips are
+/// observed asynchronously even in the test harness.
+async fn wait_capability(app: &axum::Router, wanted: bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let (_, caps) = get(app, "/v1/capabilities").await;
+        if caps["features"]["fizgig"] == wanted {
+            return caps;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fizgig capability never reached {wanted}: {caps}"
+        );
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
 // ponytail: one scenario owns the fake CLI, capability, both job lifecycles.
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
@@ -195,21 +246,34 @@ async fn fizgig_train_lifecycle_with_fake_cli() {
     std::fs::write(dataset.join("01.txt"), b"a subject").unwrap();
     let dit = models.join("sdxl.safetensors");
     std::fs::write(&dit, b"checkpoint").unwrap();
+    let vae = models.join("flux.vae.safetensors");
+    std::fs::write(&vae, b"vae").unwrap();
+    let text_encoder = models.join("flux.te.safetensors");
+    std::fs::write(&text_encoder, b"text encoder").unwrap();
 
     set_env_var("HONKBOX_FIZGIG_ENABLED", Some("1"));
     set_env_var("HONKBOX_FIZGIG_ROOT", Some(checkout.to_str().unwrap()));
-    set_env_var("HONKBOX_FIZGIG_FAMILIES", Some("sdxl"));
+    set_env_var("HONKBOX_FIZGIG_FAMILIES", Some("sdxl,flux"));
     set_env_var("HONKBOX_FIZGIG_DATASETS", Some(datasets.to_str().unwrap()));
     set_env_var("HONKBOX_FIZGIG_MODELS", Some(models.to_str().unwrap()));
     set_env_var("HONKBOX_FIZGIG_TIMEOUT_SECS", Some("30"));
     set_env_var("HONKBOX_FIZGIG_GRACE_SECS", Some("1"));
+    set_env_var("HONKBOX_FIZGIG_PROBE_TTL_SECS", Some("1"));
 
     let app = app_with(&data_dir);
-    let (_, caps) = get(&app, "/v1/capabilities").await;
-    assert_eq!(
-        caps["features"]["fizgig"], true,
-        "probe must succeed: {caps}"
-    );
+    let caps = wait_capability(&app, true).await;
+    assert_eq!(caps["features"]["fizgig"], true, "probe: {caps}");
+
+    // A failing probe flips the capability false, then retries and recovers
+    // without a restart (TTL is 1s in this test).
+    let python = checkout.join("venv/bin/python");
+    let good_script = std::fs::read(&python).unwrap();
+    std::fs::write(&python, b"#!/bin/sh\necho probe-down\nexit 1\n").unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _down = wait_capability(&app, false).await;
+    std::fs::write(&python, &good_script).unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _up = wait_capability(&app, true).await;
 
     let valid = json!({
         "family": "sdxl",
@@ -222,12 +286,80 @@ async fn fizgig_train_lifecycle_with_fake_cli() {
     });
     let mut invalid = valid.clone();
     invalid["family"] = json!("../evil");
-    let (status, _) = post(&app, "/v1/fizgig/train", invalid).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "family charset is validated"
+    let (status, err) = post(&app, "/v1/fizgig/train", invalid).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["code"], "fizgig_request_invalid");
+
+    // Non-SDXL families need explicit VAE + text encoder before admission.
+    let mut flux = valid.clone();
+    flux["family"] = json!("flux");
+    let (status, err) = post(&app, "/v1/fizgig/train", flux.clone()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "no fallback models: {err}");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("text_encoder")
     );
+    flux["vae"] = json!(vae.to_str().unwrap());
+    flux["text_encoder"] = json!(text_encoder.to_str().unwrap());
+    let (status, accepted) = post(&app, "/v1/fizgig/train", flux).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "explicit models: {accepted}");
+    let flux_id = accepted["job_id"].as_str().unwrap().to_owned();
+    let flux_done = wait_state(&app, &flux_id, "completed").await;
+    assert_eq!(flux_done["bundle"], format!("jobs/{flux_id}"));
+    let flux_argv =
+        std::fs::read_to_string(data_dir.join("fizgig").join(&flux_id).join("out/argv.log"))
+            .unwrap();
+    assert!(flux_argv.contains(&format!("--model {}", vae.display())));
+    assert!(flux_argv.contains(&format!("--model {}", text_encoder.display())));
+    let flux_manifest: Value = serde_json::from_slice(
+        &std::fs::read(data_dir.join("jobs").join(&flux_id).join("manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(flux_manifest["state_dir"], "out/state");
+
+    // Every caller path is confined to its operator allowlist.
+    let mut outside = valid.clone();
+    outside["dataset_dir"] = json!(data_dir.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", outside).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "dataset root: {err}");
+    assert_eq!(err["error"]["code"], "fizgig_request_invalid");
+    let outside_file = checkout.join("src/fizgig/families/train.py");
+    let mut outside = valid.clone();
+    outside["dit"] = json!(outside_file.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", outside).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "dit root: {err}");
+    assert_eq!(err["error"]["code"], "fizgig_request_invalid");
+    let mut outside = valid.clone();
+    outside["family"] = json!("flux");
+    outside["vae"] = json!(outside_file.to_str().unwrap());
+    outside["text_encoder"] = json!(text_encoder.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", outside).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "vae root: {err}");
+    let mut outside = valid.clone();
+    outside["family"] = json!("flux");
+    outside["vae"] = json!(vae.to_str().unwrap());
+    outside["text_encoder"] = json!(outside_file.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", outside).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "text encoder root: {err}");
+
+    // Curated weight terms are enforced before admission. These file names
+    // match the shipped restricted rows (gated/NC and territory-excluded).
+    let gated_weights = models.join("ae.safetensors");
+    std::fs::write(&gated_weights, b"gated").unwrap();
+    let mut restricted = valid.clone();
+    restricted["dit"] = json!(gated_weights.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", restricted).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "gated: {err}");
+    assert_eq!(err["error"]["code"], "model_license_gated");
+    let territory_weights = models.join("model.safetensors");
+    std::fs::write(&territory_weights, b"territory").unwrap();
+    let mut restricted = valid.clone();
+    restricted["dit"] = json!(territory_weights.to_str().unwrap());
+    let (status, err) = post(&app, "/v1/fizgig/train", restricted).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "territory: {err}");
+    assert_eq!(err["error"]["code"], "model_license_territory");
 
     let (status, accepted) = post(&app, "/v1/fizgig/train", valid.clone()).await;
     assert_eq!(
@@ -242,14 +374,40 @@ async fn fizgig_train_lifecycle_with_fake_cli() {
 
     let bundle = data_dir.join("jobs").join(&id);
     assert!(bundle.join("manifest.json").is_file());
-    assert!(bundle.join("my_subject-000001.safetensors").is_file());
+    assert!(bundle.join("my_subject.safetensors").is_file());
+    for epoch in ["000003", "000004", "000005"] {
+        assert!(
+            bundle
+                .join(format!("my_subject-{epoch}.safetensors"))
+                .is_file()
+        );
+    }
+    for epoch in ["000001", "000002"] {
+        assert!(
+            !bundle
+                .join(format!("my_subject-{epoch}.safetensors"))
+                .is_file()
+        );
+    }
     let manifest: Value =
         serde_json::from_slice(&std::fs::read(bundle.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["family"], "sdxl");
     assert_eq!(manifest["rank"], 8);
+    assert_eq!(manifest["artifacts"].as_array().unwrap().len(), 4);
+    assert_eq!(manifest["state_dir"], "out/state");
     assert_eq!(
         manifest["artifacts"][0]["sha256"].as_str().unwrap().len(),
         64
+    );
+
+    // Terminal jobs reject cancel, and stay out of the generic job registry.
+    let (status, err) = post(&app, &format!("/v1/fizgig/jobs/{id}/cancel"), json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "late cancel: {err}");
+    assert_eq!(err["error"]["code"], "fizgig_job_ended");
+    let (_, listed) = get(&app, "/v1/jobs").await;
+    assert!(
+        !listed.to_string().contains(&id),
+        "fizgig jobs use their own status route: {listed}"
     );
     let argv =
         std::fs::read_to_string(data_dir.join("fizgig").join(&id).join("out/argv.log")).unwrap();

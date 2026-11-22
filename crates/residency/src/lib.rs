@@ -4,7 +4,7 @@
 //! The ledger models a fixed set of capacities (GPU slots, VRAM bytes, RAM
 //! bytes, CPU threads; a `0` budget leaves that dimension unmanaged) and a
 //! fixed [`ResourceKind`] vocabulary (`sd`, `llm`, `ocr`, `embed`, `rag`,
-//! `comfy`, `blender`, `3d`). Each kind carries a per-job [`Demand`] (GPU
+//! `comfy`, `blender`, `3d`, `training`). Each kind carries a per-job [`Demand`] (GPU
 //! slots + byte/thread estimates), a bounded admission-queue cap, and a
 //! queue TTL. Reservation happens BEFORE model load / external process
 //! start; a bounded per-kind queue absorbs bursts, `cancel` removes a queued
@@ -48,7 +48,7 @@ pub fn global() -> &'static Ledger {
 }
 
 /// The closed admission-kind vocabulary. The label set is fixed at compile
-/// time: every ledger metric grid is 8 kinds wide no matter how large the
+/// time: every ledger metric grid is 9 kinds wide no matter how large the
 /// model catalog grows, and no user-controlled string ever becomes a label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
@@ -68,12 +68,16 @@ pub enum ResourceKind {
     Blender,
     /// Generic 3D tooling (external process; reserved).
     ThreeD,
+    /// Long LoRA/fine-tune jobs (external Python sidecar). Exclusive: a
+    /// training lease never starts beside other work, and other work never
+    /// starts beside it.
+    Training,
 }
 
 impl ResourceKind {
     /// Every kind, in the fixed label order used by [`Ledger::exposition`]
     /// and the per-kind settings arrays.
-    pub const ALL: [ResourceKind; 8] = [
+    pub const ALL: [ResourceKind; 9] = [
         ResourceKind::Sd,
         ResourceKind::Llm,
         ResourceKind::Ocr,
@@ -82,6 +86,7 @@ impl ResourceKind {
         ResourceKind::Comfy,
         ResourceKind::Blender,
         ResourceKind::ThreeD,
+        ResourceKind::Training,
     ];
 
     /// The fixed metric/config label for this kind (never user data).
@@ -96,10 +101,11 @@ impl ResourceKind {
             ResourceKind::Comfy => "comfy",
             ResourceKind::Blender => "blender",
             ResourceKind::ThreeD => "3d",
+            ResourceKind::Training => "training",
         }
     }
 
-    /// Slot in the fixed 8-wide arrays (`ALL` order).
+    /// Slot in the fixed 9-wide arrays (`ALL` order).
     const fn slot(self) -> usize {
         self as usize
     }
@@ -262,6 +268,10 @@ pub struct KindSettings {
     pub ttl: Duration,
     /// The per-job resource demand (see [`Demand::for_kind`]).
     pub demand: Demand,
+    /// Exclusive kinds cannot start beside any live lease, and no other kind
+    /// can start beside them. Used by long training jobs so interactive
+    /// generation is never silently displaced or starved mid-run.
+    pub exclusive: bool,
 }
 
 /// Whole-ledger configuration: capacities + the per-kind settings array.
@@ -271,8 +281,8 @@ pub struct LedgerConfig {
     /// Resource ceilings.
     pub capacities: Capacities,
     /// Per-kind settings, indexed by [`ResourceKind::ALL`] order
-    /// (sd, llm, ocr, embed, rag, comfy, blender, 3d).
-    pub kinds: [KindSettings; 8],
+    /// (sd, llm, ocr, embed, rag, comfy, blender, 3d, training).
+    pub kinds: [KindSettings; 9],
 }
 
 impl Default for LedgerConfig {
@@ -293,6 +303,7 @@ impl LedgerConfig {
                 queue_cap: 1,
                 ttl: Duration::ZERO,
                 demand: Demand::for_kind(kind),
+                exclusive: kind == ResourceKind::Training,
             }),
         }
     }
@@ -496,23 +507,23 @@ struct Waiter {
     enqueued_at: Instant,
 }
 
-/// Per-kind counters (fixed 8-wide grids; bounded labels only). Mutated
+/// Per-kind counters (fixed 9-wide grids; bounded labels only). Mutated
 /// only under the ledger lock, so gauges always agree with the queue/lease
 /// state any reader can observe.
 #[derive(Debug, Default)]
 struct Counters {
-    admissions: [u64; 8],
-    rejections_busy: [u64; 8],
-    rejections_queue_full: [u64; 8],
-    rejections_capacity: [u64; 8],
-    evictions: [u64; 8],
-    oom_near_misses: [u64; 8],
-    queue_depth: [u64; 8],
-    running: [u64; 8],
-    wait_ns: [u64; 8],
-    wait_count: [u64; 8],
-    hold_ns: [u64; 8],
-    hold_count: [u64; 8],
+    admissions: [u64; 9],
+    rejections_busy: [u64; 9],
+    rejections_queue_full: [u64; 9],
+    rejections_capacity: [u64; 9],
+    evictions: [u64; 9],
+    oom_near_misses: [u64; 9],
+    queue_depth: [u64; 9],
+    running: [u64; 9],
+    wait_ns: [u64; 9],
+    wait_count: [u64; 9],
+    hold_ns: [u64; 9],
+    hold_count: [u64; 9],
 }
 
 /// Read-only counter snapshot for one kind (test + readout surface).
@@ -551,10 +562,10 @@ struct Inner {
     config: LedgerConfig,
     committed: Committed,
     /// Per-kind FIFO queues (`ResourceKind::ALL` order).
-    queues: [VecDeque<Waiter>; 8],
+    queues: [VecDeque<Waiter>; 9],
     next_ticket: u64,
     /// When the last lease of a kind was released (`idle_for` hook source).
-    last_release: [Option<Instant>; 8],
+    last_release: [Option<Instant>; 9],
     counters: Counters,
 }
 
@@ -605,9 +616,9 @@ impl Ledger {
             inner: Mutex::new(Inner {
                 config,
                 committed: Committed::default(),
-                queues: [const { VecDeque::new() }; 8],
+                queues: [const { VecDeque::new() }; 9],
                 next_ticket: 0,
-                last_release: [const { None }; 8],
+                last_release: [const { None }; 9],
                 counters: Counters::default(),
             }),
         }
@@ -658,6 +669,10 @@ impl Ledger {
     pub fn try_acquire(&self, kind: ResourceKind) -> Result<Lease<'_>, AcquireError> {
         let mut inner = lock(&self.inner);
         let demand = inner.config.kinds[kind.slot()].demand;
+        if Self::exclusive_conflict(&inner, kind) {
+            inner.counters.rejections_busy[kind.slot()] += 1;
+            return Err(AcquireError::Busy);
+        }
         if inner.config.capacities.oversized(demand) {
             inner.counters.rejections_capacity[kind.slot()] += 1;
             return Err(AcquireError::Oversized {
@@ -704,6 +719,21 @@ impl Ledger {
             id,
             kind,
         })
+    }
+
+    /// Exclusive kinds (long training) never share the box with any other
+    /// live lease; conversely no other kind starts beside one. The running
+    /// counters are per-kind and updated under the same lock as admission.
+    fn exclusive_conflict(inner: &Inner, kind: ResourceKind) -> bool {
+        if inner.config.kinds[kind.slot()].exclusive {
+            return inner.counters.running.iter().any(|&running| running > 0);
+        }
+        inner
+            .config
+            .kinds
+            .iter()
+            .enumerate()
+            .any(|(slot, settings)| settings.exclusive && inner.counters.running[slot] > 0)
     }
 
     /// Commit a grant under the lock (capacity already checked by the
@@ -787,7 +817,9 @@ impl Ledger {
             return PollOutcome::Expired;
         }
         let demand = inner.config.kinds[slot].demand;
-        if inner.config.capacities.exhausted(&inner.committed, demand) {
+        if inner.config.capacities.exhausted(&inner.committed, demand)
+            || Self::exclusive_conflict(&inner, kind)
+        {
             return PollOutcome::Waiting;
         }
         inner.queues[slot].pop_front();
@@ -925,7 +957,7 @@ impl Ledger {
     }
 
     /// Render the ledger's Prometheus text fragment (version 0.0.4): the
-    /// fixed 8-kind grids for gauges/counters plus queue-wait and lease-hold
+    /// fixed 9-kind grids for gauges/counters plus queue-wait and lease-hold
     /// summaries. Labels are the closed kind vocabulary and three fixed
     /// rejection reasons — never user data (asserted by the
     /// `metrics_labels_contain_no_user_data` test). Integer math only (the
@@ -1027,7 +1059,7 @@ fn push_family(out: &mut String, name: &str, help: &str, kind: &str) {
 
 /// Render one fixed 8-kind grid (one series per kind; unpopulated kinds
 /// render `0`).
-fn push_grid(out: &mut String, name: &str, help: &str, kind: &str, cells: &[u64; 8]) {
+fn push_grid(out: &mut String, name: &str, help: &str, kind: &str, cells: &[u64; 9]) {
     push_family(out, name, help, kind);
     for (label, cell) in ResourceKind::ALL.iter().zip(cells.iter()) {
         let _ = writeln!(out, "{name}{{kind=\"{}\"}} {cell}", label.label());
@@ -1036,7 +1068,7 @@ fn push_grid(out: &mut String, name: &str, help: &str, kind: &str, cells: &[u64;
 
 /// Render one per-kind summary (`_sum`/`_count`; integer nanosecond math,
 /// 9 fractional digits like the server's histograms).
-fn push_summary(out: &mut String, name: &str, help: &str, ns: &[u64; 8], count: &[u64; 8]) {
+fn push_summary(out: &mut String, name: &str, help: &str, ns: &[u64; 9], count: &[u64; 9]) {
     push_family(out, name, help, "summary");
     for (kind, (total, n)) in ResourceKind::ALL.iter().zip(ns.iter().zip(count.iter())) {
         let _ = writeln!(
@@ -1133,6 +1165,33 @@ mod tests {
         assert_eq!(ResourceKind::from_label("audio"), None);
         assert_eq!(ResourceKind::from_label("sd"), Some(ResourceKind::Sd));
         assert_eq!(ResourceKind::ThreeD.to_string(), "3d");
+        assert_eq!(ResourceKind::Training.to_string(), "training");
+    }
+
+    /// Training is exclusive even on a box with spare GPU slots: no drift
+    /// into interactive work while a long sidecar run holds the ledger.
+    #[test]
+    fn training_lease_is_exclusive() {
+        let mut config = LedgerConfig::new();
+        config.capacities.gpu_slots = 2;
+        let ledger = Ledger::with_config(config);
+        let chat = ledger.try_acquire(ResourceKind::Llm).expect("chat slot");
+        assert_eq!(
+            ledger.try_acquire(ResourceKind::Training).unwrap_err(),
+            AcquireError::Busy,
+            "training cannot start beside interactive work"
+        );
+        drop(chat);
+        let training = ledger
+            .try_acquire(ResourceKind::Training)
+            .expect("training slot");
+        assert_eq!(
+            ledger.try_acquire(ResourceKind::Sd).unwrap_err(),
+            AcquireError::Busy,
+            "interactive work cannot start beside training"
+        );
+        drop(training);
+        assert!(ledger.try_acquire(ResourceKind::Sd).is_ok());
     }
 
     // ------------------------------------------------------------------
@@ -1394,7 +1453,9 @@ mod tests {
     /// it by exercising every counter family and parsing the exposition.
     #[test]
     fn metrics_labels_contain_no_user_data() {
-        const KINDS: [&str; 8] = ["sd", "llm", "ocr", "embed", "rag", "comfy", "blender", "3d"];
+        const KINDS: [&str; 9] = [
+            "sd", "llm", "ocr", "embed", "rag", "comfy", "blender", "3d", "training",
+        ];
         const REASONS: [&str; 3] = ["busy", "queue_full", "capacity"];
 
         let mut config = vram_config(100, 95, 200);
@@ -1508,7 +1569,7 @@ mod property_tests {
         u64::try_from(n).unwrap_or(u64::MAX)
     }
 
-    /// Slot in the fixed 8-wide arrays (the private `slot()` is not
+    /// Slot in the fixed 9-wide arrays (the private `slot()` is not
     /// reachable from a sibling test module).
     fn slot_of(kind: ResourceKind) -> usize {
         ResourceKind::ALL
@@ -1566,7 +1627,7 @@ mod property_tests {
         /// `(tickets slot, kind)` of every live queued ticket, in enqueue
         /// order (the FIFO reference).
         queued: Vec<(usize, ResourceKind)>,
-        grants: [u64; 8],
+        grants: [u64; 9],
     }
 
     impl Mirror {
@@ -1576,7 +1637,7 @@ mod property_tests {
                 committed: (0, 0, 0, 0),
                 held: Vec::new(),
                 queued: Vec::new(),
-                grants: [0; 8],
+                grants: [0; 9],
             }
         }
 
@@ -1602,7 +1663,7 @@ mod property_tests {
         }
 
         /// The invariants that must hold after EVERY ledger operation.
-        fn assert_invariants(&self, ledger: &Ledger, queue_grants: &[u64; 8]) {
+        fn assert_invariants(&self, ledger: &Ledger, queue_grants: &[u64; 9]) {
             let caps = self.config.capacities;
             assert!(
                 self.committed.0 <= u64::from(caps.gpu_slots),
@@ -1706,7 +1767,7 @@ mod property_tests {
             let mut leases: Vec<Option<Lease<'_>>> = Vec::new();
             let mut tickets: Vec<Option<Ticket<'_>>> = Vec::new();
             let mut dead: Vec<usize> = Vec::new();
-            let mut queue_grants = [0u64; 8];
+            let mut queue_grants = [0u64; 9];
 
             for _ in 0..40 {
                 match rng.below(7) {

@@ -1227,6 +1227,16 @@
               }
             }
           },
+          "412": {
+            "description": "Curated model weights refused by license terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
           "501": {
             "description": "Backend disabled, CLI probe failed, or no data dir",
             "content": {

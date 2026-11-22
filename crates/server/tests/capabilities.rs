@@ -397,7 +397,7 @@ async fn document_carries_no_user_data() {
         assert!(
             matches!(
                 label,
-                "sd" | "llm" | "ocr" | "embed" | "rag" | "comfy" | "blender" | "3d"
+                "sd" | "llm" | "ocr" | "embed" | "rag" | "comfy" | "blender" | "3d" | "training"
             ),
             "unexpected kind label {label:?}"
         );

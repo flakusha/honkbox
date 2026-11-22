@@ -1,6 +1,6 @@
 # BUG: Fizgig cache stages resolve VAE/text-encoder per family
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned
@@ -29,3 +29,13 @@ Resources: no new port; fake CLI writes under a per-test temp dir.
 ## Non-goals
 
 Model download, auto-detection of files inside checkpoints, router mode.
+
+## Landed
+
+`Config.checkpoint_models` reads `HONKBOX_FIZGIG_CHECKPOINT_MODELS` (default
+`sdxl`); validation rejects other families lacking explicit `vae` and
+`text_encoder` before any lease/job record; `Stage::model()` returns a named
+error instead of falling back to `--dit`. Fake-CLI test asserts 400 without
+paths, 202 + both `--model` argv values with them. Evidence:
+`cargo test --locked --offline -p honkbox-server --test fizgig --test licenses`
+→ 205 passed.

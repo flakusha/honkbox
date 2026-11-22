@@ -1,6 +1,6 @@
 # TASK: Honest, retryable Fizgig probe and capability contract
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P1
 Epic: epic-external-tools
 Owner: unassigned
@@ -31,3 +31,15 @@ Resources: per-test temp dir for the probe; no fixed port.
 ## Non-goals
 
 Changing upstream Fizgig's own CLI or installing the pinned checkout.
+
+## Landed
+
+`available()` no longer calls `supervisor::run` inline: a missing/stale
+verdict schedules one `spawn_blocking` probe (TTL from
+`HONKBOX_FIZGIG_PROBE_TTL_SECS`, default 60s) under a busy flag, and serves
+the previous verdict until it lands. Failures are retried, not pinned for the
+process lifetime. `ADMITTING_ROUTES` now maps the real `training` route, so
+the capability row is no longer "reserved" while a route admits jobs.
+Verification claims in `FEAT-fizgig-lora-training-jobs.md` and
+`TASK-fizgig-cli-probe.md` were corrected. Evidence: fake-CLI test proves
+down → up capability flips; `capabilities` + `fizgig` suites 290 passed.

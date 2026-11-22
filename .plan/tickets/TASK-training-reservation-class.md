@@ -1,6 +1,6 @@
 # TASK: dedicated reservation class for long training jobs
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P2
 Epic: epic-external-tools
 Owner: unassigned
@@ -22,3 +22,15 @@ Resources: TBD at implementation
 - Define demand estimates, concurrency = 1, TTL, and a preemption order that
   keeps interactive generation authoritative.
 - Migrates the Fizgig first slice off its temporary `Comfy` class borrowing.
+
+## Landed
+
+Ninth `ResourceKind::Training` (label `training`) grows every fixed grid from
+8 to 9. `KindSettings.exclusive` makes training refuse to start beside ANY
+live lease and refuses other kinds beside it — concurrency 1 even with
+multiple GPU slots; the queue TTL and cancel-with-checkpoint behavior are
+unchanged. Fizgig's runner now acquires `Training`, and `ADMITTING_ROUTES`
+advertises `/v1/fizgig/train`. Evidence: `cargo test --locked --offline
+-p honkbox-residency` → 23 passed (incl. new exclusivity test);
+`... -p honkbox-server --test capabilities --test fizgig` → 290 passed;
+`bun run audit:gpu-slot` green.

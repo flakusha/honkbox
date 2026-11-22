@@ -1,6 +1,6 @@
 # TASK: Close Fizgig admission and lifecycle contract gaps
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P2
 Epic: epic-full-ai-cycle
 Owner: unassigned
@@ -26,3 +26,13 @@ Resources: per-test temp dirs; port 0 or harness-assigned ports.
 ## Non-goals
 
 New GPU classes or license gates (separate tickets).
+
+## Landed
+
+Fake-CLI test covers all four caller paths outside their roots (named 400),
+late cancel on a terminal job (named 409) and `/v1/jobs` exclusion. The
+non-unix branch now returns 501 **before** inserting a job record; the
+assertion itself is compile-gated out on this unix host. `FEAT-fizgig-lora-
+training-jobs.md` documents the generic-registry exclusion. Evidence:
+`cargo test --locked --offline -p honkbox-server --test fizgig` → part of the
+205-passing run with `--test licenses`.

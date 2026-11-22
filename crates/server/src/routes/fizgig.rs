@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -39,6 +40,9 @@ const DEFAULT_GRACE_SECS: u64 = 30;
 const MAX_GRACE_SECS: u64 = 3_600;
 /// Terminal job records retained for polling; live jobs keep their records.
 const MAX_JOB_RECORDS: usize = 200;
+/// Default retry interval for a failed or stale probe.
+const DEFAULT_PROBE_TTL_SECS: u64 = 60;
+const MAX_PROBE_TTL_SECS: u64 = 3_600;
 
 /// Resolved env-only backend settings. Paths are canonicalized at load so a
 /// later request cannot escape an allowlisted root with `..`.
@@ -48,10 +52,14 @@ pub(super) struct Config {
     root: Option<PathBuf>,
     venv: Option<PathBuf>,
     families: Vec<String>,
+    /// Families whose own checkpoint carries VAE and text encoder weights, so
+    /// the cache stages may fall back to `--dit`. All others must supply both.
+    checkpoint_models: Vec<String>,
     dataset_roots: Vec<PathBuf>,
     model_roots: Vec<PathBuf>,
     timeout: Duration,
     grace: Duration,
+    probe_ttl: Duration,
 }
 
 impl Config {
@@ -64,6 +72,14 @@ impl Config {
             root,
             venv,
             families: list("HONKBOX_FIZGIG_FAMILIES"),
+            checkpoint_models: {
+                let configured = list("HONKBOX_FIZGIG_CHECKPOINT_MODELS");
+                if configured.is_empty() {
+                    vec!["sdxl".to_owned()]
+                } else {
+                    configured
+                }
+            },
             dataset_roots: roots("HONKBOX_FIZGIG_DATASETS"),
             model_roots: roots("HONKBOX_FIZGIG_MODELS"),
             timeout: Duration::from_secs(
@@ -75,6 +91,11 @@ impl Config {
                 number("HONKBOX_FIZGIG_GRACE_SECS")
                     .unwrap_or(DEFAULT_GRACE_SECS)
                     .clamp(1, MAX_GRACE_SECS),
+            ),
+            probe_ttl: Duration::from_secs(
+                number("HONKBOX_FIZGIG_PROBE_TTL_SECS")
+                    .unwrap_or(DEFAULT_PROBE_TTL_SECS)
+                    .clamp(1, MAX_PROBE_TTL_SECS),
             ),
         }
     }
@@ -98,18 +119,70 @@ impl Config {
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
-static PROBE: OnceLock<Result<(), String>> = OnceLock::new();
 static JOBS: LazyLock<Mutex<HashMap<String, LiveJob>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Probe cache: only a bounded-age result is trusted, and a failed probe is
+/// retried after its TTL instead of being cached for the process lifetime.
+struct ProbeCache {
+    at: Option<Instant>,
+    result: Result<(), String>,
+}
+
+static PROBE: LazyLock<Mutex<ProbeCache>> = LazyLock::new(|| {
+    Mutex::new(ProbeCache {
+        at: None,
+        result: Err("not probed yet".to_owned()),
+    })
+});
+static PROBE_BUSY: AtomicBool = AtomicBool::new(false);
 
 fn config() -> &'static Config {
     CONFIG.get_or_init(Config::from_env)
 }
 
-/// Capability honesty: enabled AND pinned CLI present AND probed.
+/// Capability honesty: enabled AND pinned CLI present AND last probe passed.
+/// The probe itself runs on the blocking pool; a stale result is refreshed in
+/// the background and the previous verdict is served until it lands.
 pub(super) fn available() -> bool {
     let cfg = config();
-    cfg.gap().is_none() && PROBE.get_or_init(|| probe(cfg)).is_ok()
+    if cfg.gap().is_some() {
+        return false;
+    }
+    let cache = PROBE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let stale = cache.at.is_none_or(|at| at.elapsed() >= cfg.probe_ttl);
+    if stale && !PROBE_BUSY.swap(true, Ordering::AcqRel) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let cfg = cfg.clone();
+            handle.spawn(async move {
+                let result = match tokio::task::spawn_blocking(move || probe(&cfg)).await {
+                    Ok(result) => result,
+                    Err(err) => Err(format!("probe task failed: {err}")),
+                };
+                let mut cache = PROBE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cache.at = Some(Instant::now());
+                cache.result = result;
+                PROBE_BUSY.store(false, Ordering::Release);
+            });
+        } else {
+            // No runtime (sync caller): leave the previous verdict intact.
+            PROBE_BUSY.store(false, Ordering::Release);
+        }
+    }
+    cache.result.is_ok()
+}
+
+fn probe_error() -> String {
+    PROBE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .result
+        .as_ref()
+        .map_or_else(std::clone::Clone::clone, |()| "probe passed".to_owned())
 }
 
 /// One accepted run's mutable, process-local status (not persisted).
@@ -127,6 +200,7 @@ pub(super) struct LiveJob {
 #[derive(Debug, Clone)]
 pub(super) struct Plan {
     pub family: String,
+    pub checkpoint_embedded: bool,
     pub dataset_dir: PathBuf,
     pub dit: PathBuf,
     pub vae: Option<PathBuf>,
@@ -263,6 +337,35 @@ fn safe_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Apply the shared curated-weight gate to every model a run would load.
+/// Uncurated local files stay local-only (the gate's existing posture);
+/// curated non-commercial, gated or territory-excluded rows refuse before a
+/// lease, job record or subprocess exists.
+#[allow(clippy::result_large_err)]
+fn check_weight_license(family: &str, models: [(&str, Option<&Path>); 3]) -> Result<(), Response> {
+    for (label, path) in models {
+        let Some(path) = path else { continue };
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let Some(record) = crate::catalog::licenses::record_for_weight_file(file_name) else {
+            continue;
+        };
+        let slug = format!("fizgig:{family}:{label}");
+        if let Err(refusal) =
+            crate::catalog::license_gate::check(&slug, Some(record), crate::config::licenses())
+        {
+            return Err(openai_error_response(
+                crate::catalog::license_gate::LicenseRefusal::status(),
+                format!("fizgig weights refused: {}", refusal.message()),
+                Some(refusal.code()),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // Axum's Response is the route's error type; boxing it would add indirection
 // to every rejected request without changing the wire contract.
 #[allow(clippy::result_large_err)]
@@ -276,7 +379,7 @@ fn validate(
         return Err(unavailable(gap));
     }
     if !available() {
-        return Err(unavailable("CLI probe failed"));
+        return Err(unavailable(format!("CLI probe failed: {}", probe_error())));
     }
     let problem = if !safe_name(&req.output_name) {
         Some("output_name must be 1-64 letters, digits, `_` or `-`".to_owned())
@@ -320,6 +423,22 @@ fn validate(
         .map(|v| resolve(v, false))
         .transpose()
         .map_err(bad_request)?;
+    let checkpoint_embedded = cfg.checkpoint_models.contains(&req.family);
+    if !checkpoint_embedded && (vae.is_none() || text_encoder.is_none()) {
+        return Err(bad_request(format!(
+            "family {:?} requires explicit vae and text_encoder (checkpoint-embedded families: {})",
+            req.family,
+            cfg.checkpoint_models.join(", ")
+        )));
+    }
+    check_weight_license(
+        &req.family,
+        [
+            ("dit", Some(dit.as_path())),
+            ("vae", vae.as_deref()),
+            ("text_encoder", text_encoder.as_deref()),
+        ],
+    )?;
     let Some(data_dir) = data_dir else {
         return Err(unavailable("no data dir: job bundles are disabled"));
     };
@@ -328,6 +447,7 @@ fn validate(
     let work_dir = data_dir.join("fizgig").join(id);
     Ok(Plan {
         family: req.family.clone(),
+        checkpoint_embedded,
         dataset_dir,
         dit,
         vae,
@@ -373,6 +493,7 @@ fn prune_jobs(jobs: &mut HashMap<String, LiveJob>) {
     responses(
         (status = 202, description = "Job admitted; poll the status route", body = FizgigTrainAccepted),
         (status = 400, description = "Invalid family, name, range or confined path", body = OpenAiError),
+        (status = 412, description = "Curated model weights refused by license terms", body = OpenAiError),
         (status = 501, description = "Backend disabled, CLI probe failed, or no data dir", body = OpenAiError)
     )
 )]
@@ -391,6 +512,11 @@ pub(super) async fn post_fizgig_train(
         Ok(plan) => plan,
         Err(response) => return response,
     };
+    // Refuse before inserting any record: a phantom `queued` job that can
+    // never run is worse than a 501 on a build without process supervision.
+    if !cfg!(unix) {
+        return unavailable("process supervision requires unix");
+    }
     if let Err(err) = fs::create_dir_all(&plan.output_dir) {
         return openai_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -474,37 +600,32 @@ pub(super) async fn get_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
     )
 )]
 pub(super) async fn cancel_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
-    let (output_dir, cancel) = {
-        let jobs = JOBS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match jobs.get(&id) {
-            Some(job) if matches!(job.state.as_str(), "queued" | "running") => {
-                (job.output_dir.clone(), job.cancel.clone())
-            }
-            Some(_) => {
-                return openai_error_response(
-                    StatusCode::CONFLICT,
-                    "job already ended".to_owned(),
-                    Some("fizgig_job_ended"),
-                );
-            }
-            None => {
-                return openai_error_response(
-                    StatusCode::NOT_FOUND,
-                    "unknown fizgig job".to_owned(),
-                    Some("fizgig_job_unknown"),
-                );
-            }
-        }
+    // Hold the lock across the marker write: a cancel that arrives after the
+    // runner's terminal `set` must not leave a pause marker on a finished run.
+    let mut jobs = JOBS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(job) = jobs.get_mut(&id) else {
+        return openai_error_response(
+            StatusCode::NOT_FOUND,
+            "unknown fizgig job".to_owned(),
+            Some("fizgig_job_unknown"),
+        );
     };
-    if let Err(err) = fs::write(output_dir.join(".pause_requested"), b"") {
+    if !matches!(job.state.as_str(), "queued" | "running") {
+        return openai_error_response(
+            StatusCode::CONFLICT,
+            "job already ended".to_owned(),
+            Some("fizgig_job_ended"),
+        );
+    }
+    if let Err(err) = fs::write(job.output_dir.join(".pause_requested"), b"") {
         return openai_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("cannot request pause: {err}"),
             Some("fizgig_cancel_failed"),
         );
     }
-    cancel.cancel();
+    job.cancel.cancel();
     StatusCode::ACCEPTED.into_response()
 }

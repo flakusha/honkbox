@@ -1,6 +1,6 @@
 # TASK: Fizgig weight-license and territory gate
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P2
 Epic: epic-binary-formats
 Owner: unassigned
@@ -24,3 +24,15 @@ Resources: TBD at implementation
   they pull non-commercial research models and the SAM license.
 - Pin the Fizgig rev + `requirements.txt` hash in the install docs; never
   vendor GPL-3.0 `minimax/`, `sam3/` or ROCm detector files into honkbox.
+
+## Landed
+
+`licenses::record_for_weight_file` resolves curated rows by file name;
+`validate()` runs the shared `license_gate::check` on dit/VAE/text-encoder
+before admission, returning named 412 (`model_license_gated`,
+`model_license_territory`, `model_license_non_commercial`) with no lease, job
+record or subprocess. Uncurated local files keep the local-only posture.
+Pinned tag/commit and `requirements.txt` sha256 recorded in the research note;
+no upstream Python files entered the tree or link graph. Evidence: new
+fixture assertion in `crates/server/tests/licenses.rs`; fake-CLI refusals in
+`--test fizgig`; `bun run deny` and `bun run spdx` both green.

@@ -113,7 +113,7 @@ Every `.tmp/research/` doc now has a plan home; scratch remains reference only.
 | `gen-flows-props-characters-locations-2026-11-20.md` | `epic-3d-capture` + 4 tickets (props, panorama, hunyuanworld, mesh-watch) + `TASK-unirig-probe` (`epic-blender-assets`) |
 | `shaders-materials-uiux-asset-pipeline-2026-11-20.md` | `TASK-cc0-pack-fetch` + `TASK-shader-validate-hook` (`epic-game-engine-export`) |
 | `product-licenses-include-vs-api-2026-11-20.md` | `epic-binary-formats` + 3 tickets (license registry, qal guard, nc gate) |
-| `fizgig-training-python-sidecar-2026-11-22.md` | `TASK-fizgig-cli-probe` + `FEAT-fizgig-lora-training-jobs` + 2 follow-up tickets |
+| `fizgig-training-python-sidecar-2026-11-22.md` | `TASK-fizgig-cli-probe` + `FEAT-fizgig-lora-training-jobs` + 6 follow-up tickets (family models, artifact cap, probe honesty, admission tests, training class, weight-license gate) |
 | `cli-app-management-llama-server-2026-11-22.md` | `TASK-llama-server-attach` + `FEAT-llama-server-client-backend` + `FEAT-cli-app-manager` |
 | `cli-app-launch-management-other-apps-2026-11-22.md` | `FEAT-fizgig-lora-training-jobs` + `BUG-fizgig-family-model-resolution` + `BUG-fizgig-artifact-cap-and-gc` |
 | `organic-growth-2026-11-20.md` | `epic-full-ai-cycle` + `TASK-generation-replay-endpoint` + `TASK-operability-surfaces` |

@@ -86,6 +86,17 @@ pub(crate) fn record_for_entry(kind: &str, file_name: &str) -> Option<LicenseRec
         .map(record_of)
 }
 
+/// Look up a training weight by file name alone (sidecars pass local paths,
+/// not registry slugs). Curated rows are the authority; an unmatched local
+/// file stays local-only via the gate's `None` path.
+#[allow(dead_code)] // used by the opt-in Fizgig route
+pub(crate) fn record_for_weight_file(file_name: &str) -> Option<LicenseRecord> {
+    crate::catalog::manifest()
+        .iter()
+        .find(|entry| file_name_of(&entry.file) == file_name)
+        .map(record_of)
+}
+
 /// Resolve a request slug to its curated record. Prefers the live catalog
 /// entry's `(kind, path)`; falls back to a curated manifest id or a slug that
 /// embeds the weight file name (callers without a scan catalog).

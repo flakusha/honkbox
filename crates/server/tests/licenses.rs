@@ -21,7 +21,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use axum::http::StatusCode;
 use catalog::license_gate::{LicenseRefusal, check, gate};
 use catalog::licenses::{
-    LicenseRecord, is_redistributable, record_for_entry, record_for_slug, records, records_from,
+    LicenseRecord, is_redistributable, record_for_entry, record_for_slug, record_for_weight_file,
+    records, records_from,
 };
 use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry};
 
@@ -269,4 +270,16 @@ fn config_knobs_default_and_env_wins() {
     assert_eq!(invalid.territory, "unknown");
     assert!(invalid.commercial);
     assert_eq!(warnings.len(), 1);
+}
+
+/// Sidecar jobs pass local weight paths, not registry slugs: the file-name
+/// lookup must still find the curated restrictions the training gate uses.
+#[test]
+fn fizgig_weight_lookup_finds_curated_restrictions() {
+    let gated = record_for_weight_file("ae.safetensors").expect("curated gated VAE");
+    assert!(gated.gated);
+    assert_eq!(gated.commercial_terms, "non-commercial");
+    let territory = record_for_weight_file("model.safetensors").expect("curated territory row");
+    assert_eq!(territory.territory.as_deref(), Some("excludes-eu-uk-kr"));
+    assert!(record_for_weight_file("operator-local.safetensors").is_none());
 }

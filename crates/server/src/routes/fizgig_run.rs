@@ -8,7 +8,7 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use honkbox_residency::ResourceKind;
@@ -21,6 +21,10 @@ use super::supervisor::{self, Spec, Termination};
 use crate::admission;
 
 type Jobs = Mutex<HashMap<String, LiveJob>>;
+
+// ponytail: newest 3 epoch checkpoints plus the final LoRA; the full history
+// stays in the work dir until GC. Raise only if consumers need more rollbacks.
+const MAX_EPOCH_ARTIFACTS: usize = 3;
 
 /// Keep supervisor stderr bounded in the status DTO (logs stay on disk).
 fn bounded(err: impl fmt::Display) -> String {
@@ -87,7 +91,21 @@ impl Stage {
         }
     }
 
-    fn args(self, plan: &Plan) -> Vec<String> {
+    /// Cache stages use explicit VAE/text-encoder paths, except for families
+    /// whose checkpoint carries both. Validation enforces the same rule.
+    fn model(self, plan: &Plan) -> Result<&Path, String> {
+        let (explicit, name) = match self {
+            Self::Latents => (&plan.vae, "vae"),
+            Self::Text => (&plan.text_encoder, "text_encoder"),
+            Self::Train => return Err("train stage has no cache model".to_owned()),
+        };
+        explicit
+            .as_deref()
+            .or_else(|| plan.checkpoint_embedded.then_some(plan.dit.as_path()))
+            .ok_or_else(|| format!("{name} is required for family {}", plan.family))
+    }
+
+    fn args(self, plan: &Plan) -> Result<Vec<String>, String> {
         let dataset = plan.work_dir.join("dataset.toml").display().to_string();
         let mut args = vec![
             self.script(plan).display().to_string(),
@@ -101,17 +119,13 @@ impl Stage {
                 "--stage".to_owned(),
                 "latents".to_owned(),
                 "--model".to_owned(),
-                plan.vae.as_ref().unwrap_or(&plan.dit).display().to_string(),
+                self.model(plan)?.display().to_string(),
             ]),
             Self::Text => args.extend([
                 "--stage".to_owned(),
                 "text".to_owned(),
                 "--model".to_owned(),
-                plan.text_encoder
-                    .as_ref()
-                    .unwrap_or(&plan.dit)
-                    .display()
-                    .to_string(),
+                self.model(plan)?.display().to_string(),
             ]),
             Self::Train => {
                 args.extend([
@@ -143,7 +157,7 @@ impl Stage {
                 }
             }
         }
-        args
+        Ok(args)
     }
 }
 
@@ -177,9 +191,9 @@ pub(super) async fn run_job(plan: Plan, jobs: &'static Jobs, id: String) {
         fail(jobs, &id, format!("cannot write dataset config: {err}"));
         return;
     }
-    // Reserve the external-GPU class for the whole run. Until the dedicated
-    // training class lands, `Comfy` is the reserved external-process slot.
-    let lease = match admission::acquire(ResourceKind::Comfy).await {
+    // One exclusive training lease spans the whole run: no interactive job
+    // can start beside it, even when the box has spare GPU slots.
+    let lease = match admission::acquire(ResourceKind::Training).await {
         Ok(lease) => lease,
         Err((_, message)) => {
             fail(jobs, &id, message);
@@ -192,10 +206,17 @@ pub(super) async fn run_job(plan: Plan, jobs: &'static Jobs, id: String) {
             break;
         }
         set(jobs, &id, "running", stage.name());
+        let args = match stage.args(&plan) {
+            Ok(args) => args,
+            Err(err) => {
+                fail(jobs, &id, err);
+                return;
+            }
+        };
         let hard = CancellationToken::new();
         let mut spec = Spec::new(
             plan.python.clone(),
-            stage.args(&plan),
+            args,
             plan.work_dir.clone(),
             plan.timeout,
         );
@@ -314,16 +335,53 @@ fn commit(plan: &Plan, id: &str, cancelled: bool) -> Result<String, String> {
         "dataset.toml",
         &plan.work_dir.join("dataset.toml"),
     )?;
-    let mut artifacts = Vec::new();
+    let final_name = format!("{}.safetensors", plan.output_name);
+    let epoch_prefix = format!("{}-", plan.output_name);
+    let mut final_artifact = None;
+    let mut epochs: Vec<(u64, PathBuf)> = Vec::new();
+    let mut state_dir = None;
     let entries =
         fs::read_dir(&plan.output_dir).map_err(|e| format!("cannot read outputs: {e}"))?;
     for entry in entries {
         let path = entry
             .map_err(|e| format!("cannot read output entry: {e}"))?
             .path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "non-UTF-8 LoRA filename".to_owned())?
+            .to_owned();
+        if path.is_dir() {
+            if state_dir.is_none() && name.contains("state") {
+                state_dir = Some(name);
+            }
+            continue;
+        }
         if path.extension().and_then(|ext| ext.to_str()) != Some("safetensors") {
             continue;
         }
+        if name == final_name {
+            final_artifact = Some(path);
+            continue;
+        }
+        let Some(epoch) = name
+            .strip_prefix(&epoch_prefix)
+            .and_then(|suffix| suffix.strip_suffix(".safetensors"))
+            .and_then(|digits| digits.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        epochs.push((epoch, path));
+    }
+    epochs.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+    epochs.truncate(MAX_EPOCH_ARTIFACTS);
+    let mut selected = Vec::new();
+    if let Some(path) = final_artifact {
+        selected.push(path);
+    }
+    selected.extend(epochs.into_iter().map(|(_, path)| path));
+    let mut artifacts = Vec::new();
+    for path in selected {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -354,6 +412,9 @@ fn commit(plan: &Plan, id: &str, cancelled: bool) -> Result<String, String> {
         "epochs": plan.epochs,
         "seed": plan.seed,
         "artifacts": artifacts,
+        // Upstream `--save_state` directory, relative to the work dir, so a
+        // later resume endpoint can find it while GC retention keeps it.
+        "state_dir": state_dir.map(|name| format!("out/{name}")),
     });
     let bytes =
         serde_json::to_vec(&manifest).map_err(|e| format!("cannot encode manifest: {e}"))?;

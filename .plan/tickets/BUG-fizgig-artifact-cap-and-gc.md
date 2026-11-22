@@ -1,6 +1,6 @@
 # BUG: Bound Fizgig artifacts, GC the work dir, retain resume state
 
-Status: proposed
+Status: done (2026-11-22)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned
@@ -25,3 +25,13 @@ Resources: per-test temp data dir; no fixed port.
 ## Non-goals
 
 Implementing resume itself; that follows in `POST …/resume` work.
+
+## Landed
+
+`commit()` copies only the final `<output_name>.safetensors` plus the 3 newest
+epoch checkpoints and hashes exactly those; the upstream `--save_state` dir is
+recorded in the manifest as `state_dir`. `jobs::gc_jobs` sweeps
+`<data_dir>/fizgig` with the job retention policy. Fake CLI emits 5 epochs +
+final; bundle test proves cap and state record. Evidence: 205 passed across
+`--test fizgig --test licenses`; `cargo test ... --bin honkbox
+gc_jobs_sweeps_fizgig_work_dirs` → 1 passed.

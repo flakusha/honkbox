@@ -57,6 +57,9 @@ pub const ADMITTING_ROUTES: &[(&str, &str)] = &[
     // `ocr` admission bucket; the route keys its 501 on the same `serves()`
     // predicate this document reports as `recognition.ocr`.
     ("ocr", "/v1/ocr/ingest"),
+    // Long Fizgig training runs take the dedicated exclusive lease; this
+    // route is their only admission point.
+    ("training", "/v1/fizgig/train"),
 ];
 
 /// The route that admits a job of `kind`, if any (see [`ADMITTING_ROUTES`]).
