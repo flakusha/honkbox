@@ -44,6 +44,25 @@ cargo run -p honkbox-server -- serve --dev  # serve web-dist from disk
 alias hbx=honkbox
 ```
 
+## Local install
+
+```sh
+bun install
+bun run install:local       # vendor sync + web build + release build, then install
+honkbox serve               # via ~/.local/bin/honkbox
+```
+
+Layout (XDG-aware):
+
+- `$XDG_DATA_HOME/honkbox/bin/honkbox` (default `~/.local/share/honkbox/bin/honkbox`)
+- `~/.local/bin/honkbox` -> that binary (a foreign link is never clobbered without `--force`)
+- runtime state stays at `$XDG_STATE_HOME/honkbox` (default `~/.local/state/honkbox`);
+  pass `--data-dir` to the binary to move it
+
+Installer flags: `--prefix DIR`, `--bindir DIR` (absolute paths), `--dry-run`,
+`--no-build`, `--force`. `bun run uninstall:local` removes the link; `--purge` also
+removes the install prefix, never the state dir. POSIX symlinks only (no Windows).
+
 ## Scripts
 
 | Script          | What it does                                        |
@@ -52,6 +71,8 @@ alias hbx=honkbox
 | `dev:web`       | Vite dev server only (:5173)                        |
 | `dev:server`    | Server under `cargo watch` (`serve --dev`)          |
 | `build`         | Full build (vendor + web + server)                  |
+| `install:local` | Release build + install under XDG data dir + `~/.local/bin` link |
+| `uninstall:local` | Remove the link (`--purge` also removes the prefix) |
 | `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen:check + docs:api:check |
 | `format`        | `dprint check`                                      |
 | `lint`          | oxlint over `scripts packages`                      |
