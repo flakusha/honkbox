@@ -8,6 +8,7 @@
 //! sites.
 
 use crate::{
+    checkpoint::CheckpointMap,
     device::{CapacityRequirements, VulkanDevice},
     model::{ModelSpec, Op},
 };
@@ -55,15 +56,45 @@ impl AshSdPipeline {
     }
 }
 
+/// `UNet` input convolution — present in SD 1.x/2.x and SDXL safetensors.
+const UNET_INPUT_TENSOR: &str = "model.diffusion_model.input_blocks.0.0.weight";
+/// Latent channels the diffusion backbone consumes.
+const LATENT_CHANNELS: usize = 4;
+
+fn validate_unet_input(map: &CheckpointMap) -> Result<(), String> {
+    let tensor = map
+        .get(UNET_INPUT_TENSOR)
+        .ok_or_else(|| format!("missing UNet input tensor '{UNET_INPUT_TENSOR}'"))?;
+    if tensor.shape.len() != 4
+        || tensor.shape[1] != LATENT_CHANNELS
+        || tensor.shape[2] != 3
+        || tensor.shape[3] != 3
+    {
+        return Err(format!(
+            "UNet input tensor '{UNET_INPUT_TENSOR}' has shape {:?}, expected [*, 4, 3, 3]",
+            tensor.shape
+        ));
+    }
+    if !matches!(tensor.dtype.as_str(), "F32" | "F16" | "BF16") {
+        return Err(format!(
+            "UNet input tensor '{UNET_INPUT_TENSOR}' has dtype {}",
+            tensor.dtype
+        ));
+    }
+    Ok(())
+}
+
 /// Reject checkpoints that cannot be loaded before any GPU work is queued.
-/// Only container-level checks: weights are read when sampling lands.
-fn validate_checkpoint(path: &Path) -> Result<(), SdError> {
+///
+/// Safetensors gets a real tensor-map check: the `UNet` input must exist with
+/// the expected NCHW shape and a floating dtype. GGUF has no safetensors map,
+/// so it is refused by name instead of passing admission with unknown weights.
+fn admit_checkpoint(path: &Path) -> Result<(), SdError> {
     let fail = |msg: String| SdError::Backend(format!("checkpoint '{}': {msg}", path.display()));
     let meta = std::fs::metadata(path).map_err(|e| fail(e.to_string()))?;
     if !meta.is_file() || meta.len() == 0 {
         return Err(fail("not a non-empty file".into()));
     }
-    let mut file = std::fs::File::open(path).map_err(|e| fail(e.to_string()))?;
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -72,24 +103,20 @@ fn validate_checkpoint(path: &Path) -> Result<(), SdError> {
         .as_str()
     {
         "safetensors" => {
-            let mut len = [0u8; 8];
-            file.read_exact(&mut len)
-                .map_err(|e| fail(format!("truncated safetensors header: {e}")))?;
-            let header = u64::from_le_bytes(len);
-            if header == 0 || header > meta.len().saturating_sub(8) {
-                return Err(fail(format!(
-                    "invalid safetensors header length {header} for {} bytes",
-                    meta.len()
-                )));
-            }
+            let map = CheckpointMap::read(path).map_err(|e| fail(e.to_string()))?;
+            validate_unet_input(&map).map_err(fail)?;
         }
         "gguf" => {
+            let mut file = std::fs::File::open(path).map_err(|e| fail(e.to_string()))?;
             let mut magic = [0u8; 4];
             file.read_exact(&mut magic)
                 .map_err(|e| fail(format!("truncated GGUF header: {e}")))?;
             if &magic != b"GGUF" {
                 return Err(fail("bad GGUF magic".into()));
             }
+            return Err(fail(
+                "GGUF checkpoints have no safetensors tensor map".into(),
+            ));
         }
         other => return Err(fail(format!("unsupported checkpoint format '{other}'"))),
     }
@@ -122,7 +149,7 @@ impl SdPipeline for AshSdPipeline {
                 self.backend_id()
             ))
         })?;
-        validate_checkpoint(&self.model_path)?;
+        admit_checkpoint(&self.model_path)?;
         // Sampling needs text encoders, diffusion backbone, VAE and a
         // scheduler; only the first two compute passes exist so far. Stop
         // here rather than return a plausible-looking image.
@@ -162,9 +189,19 @@ mod tests {
     }
 
     fn safetensors_bytes() -> Vec<u8> {
-        let header = br#"{"__metadata__":{}}"#;
-        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
-        bytes.extend_from_slice(header);
+        safetensors_with_tensor("[8,4,3,3]", "F32", 1152)
+    }
+
+    fn safetensors_with_tensor(shape: &str, dtype: &str, byte_len: usize) -> Vec<u8> {
+        let header = format!(
+            "{{\"{UNET_INPUT_TENSOR}\":{{\"dtype\":\"{dtype}\",\"shape\":{shape},\"data_offsets\":[0,{byte_len}]}}}}"
+        );
+        let mut bytes = u64::try_from(header.len())
+            .expect("header length")
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.resize(bytes.len() + byte_len, 0);
         bytes
     }
 
@@ -224,17 +261,45 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_validation_accepts_supported_formats() {
+    fn checkpoint_admission_accepts_sd_safetensors() {
         let safetensors = temp_checkpoint("safetensors", &safetensors_bytes());
+        assert_eq!(admit_checkpoint(&safetensors), Ok(()));
         let gguf = temp_checkpoint("gguf", b"GGUF\x03\0\0\0rest");
-        assert_eq!(validate_checkpoint(&safetensors), Ok(()));
-        assert_eq!(validate_checkpoint(&gguf), Ok(()));
+        assert!(
+            matches!(admit_checkpoint(&gguf), Err(SdError::Backend(msg)) if msg.contains("tensor map")),
+            "GGUF must be refused by name"
+        );
         std::fs::remove_file(safetensors).expect("cleanup");
         std::fs::remove_file(gguf).expect("cleanup");
     }
 
     #[test]
-    fn checkpoint_validation_rejects_bad_inputs() {
+    fn checkpoint_admission_checks_unet_tensor() {
+        let empty_header = br#"{"__metadata__":{}}"#;
+        let mut empty_bytes = u64::try_from(empty_header.len())
+            .expect("header length")
+            .to_le_bytes()
+            .to_vec();
+        empty_bytes.extend_from_slice(empty_header);
+        let missing = temp_checkpoint("safetensors", &empty_bytes);
+        assert!(
+            matches!(admit_checkpoint(&missing), Err(SdError::Backend(msg)) if msg.contains("missing UNet")),
+            "empty tensor map must be refused"
+        );
+        let wrong = temp_checkpoint(
+            "safetensors",
+            &safetensors_with_tensor("[8,3,3,3]", "F32", 864),
+        );
+        assert!(
+            matches!(admit_checkpoint(&wrong), Err(SdError::Backend(msg)) if msg.contains("shape")),
+            "wrong latent channels must be refused"
+        );
+        std::fs::remove_file(missing).expect("cleanup");
+        std::fs::remove_file(wrong).expect("cleanup");
+    }
+
+    #[test]
+    fn checkpoint_admission_rejects_bad_inputs() {
         let missing = std::env::temp_dir().join("honkbox-ash-no-such-checkpoint.safetensors");
         let empty = temp_checkpoint("safetensors", b"");
         let wrong_ext = temp_checkpoint("bin", b"data");
@@ -252,7 +317,7 @@ mod tests {
             &huge_header,
         ] {
             assert!(
-                matches!(validate_checkpoint(path), Err(SdError::Backend(_))),
+                matches!(admit_checkpoint(path), Err(SdError::Backend(_))),
                 "expected rejection for {}",
                 path.display()
             );
@@ -260,6 +325,24 @@ mod tests {
         for path in [empty, wrong_ext, bad_magic, truncated, huge_header] {
             std::fs::remove_file(path).expect("cleanup");
         }
+    }
+
+    #[test]
+    fn generate_rejects_checkpoint_without_unet_tensor() {
+        let Some(device) = device() else { return };
+        let empty_header = br#"{"__metadata__":{}}"#;
+        let mut empty_bytes = u64::try_from(empty_header.len())
+            .expect("header length")
+            .to_le_bytes()
+            .to_vec();
+        empty_bytes.extend_from_slice(empty_header);
+        let path = temp_checkpoint("safetensors", &empty_bytes);
+        let pipeline = AshSdPipeline::new(device, path.clone());
+        assert!(matches!(
+            pipeline.generate(&request(512, 512), &AtomicBool::new(false)),
+            Err(SdError::Backend(msg)) if msg.contains("UNet")
+        ));
+        std::fs::remove_file(path).expect("cleanup");
     }
 
     #[test]

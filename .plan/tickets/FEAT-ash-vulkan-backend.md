@@ -294,3 +294,20 @@ unknown dtypes and bad headers; clippy `-D warnings` clean; fmt clean.
 
 Next: wire the tensor map into `AshSdPipeline::generate` admission (real
 checkpoint shape checks before any kernel is scheduled).
+
+## Landed — slice 18 (2026-11-23, worktree)
+
+`AshSdPipeline::generate` now admits checkpoints through `CheckpointMap`
+instead of a header-length-only check. Safetensors must contain the `UNet`
+input convolution `model.diffusion_model.input_blocks.0.0.weight` with rank 4,
+4 latent input channels, a 3×3 kernel and a floating dtype; malformed headers,
+missing tensors and wrong shapes are named before any GPU work is queued.
+GGUF is refused by name because it has no safetensors tensor map — no silent
+pass-through with unknown weights. No payload is copied and no image is
+generated yet; sampling still stops with its named error.
+
+Evidence: 49 tests pass on `ash-compute` and 56 on `experimental-ash-sd`;
+clippy `-D warnings` clean with the SD, STT and TTS features; fmt clean.
+
+Next: text encoder seam (CLIP tokenizer assets + embedding lookup), then
+sampling wiring.
