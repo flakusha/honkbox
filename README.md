@@ -60,8 +60,10 @@ Layout (XDG-aware):
   pass `--data-dir` to the binary to move it
 
 Installer flags: `--prefix DIR`, `--bindir DIR` (absolute paths), `--dry-run`,
-`--no-build`, `--force`. `bun run uninstall:local` removes the link; `--purge` also
-removes the install prefix, never the state dir. POSIX symlinks only (no Windows).
+`--no-build`, `--force`. On Windows the binary is `honkbox.exe`; the installer tries
+a symlink first, warns on failure, then copies the binary into `bindir`. A marker in
+the install prefix lets `bun run uninstall:local` remove that copy (or the link);
+`--purge` also removes the prefix, never the state dir.
 
 ## Scripts
 

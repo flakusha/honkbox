@@ -1,4 +1,4 @@
-// Removes the ~/.local/bin/honkbox link created by scripts/install.ts.
+// Removes the ~/.local/bin/honkbox link or Windows copy created by install.ts.
 // --purge also deletes the install prefix; runtime state is never touched.
 //
 // Usage: bun scripts/uninstall.ts [--prefix DIR] [--bindir DIR] [--dry-run] [--purge]

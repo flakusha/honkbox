@@ -1,5 +1,6 @@
 // User-level install for honkbox: build the release binary, place it under
 // $XDG_DATA_HOME/honkbox/bin, and link ~/.local/bin/honkbox to it.
+// On Windows the symlink is attempted first; on failure it warns and copies.
 // Runtime state stays in the XDG state dir; this script never writes there.
 //
 // Usage: bun scripts/install.ts [--prefix DIR] [--bindir DIR] [--dry-run]
@@ -11,14 +12,17 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readlinkSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 const BIN = process.platform === "win32" ? "honkbox.exe" : "honkbox";
+const COPY_MARKER = ".honkbox-link-copy";
 
 export interface Layout {
   prefix: string;
@@ -30,14 +34,23 @@ export interface Layout {
 export interface FileOptions {
   dryRun?: boolean;
   force?: boolean;
+  // Fallback override and seams for deterministic tests.
+  fallbackToCopy?: boolean;
+  link?: (target: string, path: string) => void;
+  warn?: (message: string) => void;
+}
+
+function homeDir(env: NodeJS.ProcessEnv): string {
+  const home = env.HOME ?? (process.platform === "win32" ? env.USERPROFILE : undefined);
+  if (!home || !isAbsolute(home)) {
+    throw new Error("install: HOME must be set to an absolute path");
+  }
+  return home;
 }
 
 /** Resolve the install layout from HOME / XDG_DATA_HOME. Pure: no process env default. */
 export function defaultLayout(env: NodeJS.ProcessEnv): Layout {
-  const home = env.HOME;
-  if (!home || !isAbsolute(home)) {
-    throw new Error("install: HOME must be set to an absolute path");
-  }
+  const home = homeDir(env);
   const xdgData = env.XDG_DATA_HOME;
   const prefix = xdgData && isAbsolute(xdgData)
     ? join(xdgData, "honkbox")
@@ -93,11 +106,7 @@ export function dataDirHint(env: NodeJS.ProcessEnv): string {
   if (xdgState && isAbsolute(xdgState)) {
     return join(xdgState, "honkbox");
   }
-  const home = env.HOME;
-  if (!home || !isAbsolute(home)) {
-    throw new Error("install: HOME must be set to an absolute path");
-  }
-  return join(home, ".local/state/honkbox");
+  return join(homeDir(env), ".local/state/honkbox");
 }
 
 type Kind = "missing" | "link" | "other";
@@ -118,7 +127,32 @@ function linkTarget(path: string): string | null {
   }
 }
 
-/** Copy the built binary and create the ~/.local/bin symlink. */
+function copyMarkerPath(layout: Layout): string {
+  return join(dirname(layout.binary), COPY_MARKER);
+}
+
+/** Symlink first; Windows without symlink privileges warns and copies instead. */
+function createCommandLink(layout: Layout, opts: FileOptions): void {
+  const marker = copyMarkerPath(layout);
+  const link = opts.link ?? symlinkSync;
+  try {
+    link(layout.binary, layout.link);
+    rmSync(marker, { force: true });
+  } catch (err) {
+    if (!(opts.fallbackToCopy ?? process.platform === "win32")) {
+      throw err;
+    }
+    const warn = opts.warn ?? console.warn;
+    warn(
+      `honkbox install: symlink failed (${err instanceof Error ? err.message : String(err)}); `
+        + `copying to ${layout.link}`,
+    );
+    copyFileSync(layout.binary, layout.link);
+    writeFileSync(marker, layout.link, "utf8");
+  }
+}
+
+/** Copy the built binary, then link (or, on Windows failure, copy) the command. */
 export function installFiles(layout: Layout, source: string, opts: FileOptions = {}): void {
   const linkKind = pathKind(layout.link);
   const linkIsForeign = linkKind !== "missing" && linkTarget(layout.link) !== layout.binary;
@@ -156,7 +190,7 @@ export function installFiles(layout: Layout, source: string, opts: FileOptions =
   if (linkKind !== "missing") {
     rmSync(layout.link);
   }
-  symlinkSync(layout.binary, layout.link);
+  createCommandLink(layout, opts);
 }
 
 async function run(args: string[], cwd: string): Promise<void> {
@@ -175,20 +209,39 @@ export async function buildRelease(root: string = ROOT): Promise<void> {
   await run([bun, "run", "build:release"], root);
 }
 
-/** Remove only the link; --purge also removes the install prefix, never state. */
+function isManagedCopy(layout: Layout, marker: string): boolean {
+  try {
+    return readFileSync(marker, "utf8").trim() === layout.link;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove the link or marker-managed copy; --purge removes the prefix, never state. */
 export function uninstallFiles(
   layout: Layout,
   opts: { dryRun?: boolean; purge?: boolean; } = {},
 ): void {
-  const target = linkTarget(layout.link);
-  if (target !== null) {
-    if (target !== layout.binary) {
+  const marker = copyMarkerPath(layout);
+  const kind = pathKind(layout.link);
+  if (kind === "link") {
+    if (linkTarget(layout.link) !== layout.binary) {
       throw new Error(`uninstall: ${layout.link} points elsewhere; refusing to remove`);
     }
     if (opts.dryRun) {
       console.log(`[dry-run] remove ${layout.link}`);
     } else {
       rmSync(layout.link);
+    }
+  } else if (kind === "other") {
+    if (!isManagedCopy(layout, marker)) {
+      throw new Error(`uninstall: ${layout.link} is not an installer-managed copy`);
+    }
+    if (opts.dryRun) {
+      console.log(`[dry-run] remove ${layout.link}`);
+    } else {
+      rmSync(layout.link);
+      rmSync(marker, { force: true });
     }
   }
   if (opts.purge) {
@@ -201,9 +254,6 @@ export function uninstallFiles(
 }
 
 export async function main(argv: string[] = Bun.argv.slice(2)): Promise<void> {
-  if (process.platform === "win32") {
-    throw new Error("install: POSIX symlinks required; Windows is not supported");
-  }
   const { layout, dryRun, rest } = parseLayout(argv, process.env);
   let build = true;
   let force = false;
@@ -227,7 +277,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<void> {
   installFiles(layout, source, { dryRun, force });
   if (!dryRun) {
     console.log(`installed ${layout.binary}`);
-    console.log(`linked ${layout.link} -> ${layout.binary}`);
+    console.log(`command: ${layout.link}`);
   }
   console.log(`runtime data dir: ${dataDirHint(process.env)} (override with --data-dir)`);
 }

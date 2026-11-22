@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { defaultLayout, installFiles, releaseBinary, uninstallFiles } from "./install";
 import type { Layout } from "./install";
 
@@ -106,4 +106,45 @@ test("uninstall refuses a link pointing elsewhere", () => {
   symlinkSync(foreign, layout.link);
   expect(() => uninstallFiles(layout)).toThrow(/points elsewhere/);
   expect(readlinkSync(layout.link)).toBe(foreign);
+});
+
+function copyFallback(
+  layout: Layout,
+  source: string,
+  warnings: string[] = [],
+): void {
+  installFiles(layout, source, {
+    fallbackToCopy: true,
+    link: () => {
+      throw new Error("EPERM");
+    },
+    warn: (message) => {
+      warnings.push(message);
+    },
+  });
+}
+
+test("symlink failure warns and copies the command on Windows", async () => {
+  const { source, layout } = sandbox();
+  const warnings: string[] = [];
+  copyFallback(layout, source, warnings);
+  expect(warnings.join(" ")).toMatch(/symlink failed.*copying/);
+  expect(lstatSync(layout.link).isSymbolicLink()).toBe(false);
+  expect(await Bun.file(layout.link).text()).toBe("#!/bin/sh\n");
+  expect(existsSync(join(dirname(layout.binary), ".honkbox-link-copy"))).toBe(true);
+});
+
+test("uninstall removes a marker-managed copy", () => {
+  const { source, layout } = sandbox();
+  copyFallback(layout, source);
+  uninstallFiles(layout);
+  expect(existsSync(layout.link)).toBe(false);
+  expect(existsSync(layout.binary)).toBe(true);
+});
+
+test("uninstall refuses an unmanaged regular file at the link path", () => {
+  const { layout } = sandbox();
+  mkdirSync(layout.bindir, { recursive: true });
+  writeFileSync(layout.link, "unrelated");
+  expect(() => uninstallFiles(layout)).toThrow(/not an installer-managed copy/);
 });
