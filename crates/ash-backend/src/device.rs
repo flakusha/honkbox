@@ -445,12 +445,17 @@ const _: () = {
 };
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ash::vk::Handle;
 
     /// Placeholder row for the pure selection tests (no Vulkan needed).
-    fn info(device_type: DeviceType, vram: u64, id: u32, compute: bool) -> PhysicalDeviceInfo {
+    pub(crate) fn fake_info(
+        device_type: DeviceType,
+        vram: u64,
+        id: u32,
+        compute: bool,
+    ) -> PhysicalDeviceInfo {
         PhysicalDeviceInfo {
             handle: vk::PhysicalDevice::default(),
             name: format!("fake-{id}"),
@@ -459,7 +464,11 @@ mod tests {
             device_type,
             vram_bytes: vram,
             properties: vk::PhysicalDeviceProperties::default(),
-            limits: vk::PhysicalDeviceLimits::default(),
+            limits: vk::PhysicalDeviceLimits {
+                max_compute_work_group_count: [65535; 3],
+                max_storage_buffer_range: u32::MAX,
+                ..vk::PhysicalDeviceLimits::default()
+            },
             features: DeviceFeatures {
                 storage_8_bit: true,
                 storage_16_bit: true,
@@ -482,10 +491,10 @@ mod tests {
     #[test]
     fn selection_prefers_discrete_then_most_vram() {
         let devices = [
-            info(DeviceType::Integrated, 16 << 30, 1, true),
-            info(DeviceType::Discrete, 8 << 30, 2, true),
-            info(DeviceType::Discrete, 24 << 30, 3, true),
-            info(DeviceType::Cpu, 1 << 30, 4, true),
+            fake_info(DeviceType::Integrated, 16 << 30, 1, true),
+            fake_info(DeviceType::Discrete, 8 << 30, 2, true),
+            fake_info(DeviceType::Discrete, 24 << 30, 3, true),
+            fake_info(DeviceType::Cpu, 1 << 30, 4, true),
         ];
         let picked = select_device(&devices).expect("a compute-capable device exists");
         assert_eq!(picked.device_id, 3, "discrete with most VRAM wins");
@@ -494,7 +503,7 @@ mod tests {
 
     #[test]
     fn selection_skips_devices_without_compute_queue() {
-        let devices = [info(DeviceType::Discrete, 8 << 30, 1, false)];
+        let devices = [fake_info(DeviceType::Discrete, 8 << 30, 1, false)];
         assert!(matches!(
             select_device(&devices),
             Err(VkError::NoComputeQueue)
@@ -510,14 +519,14 @@ mod tests {
         // `Iterator::max_by_key` returns the LAST of equal maxima, so the
         // second array element wins in both orders.
         let mut order_a = [
-            info(DeviceType::Discrete, 8 << 30, 7, true),
-            info(DeviceType::Discrete, 8 << 30, 7, true),
+            fake_info(DeviceType::Discrete, 8 << 30, 7, true),
+            fake_info(DeviceType::Discrete, 8 << 30, 7, true),
         ];
         order_a[0].handle = vk::PhysicalDevice::from_raw(1);
         order_a[1].handle = vk::PhysicalDevice::from_raw(2);
         let mut order_b = [
-            info(DeviceType::Discrete, 8 << 30, 7, true),
-            info(DeviceType::Discrete, 8 << 30, 7, true),
+            fake_info(DeviceType::Discrete, 8 << 30, 7, true),
+            fake_info(DeviceType::Discrete, 8 << 30, 7, true),
         ];
         order_b[0].handle = vk::PhysicalDevice::from_raw(1);
         order_b[1].handle = vk::PhysicalDevice::from_raw(2);
@@ -547,13 +556,13 @@ mod tests {
 
     #[test]
     fn admit_accepts_default_requirements() {
-        let dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         assert_eq!(dev.admit(&CapacityRequirements::default()), Ok(()));
     }
 
     #[test]
     fn admit_names_missing_8_bit_storage() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.features.storage_8_bit = false;
         assert_eq!(
             dev.admit(&demanding_req()),
@@ -567,7 +576,7 @@ mod tests {
 
     #[test]
     fn admit_names_missing_16_bit_storage() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.features.storage_16_bit = false;
         assert!(matches!(
             dev.admit(&demanding_req()),
@@ -580,7 +589,7 @@ mod tests {
 
     #[test]
     fn admit_names_missing_shader_float16() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.features.shader_float16 = false;
         assert_eq!(
             dev.admit(&demanding_req()),
@@ -594,7 +603,7 @@ mod tests {
 
     #[test]
     fn admit_names_missing_shader_int8() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.features.shader_int8 = false;
         assert!(matches!(
             dev.admit(&demanding_req()),
@@ -607,7 +616,7 @@ mod tests {
 
     #[test]
     fn has_extension_matches_advertised_names_only() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.supported_extensions = vec!["VK_KHR_cooperative_matrix".into()];
         assert!(dev.has_extension("VK_KHR_cooperative_matrix"));
         assert!(!dev.has_extension("VK_KHR_not_installed"));
@@ -615,7 +624,7 @@ mod tests {
 
     #[test]
     fn admit_names_missing_required_extension() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         let req = CapacityRequirements {
             required_extensions: &["VK_KHR_cooperative_matrix"],
             ..CapacityRequirements::default()
@@ -634,7 +643,7 @@ mod tests {
 
     #[test]
     fn admit_names_small_subgroup_size() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.features.subgroup_size = 4;
         assert_eq!(
             dev.admit(&demanding_req()),
@@ -648,7 +657,7 @@ mod tests {
 
     #[test]
     fn admit_names_workgroup_count_over_limit() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.limits.max_compute_work_group_count = [4, 8, 8];
         assert_eq!(
             dev.admit(&demanding_req()),
@@ -662,7 +671,7 @@ mod tests {
 
     #[test]
     fn admit_names_storage_range_over_limit() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.limits.max_compute_work_group_count = [16, 16, 16];
         dev.limits.max_storage_buffer_range = 512;
         assert_eq!(
@@ -677,13 +686,13 @@ mod tests {
 
     #[test]
     fn admit_rejects_device_without_compute_queue() {
-        let dev = info(DeviceType::Cpu, 1 << 30, 1, false);
+        let dev = fake_info(DeviceType::Cpu, 1 << 30, 1, false);
         assert_eq!(dev.admit(&demanding_req()), Err(VkError::NoComputeQueue));
     }
 
     #[test]
     fn bound_dispatch_clamps_to_reported_limits() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         dev.limits.max_compute_work_group_count = [4, 8, 16];
         dev.limits.max_storage_buffer_range = 512;
         assert_eq!(
@@ -697,7 +706,7 @@ mod tests {
 
     #[test]
     fn bound_dispatch_rejects_empty_or_queue_less() {
-        let mut dev = info(DeviceType::Cpu, 1 << 30, 1, true);
+        let mut dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
         assert_eq!(dev.bound_dispatch([0, 1, 1], 0), None);
         dev.compute_queue_family = None;
         assert_eq!(dev.bound_dispatch([1, 1, 1], 0), None);

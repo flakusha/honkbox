@@ -17,6 +17,7 @@
 //!   ([`device::PhysicalDeviceInfo::admit`]) and limit-bounded dispatch plans.
 //! - [`compute`]: [`compute::ElementwiseAdd`] and the shared [`compute::Kernel`].
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
+//! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` returns a clear unimplemented error for now.
 //! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
@@ -108,6 +109,8 @@ pub mod compute;
 pub mod device;
 #[cfg(feature = "ash-compute")]
 pub mod matmul;
+#[cfg(feature = "ash-compute")]
+pub mod model;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]

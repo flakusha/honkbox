@@ -65,7 +65,18 @@ Evidence: 23 tests pass (4 new pure admission tests); headless smoke on real
 GPU reports 185 extensions; clippy `-D warnings` clean; fmt clean;
 `experimental-ash-sd` graph check green.
 
-Next: ops vocabulary + `ModelSpec`, then `AshSdPipeline::generate` on a real
-checkpoint. Optional cooperative-matrix fast path stays a later slice: no
-kernel consumes it yet.
+## Landed — slice 4 (2026-11-22, worktree)
+
+`model::{Op, ModelSpec}` introduces the ops vocabulary: one variant per landed
+kernel (ElementwiseAdd, MatMul), each declaring a static capability floor.
+`ModelSpec::validate(&PhysicalDeviceInfo)` admits every op in the model before
+any pipeline is built. Tensor-name map is deferred until a checkpoint exists;
+no placeholder fields added. Shared test fixture now reports realistic limits.
+
+Evidence: 27 tests pass (4 new pure model tests, including a failing-capability
+case); clippy `-D warnings` clean; fmt clean; `experimental-ash-sd` graph check
+green.
+
+Next: `AshSdPipeline::generate` on a real checkpoint. Optional cooperative-
+matrix fast path stays a later slice: no kernel consumes it yet.
 
