@@ -7,7 +7,9 @@
 //! `comfy:checkpoints/sdxl.safetensors`), and `stt:` / `tts:` likewise for
 //! files under the audio roots, and `ocr:` under an OCR weights root.
 //! Relative paths are measured from the root;
-//! separators are always `/`.
+//! separators are always `/`. LLM files in the `huggingface_hub` cache layout
+//! (`hub/models--<owner>--<name>/snapshots/<sha>/…`) keep their slug but take
+//! the repo id (`<owner>/<name>`) as category.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -57,7 +59,9 @@ pub struct FoundModel {
     /// Which kind of root this file was found under.
     pub root: RootKind,
     /// `ComfyUI`: first path component (`checkpoints`, `loras`, …) or `"root"`;
-    /// LLM: parent dir file name or `"root"` if directly under the root.
+    /// LLM: the HF repo id (`<owner>/<name>`) for a `huggingface_hub` cache
+    /// layout, else the parent dir file name or `"root"` if directly under
+    /// the root.
     pub category: String,
     /// Absolute path to the file.
     pub path: PathBuf,
@@ -128,7 +132,7 @@ pub struct CatalogEntry {
     pub slug: String,
     /// Modality derived from the root kind and category.
     pub kind: ModelKind,
-    /// `ComfyUI` category or the LLM parent-dir name (see `FoundModel`).
+    /// `ComfyUI` category or the LLM category (see `FoundModel`).
     pub category: String,
     /// Absolute path to the file.
     pub path: PathBuf,
@@ -262,6 +266,41 @@ fn llm_category(path: &Path, rel: &str) -> String {
         .map_or_else(|| "root".to_owned(), ToOwned::to_owned)
 }
 
+/// Category for a file in the `huggingface_hub` cache layout
+/// `hub/models--<owner>--<name>/snapshots/<sha>/...`: the decoded repo id
+/// (`<owner>/<name>`, `--` decoded to `/`). `None` for any other layout.
+fn hf_repo_category(rel: &str) -> Option<String> {
+    let segs: Vec<&str> = rel.split('/').collect();
+    let idx = segs.iter().position(|s| s.starts_with("models--"))?;
+    if segs.get(idx + 1) != Some(&"snapshots") {
+        return None;
+    }
+    // `snapshots/<sha>/<file>` — the sha dir and the file inside it.
+    if segs.get(idx + 2).is_none() || segs.get(idx + 3).is_none() {
+        return None;
+    }
+    let repo = segs[idx].strip_prefix("models--")?;
+    if repo.is_empty() {
+        return None;
+    }
+    Some(repo.replace("--", "/"))
+}
+
+/// `true` for a cache-internal dir (`blobs`, `refs`) inside a `models--*`
+/// repo dir. Ordinary user dirs with those names are never skipped.
+fn is_hf_internal_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name != "blobs" && name != "refs" {
+        return false;
+    }
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("models--"))
+}
+
 fn comfy_category(rel: &str) -> String {
     rel.split('/')
         .next()
@@ -272,9 +311,11 @@ fn comfy_category(rel: &str) -> String {
 /// Classify one file; returns (slug, category) if its extension is allowed.
 fn classify(kind: RootKind, path: &Path, rel: &str, ext: &str) -> Option<(String, String)> {
     match kind {
-        RootKind::Llm => LLM_EXTS
-            .contains(&ext)
-            .then(|| (format!("llm:{rel}"), llm_category(path, rel))),
+        RootKind::Llm => LLM_EXTS.contains(&ext).then(|| {
+            // HF cache layout: the repo id (`<owner>/<name>`) is the category.
+            let cat = hf_repo_category(rel).unwrap_or_else(|| llm_category(path, rel));
+            (format!("llm:{rel}"), cat)
+        }),
         RootKind::Comfy => {
             let cat = comfy_category(rel);
             comfy_allowed(&cat, ext).then(|| (format!("comfy:{rel}"), cat))
@@ -359,6 +400,10 @@ fn visit(
     // Symlinked dirs count as dirs; dangling links fail `is_dir` below and
     // fall through to the file path, where the extension filter drops them.
     if file_type.is_dir() || (file_type.is_symlink() && path.is_dir()) {
+        // HF cache internals (`blobs`, `refs` inside a `models--*` repo).
+        if is_hf_internal_dir(&path) {
+            return;
+        }
         if depth < MAX_DEPTH {
             stack.push((path, depth + 1));
         }
@@ -685,6 +730,87 @@ mod tests {
         let slugs: Vec<&str> = entries.iter().map(|e| e.slug.as_str()).collect();
         // The cycle is cut, the real file is found exactly once.
         assert_eq!(slugs, ["llm:dir/m.gguf"]);
+    }
+
+    /// HF cache layout under an LLM root: `hub/models--<owner>--<name>/
+    /// snapshots/<sha>/model.gguf` keeps its slug but takes the decoded repo
+    /// id (`<owner>/<name>`) as category; cache-internal `blobs`/`refs` dirs
+    /// are skipped, ordinary layouts keep the parent-dir category.
+    #[test]
+    fn hf_cache_layout_sets_repo_category() {
+        let base =
+            std::env::temp_dir().join(format!("honkbox-hf-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let llm = base.join("llm");
+        let repo = llm.join("hub/models--acme--tiny");
+        std::fs::create_dir_all(repo.join("snapshots/deadbeef")).unwrap();
+        std::fs::create_dir_all(repo.join("blobs")).unwrap();
+        std::fs::write(repo.join("snapshots/deadbeef/model.gguf"), b"m").unwrap();
+        // Cache internals never yield entries.
+        std::fs::write(repo.join("blobs/blob.gguf"), b"b").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: vec![llm],
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
+        });
+        // Cleanup before asserting: no debris even when an assert fails.
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].slug,
+            "llm:hub/models--acme--tiny/snapshots/deadbeef/model.gguf"
+        );
+        assert_eq!(entries[0].category, "acme/tiny");
+        assert_eq!(entries[0].kind, ModelKind::Llm);
+        // The absolute path is untouched by the category override.
+        assert!(
+            entries[0].path.ends_with("model.gguf"),
+            "{:?}",
+            entries[0].path
+        );
+    }
+
+    /// Non-HF LLM layouts keep the parent-dir category.
+    #[test]
+    fn ordinary_llm_layout_keeps_parent_category() {
+        let base =
+            std::env::temp_dir().join(format!("honkbox-hf-plain-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let llm = base.join("llm");
+        std::fs::create_dir_all(llm.join("org/model")).unwrap();
+        // A user dir named `blobs` is not a cache internal: it is kept.
+        std::fs::create_dir_all(llm.join("blobs")).unwrap();
+        std::fs::write(llm.join("org/model/q.gguf"), b"q").unwrap();
+        std::fs::write(llm.join("blobs/keep.gguf"), b"k").unwrap();
+        let entries = catalog(&ModelRoots {
+            llm_dirs: vec![llm],
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
+        });
+        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        assert_eq!(entries[0].slug, "llm:blobs/keep.gguf");
+        assert_eq!(entries[0].category, "blobs");
+        assert_eq!(entries[1].slug, "llm:org/model/q.gguf");
+        assert_eq!(entries[1].category, "model");
+        assert_eq!(entries[1].kind, ModelKind::Llm);
+    }
+
+    /// The repo id decodes `--` to `/` (`Qwen--Qwen2.5-7B-Instruct`).
+    #[test]
+    fn hf_repo_category_decodes_repo_id() {
+        assert_eq!(
+            hf_repo_category("hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/sha/m.gguf")
+                .as_deref(),
+            Some("Qwen/Qwen2.5-7B-Instruct")
+        );
+        // Not the HF layout: no category override.
+        assert_eq!(hf_repo_category("org/model/q.gguf"), None);
+        assert_eq!(hf_repo_category("hub/models--acme--tiny/x.gguf"), None);
     }
 
     /// OCR roots yield `ocr:` slugs and `ModelKind::Ocr`, with the same

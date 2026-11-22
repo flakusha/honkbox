@@ -121,27 +121,27 @@ and starter model dirs `<data_dir>/models/{stt,tts}`. The startup log names the
 active data dir. Model/discovery roots stay explicit (external weight trees);
 temp PNGs stay in `$TMPDIR`.
 
-```toml
-[core]
-data_dir = "/absolute/path"   # optional; must be absolute
+A ready-to-copy example lives in [`honkbox.example.toml`](honkbox.example.toml).
+Copy it to `<data_dir>/honkbox.toml` and edit; every table is optional.
 
-[models]
-llm_dirs = ["~/.cache/huggingface"]
-comfyui_dir = "~/git-ai/ai-models/Data/Models"
-
-[server]
-auth = "none"                 # "none" (default) or "bearer"
-queue_wait_secs = 10          # admission-queue bound (REQ-6); 0 = queue off
-
-[auth]
-api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
-
-[tools]
-llama_server_url = "http://127.0.0.1:8080"  # optional attached llama-server
-```
-
-- Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over
-  file), `HONKBOX_QUEUE_WAIT_SECS` for the queue bound.
+- Model roots / discovery (lists; every root is scanned, exact duplicates
+  dropped):
+  - `[models] llm_dirs` and `[models] comfyui_dirs` are lists. Legacy singular
+    `[models] comfyui_dir` still works and is merged before `comfyui_dirs`.
+  - `[discovery] llm_dirs` / `comfyui_dirs` append extra roots; the registry
+    already scans every root.
+  - Env overrides (path lists are path-separated; env wins over file):
+    `HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR` (legacy),
+    `HONKBOX_COMFYUI_DIRS` (plural), `HONKBOX_DISCOVERY_LLM_DIRS`,
+    `HONKBOX_DISCOVERY_COMFYUI_DIRS`.
+  - HuggingFace conventions: default LLM root `~/.cache/huggingface` (i.e.
+    `$HF_HOME`, or `$XDG_CACHE_HOME/huggingface`); a hub cache at
+    `$HF_HUB_CACHE`, `$HF_HOME/hub`, or `$XDG_CACHE_HOME/huggingface/hub` is
+    appended as an LLM root. The registry understands
+    `hub/models--<owner>--<name>/snapshots/<sha>/...` and reports category
+    `<owner>/<name>`; `hf download --local-dir` flat trees work under ordinary
+    roots.
+- Queue bound: `HONKBOX_QUEUE_WAIT_SECS` overrides `[server] queue_wait_secs`.
 - Attached `llama-server`: `--llm-backend attached` consumes the server at
   `[tools] llama_server_url` (loopback only; `/health` and `/v1/models` are
   proved at startup). Its process stays operator-owned. `LLAMA_API_KEY`, when

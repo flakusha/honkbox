@@ -1,0 +1,36 @@
+# Copy to <data_dir>/honkbox.toml (default $XDG_STATE_HOME/honkbox/honkbox.toml).
+# Every table is optional; omitted keys keep their defaults. Env overrides win.
+
+# [core]
+# data_dir = "/absolute/path"   # optional; must be absolute
+
+[models]
+# HuggingFace: default LLM root ~/.cache/huggingface ($HF_HOME, or
+# $XDG_CACHE_HOME/huggingface). Hub caches at $HF_HUB_CACHE, $HF_HOME/hub, or
+# $XDG_CACHE_HOME/huggingface/hub are appended as LLM roots; the scan reads
+# hub/models--<owner>--<name>/snapshots/<sha>/... as category <owner>/<name>.
+# `hf download --local-dir` flat trees work via ordinary roots below.
+# Every root is scanned; list as many as needed:
+# llm_dirs = ["~/.cache/huggingface", "/opt/llm-weights"]
+llm_dirs = ["~/.cache/huggingface"]
+# Legacy singular comfyui_dir still works and is merged BEFORE comfyui_dirs.
+comfyui_dir = "~/git-ai/ai-models/Data/Models"
+# comfyui_dirs = ["~/git-ai/ai-models/Data/Models", "/opt/comfyui/Data/Models"]
+
+# Extra roots appended to the [models] lists (all roots are scanned):
+# [discovery]
+# llm_dirs = ["/mnt/hf-hub", "/opt/llm-extra"]
+# comfyui_dirs = ["/mnt/comfyui-extra"]
+# Env overrides (path-separated): HONKBOX_LLM_DIRS, HONKBOX_COMFYUI_DIR
+# (legacy), HONKBOX_COMFYUI_DIRS, HONKBOX_DISCOVERY_LLM_DIRS,
+# HONKBOX_DISCOVERY_COMFYUI_DIRS.
+
+[server]
+auth = "none"                 # "none" (default) or "bearer"
+queue_wait_secs = 10          # 0 disables the admission queue
+
+[auth]
+api_key_env = "HONKBOX_API_KEY"   # NAME of the env var holding the bearer key
+
+# [tools]
+# llama_server_url = "http://127.0.0.1:8080"   # for --llm-backend attached

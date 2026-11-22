@@ -29,12 +29,14 @@
 //! roots but cannot move the file itself (one-pass).
 //!
 //! Precedence for model roots: built-in defaults → config file → env
-//! (`HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR`, `HONKBOX_STT_DIRS`,
-//! `HONKBOX_TTS_DIRS`, `HONKBOX_OCR_DIRS`, `HONKBOX_DISCOVERY_LLM_DIRS`,
-//! `HONKBOX_DISCOVERY_COMFYUI_DIRS`, `HONKBOX_DISCOVERY_STT_DIRS`,
-//! `HONKBOX_DISCOVERY_TTS_DIRS`, `HONKBOX_DISCOVERY_OCR_DIRS`); the curated
-//! catalog's VRAM budget rides
+//! (`HONKBOX_LLM_DIRS`, `HONKBOX_COMFYUI_DIR` / `HONKBOX_COMFYUI_DIRS`,
+//! `HONKBOX_STT_DIRS`, `HONKBOX_TTS_DIRS`, `HONKBOX_OCR_DIRS`,
+//! `HONKBOX_DISCOVERY_LLM_DIRS`, `HONKBOX_DISCOVERY_COMFYUI_DIRS`,
+//! `HONKBOX_DISCOVERY_STT_DIRS`, `HONKBOX_DISCOVERY_TTS_DIRS`,
+//! `HONKBOX_DISCOVERY_OCR_DIRS`); the curated catalog's VRAM budget rides
 //! `[models] vram_budget_bytes` with `HONKBOX_VRAM_BUDGET` as its env stage.
+//! The HF convention roots (`HF_HUB_CACHE`, `HF_HOME`, `XDG_CACHE_HOME`)
+//! are appended to the LLM roots without replacing the defaults.
 //!
 //! Operator model bindings (REQ-2) ride `[[models.entry]]` — an array of
 //! tables *under* the existing `[models]` table (a top-level `[[models]]`
@@ -84,7 +86,7 @@
 //! `timeout_secs` (default 300) and `model_allowlist` (default empty).
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -1260,8 +1262,17 @@ fn stage_config_file(
     if let Some(dirs) = file.models.llm_dirs {
         staged.llm = dirs.iter().map(|d| expand_home(d)).collect();
     }
-    if let Some(dir) = file.models.comfyui_dir {
-        staged.comfyui = vec![expand_home(&dir)];
+    if file.models.comfyui_dir.is_some() || file.models.comfyui_dirs.is_some() {
+        let mut dirs = Vec::new();
+        if let Some(dir) = &file.models.comfyui_dir {
+            push_unique(&mut dirs, expand_home(dir));
+        }
+        if let Some(more) = &file.models.comfyui_dirs {
+            for dir in more {
+                push_unique(&mut dirs, expand_home(dir));
+            }
+        }
+        staged.comfyui = dirs;
     }
     if let Some(dirs) = file.discovery.llm_dirs {
         staged.extra_llm = dirs.iter().map(|d| expand_home(d)).collect();
@@ -1514,10 +1525,11 @@ pub fn load(
         vram_budget,
         std::env::var("HONKBOX_VRAM_BUDGET").ok().as_deref(),
     );
-    let mut models = apply_env(
+    let staged = apply_env(
         staged,
         std::env::var("HONKBOX_LLM_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_COMFYUI_DIR").ok().as_deref(),
+        std::env::var("HONKBOX_COMFYUI_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_LLM_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_COMFYUI_DIRS")
             .ok()
@@ -1528,8 +1540,14 @@ pub fn load(
         std::env::var("HONKBOX_DISCOVERY_TTS_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_OCR_DIRS").ok().as_deref(),
         std::env::var("HONKBOX_DISCOVERY_OCR_DIRS").ok().as_deref(),
-    )
-    .merged(jobs, swap);
+    );
+    let staged = apply_hf_env(
+        staged,
+        std::env::var_os("HF_HOME").as_deref(),
+        std::env::var_os("HF_HUB_CACHE").as_deref(),
+        std::env::var_os("XDG_CACHE_HOME").as_deref(),
+    );
+    let mut models = staged.merged(jobs, swap);
     models.vram_budget_bytes = vram_budget;
     models.entries = entries;
     models.cache = cache;
@@ -1707,8 +1725,10 @@ impl RootStages {
 }
 
 /// Env wins over file, per stage: `HONKBOX_LLM_DIRS` (path-separated via
-/// `split_paths`) replaces the `[models]` `llm_dirs`, `HONKBOX_COMFYUI_DIR`
-/// replaces the `[models]` `comfyui_dir`, `HONKBOX_STT_DIRS` /
+/// `split_paths`) replaces the `[models]` `llm_dirs`; either
+/// `HONKBOX_COMFYUI_DIR` or `HONKBOX_COMFYUI_DIRS` replaces the `[models]`
+/// `comfyui_dir`, with the singular path first and the plural list
+/// (path-separated) following it, deduped. `HONKBOX_STT_DIRS` /
 /// `HONKBOX_TTS_DIRS` replace the `[models]` `stt_dirs` / `tts_dirs`, and
 /// `HONKBOX_DISCOVERY_LLM_DIRS` / `HONKBOX_DISCOVERY_COMFYUI_DIRS` /
 /// `HONKBOX_DISCOVERY_STT_DIRS` / `HONKBOX_DISCOVERY_TTS_DIRS` replace the
@@ -1720,6 +1740,7 @@ fn apply_env(
     mut staged: RootStages,
     llm_dirs: Option<&str>,
     comfyui_dir: Option<&str>,
+    comfyui_dirs: Option<&str>,
     extra_llm_dirs: Option<&str>,
     extra_comfyui_dirs: Option<&str>,
     stt_dirs: Option<&str>,
@@ -1734,10 +1755,17 @@ fn apply_env(
     {
         staged.llm = std::env::split_paths(v).collect();
     }
-    if let Some(v) = comfyui_dir
-        && !v.is_empty()
-    {
-        staged.comfyui = vec![PathBuf::from(v)];
+    if comfyui_dir.is_some_and(|v| !v.is_empty()) || comfyui_dirs.is_some_and(|v| !v.is_empty()) {
+        let mut dirs = Vec::new();
+        if let Some(v) = comfyui_dir.filter(|v| !v.is_empty()) {
+            push_unique(&mut dirs, PathBuf::from(v));
+        }
+        if let Some(v) = comfyui_dirs.filter(|v| !v.is_empty()) {
+            for path in std::env::split_paths(v) {
+                push_unique(&mut dirs, path);
+            }
+        }
+        staged.comfyui = dirs;
     }
     if let Some(v) = extra_llm_dirs
         && !v.is_empty()
@@ -1778,6 +1806,31 @@ fn apply_env(
         && !v.is_empty()
     {
         staged.extra_ocr = std::env::split_paths(v).collect();
+    }
+    staged
+}
+
+/// Append the HF cache conventions to the LLM extra roots: `HF_HUB_CACHE`
+/// itself, `$HF_HOME/hub`, then `$XDG_CACHE_HOME/huggingface/hub`. Missing
+/// or empty values are ignored, duplicates collapse, and the built-in
+/// `~/.cache/huggingface` default is untouched. Pure (env as args).
+fn apply_hf_env(
+    mut staged: RootStages,
+    hf_home: Option<&OsStr>,
+    hf_hub_cache: Option<&OsStr>,
+    xdg_cache_home: Option<&OsStr>,
+) -> RootStages {
+    if let Some(v) = hf_hub_cache.filter(|v| !v.is_empty()) {
+        push_unique(&mut staged.extra_llm, PathBuf::from(v));
+    }
+    if let Some(v) = hf_home.filter(|v| !v.is_empty()) {
+        push_unique(&mut staged.extra_llm, PathBuf::from(v).join("hub"));
+    }
+    if let Some(v) = xdg_cache_home.filter(|v| !v.is_empty()) {
+        push_unique(
+            &mut staged.extra_llm,
+            PathBuf::from(v).join("huggingface/hub"),
+        );
     }
     staged
 }
@@ -1961,6 +2014,8 @@ struct FileModels {
     #[serde(default)]
     comfyui_dir: Option<String>,
     #[serde(default)]
+    comfyui_dirs: Option<Vec<String>>,
+    #[serde(default)]
     stt_dirs: Option<Vec<String>>,
     #[serde(default)]
     tts_dirs: Option<Vec<String>>,
@@ -2077,6 +2132,7 @@ mod tests {
             Some("/tmp/honkbox-comfy"),
             Some(""),
             Some(""),
+            Some(""),
             Some("/tmp/honkbox-stt:/tmp/honkbox-stt2"),
             Some("/tmp/honkbox-tts"),
             Some(""),
@@ -2108,6 +2164,7 @@ mod tests {
         // Empty values keep the file/default values.
         let kept = apply_env(
             staged,
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -2194,6 +2251,7 @@ mod tests {
             Some("/tmp/base-llm"),
             Some("/tmp/base-comfy"),
             Some(""),
+            Some(""),
             Some("/tmp/replacement-comfy:/tmp/second-comfy"),
             Some(""),
             Some(""),
@@ -2248,6 +2306,134 @@ mod tests {
         assert!(cfg.tts_dirs.contains(&PathBuf::from("/tmp/extra-tts")));
         assert!(cfg.ocr_dirs.contains(&PathBuf::from("/tmp/base-ocr")));
         assert!(cfg.ocr_dirs.contains(&PathBuf::from("/tmp/extra-ocr")));
+    }
+
+    #[test]
+    fn models_comfyui_dirs_merge_with_singular() {
+        let base = std::env::temp_dir().join(format!("honkbox-comfy-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("test dir");
+        let path = base.join("honkbox.toml");
+        std::fs::write(
+            &path,
+            "[models]\ncomfyui_dir = \"/tmp/one\"\ncomfyui_dirs = [\"/tmp/two\", \"/tmp/one\", \"/tmp/three\"]\n",
+        )
+        .expect("write config");
+        let mut staged = RootStages::defaults();
+        let mut stt_from_file = false;
+        let mut tts_from_file = false;
+        stage_config_file(
+            Some(&path),
+            &mut staged,
+            &mut stt_from_file,
+            &mut tts_from_file,
+        )
+        .expect("stage config");
+        assert_eq!(
+            staged.comfyui,
+            vec![
+                PathBuf::from("/tmp/one"),
+                PathBuf::from("/tmp/two"),
+                PathBuf::from("/tmp/three"),
+            ]
+        );
+        // Neither key present leaves the built-in default alone.
+        std::fs::write(&path, "[models]\n").expect("write config");
+        let mut kept = RootStages::defaults();
+        stage_config_file(
+            Some(&path),
+            &mut kept,
+            &mut stt_from_file,
+            &mut tts_from_file,
+        )
+        .expect("stage config");
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(kept.comfyui, RootStages::defaults().comfyui);
+    }
+
+    #[test]
+    fn comfyui_dirs_env_joins_legacy_singular() {
+        let staged = apply_env(
+            RootStages::defaults(),
+            Some(""),
+            Some("/tmp/legacy-comfy"),
+            Some("/tmp/a:/tmp/b:/tmp/legacy-comfy"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+        );
+        assert_eq!(
+            staged.comfyui,
+            vec![
+                PathBuf::from("/tmp/legacy-comfy"),
+                PathBuf::from("/tmp/a"),
+                PathBuf::from("/tmp/b"),
+            ]
+        );
+        // Both env vars absent keep the default base root.
+        let kept = apply_env(
+            RootStages::defaults(),
+            Some(""),
+            None,
+            None,
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+        );
+        assert_eq!(kept.comfyui, RootStages::defaults().comfyui);
+
+        // Empty strings for both comfyui env vars are treated as unset.
+        let empty = apply_env(
+            RootStages::defaults(),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+        );
+        assert_eq!(empty.comfyui, RootStages::defaults().comfyui);
+    }
+
+    #[test]
+    fn hf_env_roots_append_and_dedupe() {
+        let staged = apply_hf_env(
+            RootStages::defaults(),
+            Some(OsStr::new("/hf/home")),
+            Some(OsStr::new("/hf/home/hub")),
+            Some(OsStr::new("/xdg/cache")),
+        );
+        assert_eq!(
+            staged.extra_llm,
+            vec![
+                PathBuf::from("/hf/home/hub"),
+                PathBuf::from("/xdg/cache/huggingface/hub"),
+            ]
+        );
+        assert_eq!(staged.llm, RootStages::defaults().llm);
+        // Empty/missing values contribute nothing.
+        let empty = apply_hf_env(
+            RootStages::defaults(),
+            Some(OsStr::new("")),
+            None,
+            Some(OsStr::new("")),
+        );
+        assert_eq!(empty.extra_llm, Vec::<PathBuf>::new());
     }
 
     /// The `[core] data_dir` file key refines the default and relocates the
