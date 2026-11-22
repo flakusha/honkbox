@@ -33,6 +33,8 @@ pub enum Op {
     ConvTranspose2d,
     /// One DDIM eta=0 scheduler step over a latent tensor.
     SamplingStep,
+    /// Classifier-free guidance on conditional/unconditional vectors.
+    ClassifierFreeGuidance,
 }
 
 impl Op {
@@ -49,9 +51,9 @@ impl Op {
                 storage_range: 12, // matmul shape buffer
                 ..CapacityRequirements::default()
             },
-            Self::Softmax => CapacityRequirements {
+            Self::Softmax | Self::ClassifierFreeGuidance => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
-                storage_range: 8, // two shape u32s
+                storage_range: 8, // two shape/scale u32s
                 ..CapacityRequirements::default()
             },
             Self::Conv2d | Self::ConvTranspose2d => CapacityRequirements {

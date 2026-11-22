@@ -197,8 +197,27 @@ seed and index using sd-core's `splitmix64` (no second hash copy). `Op` gains a
 `SamplingStep` capability floor. `generate` is unchanged: no model prediction
 exists yet, so it still names the missing pieces instead of faking an image.
 
-Evidence: 43 tests pass on `ash-compute` and 44 on `experimental-ash-sd`; the
+Evidence: 43 tests pass on `ash-compute` and 48 on `experimental-ash-sd`; the
 DDIM GPU test matched a CPU reference within 1e-4 on an 8-element latent;
 clippy `-D warnings` clean; fmt clean.
 
 Next: classifier-free guidance + text conditioning, then wire into `generate`.
+
+## Landed — slice 14 (2026-11-22, worktree)
+
+`Cfg::run` applies classifier-free guidance on the Vulkan compute scaffold:
+`uncond + scale * (cond - uncond)`, with scale validated as finite and >= 1.
+`TextConditioning` holds caller-supplied positive/negative token embeddings
+with a `(tokens, dim)` shape contract and finite-value checks; its `guided`
+method routes through the CFG pipeline. No prompt→embedding conversion exists
+here: CLIP tokenization needs vocab/merge assets and an encoder checkpoint, so
+nothing is derived from a prompt string. `Op::ClassifierFreeGuidance` joins the
+vocabulary with an 8-byte floor. `generate` remains unchanged until a text
+encoder and diffusion backbone exist.
+
+Evidence: 47 tests pass on `ash-compute` and 52 on `experimental-ash-sd`; the
+CFG GPU test matched a CPU reference within 1e-4 at scale 7.5, and scale 1.0
+preserved the conditional vector within 1e-6; clippy `-D warnings` clean; fmt
+clean.
+
+Next: text encoder seam (tokenizer + embedding assets), then `generate` wiring.

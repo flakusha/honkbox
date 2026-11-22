@@ -29,6 +29,8 @@ pub(crate) static CONV_TRANSPOSE_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/conv_transpose.spv"));
 pub(crate) static DDIM_STEP_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/ddim_step.spv"));
+pub(crate) static CFG_GUIDANCE_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/cfg_guidance.spv"));
 
 /// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
 pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {

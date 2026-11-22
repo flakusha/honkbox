@@ -29,6 +29,8 @@
 //!   the kernels above (weights come from the caller, never bundled).
 //! - [`sampler`]: [`sampler::DdimStep`], one DDIM eta=0 scheduler update, plus
 //!   deterministic seed-derived latent noise.
+//! - [`conditioning`]: [`conditioning::Cfg`] guidance over caller-supplied
+//!   positive/negative text embeddings (no prompt→embedding faking).
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -117,6 +119,8 @@ impl std::error::Error for VkError {}
 
 #[cfg(feature = "ash-compute")]
 pub mod attention;
+#[cfg(feature = "ash-compute")]
+pub mod conditioning;
 #[cfg(feature = "ash-compute")]
 pub mod compute;
 #[cfg(feature = "ash-compute")]

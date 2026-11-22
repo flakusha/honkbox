@@ -1,0 +1,23 @@
+// Provenance: original (classifier-free guidance formula written from the published definition; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// out = uncond + scale * (cond - uncond), elementwise over text embeddings or
+// model predictions. One invocation per element.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Conditional { float cond[]; };
+layout(std430, binding = 1) readonly buffer Unconditional { float uncond[]; };
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Params {
+    uint values[2];
+}; // len, scale bits
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= values[0]) {
+        return;
+    }
+    float scale = uintBitsToFloat(values[1]);
+    result[index] = uncond[index] + scale * (cond[index] - uncond[index]);
+}
