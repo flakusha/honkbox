@@ -8,6 +8,7 @@ fn main() {
         ("shaders/elementwise_add.comp", "elementwise_add.spv"),
         ("shaders/matmul.comp", "matmul.spv"),
         ("shaders/softmax.comp", "softmax.spv"),
+        ("shaders/layer_norm.comp", "layer_norm.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

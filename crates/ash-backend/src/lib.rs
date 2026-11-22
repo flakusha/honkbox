@@ -20,6 +20,7 @@
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
 //! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
 //! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
+//! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -116,6 +117,8 @@ pub mod device;
 pub mod matmul;
 #[cfg(feature = "ash-compute")]
 pub mod model;
+#[cfg(feature = "ash-compute")]
+pub mod norm;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]

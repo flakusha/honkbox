@@ -1,0 +1,38 @@
+// Provenance: original (row-wise layer norm written from first principles; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation normalizes a whole row; affine parameters are interleaved
+// [gamma, beta] per column. Bindings match the shared four-buffer scaffold.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Affine { float affine[]; };
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape { uint dims[3]; }; // rows, cols, eps bits
+
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    uint rows = dims[0];
+    uint cols = dims[1];
+    if (row >= rows) {
+        return;
+    }
+    uint base = row * cols;
+    float mean = 0.0;
+    for (uint i = 0; i < cols; ++i) {
+        mean += values[base + i];
+    }
+    mean /= float(cols);
+    float variance = 0.0;
+    for (uint i = 0; i < cols; ++i) {
+        float delta = values[base + i] - mean;
+        variance += delta * delta;
+    }
+    variance /= float(cols);
+    float inv_std = inversesqrt(variance + uintBitsToFloat(dims[2]));
+    for (uint i = 0; i < cols; ++i) {
+        result[base + i] = (values[base + i] - mean) * inv_std * affine[2 * i]
+            + affine[2 * i + 1];
+    }
+}

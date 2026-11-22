@@ -115,5 +115,16 @@ Evidence: 30 tests pass on `ash-compute`, 34 on `experimental-ash-sd`; GPU
 attention test matched a CPU reference within 1e-4; clippy `-D warnings` clean;
 fmt clean. `Op::Attention` joins the vocabulary.
 
-Next: norm and VAE/conv slices before sampling can return an image.
+## Landed — slice 8 (2026-11-22, worktree)
+
+`LayerNorm::run(values, rows, cols, gamma, beta, eps)` normalizes each row and
+applies per-column affine params (packed gamma/beta in one buffer). New
+`shaders/layer_norm.comp` uses one invocation per row; `Op::LayerNorm` joins the
+vocabulary. GroupNorm for UNet conv blocks is still absent.
+
+Evidence: 32 tests pass on `ash-compute`, 36 on `experimental-ash-sd`; GPU test
+on RADV matched a CPU reference within 1e-4; clippy `-D warnings` clean;
+fmt clean.
+
+Next: conv2d / VAE slice before sampling can return an image.
 

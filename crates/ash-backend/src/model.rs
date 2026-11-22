@@ -21,6 +21,8 @@ pub enum Op {
     Softmax,
     /// Scaled dot-product attention (composed from matmul + softmax).
     Attention,
+    /// Affine row-wise layer norm.
+    LayerNorm,
 }
 
 impl Op {
@@ -32,7 +34,7 @@ impl Op {
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()
             },
-            Self::MatMul | Self::Attention => CapacityRequirements {
+            Self::MatMul | Self::Attention | Self::LayerNorm => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 12, // matmul shape buffer
                 ..CapacityRequirements::default()
