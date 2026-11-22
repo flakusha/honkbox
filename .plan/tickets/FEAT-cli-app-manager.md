@@ -5,7 +5,7 @@ Status: done (2026-11-22)
 Priority: P2
 Epic: epic-external-tools
 Owner: unassigned
-Acceptance: an operator can start/stop/restart a declared CLI server (first target: `llama-server`) from honkbox; honkbox owns readiness, capped logs, process-group teardown, GPU lease lifetime and idle unload. Attach-only discovery keeps working when no app is managed.
+Acceptance: an operator can start/stop a declared CLI server (first target: `llama-server`) from honkbox, with explicit restart via stop+start (no restart route); honkbox owns readiness, capped logs, process-group teardown, GPU lease lifetime and idle unload. Attach-only discovery keeps working when no app is managed.
 Verification: `bun run test:server`, `bun run lint:rs`, `bun run codegen:check`, `bun run deny`
 Links: `.tmp/research/cli-app-management-llama-server-2026-11-22.md`, `TASK-llama-server-attach.md`
 Resources: unix-only first; `rustix` process-group kill + `CancellationToken` + the fixed 8-kind ledger are already in the tree.

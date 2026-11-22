@@ -7,7 +7,7 @@ Epic: epic-trust-safety
 Owner: unassigned
 Acceptance: image-generation routes refuse explicit minors-facing requests with
 a named error, pass outputs through an NSFW score gate whose decision is
-reported (never silently dropped), and expose a capability flag that a
+reported (never silently dropped), and expose the existing additive `capabilities.nsfw` row (available/policy/threshold) that a
 multi-user consumer can map to its own age gate.
 Verification: `bun run test:server`, `bun run codegen:check`, `bun run lint:rs`,
 plus route tests for block, flag and disabled-engine cases.
