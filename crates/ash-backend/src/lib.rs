@@ -160,7 +160,11 @@ pub mod sd;
 pub mod silu;
 #[cfg(feature = "ash-compute")]
 pub mod softmax;
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(any(
+    feature = "experimental-ash-sd",
+    feature = "experimental-ash-stt",
+    feature = "experimental-ash-tts"
+))]
 pub mod stubs;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;

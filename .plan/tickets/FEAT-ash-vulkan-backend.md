@@ -246,6 +246,35 @@ construction); `--features ash-compute` regression → 43 passed; server
 clippy `--features honkbox-server/experimental-ash-llm -- -D warnings`
 clean; `cargo fmt --check` clean.
 
+## Landed — slice 16 (2026-11-23, worktree)
+
+The STT/TTS placeholders become real worker seams, same posture as slice
+15: `stubs.rs` keeps both types (two small seams, one module) and — behind
+new `experimental-ash-stt` / `experimental-ash-tts` crate features (shared
+optional `honkbox-audio-worker` path dep) — `AshSttPipeline` implements
+`SttPipeline` and `AshTtsPipeline` implements `TtsPipeline`. Semantics:
+placeholder on the direct-Vulkan path, NOT a deterministic emulator —
+`transcribe` returns `SttError::Model(...)` and `synthesize` returns
+`TtsError::Model(...)`, both "direct-Vulkan <modality> seam is not
+implemented yet ... no output is faked"; no transcript text or PCM16
+samples are ever produced. Backend ids `ash-stt` / `ash-tts`; the Send+Sync
+const assertions stay. The module also builds under plain
+`experimental-ash-sd` (types reserved, no worker traits) — the module gate
+is now `any(experimental-ash-sd, experimental-ash-stt,
+experimental-ash-tts)`. Server side: forwarding features, cfg-gated
+`SttBackend::AshStt` / `TtsBackend::AshTts` variants, `make_stt`/
+`make_tts` arms constructing `VulkanDevice::headless()` with a loud named
+exit-1 on device failure — mirroring the slice-15 AshLlm arm — and two
+cfg arms in the CLI model-scan matches. No new config keys.
+
+Evidence: `cargo test --locked -p honkbox-ash-backend --features
+experimental-ash-stt,experimental-ash-tts` → 51 passed (4 new: backend id
++ named-unimplemented error per seam); `--features ash-compute` regression
+→ 47 passed; server `cargo check --locked` green with and without the two
+features; workspace clippy `--features
+honkbox-server/experimental-ash-stt,honkbox-server/experimental-ash-tts --
+-D warnings` clean; `cargo fmt --check` clean.
+
 ## Landed — slice 17 (2026-11-23, worktree)
 
 `checkpoint.rs` adds a strict safetensors header reader: 8-byte length prefix

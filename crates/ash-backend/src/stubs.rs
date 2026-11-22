@@ -23,8 +23,8 @@ fn unimplemented(modality: &str) -> String {
 ///
 /// Holds the selected execution device so later slices build kernels on it
 /// without re-plumbing the server seam. With `experimental-ash-stt`, the
-/// [`honkbox_audio_worker::SttPipeline`] impl fails every transcription
-/// with [`honkbox_audio_worker::SttError::Model`] naming the missing
+/// `SttPipeline` impl (feature `experimental-ash-stt`) fails every
+/// transcription with `SttError::Model` naming the missing
 /// capability — the pipeline has no model, so model-load failure is the
 /// honest classification.
 #[derive(Debug)]
@@ -63,8 +63,8 @@ impl honkbox_audio_worker::SttPipeline for AshSttPipeline {
 /// Direct-Vulkan TTS seam (backend id `ash-tts`).
 ///
 /// Same posture as [`AshSttPipeline`]: with `experimental-ash-tts`, the
-/// [`honkbox_audio_worker::TtsPipeline`] impl fails every synthesis with
-/// [`honkbox_audio_worker::TtsError::Model`] naming the missing capability.
+/// `TtsPipeline` impl fails every synthesis with `TtsError::Model` naming
+/// the missing capability.
 #[derive(Debug)]
 pub struct AshTtsPipeline {
     device: Arc<VulkanDevice>,
@@ -96,11 +96,18 @@ impl honkbox_audio_worker::TtsPipeline for AshTtsPipeline {
     }
 }
 
+// The seams sit behind `Send + Sync` pipeline traits; pin that contract on
+// the stubs now so it cannot regress as fields grow.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AshSttPipeline>();
+    assert_send_sync::<AshTtsPipeline>();
+};
+
 #[cfg(test)]
 mod tests {
-    use super::{AshSttPipeline, AshTtsPipeline};
-    use crate::device::VulkanDevice;
     use crate::VkError;
+    use crate::device::VulkanDevice;
     use std::sync::Arc;
 
     /// One shared device: `None` on loader-less machines (tests skip), a
@@ -191,11 +198,3 @@ mod tests {
         }
     }
 }
-
-// The seams will ultimately sit behind `Send + Sync` pipeline traits; pin
-// that contract on the stubs now so it cannot regress as fields grow.
-const _: () = {
-    const fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<AshSttPipeline>();
-    assert_send_sync::<AshTtsPipeline>();
-};
