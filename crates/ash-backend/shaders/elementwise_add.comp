@@ -1,0 +1,17 @@
+// Provenance: original (Vulkan compute model; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Left { float lhs[]; };
+layout(std430, binding = 1) readonly buffer Right { float rhs[]; };
+layout(std430, binding = 2) buffer Out { float result[]; };
+layout(std430, binding = 3) readonly buffer Length { uint count; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i < count) {
+        result[i] = lhs[i] + rhs[i];
+    }
+}

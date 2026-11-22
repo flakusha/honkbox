@@ -30,7 +30,8 @@ weights/
 
 # Fetched vendored sources (never committed): `bun scripts/vendor-patches.ts sync`
 # converges vendor/ from vendor.manifest.toml pins + vendor_patches/ stack.
-/vendor/
+# No trailing slash: worktrees link this as a symlink, which `/vendor/` misses.
+/vendor
 
 # Env / secrets
 .env*

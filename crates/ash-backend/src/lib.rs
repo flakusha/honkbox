@@ -1,20 +1,21 @@
-//! Experimental direct-Vulkan backend (`ash`) — skeleton + P0 device groundwork.
+//! Experimental direct-Vulkan backend (`ash`) — device groundwork + first
+//! compute kernel.
 //!
-//! Design docs: `.tmp/research/ReviewedAsh-FeaturePlan.md` (feature wiring,
-//! experimental policy) and `.tmp/research/ReviewedAsh-DirectVulkan.md`
-//! (loader choice, kernel inventory). The default build stays on the shortcut
-//! stack (`honkbox-sd-core`'s [`honkbox_sd_core::SdCppPipeline`]); this crate
-//! is the promoted home of the ground-up path and compiles to an empty lib
-//! unless the `experimental-ash-sd` feature is on
-//! (`server/experimental-ash-sd` → `honkbox-ash-backend/experimental-ash-sd`
-//! → `honkbox-sd-core/ash-backend`).
+//! Design record: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md`
+//! (the older `ReviewedAsh-*.md` refs in earlier comments were never present
+//! in this repo). The default build stays on the shortcut stack
+//! (`honkbox-sd-core`'s [`honkbox_sd_core::SdCppPipeline`]); this crate is the
+//! promoted home of the ground-up path. `ash-compute` builds the kernel stack
+//! alone; `experimental-ash-sd` adds the `SdPipeline` seam and forwards to
+//! `honkbox-sd-core/ash-backend`.
 //!
 //! # Layout
-//! - [`raw`]: the single `unsafe` boundary — thin 1:1 wrappers over ash FFI.
+//! - [`raw`]: the single `unsafe` boundary — thin wrappers over ash FFI.
 //! - [`device`]: [`device::VulkanDevice`] (loader + headless instance +
 //!   logical device + compute queue) and physical-device selection
 //!   (discrete > integrated > cpu, then VRAM), plus capacity admission
 //!   ([`device::PhysicalDeviceInfo::admit`]) and limit-bounded dispatch plans.
+//! - [`compute`]: [`compute::ElementwiseAdd`], the first real GPU dispatch.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` returns a clear unimplemented error for now.
 //! - [`stubs`]: placeholder LLM/STT/TTS seam types (backend ids `ash-llm`,
@@ -32,7 +33,7 @@
 
 /// Failures from the Vulkan init path (loader, instance, device selection,
 /// logical device creation).
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VkError {
     /// System Vulkan loader missing or failed to load (`Entry::load`).
@@ -56,7 +57,7 @@ pub enum VkError {
     NoComputeQueue,
 }
 
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
 impl VkError {
     /// Wrap an ash [`ash::vk::Result`] from an instance-level `op`.
     pub(crate) fn instance(op: &'static str, res: ash::vk::Result) -> Self {
@@ -69,7 +70,7 @@ impl VkError {
     }
 }
 
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
 impl std::fmt::Display for VkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -97,12 +98,14 @@ impl std::fmt::Display for VkError {
     }
 }
 
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
 impl std::error::Error for VkError {}
 
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
+pub mod compute;
+#[cfg(feature = "ash-compute")]
 pub mod device;
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-compute")]
 pub mod raw;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;

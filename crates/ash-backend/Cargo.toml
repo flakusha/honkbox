@@ -29,11 +29,19 @@ must_use_candidate = "allow"
 
 [features]
 default = []
-# Experimental direct-Vulkan path (ReviewedAsh-FeaturePlan §2): one flag for
-# the whole ash surface. `server/experimental-ash-sd` forwards here (server
-# wiring is a later ticket), and this forwards `ash-backend` to sd-core,
-# mirroring how `server/vulkan → sd-core/vulkan`.
-experimental-ash-sd = ["dep:ash", "dep:honkbox-sd-core", "honkbox-sd-core/ash-backend"]
+# Compute kernels need only `ash`; keeping this separate lets the first slice
+# build and test without pulling the vendored diffusion-rs stack.
+ash-compute = ["dep:ash"]
+# Experimental direct-Vulkan path: one flag for the whole ash surface.
+# `server/experimental-ash-sd` forwards here (server wiring is a later
+# ticket), and this forwards `ash-backend` to sd-core, mirroring
+# `server/vulkan → sd-core/vulkan`.
+experimental-ash-sd = [
+  "dep:ash",
+  "dep:honkbox-sd-core",
+  "honkbox-sd-core/ash-backend",
+  "ash-compute",
+]
 
 [dependencies]
 ash = { workspace = true, optional = true }

@@ -47,9 +47,9 @@ impl DeviceType {
 /// Capability bits reported by the driver and consumed by the ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceFeatures {
-    /// `storageBuffer8BitAccess` (VK_KHR_8bit_storage).
+    /// `storageBuffer8BitAccess` (`VK_KHR_8bit_storage`).
     pub storage_8_bit: bool,
-    /// `storageBuffer16BitAccess` (VK_KHR_16bit_storage).
+    /// `storageBuffer16BitAccess` (`VK_KHR_16bit_storage`).
     pub storage_16_bit: bool,
     /// Driver-reported subgroup size (`0` on pre-1.1 devices).
     pub subgroup_size: u32,
@@ -206,7 +206,7 @@ impl PhysicalDeviceInfo {
     /// queue; the plan can never exceed `maxComputeWorkGroupCount` or
     /// `maxStorageBufferRange`.
     pub fn bound_dispatch(&self, workgroups: [u32; 3], storage_range: u64) -> Option<DispatchPlan> {
-        if self.compute_queue_family.is_none() || workgroups.iter().any(|&n| n == 0) {
+        if self.compute_queue_family.is_none() || workgroups.contains(&0) {
             return None;
         }
         let max = self.limits.max_compute_work_group_count;
@@ -268,9 +268,9 @@ fn query_features(
 /// a device without a compute queue cannot host the future kernels.
 ///
 /// Caveat: `device_id` is the vendor PCI device id, so two identical GPU
-/// models (same type, VRAM, and device_id) tie completely and `max_by_key`
+/// models (same type, VRAM, and `device_id`) tie completely and `max_by_key`
 /// then falls back to driver enumeration order (`max_by_key` returns the
-/// last of equal maxima). A stable tie-break needs a per-device UUID (e.g. VK_KHR deviceUUID), deferred until the instance
+/// last of equal maxima). A stable tie-break needs a per-device UUID (e.g. `VK_KHR` deviceUUID), deferred until the instance
 /// requests extensions (P1 allocator work).
 pub fn select_device(devices: &[PhysicalDeviceInfo]) -> Result<&PhysicalDeviceInfo, VkError> {
     if devices.is_empty() {
@@ -351,6 +351,11 @@ impl VulkanDevice {
     /// The logical device future pipelines allocate and dispatch on.
     pub fn logical(&self) -> &Device {
         &self.device
+    }
+
+    /// The owning instance, needed for physical-device memory queries.
+    pub fn instance(&self) -> &Instance {
+        &self.instance
     }
 
     /// The compute queue.
