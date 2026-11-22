@@ -21,6 +21,7 @@ pub(crate) static MATMUL_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), 
 pub(crate) static SOFTMAX_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/softmax.spv"));
 pub(crate) static LAYER_NORM_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/layer_norm.spv"));
+pub(crate) static CONV2D_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv2d.spv"));
 
 /// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
 pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {
@@ -342,6 +343,7 @@ mod tests {
         assert_eq!(spirv_words(MATMUL_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(SOFTMAX_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(LAYER_NORM_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(CONV2D_SPIRV).first(), Some(&SPIRV_MAGIC));
     }
 
     #[test]

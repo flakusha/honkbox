@@ -1,0 +1,59 @@
+// Provenance: original (direct NCHW convolution written from first principles; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation per output element; no im2col or tiling yet. Correctness
+// first — a shared-memory tile arrives when UNet throughput needs it.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float source[]; };
+layout(std430, binding = 1) readonly buffer Weights { float params[]; }; // weights then bias
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape {
+    uint dims[10];
+}; // batch, in_c, out_c, in_h, in_w, out_h, out_w, kernel, stride, padding
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    uint batch = dims[0];
+    uint in_c = dims[1];
+    uint out_c = dims[2];
+    uint in_h = dims[3];
+    uint in_w = dims[4];
+    uint out_h = dims[5];
+    uint out_w = dims[6];
+    uint kernel = dims[7];
+    uint stride = dims[8];
+    uint padding = dims[9];
+    uint plane = out_h * out_w;
+    if (index >= batch * out_c * plane) {
+        return;
+    }
+
+    uint n = index / (out_c * plane);
+    uint oc = (index / plane) % out_c;
+    uint pos = index % plane;
+    uint oh = pos / out_w;
+    uint ow = pos % out_w;
+
+    float sum = params[out_c * in_c * kernel * kernel + oc]; // bias
+    uint weight_base = oc * in_c * kernel * kernel;
+    for (uint ic = 0; ic < in_c; ++ic) {
+        for (uint kh = 0; kh < kernel; ++kh) {
+            uint ih = oh * stride + kh;
+            if (ih < padding || ih >= padding + in_h) {
+                continue;
+            }
+            for (uint kw = 0; kw < kernel; ++kw) {
+                uint iw = ow * stride + kw;
+                if (iw < padding || iw >= padding + in_w) {
+                    continue;
+                }
+                uint in_offset = ((n * in_c + ic) * in_h + ih - padding) * in_w + iw - padding;
+                uint weight_offset = weight_base + (ic * kernel + kh) * kernel + kw;
+                sum += source[in_offset] * params[weight_offset];
+            }
+        }
+    }
+    result[index] = sum;
+}

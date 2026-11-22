@@ -126,5 +126,21 @@ Evidence: 32 tests pass on `ash-compute`, 36 on `experimental-ash-sd`; GPU test
 on RADV matched a CPU reference within 1e-4; clippy `-D warnings` clean;
 fmt clean.
 
-Next: conv2d / VAE slice before sampling can return an image.
+## Landed — slice 9 (2026-11-22, worktree)
+
+`Conv2d::run(input, weights, bias, ConvShape)` adds direct NCHW convolution:
+square kernel, stride, zero padding, per-channel bias, packed weight+bias
+buffer, and pure shape validation (including derived output-size checks). New
+`shaders/conv2d.comp` is one invocation per output element — no im2col or
+tiling yet. `Op::Conv2d` joins the vocabulary.
+
+Evidence: 34 tests pass on `ash-compute`, 38 on `experimental-ash-sd`; 2×2×4×4
+convolution with padding matched a CPU reference within 1e-4; clippy
+`-D warnings` clean; fmt clean.
+
+Note: a sibling lane added `experimental-ash-llm` to `Cargo.toml` mid-slice,
+forcing an approved offline `Cargo.lock` regeneration. That lock change and
+the sibling's LLM files are deliberately NOT part of this commit.
+
+Next: GroupNorm / activation kernels, then VAE decode slice.
 

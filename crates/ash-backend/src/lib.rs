@@ -21,6 +21,7 @@
 //! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
 //! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
+//! - [`conv2d`]: [`conv2d::Conv2d`], direct NCHW convolution.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -111,6 +112,8 @@ impl std::error::Error for VkError {}
 pub mod attention;
 #[cfg(feature = "ash-compute")]
 pub mod compute;
+#[cfg(feature = "ash-compute")]
+pub mod conv2d;
 #[cfg(feature = "ash-compute")]
 pub mod device;
 #[cfg(feature = "ash-compute")]

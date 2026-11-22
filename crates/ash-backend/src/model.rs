@@ -23,6 +23,8 @@ pub enum Op {
     Attention,
     /// Affine row-wise layer norm.
     LayerNorm,
+    /// Direct NCHW convolution.
+    Conv2d,
 }
 
 impl Op {
@@ -42,6 +44,11 @@ impl Op {
             Self::Softmax => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 8, // two shape u32s
+                ..CapacityRequirements::default()
+            },
+            Self::Conv2d => CapacityRequirements {
+                workgroup_count: [1, 1, 1],
+                storage_range: 40, // ten shape u32s
                 ..CapacityRequirements::default()
             },
         }

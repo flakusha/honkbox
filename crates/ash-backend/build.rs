@@ -9,6 +9,7 @@ fn main() {
         ("shaders/matmul.comp", "matmul.spv"),
         ("shaders/softmax.comp", "softmax.spv"),
         ("shaders/layer_norm.comp", "layer_norm.spv"),
+        ("shaders/conv2d.comp", "conv2d.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");
