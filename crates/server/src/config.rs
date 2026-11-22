@@ -820,6 +820,9 @@ pub struct ExternalToolsConfig {
     pub blender_path: Option<PathBuf>,
     /// `ComfyUI` base URL; `None` uses the crate's loopback default.
     pub comfyui_url: Option<String>,
+    /// Optional `llama-server` base URL. `None` probes the binary only;
+    /// `Some` also probes `/health` + `/v1/models` before claiming a capability.
+    pub llama_server_url: Option<String>,
     /// Probe timeout; bounded so a hung binary never blocks startup.
     pub timeout: Duration,
 }
@@ -830,6 +833,7 @@ impl ExternalToolsConfig {
         honkbox_external_tools::Config {
             blender_path: self.blender_path,
             comfyui_url: self.comfyui_url,
+            llama_server_url: self.llama_server_url,
             timeout: self.timeout,
         }
     }
@@ -1594,6 +1598,7 @@ pub fn load(
     let tools = ExternalToolsConfig {
         blender_path: file_tools.blender_path.map(|p| expand_home(&p)),
         comfyui_url: file_tools.comfyui_url,
+        llama_server_url: file_tools.llama_server_url,
         timeout: Duration::from_secs(file_tools.timeout_secs.unwrap_or(5).clamp(1, 3600)),
     };
     Ok(LoadedConfig {
@@ -1831,7 +1836,8 @@ struct FileConfig {
     #[serde(default)]
     mesh: mesh::FileMesh,
     /// `[tools]` keys (TASK-external-tool-registry); absent table uses PATH
-    /// / the loopback `ComfyUI` default and a 5 s probe timeout.
+    /// / the loopback `ComfyUI` default, no attached `llama-server` endpoint
+    /// and a 5 s probe timeout.
     #[serde(default)]
     tools: FileTools,
     /// `[licenses]` keys (TASK-model-license-registry); absent table keeps
@@ -2031,6 +2037,7 @@ struct FileArtifacts {
 struct FileTools {
     blender_path: Option<String>,
     comfyui_url: Option<String>,
+    llama_server_url: Option<String>,
     timeout_secs: Option<u64>,
 }
 

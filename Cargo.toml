@@ -41,6 +41,8 @@ reqwest = { version = "0.13", default-features = false, features = [
     "stream",
     "http2",
     "json",
+    # Attached llama-server backend: blocking client on its own runtime thread.
+    "blocking",
 ] }
 tokio-util = "0.7"
 sha2 = "0.11"

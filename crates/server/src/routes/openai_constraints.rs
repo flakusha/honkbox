@@ -41,6 +41,19 @@ pub(super) fn llm_error_class(err: &LlmError) -> (StatusCode, &'static str, Stri
             "context_length_exceeded",
             format!("chat failed: {err}"),
         ),
+        LlmError::Upstream { status, .. } => (
+            if *status == 503 {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::BAD_GATEWAY
+            },
+            if *status == 503 {
+                "upstream_unavailable"
+            } else {
+                "upstream_error"
+            },
+            format!("chat failed: {err}"),
+        ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
@@ -168,4 +181,23 @@ pub(super) fn resolve_constraints(
             dynatemp_exponent: req.dynatemp_exponent,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_status_maps_to_gateway_errors() {
+        let loading = LlmError::Upstream {
+            status: 503,
+            message: "loading".to_owned(),
+        };
+        assert_eq!(llm_error_class(&loading).0, StatusCode::SERVICE_UNAVAILABLE);
+        let gone = LlmError::Upstream {
+            status: 404,
+            message: "gone".to_owned(),
+        };
+        assert_eq!(llm_error_class(&gone).0, StatusCode::BAD_GATEWAY);
+    }
 }

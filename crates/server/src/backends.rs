@@ -17,6 +17,9 @@ pub enum LlmBackend {
     Stub,
     /// Real inference via llama.cpp on a registry GGUF.
     LlamaCpp,
+    /// Consume an already-running, health-proved `llama-server` over loopback.
+    /// The endpoint comes from `[tools] llama_server_url`; no process is started.
+    Attached,
 }
 
 /// `--stt-backend` values: instant stub or the real pipeline.
@@ -44,14 +47,17 @@ pub enum TtsBackend {
     Kokoro,
 }
 
-/// Chat pipeline: stub unit struct, or file backend via `resolve` slug→path.
+/// Chat pipeline: stub, file backend via `resolve` slug→path, or an attached
+/// `llama-server` proved over loopback HTTP.
 ///
 /// `resolve` is `main::resolve_model` (unknown slug is a loud exit-1); a
-/// missing slug with a file backend is a loud exit-1 too.
+/// missing slug with a file backend is a loud exit-1 too. `attach_url` is
+/// config-only and required by the `Attached` arm.
 #[must_use]
 pub fn make_llm(
     backend: LlmBackend,
     model: Option<&str>,
+    attach_url: Option<&str>,
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
     cache: crate::config::CacheConfig,
     vram_budget_bytes: Option<u64>,
@@ -77,6 +83,17 @@ pub fn make_llm(
                 .then(|| honkbox_registry::sibling_mmproj(&path))
                 .flatten();
             Arc::new(crate::or_exit(LlamaCppLlm::load(&path, &opts)))
+        }
+        LlmBackend::Attached => {
+            let url = attach_url.unwrap_or_else(|| {
+                eprintln!(
+                    "error: [tools] llama_server_url is required with --llm-backend attached"
+                );
+                std::process::exit(1);
+            });
+            Arc::new(crate::or_exit(crate::llm_attached::AttachedLlm::new(
+                url, model,
+            )))
         }
     }
 }

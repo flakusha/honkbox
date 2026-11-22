@@ -776,7 +776,7 @@ async fn reserved_rows_agree_with_the_admitting_routes() {
 }
 
 /// With no startup probe installed, the capability document still reports
-/// both known tools — honestly marked missing — in registry order.
+/// every known tool — honestly marked missing — in registry order.
 #[tokio::test]
 async fn capabilities_report_external_tools_without_probing() {
     let _slot = SLOT_LOCK.lock().await;
@@ -795,7 +795,8 @@ async fn capabilities_report_external_tools_without_probing() {
             "comfyui",
             "splat_renderer",
             "shader_validator",
-            "unirig"
+            "unirig",
+            "llama_server"
         ]
     );
     // No probed Blender → the feature flag is false (the same truth the
@@ -872,7 +873,7 @@ async fn external_tool_routes_name_missing_tools() {
     let app = app_with(catalog_with(&[]));
     let (status, body) = get_json(&app, "/v1/external-tools").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["tools"].as_array().unwrap().len(), 5);
+    assert_eq!(body["tools"].as_array().unwrap().len(), 6);
 
     let (status, body) = get_text(&app, "/v1/external-tools/blender").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);

@@ -368,6 +368,7 @@ echo 'HONKBOX_ADDONS={"scripts":"/opt/blender/scripts","addons":[{"id":"honkbox_
         let config = crate::Config {
             blender_path: Some(bin),
             comfyui_url: Some("http://127.0.0.1:1".to_string()),
+            llama_server_url: None,
             timeout: Duration::from_secs(5),
         };
         let (status, addons) = crate::probe_blender(&config);
@@ -403,6 +404,7 @@ echo 'HONKBOX_ADDONS={"scripts":"/opt/blender/scripts","addons":[{"id":"honkbox_
         let config = crate::Config {
             blender_path: Some(PathBuf::from("blender")),
             comfyui_url: Some("http://127.0.0.1:1".to_string()),
+            llama_server_url: None,
             timeout: Duration::from_secs(120),
         };
         let (status, _) = crate::probe_blender(&config);

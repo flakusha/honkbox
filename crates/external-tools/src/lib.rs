@@ -1,9 +1,10 @@
 //! External tool registry (`TASK-external-tool-registry`).
 //!
-//! Discovers the external engines honkbox can drive — the Blender CLI and a
-//! `ComfyUI` server — once, caches the result, and re-probes only on an
-//! explicit reload. Nothing here links an engine into the workspace and
-//! nothing here starts an engine: this crate only *discovers*.
+//! Discovers the external engines honkbox can drive — the Blender CLI, a
+//! `ComfyUI` server and a user-installed `llama-server` — once, caches the
+//! result, and re-probes only on an explicit reload. Nothing here links an
+//! engine into the workspace and nothing here starts an engine: this crate
+//! only *discovers*.
 //!
 //! Discovery is honest by construction: a missing tool reports
 //! [`Unavailable::NotInstalled`], a present-but-misbehaving tool reports
@@ -29,6 +30,7 @@ use std::time::{Duration, Instant};
 
 mod blender_addons;
 mod blender_assets;
+pub mod llama_server;
 pub mod shader_validate;
 mod texture_postprocess;
 pub mod unirig;
@@ -71,16 +73,20 @@ pub enum ToolId {
     ShaderValidator,
     /// The external `UniRig` auto-rigger (external binary).
     Unirig,
+    /// A user-installed `llama-server` (PATH binary, optionally attached over
+    /// its `OpenAI`-compatible HTTP API).
+    LlamaServer,
 }
 
 impl ToolId {
     /// Every tool the registry probes at discovery, in a stable order.
-    pub const ALL: [ToolId; 5] = [
+    pub const ALL: [ToolId; 6] = [
         ToolId::Blender,
         ToolId::ComfyUi,
         ToolId::SplatRenderer,
         ToolId::ShaderValidator,
         ToolId::Unirig,
+        ToolId::LlamaServer,
     ];
 
     /// Stable lowercase identifier (never user data).
@@ -92,6 +98,7 @@ impl ToolId {
             Self::SplatRenderer => "splat_renderer",
             Self::ShaderValidator => "shader_validator",
             Self::Unirig => "unirig",
+            Self::LlamaServer => "llama_server",
         }
     }
 }
@@ -127,6 +134,9 @@ pub enum Capability {
     ShaderValidate,
     /// Auto-rigging: skeleton + weights report for a generated mesh.
     AutoRig,
+    /// An attached server answered `/health` and exposed `/v1/models`; the
+    /// probe does NOT claim that honkbox routes inference through it yet.
+    OpenAiCompat,
     /// A probed detail string (for example the sequencefile contract).
     Detail(String),
 }
@@ -144,6 +154,7 @@ impl Capability {
             Self::Sequencefile => "sequencefile",
             Self::ShaderValidate => "shader_validate",
             Self::AutoRig => "auto_rig",
+            Self::OpenAiCompat => "openai_compat",
         }
     }
 
@@ -218,6 +229,10 @@ pub struct Config {
     pub blender_path: Option<PathBuf>,
     /// `ComfyUI` base URL (`None` → [`DEFAULT_COMFYUI_URL`]).
     pub comfyui_url: Option<String>,
+    /// Optional `llama-server` base URL. `None` probes the binary only and
+    /// claims no serving capability; `Some` also probes `/health` and
+    /// `/v1/models` before [`Capability::OpenAiCompat`] is claimed.
+    pub llama_server_url: Option<String>,
     /// Per-probe timeout.
     pub timeout: Duration,
 }
@@ -227,6 +242,7 @@ impl Default for Config {
         Self {
             blender_path: None,
             comfyui_url: None,
+            llama_server_url: None,
             timeout: Duration::from_secs(5),
         }
     }
@@ -285,14 +301,34 @@ impl Registry {
         });
         let comfyui = probe_comfyui(&self.config, &self.client);
         let timeout = self.config.timeout;
+        let llama_server = tokio::task::spawn_blocking(move || {
+            llama_server::probe(&llama_server::binary(), timeout)
+        });
+        let llama_endpoint = {
+            let client = self.client.clone();
+            let url = self.config.llama_server_url.clone();
+            async move {
+                match url {
+                    Some(url) => Some(llama_server::probe_endpoint(&client, &url).await),
+                    None => None,
+                }
+            }
+        };
         let vkgs = tokio::task::spawn_blocking(move || vkgs::status(&vkgs::binary(), timeout));
         let shader = tokio::task::spawn_blocking(move || {
             shader_validate::status(&shader_validate::binary(), timeout)
         });
         let unirig =
             tokio::task::spawn_blocking(move || unirig::status(&unirig::binary(), timeout));
-        let (blender, comfyui, vkgs, shader, unirig) =
-            tokio::join!(blender, comfyui, vkgs, shader, unirig);
+        let (blender, comfyui, llama_server, llama_endpoint, vkgs, shader, unirig) = tokio::join!(
+            blender,
+            comfyui,
+            llama_server,
+            llama_endpoint,
+            vkgs,
+            shader,
+            unirig
+        );
         let (blender_status, blender_addons) = match blender {
             Ok(probed) => probed,
             Err(join_error) => (
@@ -318,6 +354,10 @@ impl Registry {
         let unirig_status = unirig.unwrap_or_else(|err| {
             unavailable_status(ToolId::Unirig, Unavailable::ProbeFailed(err.to_string()))
         });
+        let llama_server_status = llama_server::status(
+            llama_server.unwrap_or_else(|err| Err(Unavailable::ProbeFailed(err.to_string()))),
+            llama_endpoint,
+        );
         let mut statuses = Vec::with_capacity(ToolId::ALL.len());
         for id in ToolId::ALL {
             statuses.push(match id {
@@ -326,6 +366,7 @@ impl Registry {
                 ToolId::SplatRenderer => vkgs_status.clone(),
                 ToolId::ShaderValidator => shader_status.clone(),
                 ToolId::Unirig => unirig_status.clone(),
+                ToolId::LlamaServer => llama_server_status.clone(),
                 // OIIO is a job tool with its own probe (`texture_tools_status`),
                 // not a registry-discovered capability; it is never in `ALL`.
                 ToolId::Oiio => unreachable!("OIIO is not registry-discovered"),
@@ -926,6 +967,7 @@ echo 'no cycles here'
         Config {
             blender_path: Some(PathBuf::from("/nonexistent/honkbox-blender")),
             comfyui_url: Some("http://127.0.0.1:1".to_string()),
+            llama_server_url: None,
             timeout: Duration::from_secs(2),
         }
     }
@@ -1001,6 +1043,7 @@ echo 'no cycles here'
         let config = Config {
             blender_path: Some(bin),
             comfyui_url: Some(url),
+            llama_server_url: None,
             timeout: Duration::from_secs(30),
         };
         let registry = Registry::discover(config).await;

@@ -10,6 +10,7 @@ mod downloads;
 mod formats;
 mod jobs;
 mod jobs_registry;
+mod llm_attached;
 mod logging;
 mod metrics;
 mod model_formats;
@@ -472,6 +473,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     } else {
         info!("honkbox data dir: <unresolved>");
     }
+    // The attached-backend endpoint is config-only; clone before the tools
+    // snapshot moves into the startup probe.
+    let attach_url = loaded.tools.llama_server_url.clone();
     let cfg = loaded.models;
     // REQ-6 Option A: install the resolved admission-queue bound before any
     // route can acquire the GPU slot.
@@ -565,6 +569,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let llm = backends::make_llm(
         llm_backend,
         llm_model.as_deref(),
+        attach_url.as_deref(),
         &resolve,
         llm_cache,
         vram_budget,
@@ -887,13 +892,14 @@ fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>)
     let llm_cache = cfg.cache.get(model.as_str()).copied().unwrap_or_default();
     let vram_budget = cfg.vram_budget_bytes;
     let found = match llm_backend {
-        LlmBackend::Stub => Vec::new(),
+        LlmBackend::Stub | LlmBackend::Attached => Vec::new(),
         LlmBackend::LlamaCpp => scan_models(cfg),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_llm(
         llm_backend,
         Some(model.as_str()),
+        loaded.tools.llama_server_url.as_deref(),
         &resolve,
         llm_cache,
         vram_budget,

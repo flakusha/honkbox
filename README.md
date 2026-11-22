@@ -112,10 +112,17 @@ queue_wait_secs = 10          # admission-queue bound (REQ-6); 0 = queue off
 
 [auth]
 api_key_env = "HONKBOX_API_KEY"   # env var NAME holding the bearer key
+
+[tools]
+llama_server_url = "http://127.0.0.1:8080"  # optional attached llama-server
 ```
 
 - Env overrides: `HONKBOX_LLM_DIRS` / `HONKBOX_COMFYUI_DIR` (env wins over
   file), `HONKBOX_QUEUE_WAIT_SECS` for the queue bound.
+- Attached `llama-server`: `--llm-backend attached` consumes the server at
+  `[tools] llama_server_url` (loopback only; `/health` and `/v1/models` are
+  proved at startup). Its process stays operator-owned. `LLAMA_API_KEY`, when
+  set, is sent only to that server; honkbox's own bearer is never forwarded.
 - Jobs & cancellation: every ADMITTED GPU request is stamped with an
   `X-Job-Id` response header and listed (while in flight) by `GET /v1/jobs`;
   a request refused before admission (bad body, model without the required

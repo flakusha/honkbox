@@ -346,6 +346,13 @@ pub enum LlmError {
     Vision(String),
     /// Request is unusable (e.g. no messages).
     InvalidRequest(String),
+    /// Attached HTTP backend failed (upstream status + bounded reason).
+    Upstream {
+        /// Upstream HTTP status (400/502/503 classes).
+        status: u16,
+        /// Bounded upstream reason; never a key or credential-bearing URL.
+        message: String,
+    },
 }
 
 impl fmt::Display for LlmError {
@@ -357,6 +364,9 @@ impl fmt::Display for LlmError {
             Self::Context(e) => write!(f, "context failed: {e}"),
             Self::Decode(e) => write!(f, "decode failed: {e}"),
             Self::Vision(e) => write!(f, "vision unsupported: {e}"),
+            Self::Upstream { status, message } => {
+                write!(f, "upstream llama-server {status}: {message}")
+            }
             Self::InvalidRequest(e) => write!(f, "invalid request: {e}"),
         }
     }
