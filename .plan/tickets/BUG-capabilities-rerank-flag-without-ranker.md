@@ -35,7 +35,7 @@ The flag is derived in honkbox's capabilities document; loop-lore only reads it 
 
 ## Status note
 
-Status stays `proposed`: the derivation edits exist in the working tree (`runtime_config::rerank_supported`, the capabilities flag, the shared rerank guard), but the ticket closes only once they are committed and the `rerank_capability` binary passes the full gate. The new test verifies the contract; it does not itself land the fix.
+Status is `done` (2026-11-22): the derivation edits (`runtime_config::rerank_supported`, the capabilities flag, the shared rerank guard) and the `rerank_capability` binary are committed and the full gate is green. The test verifies the contract; the deferred item is only a real scoring round-trip with a sidecar fixture.
 
 ## Test-binary note
 

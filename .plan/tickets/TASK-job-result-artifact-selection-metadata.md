@@ -16,7 +16,7 @@ Only the `JobEvent` DTO and `jobs_registry::emit_result` change — one DTO seam
 ## Change
 
 - `crates/api-types/src/lib.rs:2453-2501`: add `artifact_name: Option<String>`, `artifact_kind: Option<String>`, `artifact_index: Option<u32>`, `artifact_primary: Option<bool>` with `#[serde(skip_serializing_if = "Option::is_none")]`.
-- `crates/server/src/jobs_registry.rs:335-350`: extend `emit_result` to set those four fields; update its two callers (`routes/images_generate.rs:641-646`, `routes/blender_exec.rs:241-246`) to pass the name/kind/index already held at emit time (no new vocabulary, no second read).
+- `crates/server/src/jobs_registry.rs:335-350`: extend `emit_result` to set those four fields; update its three callers (`routes/images_generate.rs:641-646`, `routes/blender_exec.rs:241-246`, `routes/images_edit.rs:644`) to pass the name/kind/index already held at emit time (no new vocabulary, no second read).
 - Primary policy: images mark generation index 0; Blender marks the `model` artifact when one exists. Every other artifact frame leaves `artifact_primary` unset, so zero primaries is valid. Inline delivery emits no frame at all (`images_generate.rs:600-603`). The NSFW re-emit (`jobs_registry.rs:355-368`) is an extra artifact-less frame: excluded from the primary count, unchanged by this ticket. Artifact-less annotation frames are outside this contract.
 - Regenerate TS bindings/OpenAPI through `bun run codegen:check`; consumers that decode only the old fields keep working.
 

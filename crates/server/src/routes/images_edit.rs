@@ -653,6 +653,9 @@ pub(super) async fn post_images_edits(
                     primary: true,
                 },
             );
+            if !annotations.is_empty() {
+                crate::jobs_registry::global().emit_annotations(job.id(), annotations.clone());
+            }
             artifacts.push(ImageArtifact {
                 artifact_id: info.id,
                 content_type: info.content_type,
