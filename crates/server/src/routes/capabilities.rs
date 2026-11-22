@@ -48,7 +48,7 @@ pub const ADMITTING_ROUTES: &[(&str, &str)] = &[
     ("llm", "/v1/chat/completions"),
     ("embed", "/v1/embeddings"),
     // The CPU-only bucket: image ops and the audio routes take the `rag`
-    // bucket (0 GPU slots) — the fixed 8-kind vocabulary has no CPU kind.
+    // bucket (0 GPU slots) — the fixed 9-kind vocabulary has no CPU kind.
     ("rag", "/v1/image-ops"),
     // Blender asset jobs (`POST /v1/jobs/blender`): the route admits a job
     // of the `blender` kind, so the reserved row becomes callable.

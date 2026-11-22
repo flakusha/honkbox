@@ -543,7 +543,7 @@ pub(super) async fn post_fizgig_train(
         );
     }
     #[cfg(unix)]
-    tokio::spawn(fizgig_run::run_job(plan, &JOBS, id.clone()));
+    tokio::spawn(fizgig_run::run_fizgig_job(plan, &JOBS, id.clone()));
     #[cfg(not(unix))]
     {
         let _ = (plan, &id);

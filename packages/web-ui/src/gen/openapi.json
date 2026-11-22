@@ -6638,7 +6638,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "description": "Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,\n`blender`, `3d`) — never user data."
+            "description": "Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,\n`blender`, `3d`, `training`) — never user data."
           },
           "queue_cap": {
             "type": "integer",

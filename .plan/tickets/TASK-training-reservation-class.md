@@ -26,11 +26,19 @@ Resources: TBD at implementation
 ## Landed
 
 Ninth `ResourceKind::Training` (label `training`) grows every fixed grid from
-8 to 9. `KindSettings.exclusive` makes training refuse to start beside ANY
-live lease and refuses other kinds beside it — concurrency 1 even with
-multiple GPU slots; the queue TTL and cancel-with-checkpoint behavior are
-unchanged. Fizgig's runner now acquires `Training`, and `ADMITTING_ROUTES`
-advertises `/v1/fizgig/train`. Evidence: `cargo test --locked --offline
--p honkbox-residency` → 23 passed (incl. new exclusivity test);
-`... -p honkbox-server --test capabilities --test fizgig` → 290 passed;
-`bun run audit:gpu-slot` green.
+8 to 9. `KindSettings.exclusive` is ONE-WAY: training refuses to start while
+ANY lease is live, but a live training lease does not block other kinds —
+`rag` (CPU-only) and interactive GPU work keep running. Concurrency 1 holds
+with the default single GPU slot; the queue TTL and cancel-with-checkpoint
+behavior are unchanged. Fizgig's runner acquires `Training`, and
+`ADMITTING_ROUTES` advertises `/v1/fizgig/train`. A later audit closed four
+gaps: the runner function was renamed so `bun run audit:gpu-slot` actually
+derives the route, the fizgig test takes `SLOT_LOCK`, `Oversized` is checked
+before exclusivity again, and stale 8-kind prose/API docs were regenerated.
+
+Evidence: `cargo test --locked --offline -p honkbox-residency` → 23 passed
+(incl. `training_defers_to_live_work`), `... -p honkbox-server --test fizgig
+--test capabilities --test licenses` → 361 passed, `bun run audit:gpu-slot`
+now lists `/v1/fizgig/train` and passes. Full preemption of a running
+training job is not implemented — with one slot, interactive GPU work queues
+behind it; the one-way rule only guarantees priority at admission.

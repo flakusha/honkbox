@@ -1077,7 +1077,7 @@ fn kind_overrides<T: Copy>(
             let kind = ResourceKind::from_label(label).ok_or_else(|| {
                 format!(
                     "[ledger] {section}: unknown kind {label:?} (expected one of \
-                     sd, llm, ocr, embed, rag, comfy, blender, 3d)"
+                     sd, llm, ocr, embed, rag, comfy, blender, 3d, training)"
                 )
             })?;
             Ok((kind, *value))

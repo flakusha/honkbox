@@ -165,7 +165,7 @@ impl Stage {
 // ponytail: the lease, cancel watchdog and stage loop belong in one scope;
 // split only if the runner grows another responsibility.
 #[allow(clippy::too_many_lines)]
-pub(super) async fn run_job(plan: Plan, jobs: &'static Jobs, id: String) {
+pub(super) async fn run_fizgig_job(plan: Plan, jobs: &'static Jobs, id: String) {
     let soft = {
         let map = jobs
             .lock()

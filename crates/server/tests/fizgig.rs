@@ -66,6 +66,9 @@ use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, app, set_env_var};
 
+// The training lease is process-global; serialize this test with other GPU tests.
+static SLOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn tmp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("honkbox-fizgig-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -231,6 +234,7 @@ async fn wait_capability(app: &axum::Router, wanted: bool) -> Value {
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn fizgig_train_lifecycle_with_fake_cli() {
+    let _slot = SLOT_LOCK.lock().await;
     let base = tmp_dir("e2e");
     let data_dir = base.join("data");
     let checkout = base.join("fizgig");

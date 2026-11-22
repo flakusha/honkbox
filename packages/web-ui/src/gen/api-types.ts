@@ -2011,7 +2011,7 @@ export type QueueCapabilities = {
 export type QueueKindCapacity = {
   /**
    * Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,
-   * `blender`, `3d`) — never user data.
+   * `blender`, `3d`, `training`) — never user data.
    */
   kind: string;
   /**

@@ -68,9 +68,8 @@ pub enum ResourceKind {
     Blender,
     /// Generic 3D tooling (external process; reserved).
     ThreeD,
-    /// Long LoRA/fine-tune jobs (external Python sidecar). Exclusive: a
-    /// training lease never starts beside other work, and other work never
-    /// starts beside it.
+    /// Long LoRA/fine-tune jobs (external Python sidecar). Defers to any
+    /// live work at admission; never blocks interactive or CPU-only kinds.
     Training,
 }
 
@@ -268,9 +267,9 @@ pub struct KindSettings {
     pub ttl: Duration,
     /// The per-job resource demand (see [`Demand::for_kind`]).
     pub demand: Demand,
-    /// Exclusive kinds cannot start beside any live lease, and no other kind
-    /// can start beside them. Used by long training jobs so interactive
-    /// generation is never silently displaced or starved mid-run.
+    /// Exclusive kinds defer to any live lease (one-way); once granted they
+    /// do not block other kinds themselves. Used by long training jobs so
+    /// interactive generation keeps priority and CPU-only routes keep working.
     pub exclusive: bool,
 }
 
@@ -669,15 +668,15 @@ impl Ledger {
     pub fn try_acquire(&self, kind: ResourceKind) -> Result<Lease<'_>, AcquireError> {
         let mut inner = lock(&self.inner);
         let demand = inner.config.kinds[kind.slot()].demand;
-        if Self::exclusive_conflict(&inner, kind) {
-            inner.counters.rejections_busy[kind.slot()] += 1;
-            return Err(AcquireError::Busy);
-        }
         if inner.config.capacities.oversized(demand) {
             inner.counters.rejections_capacity[kind.slot()] += 1;
             return Err(AcquireError::Oversized {
                 what: Self::oversized_what(&inner.config, demand),
             });
+        }
+        if Self::exclusive_conflict(&inner, kind) {
+            inner.counters.rejections_busy[kind.slot()] += 1;
+            return Err(AcquireError::Busy);
         }
         if inner.config.capacities.exhausted(&inner.committed, demand) {
             inner.counters.rejections_busy[kind.slot()] += 1;
@@ -721,19 +720,14 @@ impl Ledger {
         })
     }
 
-    /// Exclusive kinds (long training) never share the box with any other
-    /// live lease; conversely no other kind starts beside one. The running
-    /// counters are per-kind and updated under the same lock as admission.
+    /// One-way deferral: an exclusive kind (long training) refuses to start
+    /// while ANY lease is live, so interactive work always keeps the box.
+    /// Running interactive work is NOT blocked by training — with one slot
+    /// capacity already handles that, and CPU-only kinds must keep working.
+    /// The running counters are per-kind and updated under the same lock.
     fn exclusive_conflict(inner: &Inner, kind: ResourceKind) -> bool {
-        if inner.config.kinds[kind.slot()].exclusive {
-            return inner.counters.running.iter().any(|&running| running > 0);
-        }
-        inner
-            .config
-            .kinds
-            .iter()
-            .enumerate()
-            .any(|(slot, settings)| settings.exclusive && inner.counters.running[slot] > 0)
+        inner.config.kinds[kind.slot()].exclusive
+            && inner.counters.running.iter().any(|&running| running > 0)
     }
 
     /// Commit a grant under the lock (capacity already checked by the
@@ -1057,7 +1051,7 @@ fn push_family(out: &mut String, name: &str, help: &str, kind: &str) {
     let _ = write!(out, "# HELP {name} {help}\n# TYPE {name} {kind}\n");
 }
 
-/// Render one fixed 8-kind grid (one series per kind; unpopulated kinds
+/// Render one fixed 9-kind grid (one series per kind; unpopulated kinds
 /// render `0`).
 fn push_grid(out: &mut String, name: &str, help: &str, kind: &str, cells: &[u64; 9]) {
     push_family(out, name, help, kind);
@@ -1168,10 +1162,10 @@ mod tests {
         assert_eq!(ResourceKind::Training.to_string(), "training");
     }
 
-    /// Training is exclusive even on a box with spare GPU slots: no drift
-    /// into interactive work while a long sidecar run holds the ledger.
+    /// Training defers to live work, but never locks interactive or CPU-only
+    /// kinds out once it holds the box: only the training side is exclusive.
     #[test]
-    fn training_lease_is_exclusive() {
+    fn training_defers_to_live_work() {
         let mut config = LedgerConfig::new();
         config.capacities.gpu_slots = 2;
         let ledger = Ledger::with_config(config);
@@ -1185,13 +1179,15 @@ mod tests {
         let training = ledger
             .try_acquire(ResourceKind::Training)
             .expect("training slot");
-        assert_eq!(
-            ledger.try_acquire(ResourceKind::Sd).unwrap_err(),
-            AcquireError::Busy,
-            "interactive work cannot start beside training"
+        assert!(
+            ledger.try_acquire(ResourceKind::Rag).is_ok(),
+            "CPU-only bucket must keep working during training"
+        );
+        assert!(
+            ledger.try_acquire(ResourceKind::Sd).is_ok(),
+            "interactive work stays authoritative even with a live training lease"
         );
         drop(training);
-        assert!(ledger.try_acquire(ResourceKind::Sd).is_ok());
     }
 
     // ------------------------------------------------------------------

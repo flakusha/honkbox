@@ -87,7 +87,7 @@ pub(super) async fn execute_image_op(
             }
         };
     // Admission (TASK-image-ops-job-route): CPU-only work takes the
-    // ledger's CPU-only bucket (`rag`, 0 GPU slots) — the fixed 8-kind
+    // ledger's CPU-only bucket (`rag`, 0 GPU slots) — the fixed 9-kind
     // vocabulary has no image-ops kind, the same nearest-bucket mapping the
     // audio routes use with `llm`. Image ops therefore contend with rag
     // pipelines on CPU threads instead of bypassing the ledger entirely.

@@ -66,5 +66,8 @@ The 135/135 targeted test result still stands for the shipped code.
 - Follow-up wave (all six review tickets closed 2026-11-22): per-family VAE/
   text encoder resolution, artifact cap + work-dir GC with pause-state
   retention, probe honesty + retry, admission/lifecycle contract tests, the
-  ninth exclusive `Training` reservation class, and the curated weight
-  license/territory gate. See each ticket's landed section.
+  ninth `Training` reservation class (one-way deferral), and the curated
+  weight license/territory gate. A follow-up audit corrected the audit-gate
+  visibility (`run_fizgig_job` + `SLOT_LOCK`), restored oversized-first
+  admission, and regenerated the stale 8-kind API docs. See each ticket's
+  landed section.

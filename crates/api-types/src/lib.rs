@@ -365,7 +365,7 @@ pub struct QueueCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct QueueKindCapacity {
     /// Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,
-    /// `blender`, `3d`) — never user data.
+    /// `blender`, `3d`, `training`) — never user data.
     pub kind: String,
     /// Bounded queue length for the kind.
     pub queue_cap: u64,
