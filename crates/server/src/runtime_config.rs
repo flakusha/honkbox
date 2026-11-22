@@ -122,6 +122,19 @@ pub fn python_allowlist() -> &'static [String] {
     facts().map_or(EMPTY, |f| f.python_allowlist.as_slice())
 }
 
+/// Whether `/v1/rerank` is backed by a ranker model. A configured, non-empty
+/// first allowlist slug is the minimal honest rule: request-time membership
+/// is still enforced by the sidecar, so no catalog probe is needed here.
+fn rerank_backed(enabled: bool, allowlist: &[String]) -> bool {
+    enabled && allowlist.first().is_some_and(|slug| !slug.is_empty())
+}
+
+/// Shared gate for the capability flag and the rerank route. `true` means
+/// the route can reach a configured ranker without answering a named 501.
+pub(crate) fn rerank_supported() -> bool {
+    rerank_backed(python_enabled(), python_allowlist())
+}
+
 /// `(enabled, upstream_count, discovery_ttl_secs, discovery_cap)`.
 // Only `main.rs` renders mesh capability; harnesses including `routes.rs`
 // compile this getter without calling it.
@@ -163,4 +176,18 @@ pub fn scope_facts() -> (bool, Vec<(String, Vec<String>)>) {
     facts().map_or((false, Vec::new()), |f| {
         (!f.scopes.is_empty(), f.scopes.clone())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rerank_backed;
+
+    #[test]
+    fn rerank_backed_needs_python_and_a_configured_slug() {
+        let slug = ["ranker:stub".to_owned()];
+        assert!(!rerank_backed(false, &slug));
+        assert!(!rerank_backed(true, &[]));
+        assert!(!rerank_backed(true, &[String::new()]));
+        assert!(rerank_backed(true, &slug));
+    }
 }

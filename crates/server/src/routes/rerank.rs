@@ -16,7 +16,7 @@ use honkbox_api_types::{RerankItem, RerankRequest, RerankResult};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
-use super::runtime_config::python_allowlist;
+use super::runtime_config::{python_allowlist, rerank_supported};
 
 use super::python_sidecar;
 
@@ -94,6 +94,43 @@ fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, message.to_owned()).into_response()
 }
 
+/// Named 501 for an unconfigured ranker, shared by both guards below.
+fn no_ranker() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "rerank unavailable: no ranker model configured; see GET /v1/capabilities rerank"
+            .to_owned(),
+    )
+        .into_response()
+}
+
+/// Shape sidecar scores into the wire result: stable order, `top_n` cut,
+/// optional original text. Pure so stub scores can exercise the full shape.
+fn scored_result(
+    model: String,
+    texts: &[String],
+    scores: Vec<f64>,
+    top_n: Option<usize>,
+    return_text: bool,
+) -> RerankResult {
+    let mut results: Vec<RerankItem> = scores
+        .into_iter()
+        .enumerate()
+        .map(|(index, score)| RerankItem {
+            index,
+            score,
+            text: return_text.then(|| texts[index].clone()),
+        })
+        .collect();
+    results.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.index.cmp(&b.index))
+    });
+    results.truncate(top_n.unwrap_or(results.len()).min(results.len()));
+    RerankResult { results, model }
+}
+
 /// Shared implementation behind both route registrations.
 async fn rerank(body: Bytes) -> Response {
     let body: RerankBody = match serde_json::from_slice(&body) {
@@ -104,17 +141,15 @@ async fn rerank(body: Bytes) -> Response {
     if texts.is_empty() {
         return bad_request("rerank needs a non-empty texts[] or documents[]");
     }
+    if !rerank_supported() {
+        return no_ranker();
+    }
     let model = body
         .model
         .clone()
         .or_else(|| python_allowlist().first().cloned());
     let Some(model) = model.filter(|slug| !slug.is_empty()) else {
-        return (
-            StatusCode::NOT_IMPLEMENTED,
-            "rerank unavailable: no ranker model configured; see GET /v1/capabilities rerank"
-                .to_owned(),
-        )
-            .into_response();
+        return no_ranker();
     };
 
     let request = RerankRequest {
@@ -133,23 +168,14 @@ async fn rerank(body: Bytes) -> Response {
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
     };
 
-    let with_text = request.return_text.unwrap_or(false);
-    let mut results: Vec<RerankItem> = scores
-        .into_iter()
-        .enumerate()
-        .map(|(index, score)| RerankItem {
-            index,
-            score,
-            text: with_text.then(|| texts[index].clone()),
-        })
-        .collect();
-    results.sort_by(|a, b| {
-        b.score
-            .total_cmp(&a.score)
-            .then_with(|| a.index.cmp(&b.index))
-    });
-    results.truncate(request.top_n.unwrap_or(results.len()).min(results.len()));
-    Json(RerankResult { results, model }).into_response()
+    let result = scored_result(
+        model,
+        &texts,
+        scores,
+        request.top_n,
+        request.return_text.unwrap_or(false),
+    );
+    Json(result).into_response()
 }
 
 /// `POST /v1/rerank` — TEI `texts[]` or Jina `documents[]` in, ranked items out.
@@ -182,4 +208,46 @@ pub(super) async fn post_rerank(body: Bytes) -> Response {
 )]
 pub(super) async fn post_rerank_slash(body: Bytes) -> Response {
     rerank(body).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stubbed_scores_produce_a_valid_ranked_result() {
+        let texts = ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+        let result = scored_result(
+            "ranker:stub".to_owned(),
+            &texts,
+            vec![0.1, 0.9, 0.5],
+            Some(2),
+            true,
+        );
+        assert_eq!(result.model, "ranker:stub");
+        assert_eq!(result.results.len(), 2);
+        assert_eq!(result.results[0].index, 1);
+        assert_eq!(result.results[0].text.as_deref(), Some("beta"));
+        assert_eq!(result.results[1].index, 2);
+        assert_eq!(result.results[1].text.as_deref(), Some("gamma"));
+    }
+
+    #[tokio::test]
+    async fn unconfigured_rerank_route_returns_named_501() {
+        // The 501 must be produced before any slot, job dir or child
+        // process is touched; do not assert on global FACTS here, which
+        // other tests may have configured first.
+        let response = rerank(Bytes::from_static(
+            br#"{"query":"q","texts":["alpha","beta"]}"#,
+        ))
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert!(
+            String::from_utf8_lossy(&body).contains("no ranker model configured"),
+            "{body:?}"
+        );
+    }
 }

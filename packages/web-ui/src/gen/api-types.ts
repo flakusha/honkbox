@@ -984,7 +984,8 @@ export type SynthesizeRequest = {
 };
 export type Voice = {
   /**
-   * Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`).
+   * Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart` for
+   * Kokoro).
    */
   id: string;
   /**
@@ -1007,7 +1008,8 @@ export type VoiceList = {
    */
   object: string;
   /**
-   * The supported voices.
+   * Voices supported by the loaded backend; empty when it cannot
+   * enumerate them.
    */
   data: Array<Voice>;
 };
@@ -1382,6 +1384,31 @@ export type DownloadList = {
    */
   downloads: Array<DownloadState>;
 };
+export type JobArtifactRef = {
+  /**
+   * Content-addressed artifact id (same value as `JobEvent::artifact_id`).
+   */
+  artifact_id: string;
+  /**
+   * Artifact name from the producer's own record (`final_00.png` for an
+   * image, the bundle file name for a Blender artifact).
+   */
+  name: string;
+  /**
+   * Artifact kind from the producer's own record (`image`, `model`,
+   * `map`, `preview`). This is NOT the job modality (`JobInfo::kind`).
+   */
+  kind: string;
+  /**
+   * Zero-based artifact position in emission order.
+   */
+  index: number;
+  /**
+   * `true` for the one artifact a consumer should prefer; at most one
+   * entry of a job carries it.
+   */
+  primary: boolean;
+};
 export type JobInfo = {
   /**
    * Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.
@@ -1411,6 +1438,13 @@ export type JobInfo = {
    * spike, per the design record).
    */
   interruptible: boolean;
+  /**
+   * Artifacts emitted so far by this live job, in emission order (bounded
+   * to 64). Absent until the first `job_result`; a dropped frame can be
+   * reconciled from this snapshot without a second request. The snapshot
+   * disappears with the live entry — this is not history or replay.
+   */
+  artifacts: Array<JobArtifactRef> | null;
 };
 export type JobList = {
   /**
@@ -1499,6 +1533,24 @@ export type JobEvent = {
    * Artifact byte length (`job_result` only).
    */
   size_bytes: bigint | null;
+  /**
+   * Artifact name from the producer's own record (`job_result` only).
+   */
+  artifact_name: string | null;
+  /**
+   * Artifact kind from the producer's own record (`job_result` only).
+   * NOT the job modality already carried by `kind`.
+   */
+  artifact_kind: string | null;
+  /**
+   * Zero-based artifact position in emission order (`job_result` only).
+   */
+  artifact_index: number | null;
+  /**
+   * `Some(true)` marks the one preferred artifact of a job (`job_result`
+   * only); `None` on older frames and on annotation re-emits.
+   */
+  artifact_primary: boolean | null;
   /**
    * NSFW annotations attached to the job's output, when a classifier
    * ran. Absent when no annotation was produced.
@@ -1893,6 +1945,13 @@ export type FeatureFlags = {
    * run in this build.
    */
   texture_postprocess: boolean;
+  /**
+   * Residency control (`GET /running`, `POST /api/models/unload`): `true`
+   * exactly when a swap manager exists, so the warm-set readout and
+   * explicit unload have something to act on. The control routes never
+   * take a GPU slot themselves.
+   */
+  residency_control: boolean;
 };
 export type VisionFeature = {
   /**

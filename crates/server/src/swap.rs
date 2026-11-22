@@ -61,7 +61,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use honkbox_api_types::{ModelCatalog, ModelCatalogEntry, ModelKind};
@@ -174,6 +174,21 @@ pub struct ResidentEntry {
     /// `false` never claims activity, `true` always reflects a real extra
     /// holder at snapshot time.
     pub in_use: bool,
+}
+
+/// Read-only lifetime probe for an evicted pipeline. A `Weak` handle never
+/// keeps the model alive and never takes a residency lease: it only lets a
+/// control route observe when the last in-flight `Arc` holder drops.
+#[derive(Clone)]
+pub struct DrainProbe(Weak<dyn LlmPipeline>);
+
+impl DrainProbe {
+    /// `true` once no holder remains; `false` means an in-flight request
+    /// still owns the pipeline and must never be force-killed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.strong_count() == 0
+    }
 }
 
 /// Outcome of [`SwapManager::evict_by_slug`].
@@ -394,6 +409,29 @@ impl SwapManager {
             self.settings.llm_max_loaded,
             self.settings.llm_ttl.as_secs(),
         )
+    }
+
+    /// Weak lifetime handle for one resident pipeline, captured BEFORE
+    /// eviction. `None` when the slug is not resident; no lease, no map
+    /// mutation, and the pipeline stays alive for its in-flight holders.
+    #[must_use]
+    pub fn drain_probe(&self, slug: &str) -> Option<DrainProbe> {
+        self.lock_entries()
+            .get(slug)
+            .map(|entry| DrainProbe(Arc::downgrade(&entry.pipe)))
+    }
+
+    /// Probes for every evictable (non-pinned) resident, paired with its
+    /// slug so a control route can also notice a queued admission reloading
+    /// the same slug after eviction.
+    #[must_use]
+    pub fn drain_probes(&self) -> Vec<(String, DrainProbe)> {
+        let entries = self.lock_entries();
+        entries
+            .iter()
+            .filter(|(slug, _)| !self.settings.pinned.contains(*slug))
+            .map(|(slug, entry)| (slug.clone(), DrainProbe(Arc::downgrade(&entry.pipe))))
+            .collect()
     }
 
     /// Pre-load capacity trim: TTL-expired entries go first, then LRU down

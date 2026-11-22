@@ -193,7 +193,7 @@ fn residency_app(catalog: ModelCatalog, swap_settings: SwapSettings) -> Router {
     )
 }
 
-fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
+fn residency_app_with(catalog: ModelCatalog, manager: impl Into<Arc<SwapManager>>) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
@@ -215,7 +215,7 @@ fn residency_app_with(catalog: ModelCatalog, manager: SwapManager) -> Router {
         tts: Arc::new(StubTts),
         sd: std::sync::Arc::new(honkbox_sd_core::StubPipeline),
         sd_model: None,
-        swap: Some(Arc::new(manager)),
+        swap: Some(manager.into()),
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
         data_dir: None,
@@ -244,6 +244,28 @@ async fn post_control(app: Router, uri: &str) -> (StatusCode, String) {
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
     (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// Same POST, plus the additive `X-Honkbox-Drain` post-state header.
+async fn post_control_drain(app: Router, uri: &str) -> (StatusCode, String, Option<String>) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let drain = response
+        .headers()
+        .get("x-honkbox-drain")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap(), drain)
 }
 
 /// `GET` a readout route; returns (status, parsed JSON body).
@@ -299,8 +321,10 @@ async fn unload_resident_evicts_and_frees() {
     warm(&app, "llm:fake.gguf").await;
     assert_eq!(probe.live.load(Ordering::Relaxed), 1, "resident after warm");
 
-    let (status, body) = post_control(app.clone(), "/v1/models/llm:fake.gguf/unload").await;
+    let (status, body, drain) =
+        post_control_drain(app.clone(), "/api/models/unload/llm:fake.gguf").await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(drain.as_deref(), Some("drained"));
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["unloaded"], true);
     assert_eq!(parsed["slug"], "llm:fake.gguf");
@@ -331,8 +355,12 @@ async fn unload_not_resident_is_idempotent_200() {
         "/v1/models/llm:never-loaded.gguf/unload",
         "/api/models/unload/llm:fake.gguf",
     ] {
-        let (status, body) = post_control(app.clone(), uri).await;
+        let (status, body, drain) = post_control_drain(app.clone(), uri).await;
         assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert!(
+            drain.is_none(),
+            "no eviction, no drain claim: {uri}: {drain:?}"
+        );
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["unloaded"], false, "{uri}: {body}");
         assert_eq!(parsed["reason"], "not_loaded", "{uri}: {body}");
@@ -369,8 +397,10 @@ async fn unload_pinned_is_409_and_stays_resident() {
         settings(Duration::from_secs(3600), 4, &["llm:pinned.gguf"]),
     );
     warm(&app, "llm:pinned.gguf").await;
-    let (status, body) = post_control(app.clone(), "/v1/models/llm:pinned.gguf/unload").await;
+    let (status, body, drain) =
+        post_control_drain(app.clone(), "/v1/models/llm:pinned.gguf/unload").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(drain.is_none(), "refusal never claims a drain: {drain:?}");
 
     let (_, running) = get_json(app.clone(), "/running").await;
     let models: Vec<&str> = running["running"]
@@ -547,8 +577,9 @@ async fn bulk_unload_skips_pinned() {
     warm(&app, "llm:free.gguf").await;
     warm(&app, "llm:pinned.gguf").await;
 
-    let (status, body) = post_control(app.clone(), "/api/models/unload").await;
+    let (status, body, drain) = post_control_drain(app.clone(), "/api/models/unload").await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(drain.as_deref(), Some("drained"));
     let parsed: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(parsed["unloaded"], 2, "non-pinned only: {body}");
     assert_eq!(parsed["reason"], "explicit");
@@ -716,4 +747,100 @@ async fn busy_rejection_reason_labels_render() {
             "reserved reason series renders: {body}"
         );
     }
+}
+
+/// Explicit unload with an in-flight holder: the bounded wait expires, the
+/// response says `in-flight`, and the holder still finishes — no abort.
+#[tokio::test]
+async fn drain_timeout_reports_in_flight_without_killing() {
+    let _slot = SLOT_LOCK.lock().await;
+    let probe = Arc::new(Probe::default());
+    // A direct manager clone stands in for an in-flight request's `Arc`;
+    // build the app around that same manager so eviction sees the holder.
+    let manager = Arc::new(SwapManager::new(
+        settings(Duration::from_secs(3600), 2, &[]),
+        counting_loader(&probe),
+    ));
+    let app = residency_app_with(
+        catalog_with(&[entry("llm:a.gguf", "llm:a.gguf", ModelKind::Llm)]),
+        Arc::clone(&manager),
+    );
+    let holder = manager.get("llm:a.gguf", None).await.expect("warm");
+    assert_eq!(probe.live.load(Ordering::Relaxed), 1);
+
+    let (status, body, drain) =
+        post_control_drain(app.clone(), "/api/models/unload/llm:a.gguf").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(drain.as_deref(), Some("in-flight"));
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["unloaded"], true);
+    assert_eq!(parsed["reason"], "explicit");
+    assert_eq!(
+        probe.live.load(Ordering::Relaxed),
+        1,
+        "in-flight holder survives the eviction"
+    );
+    let (_, running) = get_json(app, "/running").await;
+    assert_eq!(running["running"].as_array().map(Vec::len), Some(0));
+
+    drop(holder);
+    assert_eq!(probe.live.load(Ordering::Relaxed), 0, "last drop frees it");
+}
+
+/// Concurrent requests for an uncached slug share one construction (the
+/// load gate), so the warm set stays a single resident pipeline.
+#[tokio::test]
+async fn warm_set_serializes_concurrent_requests() {
+    let _slot = SLOT_LOCK.lock().await;
+    let probe = Arc::new(Probe::default());
+    // Exercise the manager's load gate directly: two HTTP chat calls would
+    // contend for the single GPU slot (a 429), which is a separate gate.
+    let manager = Arc::new(SwapManager::new(
+        settings(Duration::from_secs(3600), 2, &[]),
+        counting_loader(&probe),
+    ));
+    let (first, second) = tokio::join!(
+        manager.get("llm:a.gguf", None),
+        manager.get("llm:a.gguf", None)
+    );
+    let first = first.expect("first load");
+    let second = second.expect("second load");
+    assert_eq!(probe.loads.load(Ordering::Relaxed), 1, "one load");
+    assert_eq!(manager.residency().len(), 1, "one resident entry");
+    drop((first, second));
+}
+
+/// The capability flag follows the fact that makes the control routes real.
+#[tokio::test]
+async fn residency_control_flag_follows_swap_presence() {
+    let app = residency_app(
+        catalog_with(&[entry("llm:a.gguf", "llm:a.gguf", ModelKind::Llm)]),
+        settings(Duration::from_secs(3600), 2, &[]),
+    );
+    let (status, doc) = get_json(app, "/v1/capabilities").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(doc["features"]["residency_control"], true);
+    assert_eq!(doc["features"]["rerank"], false, "rerank flag unchanged");
+}
+
+/// Readout + unload routes are read-only with respect to the GPU ledger.
+#[tokio::test]
+async fn control_routes_take_no_gpu_slot() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = residency_app(
+        catalog_with(&[entry("llm:fake.gguf", "llm:fake.gguf", ModelKind::Llm)]),
+        settings(Duration::from_secs(3600), 2, &[]),
+    );
+    let ledger = honkbox_residency::global();
+    let before = ledger.stats(honkbox_residency::ResourceKind::Llm);
+
+    get_json(app.clone(), "/running").await;
+    get_json(app.clone(), "/v1/memory").await;
+    post_control(app.clone(), "/api/models/unload").await;
+    post_control(app, "/api/models/unload/llm:fake.gguf").await;
+
+    let after = ledger.stats(honkbox_residency::ResourceKind::Llm);
+    assert_eq!(after.admissions, before.admissions);
+    assert_eq!(after.running, before.running);
+    assert_eq!(after.rejections_busy, before.rejections_busy);
 }

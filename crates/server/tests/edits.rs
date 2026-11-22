@@ -54,7 +54,8 @@ mod swap;
 #[path = "../src/texture_postprocess.rs"]
 mod texture_postprocess;
 
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
 
 use axum::{
     Router,
@@ -65,6 +66,7 @@ use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, Mode
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
 use serde_json::{Value, json};
+use tokio_stream::StreamExt as _;
 use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, app};
@@ -102,6 +104,15 @@ fn catalog_with(entries: &[ModelCatalogEntry]) -> ModelCatalog {
 
 #[allow(clippy::needless_pass_by_value)] // mirrors the other test helpers' owned-argument style
 fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
+    app_with_sd(catalog, data_dir, Arc::new(honkbox_sd_core::StubPipeline))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn app_with_sd(
+    catalog: ModelCatalog,
+    data_dir: Option<std::path::PathBuf>,
+    sd: Arc<dyn honkbox_sd_core::SdPipeline>,
+) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
@@ -122,7 +133,7 @@ fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Rout
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
-        sd: Arc::new(honkbox_sd_core::StubPipeline),
+        sd,
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
@@ -196,16 +207,25 @@ fn multipart_body(parts: &[Part]) -> (String, Vec<u8>) {
 
 /// `POST /v1/images/edits`; returns (status, parsed JSON body).
 async fn edits(app: Router, parts: &[Part]) -> (StatusCode, Value) {
+    edits_with_delivery(app, parts, None).await
+}
+
+/// Same request with an explicit `X-Honkbox-Delivery` value.
+async fn edits_with_delivery(
+    app: Router,
+    parts: &[Part],
+    delivery: Option<&str>,
+) -> (StatusCode, Value) {
     let (content_type, body) = multipart_body(parts);
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/v1/images/edits")
+        .header("content-type", content_type);
+    if let Some(delivery) = delivery {
+        builder = builder.header("X-Honkbox-Delivery", delivery);
+    }
     let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/images/edits")
-                .header("content-type", content_type)
-                .body(Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(builder.body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -862,6 +882,337 @@ async fn edits_malformed_loras_field_is_400() {
         body["error"]["message"]
             .as_str()
             .is_some_and(|m| m.contains("loras must be a JSON array")),
+        "{body}"
+    );
+}
+
+/// `GET /v1/jobs` while a job is registered (the guard drops when the
+/// request ends, so an in-flight gate keeps the row observable).
+async fn jobs_list(app: Router) -> Value {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/jobs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 64 * 1024 * 1024)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// Read SSE frames until the `job_result` for `job_id`; other tests in
+/// this binary share the global registry, so frames are filtered by id.
+async fn result_frame(stream: &mut axum::body::BodyDataStream, job_id: &str) -> Value {
+    let mut buffer = String::new();
+    loop {
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .expect("sse frame within 5s")
+            .expect("stream alive")
+            .expect("frame bytes");
+        buffer.push_str(std::str::from_utf8(&chunk).expect("utf8"));
+        while let Some(pos) = buffer.find("\n\n") {
+            let frame: String = buffer.drain(..pos + 2).collect();
+            let Some(data) = frame
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+                .next_back()
+            else {
+                continue;
+            };
+            let parsed: Value = serde_json::from_str(data).expect("frame data JSON");
+            if frame.contains("event: job_result") && parsed["id"].as_str() == Some(job_id) {
+                return parsed;
+            }
+        }
+    }
+}
+
+/// Park/notify pair: `GatedSd` parks in `generate` until the test opens
+/// the gate, holding the request (and its job registration) open.
+struct Gate {
+    open: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl Gate {
+    fn new() -> Self {
+        Self {
+            open: Mutex::new(false),
+            wake: Condvar::new(),
+        }
+    }
+
+    fn open(&self) {
+        *self.open.lock().expect("gate lock") = true;
+        self.wake.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut open = self.open.lock().expect("gate lock");
+        while !*open {
+            open = self.wake.wait(open).expect("gate wait");
+        }
+    }
+}
+
+struct GatedSd {
+    entered: Arc<AtomicBool>,
+    gate: Arc<Gate>,
+}
+
+impl honkbox_sd_core::SdPipeline for GatedSd {
+    fn generate(
+        &self,
+        _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        self.entered.store(true, Ordering::SeqCst);
+        self.gate.wait();
+        Ok(honkbox_sd_core::GeneratedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+        })
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "edits-gate-test"
+    }
+}
+
+async fn wait_entered(entered: &AtomicBool) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !entered.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("edit generation entered");
+}
+
+/// Inline delivery with a mask stays byte-compatible: the only response
+/// keys are `created`/`data` and `data[0].b64_json` is a real PNG.
+#[tokio::test]
+async fn inline_delivery_with_mask_keeps_base64_response() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = edits_with_delivery(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            png_part("mask", png_bytes(4, 4)),
+            part("prompt", "inpaint here"),
+        ],
+        Some("inline"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 1, "{body}");
+    assert_png(&data[0], 4, 4);
+    let mut keys: Vec<_> = body
+        .as_object()
+        .expect("response object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["created", "data"], "{body}");
+}
+
+/// Artifact delivery with a mask: the returned `job_id` is live while
+/// registered, and the one `job_result` matches the returned artifact.
+#[tokio::test]
+async fn artifact_delivery_with_mask_registers_live_job_and_emits_result() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir =
+        std::env::temp_dir().join(format!("honkbox-edit-artifact-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let gate = Arc::new(Gate::new());
+    let entered = Arc::new(AtomicBool::new(false));
+    let app = app_with_sd(
+        catalog_with(&[sd_entry("comfy:f.safetensors")]),
+        Some(data_dir.clone()),
+        Arc::new(GatedSd {
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        }),
+    );
+    // Subscribe first: registration/result events must not be missed.
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    let mut stream = sse.into_body().into_data_stream();
+    let parts = [
+        png_part("image", png_bytes(4, 4)),
+        png_part("mask", png_bytes(4, 4)),
+        part("prompt", "inpaint here"),
+    ];
+    let request_app = app.clone();
+    let request =
+        tokio::spawn(
+            async move { edits_with_delivery(request_app, &parts, Some("artifact")).await },
+        );
+    wait_entered(&entered).await;
+    let live = jobs_list(app.clone()).await;
+    let rows = live["data"].as_array().expect("jobs array");
+    assert!(!rows.is_empty(), "no live jobs: {live}");
+    gate.open();
+    let (status, body) = request.await.expect("edit finished");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let job_id = body["job_id"].as_str().expect("job id").to_owned();
+    let row = rows
+        .iter()
+        .find(|row| row["id"].as_str() == Some(job_id.as_str()))
+        .unwrap_or_else(|| panic!("job {job_id} not live: {live}"));
+    assert_eq!(row["interruptible"], false, "{row}");
+    assert_eq!(body["data"].as_array().expect("data array").len(), 0);
+    assert!(
+        body["bundle"].as_str().is_some_and(|dir| !dir.is_empty()),
+        "{body}"
+    );
+    let artifact = &body["artifacts"][0];
+    assert_eq!(artifact["job_id"], job_id, "{body}");
+    assert_eq!(artifact["content_type"], "image/png", "{body}");
+    assert!(
+        artifact["size_bytes"].as_u64().is_some_and(|n| n > 0),
+        "{body}"
+    );
+    let frame = result_frame(&mut stream, &job_id).await;
+    assert_eq!(frame["event"], "job_result", "{frame}");
+    assert_eq!(frame["artifact_id"], artifact["artifact_id"], "{frame}");
+    assert_eq!(frame["sha256"], artifact["artifact_id"], "{frame}");
+    assert_eq!(frame["size_bytes"], artifact["size_bytes"], "{frame}");
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Inline delivery with a `LoRA` keeps the license warning and base64 body,
+/// with no artifact fields added.
+#[tokio::test]
+async fn inline_delivery_with_lora_keeps_warning_and_base64() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/detail.safetensors",
+            "/models/loras/detail.safetensors",
+        ),
+    ]);
+    let (status, body) = edits_with_delivery(
+        app_with(catalog, None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            loras_part(&json!([
+                {"slug": "comfy:loras/detail.safetensors", "strength": 0.8}
+            ])),
+        ],
+        Some("inline"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_png(&body["data"][0], 4, 4);
+    assert_eq!(body["warnings"].as_array().expect("warnings").len(), 1);
+    let mut keys: Vec<_> = body
+        .as_object()
+        .expect("response object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["created", "data", "warnings"], "{body}");
+}
+
+/// Artifact delivery with a `LoRA` keeps the warning and emits the same
+/// artifact id as the response.
+#[tokio::test]
+async fn artifact_delivery_with_lora_emits_matching_result() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir =
+        std::env::temp_dir().join(format!("honkbox-edit-lora-artifact-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let catalog = catalog_with(&[
+        sd_entry("comfy:f.safetensors"),
+        lora_entry(
+            "comfy:loras/detail.safetensors",
+            "/models/loras/detail.safetensors",
+        ),
+    ]);
+    let app = app_with(catalog, Some(data_dir.clone()));
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut stream = sse.into_body().into_data_stream();
+    let (status, body) = edits_with_delivery(
+        app,
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+            loras_part(&json!([
+                {"slug": "comfy:loras/detail.safetensors", "strength": 0.8}
+            ])),
+        ],
+        Some("artifact"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["warnings"].as_array().expect("warnings").len(), 1);
+    let job_id = body["job_id"].as_str().expect("job id").to_owned();
+    let artifact = &body["artifacts"][0];
+    assert_eq!(artifact["job_id"], job_id, "{body}");
+    assert!(
+        body["bundle"].as_str().is_some_and(|dir| !dir.is_empty()),
+        "{body}"
+    );
+    let frame = result_frame(&mut stream, &job_id).await;
+    assert_eq!(frame["artifact_id"], artifact["artifact_id"], "{frame}");
+    assert_eq!(frame["sha256"], artifact["artifact_id"], "{frame}");
+    assert_eq!(frame["artifact_name"], "final_00.png", "{frame}");
+    assert_eq!(frame["artifact_kind"], "image", "{frame}");
+    assert_eq!(frame["artifact_index"], 0, "{frame}");
+    assert_eq!(frame["artifact_primary"], true, "{frame}");
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Unknown delivery values are a named 400 before any GPU work.
+#[tokio::test]
+async fn unknown_delivery_header_is_named_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = edits_with_delivery(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("prompt", "redo this"),
+        ],
+        Some("sideways"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unsupported_delivery", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("X-Honkbox-Delivery")),
         "{body}"
     );
 }

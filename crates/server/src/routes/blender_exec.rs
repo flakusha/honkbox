@@ -210,7 +210,14 @@ mod unix {
             ));
         }
         let mut artifacts = Vec::with_capacity(manifest.artifacts.len());
-        for artifact in &manifest.artifacts {
+        // One winner for the whole job, chosen before any frame is emitted:
+        // the first `model`, falling back to index 0 when a recipe has none.
+        let primary_index = manifest
+            .artifacts
+            .iter()
+            .position(|artifact| artifact.kind == "model")
+            .unwrap_or(0);
+        for (index, artifact) in manifest.artifacts.iter().enumerate() {
             let name = artifact
                 .path
                 .file_name()
@@ -243,6 +250,12 @@ mod unix {
                 &info.id,
                 &info.sha256,
                 info.size_bytes,
+                crate::jobs_registry::ArtifactFrameMeta {
+                    name: &name,
+                    kind: &artifact.kind,
+                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                    primary: index == primary_index,
+                },
             );
             artifacts.push(json!({
                 "name": name,
@@ -366,7 +379,7 @@ mod unix {
     mod tests {
         use honkbox_api_types::{
             BlenderJobCompletion, BlenderJobCompletionArtifact, BlenderJobCompletionInput,
-            BlenderJobCompletionJob, BlenderJobCompletionProgress, BlenderStage,
+            BlenderJobCompletionJob, BlenderJobCompletionProgress, BlenderStage, JobEventType,
         };
         use honkbox_external_tools::{AssetArtifact, MeshFormat, Primitive, ProgressEvent};
 
@@ -466,6 +479,130 @@ mod unix {
                 serde_json::to_value(&dto).expect("the completion DTO serializes"),
                 manifest_record(&plan, &manifest, &artifacts)
             );
+        }
+
+        fn test_manifest(artifacts: Vec<AssetArtifact>) -> AssetManifest {
+            AssetManifest {
+                manifest: 1,
+                blender_version: "4.5.15".to_owned(),
+                recipe_version: "0.3.0".to_owned(),
+                recipe_sha256: "b".repeat(64),
+                job: AssetJob {
+                    source: AssetSource::Primitive {
+                        primitive: Primitive::Cube,
+                        size: 2.0,
+                    },
+                    stages: Vec::new(),
+                    output_dir: PathBuf::from("unused-output"),
+                    prefix: "output".to_owned(),
+                    seed: 7,
+                },
+                artifacts,
+                warnings: Vec::new(),
+                progress: Vec::new(),
+            }
+        }
+
+        /// A real multi-artifact bundle: each committed output emits one
+        /// result frame, the first `model` is the only primary (even though
+        /// it is not index 0), and the live snapshot agrees with manifest.json.
+        #[test]
+        fn multi_artifact_commit_emits_one_primary_matching_manifest() {
+            let root =
+                std::env::temp_dir().join(format!("honkbox-blender-meta-{}", ulid::Ulid::new()));
+            let staging = root.join("staging");
+            let bundle = root.join("bundle");
+            std::fs::create_dir_all(&staging).expect("staging dir");
+            std::fs::create_dir_all(&bundle).expect("bundle dir");
+
+            let rows = [
+                ("map_diffuse.png", "map", &b"map-bytes"[..]),
+                ("output.glb", "model", &b"glb-bytes"[..]),
+                ("map_normal.png", "map", &b"normal-bytes"[..]),
+            ];
+            let artifacts: Vec<AssetArtifact> = rows
+                .iter()
+                .map(|(name, kind, bytes)| {
+                    std::fs::write(staging.join(name), bytes).expect("staged artifact");
+                    AssetArtifact {
+                        path: staging.join(name),
+                        kind: (*kind).to_owned(),
+                        bytes: bytes.len(),
+                        sha256: "c".repeat(64),
+                    }
+                })
+                .collect();
+            let manifest = test_manifest(artifacts);
+
+            let registry = crate::jobs_registry::global();
+            let mut receiver = registry.subscribe();
+            let guard = registry.register(crate::jobs_registry::JobKind::Blender, None, false);
+            let plan = JobPlan {
+                stages: Vec::new(),
+                echo: vec![BlenderStage::ExportGlb],
+                input: PathBuf::from("unused-mesh.glb"),
+                format: MeshFormat::Glb,
+                input_id: "a".repeat(64),
+                prefix: "output".to_owned(),
+                seed: 7,
+                timeout: Duration::from_secs(600),
+                max_output_bytes: 1024,
+                artifacts: Arc::new(crate::artifacts::Registry::new(Some(root.clone()), 10_000)),
+                job_id: guard.id().to_owned(),
+            };
+            commit(&plan, &bundle, &manifest).expect("commit bundle");
+
+            let mut frames: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok())
+                .filter(|event| event.event == JobEventType::Result && event.id == guard.id())
+                .collect();
+            frames.sort_by_key(|frame| frame.artifact_index.unwrap_or(u32::MAX));
+            assert_eq!(frames.len(), 3, "one frame per manifest artifact");
+            let expected = [
+                ("map_diffuse.png", "map", 0, false),
+                ("output.glb", "model", 1, true),
+                ("map_normal.png", "map", 2, false),
+            ];
+            for (frame, (name, kind, index, primary)) in frames.iter().zip(expected) {
+                assert_eq!(frame.artifact_name.as_deref(), Some(name));
+                assert_eq!(frame.artifact_kind.as_deref(), Some(kind));
+                assert_eq!(frame.artifact_index, Some(index));
+                assert_eq!(frame.artifact_primary, Some(primary));
+            }
+            assert_eq!(
+                frames
+                    .iter()
+                    .filter(|f| f.artifact_primary == Some(true))
+                    .count(),
+                1,
+                "exactly one primary"
+            );
+
+            let recorded: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(bundle.join("manifest.json")).expect("manifest.json"),
+            )
+            .expect("manifest json");
+            let manifest_rows = recorded["artifacts"].as_array().expect("artifacts");
+            for (frame, row) in frames.iter().zip(manifest_rows) {
+                assert_eq!(frame.artifact_id.as_deref(), row["artifact_id"].as_str());
+                assert_eq!(frame.artifact_name.as_deref(), row["name"].as_str());
+                assert_eq!(frame.artifact_kind.as_deref(), row["kind"].as_str());
+            }
+            let refs = registry
+                .list()
+                .into_iter()
+                .find(|row| row.id == guard.id())
+                .and_then(|row| row.artifacts)
+                .expect("live snapshot");
+            assert_eq!(refs.len(), 3);
+            assert_eq!(refs.iter().filter(|row| row.primary).count(), 1);
+            assert_eq!(refs[1].name, "output.glb");
+            assert_eq!(
+                refs[1].artifact_id,
+                frames[1].artifact_id.as_deref().unwrap()
+            );
+
+            drop(guard);
+            std::fs::remove_dir_all(&root).ok();
         }
     }
 }

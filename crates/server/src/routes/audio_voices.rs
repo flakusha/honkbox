@@ -7,9 +7,12 @@
 
 use axum::{
     Json,
+    extract::State,
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{Voice, VoiceList};
+
+use super::AppConfig;
 
 /// Map a Kokoro voice-id prefix to `(language, gender)` metadata.
 /// Kokoro ids are `<lang><gender>_<name>`: `a`/`b` US/GB English, `e` es,
@@ -37,30 +40,34 @@ pub(super) fn kokoro_voice_meta(id: &str) -> (&'static str, &'static str) {
     (language, gender)
 }
 
-/// `GET /v1/audio/voices`: the supported TTS voice set as an OpenAI-style
-/// list (`{object: "list", data: [{object: "voice", …}]}`). The Kokoro
-/// backend cannot enumerate voices at runtime, so this serves the
-/// statically documented `KOKORO_VOICES` set — honest, no model loaded,
-/// no state. `data[].id` values are exactly what `/v1/audio/speech`
-/// accepts as `voice`.
+/// `GET /v1/audio/voices`: the voice set of the loaded TTS backend as an
+/// OpenAI-style list (`{object: "list", data: [{object: "voice", …}]}`).
+/// Kokoro (`kokoro-cpu`) cannot enumerate voices at runtime, so it serves the
+/// statically documented `KOKORO_VOICES` set; every other backend returns
+/// `data: []` rather than advertising another backend's ids. `object: "voice"`
+/// and the list envelope stay stable across backends.
 #[utoipa::path(
     get,
     path = "/v1/audio/voices",
     responses((status = 200, description = "Supported TTS voices", body = VoiceList))
 )]
-pub(super) async fn get_audio_voices() -> Response {
-    let data = honkbox_audio_worker::KOKORO_VOICES
-        .iter()
-        .map(|id| {
-            let (language, gender) = kokoro_voice_meta(id);
-            Voice {
-                id: (*id).to_owned(),
-                object: "voice".to_owned(),
-                language: language.to_owned(),
-                gender: gender.to_owned(),
-            }
-        })
-        .collect();
+pub(super) async fn get_audio_voices(State(config): State<AppConfig>) -> Response {
+    let data = if config.tts.backend_id() == honkbox_audio_worker::KOKORO_BACKEND_ID {
+        honkbox_audio_worker::KOKORO_VOICES
+            .iter()
+            .map(|id| {
+                let (language, gender) = kokoro_voice_meta(id);
+                Voice {
+                    id: (*id).to_owned(),
+                    object: "voice".to_owned(),
+                    language: language.to_owned(),
+                    gender: gender.to_owned(),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     Json(VoiceList {
         object: "list".to_owned(),
         data,

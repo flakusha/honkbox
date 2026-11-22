@@ -60,13 +60,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use honkbox_api_types::{JobEvent, JobEventType, JobInfo, NsfwAnnotation};
+use honkbox_api_types::{JobArtifactRef, JobEvent, JobEventType, JobInfo, NsfwAnnotation};
 
 /// Broadcast capacity for lifecycle events, in events (not bytes). A
 /// subscriber that falls further behind is `Lagged` — surfaced honestly by
 /// the SSE route instead of silently skipped. Small by design: this is a
 /// liveness stream, not a history log.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+/// Cap on artifact refs kept per live job. Frames are never capped; the
+/// snapshot only needs enough identity to reconcile a dropped frame.
+const MAX_ARTIFACT_REFS: usize = 64;
+
+/// Borrowed selection metadata the producer already holds at emit time.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ArtifactFrameMeta<'a> {
+    pub name: &'a str,
+    pub kind: &'a str,
+    pub index: u32,
+    pub primary: bool,
+}
 
 /// The process-wide registry.
 static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::default);
@@ -141,6 +154,8 @@ struct JobEntry {
     /// Surfaced verbatim by `cancel` so the response never promises an
     /// interruption the route cannot deliver.
     interruptible: bool,
+    /// Artifact identities emitted so far (bounded, emission order).
+    artifacts: Vec<JobArtifactRef>,
 }
 
 impl JobEntry {
@@ -161,6 +176,10 @@ impl JobEntry {
             artifact_id: None,
             sha256: None,
             size_bytes: None,
+            artifact_name: None,
+            artifact_kind: None,
+            artifact_index: None,
+            artifact_primary: None,
             annotations: None,
         }
     }
@@ -221,6 +240,7 @@ impl Registry {
             started_at_ms,
             seq: self.seq.fetch_add(1, Ordering::Relaxed),
             interruptible,
+            artifacts: Vec::new(),
         };
         self.entries
             .lock()
@@ -244,6 +264,10 @@ impl Registry {
             artifact_id: None,
             sha256: None,
             size_bytes: None,
+            artifact_name: None,
+            artifact_kind: None,
+            artifact_index: None,
+            artifact_primary: None,
             annotations: None,
         });
         JobGuard {
@@ -297,6 +321,7 @@ impl Registry {
                 model: entry.model.clone(),
                 started_at_ms: entry.started_at_ms,
                 interruptible: entry.interruptible,
+                artifacts: (!entry.artifacts.is_empty()).then(|| entry.artifacts.clone()),
             })
             .collect()
     }
@@ -331,21 +356,44 @@ impl Registry {
     }
 
     /// Emit a `job_result` event for a live job: one produced artifact,
-    /// identified by its content hash. Fire-and-forget; unknown id is a no-op.
-    pub(crate) fn emit_result(&self, id: &str, artifact_id: &str, sha256: &str, size_bytes: u64) {
+    /// identified by its content hash and its producer's own selection
+    /// metadata. The bounded snapshot gets the same identity so a dropped
+    /// frame can be reconciled. Fire-and-forget; unknown id is a no-op.
+    pub(crate) fn emit_result(
+        &self,
+        id: &str,
+        artifact_id: &str,
+        sha256: &str,
+        size_bytes: u64,
+        meta: ArtifactFrameMeta<'_>,
+    ) {
+        let artifact = JobArtifactRef {
+            artifact_id: artifact_id.to_owned(),
+            name: meta.name.to_owned(),
+            kind: meta.kind.to_owned(),
+            index: meta.index,
+            primary: meta.primary,
+        };
         let mut event = {
-            let entries = self
+            let mut entries = self
                 .entries
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Some(entry) = entries.get(id) else {
+            let Some(entry) = entries.get_mut(id) else {
                 return;
             };
+            if entry.artifacts.len() < MAX_ARTIFACT_REFS {
+                entry.artifacts.push(artifact.clone());
+            }
             entry.to_event(JobEventType::Result, false)
         };
-        event.artifact_id = Some(artifact_id.to_owned());
+        event.artifact_id = Some(artifact.artifact_id);
         event.sha256 = Some(sha256.to_owned());
         event.size_bytes = Some(size_bytes);
+        event.artifact_name = Some(artifact.name);
+        event.artifact_kind = Some(artifact.kind);
+        event.artifact_index = Some(artifact.index);
+        event.artifact_primary = Some(artifact.primary);
         let _ = self.events.send(event);
     }
 
@@ -522,17 +570,192 @@ mod tests {
         registry.emit_progress(job.id(), 1, 0);
         assert_eq!(next_event(&mut receiver).await.pct, None);
 
-        registry.emit_result(job.id(), "art_1", "abc123", 42);
+        registry.emit_result(
+            job.id(),
+            "art_1",
+            "abc123",
+            42,
+            ArtifactFrameMeta {
+                name: "final_00.png",
+                kind: "image",
+                index: 0,
+                primary: true,
+            },
+        );
         let result = next_event(&mut receiver).await;
         assert_eq!(result.event, JobEventType::Result);
         assert_eq!(result.artifact_id.as_deref(), Some("art_1"));
         assert_eq!(result.sha256.as_deref(), Some("abc123"));
         assert_eq!(result.size_bytes, Some(42));
+        assert_eq!(result.artifact_name.as_deref(), Some("final_00.png"));
+        assert_eq!(result.artifact_kind.as_deref(), Some("image"));
+        assert_eq!(result.artifact_index, Some(0));
+        assert_eq!(result.artifact_primary, Some(true));
         assert!(result.step.is_none());
 
         // An id that is not live emits nothing.
-        registry.emit_result("job_unknown", "art_2", "def", 1);
+        registry.emit_result(
+            "job_unknown",
+            "art_2",
+            "def",
+            1,
+            ArtifactFrameMeta {
+                name: "final_00.png",
+                kind: "image",
+                index: 1,
+                primary: false,
+            },
+        );
         assert!(receiver.try_recv().is_err());
+    }
+
+    /// Result frames select one primary artifact; the live snapshot carries
+    /// the same identities and loses them when the guard evicts the entry.
+    #[tokio::test]
+    async fn result_refs_snapshot_primary_and_eviction() {
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(JobKind::Blender, None, false);
+        let _ = next_event(&mut receiver).await; // job_registered
+
+        registry.emit_result(
+            job.id(),
+            "art_preview",
+            "prev",
+            3,
+            ArtifactFrameMeta {
+                name: "preview.webp",
+                kind: "preview",
+                index: 0,
+                primary: false,
+            },
+        );
+        registry.emit_result(
+            job.id(),
+            "art_model",
+            "model",
+            9,
+            ArtifactFrameMeta {
+                name: "output.glb",
+                kind: "model",
+                index: 1,
+                primary: true,
+            },
+        );
+        let first = next_event(&mut receiver).await;
+        let second = next_event(&mut receiver).await;
+        assert_eq!(first.artifact_name.as_deref(), Some("preview.webp"));
+        assert_eq!(first.artifact_kind.as_deref(), Some("preview"));
+        assert_eq!(first.artifact_index, Some(0));
+        assert_eq!(first.artifact_primary, Some(false));
+        assert_eq!(second.artifact_name.as_deref(), Some("output.glb"));
+        assert_eq!(second.artifact_kind.as_deref(), Some("model"));
+        assert_eq!(second.artifact_index, Some(1));
+        assert_eq!(second.artifact_primary, Some(true));
+
+        let listed = registry.list();
+        let refs = listed[0].artifacts.as_ref().expect("artifacts");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].artifact_id, "art_preview");
+        assert_eq!(refs[1].artifact_id, "art_model");
+        assert_eq!(refs.iter().filter(|row| row.primary).count(), 1);
+
+        // The annotation re-emit is artifact-less: no second primary.
+        registry.emit_annotations(job.id(), Vec::new());
+        let annotations = next_event(&mut receiver).await;
+        assert!(annotations.annotations.is_some());
+        assert!(annotations.artifact_id.is_none());
+        assert!(annotations.artifact_primary.is_none());
+        assert_eq!(
+            registry.list()[0]
+                .artifacts
+                .as_ref()
+                .expect("artifacts")
+                .len(),
+            2
+        );
+
+        drop(job);
+        assert!(registry.list().is_empty(), "eviction drops the snapshot");
+    }
+
+    /// A manifest with many outputs cannot grow a live entry without bound.
+    #[test]
+    fn result_refs_are_bounded() {
+        let registry = fresh();
+        let job = registry.register(JobKind::Blender, None, false);
+        for index in 0..70 {
+            registry.emit_result(
+                job.id(),
+                &format!("art_{index}"),
+                "sha",
+                1,
+                ArtifactFrameMeta {
+                    name: "output.glb",
+                    kind: "model",
+                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                    primary: index == 0,
+                },
+            );
+        }
+        let refs = registry.list()[0]
+            .artifacts
+            .as_ref()
+            .expect("artifacts")
+            .clone();
+        assert_eq!(refs.len(), MAX_ARTIFACT_REFS);
+        assert_eq!(refs[0].artifact_id, "art_0");
+        assert_eq!(refs[MAX_ARTIFACT_REFS - 1].artifact_id, "art_63");
+    }
+
+    /// A consumer built for the original three result keys still decodes a
+    /// frame; the additive keys are simply absent on the wire.
+    #[test]
+    fn legacy_result_frame_decodes_without_new_keys() {
+        #[derive(serde::Deserialize)]
+        struct Legacy {
+            event: String,
+            artifact_id: Option<String>,
+            sha256: Option<String>,
+            size_bytes: Option<u64>,
+        }
+
+        let registry = fresh();
+        let mut receiver = registry.subscribe();
+        let job = registry.register(JobKind::Images, None, true);
+        let registered = receiver.try_recv().expect("registered frame");
+        let registered_json = serde_json::to_value(&registered).expect("serialize");
+        for key in [
+            "artifact_name",
+            "artifact_kind",
+            "artifact_index",
+            "artifact_primary",
+        ] {
+            assert!(
+                registered_json.get(key).is_none(),
+                "{key} absent on non-result frames: {registered_json}"
+            );
+        }
+        registry.emit_result(
+            job.id(),
+            "art_1",
+            "abc",
+            3,
+            ArtifactFrameMeta {
+                name: "final_00.png",
+                kind: "image",
+                index: 0,
+                primary: true,
+            },
+        );
+        let event = receiver.try_recv().expect("result frame");
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(json["artifact_name"], "final_00.png");
+        let legacy: Legacy = serde_json::from_value(json).expect("legacy decode");
+        assert_eq!(legacy.event, "job_result");
+        assert_eq!(legacy.artifact_id.as_deref(), Some("art_1"));
+        assert_eq!(legacy.sha256.as_deref(), Some("abc"));
+        assert_eq!(legacy.size_bytes, Some(3));
     }
 
     /// Receive one event with a generous bound (a missed send fails with

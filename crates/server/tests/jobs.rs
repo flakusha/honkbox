@@ -151,12 +151,44 @@ impl honkbox_sd_core::SdPipeline for GatedSd {
 }
 
 fn test_app(sd: Arc<dyn honkbox_sd_core::SdPipeline>) -> Router {
-    test_app_with_entries(sd, Vec::new())
+    test_app_with_entries(sd, Vec::new(), None)
+}
+
+/// SD double that parks on the second image only: the first artifact frame
+/// is emitted before the snapshot is inspected, while the job is still live.
+struct ParkSecondSd {
+    calls: std::sync::atomic::AtomicUsize,
+    gate: Arc<Gate>,
+}
+
+impl honkbox_sd_core::SdPipeline for ParkSecondSd {
+    fn generate(
+        &self,
+        _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == 2 {
+            while !self.gate.wait_bounded(Duration::from_millis(5)) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        Ok(honkbox_sd_core::GeneratedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255],
+        })
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "park-second-sd-test"
+    }
 }
 
 fn test_app_with_entries(
     sd: Arc<dyn honkbox_sd_core::SdPipeline>,
     entries: Vec<honkbox_api_types::ModelCatalogEntry>,
+    data_dir: Option<std::path::PathBuf>,
 ) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
@@ -185,9 +217,9 @@ fn test_app_with_entries(
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
-        data_dir: None,
+        data_dir: data_dir.clone(),
         artifacts: std::sync::Arc::new(crate::artifacts::Registry::new(
-            None.clone(),
+            data_dir,
             crate::config::DEFAULT_ARTIFACT_MAX_BYTES,
         )),
         vram_budget: None,
@@ -645,6 +677,96 @@ async fn events_stream_reports_plain_finish() {
     assert_eq!(finished["cancelled"], false);
 }
 
+/// An artifact-mode two-image job streams one result per image with
+/// selection metadata, and its LIVE snapshot carries the same ids so a
+/// dropped frame is recoverable without another request.
+#[tokio::test]
+async fn artifact_result_frames_and_snapshot_agree() {
+    let _slot = SLOT_LOCK.lock().await;
+    let gate = Arc::new(Gate::new());
+    let sd = Arc::new(ParkSecondSd {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        gate: Arc::clone(&gate),
+    });
+    let dir = std::env::temp_dir().join(format!(
+        "honkbox-jobs-artifact-meta-{}-{}",
+        std::process::id(),
+        ulid::Ulid::new()
+    ));
+    std::fs::create_dir_all(&dir).expect("test data dir");
+    let app = test_app_with_entries(sd.clone(), Vec::new(), Some(dir.clone()));
+
+    let sse = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/events")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("sse");
+    let mut stream = sse.into_body().into_data_stream();
+
+    let generation = tokio::spawn(send(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/v1/images/generations")
+            .header("content-type", "application/json")
+            .header("x-honkbox-delivery", "artifact")
+            .body(Body::from(
+                json!({"prompt":"a honk","n":2,"size":"64x64"}).to_string(),
+            ))
+            .unwrap(),
+    ));
+    // Second image parked ⇒ first frame emitted; the job is still live.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while sd.calls.load(Ordering::SeqCst) < 2 {
+        assert!(Instant::now() < deadline, "second image never entered");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let listed = jobs_list(app.clone()).await;
+    let id = listed["data"][0]["id"].as_str().expect("job id").to_owned();
+    let first = frame_for(&mut stream, "job_result", &id).await;
+    assert_eq!(first["artifact_name"], "final_00.png");
+    assert_eq!(first["artifact_kind"], "image");
+    assert_eq!(first["artifact_index"], 0);
+    assert_eq!(first["artifact_primary"], true);
+    let snapshot = jobs_list(app.clone()).await;
+    let refs = snapshot["data"][0]["artifacts"]
+        .as_array()
+        .expect("artifacts in live snapshot");
+    assert_eq!(refs.len(), 1, "live snapshot: {snapshot}");
+    assert_eq!(refs[0]["artifact_id"], first["artifact_id"]);
+    assert_eq!(refs[0]["name"], "final_00.png");
+    assert_eq!(refs[0]["primary"], true);
+
+    gate.open();
+    let (status, _, body) = tokio::time::timeout(Duration::from_secs(5), generation)
+        .await
+        .expect("generation finishes")
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response: Value = serde_json::from_str(&body).expect("json response");
+    let artifacts = response["artifacts"].as_array().expect("artifacts");
+    assert_eq!(artifacts.len(), 2);
+    let second = frame_for(&mut stream, "job_result", &id).await;
+    assert_eq!(second["artifact_index"], 1);
+    assert_eq!(second["artifact_primary"], false);
+    assert_eq!(second["artifact_name"], "final_00.png");
+    assert_eq!(second["artifact_kind"], "image");
+    // Frame order and HTTP artifacts[] order name the same two artifacts.
+    assert_eq!(first["artifact_id"], artifacts[0]["artifact_id"]);
+    assert_eq!(second["artifact_id"], artifacts[1]["artifact_id"]);
+    let then = jobs_list(app.clone()).await;
+    assert!(
+        then["data"].as_array().expect("data").is_empty(),
+        "entry gone after the response: {then}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// `iVBORw0KGgo=` is base64 of the 8-byte PNG magic — enough for the
 /// magic-sniffing `control_image` check (full decoding is not the route's
 /// job at validation time).
@@ -684,7 +806,7 @@ async fn controlnet_rejections_are_precise_400s() {
         entered: AtomicBool::new(false),
         honor_cancel: false,
     });
-    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()], None);
 
     // Slug without the conditioning image.
     let (status, _, body) = images(
@@ -834,6 +956,7 @@ async fn controlnet_valid_inputs_answer_501_and_empties_fall_through() {
     let app = test_app_with_entries(
         Arc::new(honkbox_sd_core::StubPipeline),
         vec![controlnet_entry()],
+        None,
     );
 
     let (status, _, body) = images(
@@ -870,7 +993,7 @@ async fn controlnet_valid_pair_is_threaded_into_the_sd_cpp_pipeline() {
     let sd = Arc::new(CapturingSd {
         captured: Mutex::new(None),
     });
-    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()], None);
 
     let (status, _, body) = images(
         app,
@@ -910,7 +1033,7 @@ async fn controlnet_strength_default_and_rejection() {
     let sd = Arc::new(CapturingSd {
         captured: Mutex::new(None),
     });
-    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()], None);
 
     let (status, _, body) = images(
         app.clone(),
@@ -954,7 +1077,7 @@ async fn controlnet_type_execution_contract() {
     let sd = Arc::new(CapturingSd {
         captured: Mutex::new(None),
     });
-    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()]);
+    let app = test_app_with_entries(sd.clone(), vec![controlnet_entry()], None);
 
     let canny = honkbox_sd_core::control_type_from_name("canny").expect("engine name");
     let (status, _, body) = images(

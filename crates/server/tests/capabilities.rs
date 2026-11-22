@@ -974,12 +974,50 @@ async fn audio_cpp_feature_off_snapshot_is_honest() {
     let app = app_with(catalog_with(&[]));
     let doc = get_capabilities(&app).await;
     assert_eq!(doc["features"]["decisions"], false);
-    // rerank remains bound to the Python sidecar (the route is mounted);
-    // pin it so the stale "default false" ticket premise cannot regress.
-    assert_eq!(doc["features"]["rerank"], doc["features"]["python_sidecar"]);
+    // No ranker model is configured in this harness: the flag must not
+    // promise a route that answers the named 501. `python_sidecar` stays
+    // bound to the Python switch (also off here).
+    assert_eq!(doc["features"]["rerank"], false);
+    assert_eq!(doc["features"]["python_sidecar"], false);
+    // No swap manager in this harness: the unload/readout routes have no
+    // warm set to act on.
+    assert_eq!(doc["features"]["residency_control"], false);
     assert_eq!(
         doc["features"]["audio_cpp"],
         json!({"built": false, "stt_families": [], "tts_families": []})
+    );
+}
+
+/// With no ranker model configured, the flag is false and the route answers
+/// the same named 501 — no slot, job dir or sidecar child is touched.
+#[tokio::test]
+async fn unconfigured_rerank_flag_and_route_agree() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    assert_eq!(doc["features"]["rerank"], false);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/rerank")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"query": "q", "texts": ["alpha", "beta"]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("infallible");
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(
+        body.contains("rerank unavailable: no ranker model configured"),
+        "{body}"
     );
 }
 

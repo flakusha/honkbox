@@ -638,11 +638,18 @@ pub(super) async fn post_images_generations(
                         );
                     }
                 };
+                let name = format!("final_00.{}", format.extension());
                 crate::jobs_registry::global().emit_result(
                     job.id(),
                     &info.id,
                     &info.sha256,
                     info.size_bytes,
+                    crate::jobs_registry::ArtifactFrameMeta {
+                        name: &name,
+                        kind: "image",
+                        index: u32::try_from(i).unwrap_or(u32::MAX),
+                        primary: i == 0,
+                    },
                 );
                 if !annotations.is_empty() {
                     crate::jobs_registry::global().emit_annotations(job.id(), annotations.clone());

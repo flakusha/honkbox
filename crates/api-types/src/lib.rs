@@ -256,6 +256,11 @@ pub struct FeatureFlags {
     /// Texture post-processing: whether `oiiotool`/`maketx` passes can
     /// run in this build.
     pub texture_postprocess: bool,
+    /// Residency control (`GET /running`, `POST /api/models/unload`): `true`
+    /// exactly when a swap manager exists, so the warm-set readout and
+    /// explicit unload have something to act on. The control routes never
+    /// take a GPU slot themselves.
+    pub residency_control: bool,
 }
 
 /// Vision chat capability (`FeatureFlags::vision`).
@@ -1872,10 +1877,13 @@ pub struct SpeechRequest {
     pub response_format: Option<String>,
 }
 
-/// One TTS voice entry of `GET /v1/audio/voices` (`data[]`).
+/// One TTS voice entry of `GET /v1/audio/voices` (`data[]`). Entries describe
+/// the loaded backend only: Kokoro serves its documented static set, while
+/// backends without a voice-enumeration surface contribute no entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct Voice {
-    /// Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`).
+    /// Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart` for
+    /// Kokoro).
     pub id: String,
     /// Always `"voice"` (OpenAI-style entry tag).
     pub object: String,
@@ -1886,15 +1894,17 @@ pub struct Voice {
     pub gender: String,
 }
 
-/// `GET /v1/audio/voices` response: OpenAI-style list envelope over the
-/// statically documented Kokoro voice set (the backend cannot enumerate
-/// voices at runtime, so this is the *supported* set — served without any
-/// model loaded).
+/// `GET /v1/audio/voices` response: OpenAI-style list envelope whose `data`
+/// depends on the loaded TTS backend. `kokoro-cpu` serves the statically
+/// documented Kokoro set (the backend cannot enumerate voices at runtime);
+/// other backends, including `stub-tts`, return an empty `data` rather than
+/// advertising another backend's ids. The `object: "list"` envelope is stable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct VoiceList {
     /// Always `"list"`.
     pub object: String,
-    /// The supported voices.
+    /// Voices supported by the loaded backend; empty when it cannot
+    /// enumerate them.
     pub data: Vec<Voice>,
 }
 
@@ -2355,6 +2365,27 @@ pub struct DownloadList {
     pub downloads: Vec<DownloadState>,
 }
 
+/// One artifact emitted by a job, as reported by both `job_result` frames
+/// and the live `GET /v1/jobs` snapshot. The five fields are the selection
+/// metadata a consumer needs when a frame was dropped: identity, producer
+/// name/kind, emission order and the single preferred artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct JobArtifactRef {
+    /// Content-addressed artifact id (same value as `JobEvent::artifact_id`).
+    pub artifact_id: String,
+    /// Artifact name from the producer's own record (`final_00.png` for an
+    /// image, the bundle file name for a Blender artifact).
+    pub name: String,
+    /// Artifact kind from the producer's own record (`image`, `model`,
+    /// `map`, `preview`). This is NOT the job modality (`JobInfo::kind`).
+    pub kind: String,
+    /// Zero-based artifact position in emission order.
+    pub index: u32,
+    /// `true` for the one artifact a consumer should prefer; at most one
+    /// entry of a job carries it.
+    pub primary: bool,
+}
+
 /// One in-flight GPU job of `GET /v1/jobs` (NEW-3). Entries appear when a
 /// GPU route admits a request and vanish when the request ends — this is a
 /// liveness view, not history.
@@ -2379,6 +2410,12 @@ pub struct JobInfo {
     /// runs to completion (engine-level cancellation needs a per-backend
     /// spike, per the design record).
     pub interruptible: bool,
+    /// Artifacts emitted so far by this live job, in emission order (bounded
+    /// to 64). Absent until the first `job_result`; a dropped frame can be
+    /// reconciled from this snapshot without a second request. The snapshot
+    /// disappears with the live entry — this is not history or replay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<Vec<JobArtifactRef>>,
 }
 
 /// `GET /v1/jobs` response: OpenAI-style list envelope over in-flight GPU
@@ -2494,6 +2531,20 @@ pub struct JobEvent {
     /// Artifact byte length (`job_result` only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// Artifact name from the producer's own record (`job_result` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_name: Option<String>,
+    /// Artifact kind from the producer's own record (`job_result` only).
+    /// NOT the job modality already carried by `kind`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_kind: Option<String>,
+    /// Zero-based artifact position in emission order (`job_result` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_index: Option<u32>,
+    /// `Some(true)` marks the one preferred artifact of a job (`job_result`
+    /// only); `None` on older frames and on annotation re-emits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_primary: Option<bool>,
     /// NSFW annotations attached to the job's output, when a classifier
     /// ran. Absent when no annotation was produced.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2981,6 +3032,7 @@ mod tests {
             DownloadAccepted::decl(&config),
             DownloadState::decl(&config),
             DownloadList::decl(&config),
+            JobArtifactRef::decl(&config),
             JobInfo::decl(&config),
             JobList::decl(&config),
             JobCancelResult::decl(&config),

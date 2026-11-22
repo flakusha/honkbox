@@ -17,7 +17,7 @@
         "operationId": "post_unload_all",
         "responses": {
           "200": {
-            "description": "Non-pinned residents evicted",
+            "description": "Non-pinned residents evicted; X-Honkbox-Drain: drained|in-flight|reloaded (evicted entries only)",
             "content": {
               "application/json": {
                 "schema": {
@@ -47,7 +47,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Unloaded or not resident",
+            "description": "Unloaded or not resident; X-Honkbox-Drain: drained|in-flight|reloaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -584,7 +584,7 @@
     "/v1/audio/voices": {
       "get": {
         "tags": [],
-        "summary": "`GET /v1/audio/voices`: the supported TTS voice set as an OpenAI-style\nlist (`{object: \"list\", data: [{object: \"voice\", …}]}`). The Kokoro\nbackend cannot enumerate voices at runtime, so this serves the\nstatically documented `KOKORO_VOICES` set — honest, no model loaded,\nno state. `data[].id` values are exactly what `/v1/audio/speech`\naccepts as `voice`.",
+        "summary": "`GET /v1/audio/voices`: the voice set of the loaded TTS backend as an\nOpenAI-style list (`{object: \"list\", data: [{object: \"voice\", …}]}`).\nKokoro (`kokoro-cpu`) cannot enumerate voices at runtime, so it serves the\nstatically documented `KOKORO_VOICES` set; every other backend returns\n`data: []` rather than advertising another backend's ids. `object: \"voice\"`\nand the list envelope stay stable across backends.",
         "operationId": "get_audio_voices",
         "responses": {
           "200": {
@@ -1322,7 +1322,7 @@
     "/v1/images/edits": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/\n`negative_prompt`/`seed`) validate exactly like `generations` — a named\nrecipe plus per-field overrides, explicit fields winning. `output_format`\n(`png` default | `jpeg` | `webp` lossless) and `output_compression`\n(JPEG quality `[0, 100]`; ignored for lossless PNG/WebP) mirror the\n`generations` knobs — unknown format names and non-numeric/out-of-range\ncompression values are named 400s, never clamps. No\n`hires_fix` on this route: the output stays at the source image's\ndimensions. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `loras` (a JSON array of\n`{slug, strength}` objects) resolves through the same\n[`resolve_loras`] as `generations` — max 2, strength `[-2, 2]`\nreject-not-clamp, catalog lookup, single directory — with license notes\nsurfaced as response `warnings` and the resolved slugs/strengths recorded\nin the bundle sidecar. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\n`strength`/`size`/`recipe`/`output_format`/`output_compression`/`loras`\nfields), 404\nunknown model, 429 busy, 500 staging or generation failure.",
+        "summary": "`POST /v1/images/edits`: pragmatic honkbox img2img/inpaint shape over\nthe same SD pipeline seam as `/v1/images/generations` (single image per\nrequest, `n` fixed at 1). `image` is a required PNG (magic-sniffed; the\ndeclared content type is not trusted), `mask` an optional PNG that\nturns the run into inpainting; `prompt` is required; `strength` (the\ndenoise amount, `(0, 1]`, default 0.75) applies to the init image;\n`size` defaults to the source image's dimensions; the remaining recipe\nfields (`recipe`/`sampler`/`scheduler`/`cfg_scale`/`steps`/\n`negative_prompt`/`seed`) validate exactly like `generations` — a named\nrecipe plus per-field overrides, explicit fields winning. `output_format`\n(`png` default | `jpeg` | `webp` lossless) and `output_compression`\n(JPEG quality `[0, 100]`; ignored for lossless PNG/WebP) mirror the\n`generations` knobs — unknown format names and non-numeric/out-of-range\ncompression values are named 400s, never clamps. No\n`hires_fix` on this route: the output stays at the source image's\ndimensions. Inputs are staged as temp\nPNG paths (the vendor reads images from the filesystem) and removed\nafter the generation, including on failure. `loras` (a JSON array of\n`{slug, strength}` objects) resolves through the same\n[`resolve_loras`] as `generations` — max 2, strength `[-2, 2]`\nreject-not-clamp, catalog lookup, single directory — with license notes\nsurfaced as response `warnings` and the resolved slugs/strengths recorded\nin the bundle sidecar. The stub\nbackend honestly ignores image inputs, so its pixels never depend on\nthe upload; tests cover the wire/validation paths. Errors are `OpenAI`\nenvelopes: 400 (missing image/prompt, non-PNG bytes, bad\n`strength`/`size`/`recipe`/`output_format`/`output_compression`/`loras`\nfields), 404\nunknown model, 429 busy, 500 staging or generation failure. `X-Honkbox-Delivery:\nartifact` stores the image in the artifact registry and answers descriptors,\n`bundle` and `job_id` instead of base64; `inline` (default) keeps the\nhistorical base64 `data` response.",
         "operationId": "post_images_edits",
         "requestBody": {
           "description": "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100), loras? (JSON array of {slug, strength})",
@@ -1337,7 +1337,7 @@
         },
         "responses": {
           "200": {
-            "description": "Edited image (base64-encoded bytes in the requested output_format)",
+            "description": "Edited image (base64 bytes by default; X-Honkbox-Delivery: artifact returns artifacts[] with bundle and job_id instead)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1347,7 +1347,7 @@
             }
           },
           "400": {
-            "description": "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, or loras fields",
+            "description": "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, loras, or X-Honkbox-Delivery fields",
             "content": {
               "application/json": {
                 "schema": {
@@ -4085,7 +4085,8 @@
           "rerank",
           "python_sidecar",
           "fizgig",
-          "texture_postprocess"
+          "texture_postprocess",
+          "residency_control"
         ],
         "properties": {
           "artifact_delivery": {
@@ -4135,6 +4136,10 @@
           "rerank": {
             "type": "boolean",
             "description": "Rerank surface (`POST /v1/rerank`): whether a rerank route is\nmounted and backed by a model."
+          },
+          "residency_control": {
+            "type": "boolean",
+            "description": "Residency control (`GET /running`, `POST /api/models/unload`): `true`\nexactly when a swap manager exists, so the warm-set readout and\nexplicit unload have something to act on. The control routes never\ntake a GPU slot themselves."
           },
           "texture_postprocess": {
             "type": "boolean",
@@ -5134,6 +5139,41 @@
           }
         }
       },
+      "JobArtifactRef": {
+        "type": "object",
+        "description": "One artifact emitted by a job, as reported by both `job_result` frames\nand the live `GET /v1/jobs` snapshot. The five fields are the selection\nmetadata a consumer needs when a frame was dropped: identity, producer\nname/kind, emission order and the single preferred artifact.",
+        "required": [
+          "artifact_id",
+          "name",
+          "kind",
+          "index",
+          "primary"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "Content-addressed artifact id (same value as `JobEvent::artifact_id`)."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based artifact position in emission order.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "description": "Artifact kind from the producer's own record (`image`, `model`,\n`map`, `preview`). This is NOT the job modality (`JobInfo::kind`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Artifact name from the producer's own record (`final_00.png` for an\nimage, the bundle file name for a Blender artifact)."
+          },
+          "primary": {
+            "type": "boolean",
+            "description": "`true` for the one artifact a consumer should prefer; at most one\nentry of a job carries it."
+          }
+        }
+      },
       "JobCancelResult": {
         "type": "object",
         "description": "`POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` is `true`\nwhen a cancel was requested for a found id — the cooperative-stop token\nwas marked — and is never `false` for a found id; an unknown id\n(finished or never registered) is a plain-text 404. Whether the work can\nactually stop early is a SEPARATE fact: `interruptible` is reported per\njob by [`JobInfo`] (`GET /v1/jobs`) and by the `job_cancelled`\n[`JobEvent`] (`GET /v1/events`), not by this response.",
@@ -5175,6 +5215,36 @@
               "null"
             ],
             "description": "Content-addressed artifact id (`job_result` only)."
+          },
+          "artifact_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Zero-based artifact position in emission order (`job_result` only).",
+            "minimum": 0
+          },
+          "artifact_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Artifact kind from the producer's own record (`job_result` only).\nNOT the job modality already carried by `kind`."
+          },
+          "artifact_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Artifact name from the producer's own record (`job_result` only)."
+          },
+          "artifact_primary": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`Some(true)` marks the one preferred artifact of a job (`job_result`\nonly); `None` on older frames and on annotation re-emits."
           },
           "cancelled": {
             "type": "boolean",
@@ -5274,6 +5344,16 @@
           "interruptible"
         ],
         "properties": {
+          "artifacts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/JobArtifactRef"
+            },
+            "description": "Artifacts emitted so far by this live job, in emission order (bounded\nto 64). Absent until the first `job_result`; a dropped frame can be\nreconciled from this snapshot without a second request. The snapshot\ndisappears with the live entry — this is not history or replay."
+          },
           "id": {
             "type": "string",
             "description": "Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.\nAlso stamped as the `X-Job-Id` response header of the owning request\n(on SSE routes it precedes the stream body)."
@@ -7751,7 +7831,7 @@
       },
       "Voice": {
         "type": "object",
-        "description": "One TTS voice entry of `GET /v1/audio/voices` (`data[]`).",
+        "description": "One TTS voice entry of `GET /v1/audio/voices` (`data[]`). Entries describe\nthe loaded backend only: Kokoro serves its documented static set, while\nbackends without a voice-enumeration surface contribute no entries.",
         "required": [
           "id",
           "object",
@@ -7765,7 +7845,7 @@
           },
           "id": {
             "type": "string",
-            "description": "Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart`)."
+            "description": "Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart` for\nKokoro)."
           },
           "language": {
             "type": "string",
@@ -7779,7 +7859,7 @@
       },
       "VoiceList": {
         "type": "object",
-        "description": "`GET /v1/audio/voices` response: OpenAI-style list envelope over the\nstatically documented Kokoro voice set (the backend cannot enumerate\nvoices at runtime, so this is the *supported* set — served without any\nmodel loaded).",
+        "description": "`GET /v1/audio/voices` response: OpenAI-style list envelope whose `data`\ndepends on the loaded TTS backend. `kokoro-cpu` serves the statically\ndocumented Kokoro set (the backend cannot enumerate voices at runtime);\nother backends, including `stub-tts`, return an empty `data` rather than\nadvertising another backend's ids. The `object: \"list\"` envelope is stable.",
         "required": [
           "object",
           "data"
@@ -7790,7 +7870,7 @@
             "items": {
               "$ref": "#/components/schemas/Voice"
             },
-            "description": "The supported voices."
+            "description": "Voices supported by the loaded backend; empty when it cannot\nenumerate them."
           },
           "object": {
             "type": "string",

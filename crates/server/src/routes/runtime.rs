@@ -3,10 +3,12 @@
 //! The router registrations stay in `routes.rs`: the `OpenAPI` coverage gate
 //! scans that file for `.route()` calls. Only handlers live here.
 
+use std::time::{Duration, Instant};
+
 use axum::{
     Json,
     extract::{Path as AxumPath, State},
-    http::StatusCode,
+    http::{HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{
@@ -14,7 +16,75 @@ use honkbox_api_types::{
     UnloadAllResult, UnloadResult,
 };
 
+use crate::swap::{DrainProbe, SwapManager};
+
 use super::AppConfig;
+
+/// Fixed courtesy grace for an explicit unload: a real model can take much
+/// longer to free, so control routes report the truth at the bound instead
+/// of blocking indefinitely. No new config knob.
+const DRAIN_BOUND: Duration = Duration::from_millis(200);
+const DRAIN_POLL: Duration = Duration::from_millis(5);
+/// Additive header; existing JSON bodies stay byte-compatible for loop-lore.
+const DRAIN_HEADER: &str = "x-honkbox-drain";
+
+/// Post-unload state of the evicted pipelines, observed without a lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DrainState {
+    /// No holder left and no new resident under the evicted slug(s).
+    Drained,
+    /// An in-flight holder still owns the pipeline; it is never killed.
+    InFlight,
+    /// A queued admission re-loaded the slug inside the wait window.
+    Reloaded,
+}
+
+impl DrainState {
+    fn header_value(self) -> &'static str {
+        match self {
+            Self::Drained => "drained",
+            Self::InFlight => "in-flight",
+            Self::Reloaded => "reloaded",
+        }
+    }
+}
+
+/// Wait at most [`DRAIN_BOUND`] for the evicted pipelines' in-flight `Arc`
+/// holders to drop. A queued admission can re-load the same slug in this
+/// window; that is reported as `reloaded`, never hidden. No GPU slot is taken
+/// here and no request is aborted — the readouts stay honest instead.
+async fn drain_state(swap: &SwapManager, probes: &[(String, DrainProbe)]) -> DrainState {
+    if probes.is_empty() {
+        return DrainState::Drained;
+    }
+    let deadline = Instant::now() + DRAIN_BOUND;
+    loop {
+        let in_flight = probes.iter().any(|(_, probe)| !probe.is_empty());
+        let resident = swap.residency();
+        let reloaded = probes
+            .iter()
+            .any(|(slug, _)| resident.iter().any(|entry| entry.slug == *slug));
+        if !in_flight && !reloaded {
+            return DrainState::Drained;
+        }
+        if Instant::now() >= deadline {
+            return if in_flight {
+                DrainState::InFlight
+            } else {
+                DrainState::Reloaded
+            };
+        }
+        tokio::time::sleep(DRAIN_POLL).await;
+    }
+}
+
+fn with_drain(mut response: Response, state: DrainState) -> Response {
+    response.headers_mut().insert(
+        HeaderName::from_static(DRAIN_HEADER),
+        HeaderValue::from_static(state.header_value()),
+    );
+    response
+}
 
 /// `GET /v1/memory`: residency readout (REQ-5) - exactly the models the
 /// swap manager considers resident, with `loaded_at`, `expires_at`,
@@ -126,9 +196,14 @@ pub(super) async fn get_running(State(config): State<AppConfig>) -> Response {
 #[utoipa::path(
     post,
     path = "/api/models/unload",
-    responses((status = 200, description = "Non-pinned residents evicted", body = UnloadAllResult))
+    responses((status = 200, description = "Non-pinned residents evicted; X-Honkbox-Drain: drained|in-flight|reloaded (evicted entries only)", body = UnloadAllResult))
 )]
 pub(super) async fn post_unload_all(State(config): State<AppConfig>) -> Response {
+    // Capture weak handles BEFORE eviction; pinned survivors are not probed.
+    let probes = config
+        .swap
+        .as_ref()
+        .map_or_else(Vec::new, |swap| swap.drain_probes());
     let evicted = match &config.swap {
         Some(swap) => swap.evict_all_unpinned(crate::metrics::UnloadReason::Explicit),
         None => 0,
@@ -136,11 +211,25 @@ pub(super) async fn post_unload_all(State(config): State<AppConfig>) -> Response
     if evicted > 0 {
         tracing::info!(count = evicted, "bulk explicit unload");
     }
-    Json(UnloadAllResult {
-        unloaded: u32::try_from(evicted).unwrap_or(u32::MAX),
-        reason: "explicit".to_owned(),
-    })
-    .into_response()
+    if probes.is_empty() {
+        return Json(UnloadAllResult {
+            unloaded: u32::try_from(evicted).unwrap_or(u32::MAX),
+            reason: "explicit".to_owned(),
+        })
+        .into_response();
+    }
+    let state = match &config.swap {
+        Some(swap) => drain_state(swap, &probes).await,
+        None => DrainState::Drained,
+    };
+    with_drain(
+        Json(UnloadAllResult {
+            unloaded: u32::try_from(evicted).unwrap_or(u32::MAX),
+            reason: "explicit".to_owned(),
+        })
+        .into_response(),
+        state,
+    )
 }
 
 /// `POST /api/models/unload/{model}`: llama-swap-compatible single unload
@@ -155,7 +244,7 @@ pub(super) async fn post_unload_all(State(config): State<AppConfig>) -> Response
     path = "/api/models/unload/{model}",
     params(("model" = String, Path, description = "Operator alias or registry slug")),
     responses(
-        (status = 200, description = "Unloaded or not resident", body = UnloadResult),
+        (status = 200, description = "Unloaded or not resident; X-Honkbox-Drain: drained|in-flight|reloaded", body = UnloadResult),
         (status = 404, description = "Unknown model (body contains `model not found`)"),
         (status = 409, description = "Model is pinned; explicit refusal")
     )
@@ -170,9 +259,25 @@ pub(super) async fn post_unload_one(
         return (StatusCode::NOT_FOUND, format!("model not found: {model}")).into_response();
     };
     let slug = slug.to_owned();
+    // Weak handle captured while the entry is still resident: after eviction
+    // it reports the in-flight holders that are deliberately left running.
+    let probes: Vec<(String, DrainProbe)> = config
+        .swap
+        .as_ref()
+        .and_then(|swap| swap.drain_probe(&slug))
+        .map(|probe| vec![(slug.clone(), probe)])
+        .unwrap_or_default();
     let outcome = match &config.swap {
         Some(swap) => swap.evict_by_slug(&slug, crate::metrics::UnloadReason::Explicit),
         None => crate::swap::EvictOutcome::NotLoaded,
     };
-    super::models::unload_response(outcome, slug)
+    let response = super::models::unload_response(outcome, slug);
+    if !response.status().is_success() || probes.is_empty() {
+        return response;
+    }
+    let state = match &config.swap {
+        Some(swap) => drain_state(swap, &probes).await,
+        None => DrainState::Drained,
+    };
+    with_drain(response, state)
 }

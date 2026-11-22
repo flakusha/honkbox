@@ -67,7 +67,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
-use honkbox_audio_worker::{StubStt, StubTts, encode_wav};
+use honkbox_audio_worker::{
+    KOKORO_BACKEND_ID, KOKORO_VOICES, StubStt, StubTts, SynthesizeRequest, SynthesizedAudio,
+    TtsError, TtsPipeline, encode_wav,
+};
 use honkbox_llm_worker::StubLlm;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -109,6 +112,11 @@ fn catalog_with(ids: &[&str]) -> ModelCatalog {
 }
 
 fn test_app() -> Router {
+    test_app_with_tts(Arc::new(StubTts))
+}
+
+/// Router fixture with an explicit TTS backend for the voices dispatch test.
+fn test_app_with_tts(tts: Arc<dyn TtsPipeline>) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
@@ -130,7 +138,7 @@ fn test_app() -> Router {
         tts_model: Some("llm:tts-fake.gguf".to_owned()),
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
-        tts: Arc::new(StubTts),
+        tts,
         sd: Arc::new(honkbox_sd_core::StubPipeline),
         sd_model: None,
         swap: None,
@@ -781,12 +789,45 @@ async fn speech_flac_and_opus_containers() {
     }
 }
 
-/// `GET /v1/audio/voices`: the statically documented supported Kokoro set,
-/// served as an OpenAI-style list without any model loaded.
-#[tokio::test]
-async fn voices_lists_supported_kokoro_set() {
+/// Test-only TTS backend with a distinct `backend_id`; synthesis delegates to
+/// the stub so `/v1/audio/speech` stays cheap and deterministic.
+struct NamedTts(&'static str);
+
+impl TtsPipeline for NamedTts {
+    fn synthesize(&self, req: &SynthesizeRequest) -> Result<SynthesizedAudio, TtsError> {
+        StubTts.synthesize(req)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        self.0
+    }
+}
+
+/// Test-only Kokoro-like TTS: records the `voice` the route hands to the
+/// worker, then delegates audio to the stub (cheap and deterministic).
+/// Unlike `StubTts`, it observes `req.voice`, so the advertised-id round trip
+/// is assertable.
+struct RecordingTts {
+    voices: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl TtsPipeline for RecordingTts {
+    fn synthesize(&self, req: &SynthesizeRequest) -> Result<SynthesizedAudio, TtsError> {
+        self.voices
+            .lock()
+            .expect("voice log poisoned")
+            .push(req.voice.clone());
+        StubTts.synthesize(req)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        KOKORO_BACKEND_ID
+    }
+}
+
+async fn get_voices(app: Router) -> (StatusCode, String, Value) {
     let (status, ct, bytes) = send(
-        test_app(),
+        app,
         Request::builder()
             .method("GET")
             .uri("/v1/audio/voices")
@@ -794,12 +835,59 @@ async fn voices_lists_supported_kokoro_set() {
             .unwrap(),
     )
     .await;
+    (
+        status,
+        ct,
+        serde_json::from_slice(&bytes).expect("list envelope"),
+    )
+}
+
+/// `GET /v1/audio/voices`: the list belongs to the loaded backend. A
+/// non-Kokoro backend advertises none, so no Kokoro id leaks; the envelope
+/// stays stable.
+#[tokio::test]
+async fn voices_for_non_kokoro_backends_are_empty() {
+    for tts in [
+        Arc::new(StubTts) as Arc<dyn TtsPipeline>,
+        Arc::new(NamedTts("other-tts")),
+    ] {
+        let (status, ct, parsed) = get_voices(test_app_with_tts(tts)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(ct.starts_with("application/json"), "{ct}");
+        assert_eq!(parsed["object"], "list");
+        assert_eq!(parsed["data"], json!([]), "{parsed}");
+        let data = parsed["data"].as_array().expect("data array");
+        assert!(
+            data.iter().all(|v| {
+                let id = v["id"].as_str().unwrap_or("");
+                !KOKORO_VOICES.contains(&id)
+            }),
+            "a non-Kokoro backend leaked a Kokoro id: {parsed}"
+        );
+    }
+}
+
+/// `GET /v1/audio/voices`: the Kokoro backend advertises exactly its static
+/// set, and every advertised id reaches `/v1/audio/speech` as that request's
+/// `voice` (proved by a recording fake; `StubTts` ignores `req.voice`).
+#[tokio::test]
+async fn voices_for_kokoro_backend_are_all_synthesizable() {
+    let _slot = SLOT_LOCK.lock().await;
+    let voices_seen = Arc::new(std::sync::Mutex::new(Vec::<Option<String>>::new()));
+    let app = test_app_with_tts(Arc::new(RecordingTts {
+        voices: Arc::clone(&voices_seen),
+    }));
+    let (status, ct, parsed) = get_voices(app.clone()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(ct.starts_with("application/json"), "{ct}");
-    let parsed: Value = serde_json::from_slice(&bytes).expect("list envelope");
     assert_eq!(parsed["object"], "list");
     let data = parsed["data"].as_array().expect("data array");
-    assert!(!data.is_empty(), "supported set is non-empty");
+    let advertised: Vec<&str> = data
+        .iter()
+        .map(|v| v["id"].as_str().expect("voice id"))
+        .collect();
+    assert_eq!(advertised.len(), KOKORO_VOICES.len());
+    assert!(KOKORO_VOICES.iter().all(|id| advertised.contains(id)));
     assert!(data.iter().all(|v| v["object"] == "voice"), "{parsed}");
     let heart = data
         .iter()
@@ -807,6 +895,26 @@ async fn voices_lists_supported_kokoro_set() {
         .expect("af_heart in the supported set");
     assert_eq!(heart["language"], "en-US");
     assert_eq!(heart["gender"], "female");
+
+    for id in &advertised {
+        let (status, ct, bytes) = post_json(
+            app.clone(),
+            "/v1/audio/speech",
+            json!({"input": "hi", "voice": id}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "voice {id}");
+        assert!(ct.starts_with("audio/"), "{id}: {ct}");
+        assert!(!bytes.is_empty(), "voice {id}: empty payload");
+    }
+
+    // The voices route and synthesis must agree id-for-id: each advertised
+    // voice arrived at the worker unchanged, in advertisement order.
+    let received = voices_seen.lock().expect("voice log poisoned");
+    assert_eq!(received.len(), advertised.len());
+    for (want, got) in advertised.iter().zip(received.iter()) {
+        assert_eq!(got.as_deref(), Some(*want), "voice {want} not passed through");
+    }
 }
 
 /// H3 (ReviewedAudio): the served `OpenAPI` document must carry the REQ-9

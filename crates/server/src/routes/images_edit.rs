@@ -13,17 +13,21 @@ use axum::{
     Json,
     body::Bytes,
     extract::{Multipart, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use base64::Engine as _;
-use honkbox_api_types::{ImageB64, ImagesGenerationResponse, ImagesLora, OpenAiError};
+use honkbox_api_types::{
+    ImageArtifact, ImageB64, ImagesGenerationResponse, ImagesLora, OpenAiError,
+};
 
 use super::audio_multipart::bad_multipart;
+use super::chat_prep::{admit_then_register, with_job_id};
 use super::images_generate::{
     GenerateFailure, generate_image_bytes, image_scheduler_name, write_generation_bundle,
+    write_generation_bundle_strict,
 };
-use super::images_inputs::{parse_output_format, resolve_loras};
+use super::images_inputs::{DeliveryMode, parse_output_format, resolve_loras};
 use super::images_recipe::{resolve_sd_model, validate_recipe};
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
@@ -244,15 +248,18 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 /// envelopes: 400 (missing image/prompt, non-PNG bytes, bad
 /// `strength`/`size`/`recipe`/`output_format`/`output_compression`/`loras`
 /// fields), 404
-/// unknown model, 429 busy, 500 staging or generation failure.
+/// unknown model, 429 busy, 500 staging or generation failure. `X-Honkbox-Delivery:
+/// artifact` stores the image in the artifact registry and answers descriptors,
+/// `bundle` and `job_id` instead of base64; `inline` (default) keeps the
+/// historical base64 `data` response.
 #[allow(clippy::too_many_lines)] // linear multipart handler; see `post_images_generations`
 #[utoipa::path(
     post,
     path = "/v1/images/edits",
     request_body(content = String, description = "multipart/form-data: image (PNG, required), mask? (PNG), prompt (required), model?, strength?, size?, recipe?, sampler?, scheduler?, cfg_scale?, steps?, negative_prompt?, seed?, output_format? (png|jpeg|webp), output_compression? (JPEG quality 0-100), loras? (JSON array of {slug, strength})"),
     responses(
-        (status = 200, description = "Edited image (base64-encoded bytes in the requested output_format)", body = ImagesGenerationResponse),
-        (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, or loras fields", body = OpenAiError),
+        (status = 200, description = "Edited image (base64 bytes by default; X-Honkbox-Delivery: artifact returns artifacts[] with bundle and job_id instead)", body = ImagesGenerationResponse),
+        (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, loras, or X-Honkbox-Delivery fields", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Generation failed", body = OpenAiError)
@@ -260,8 +267,19 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
 )]
 pub(super) async fn post_images_edits(
     State(config): State<AppConfig>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> Response {
+    let delivery = match DeliveryMode::parse(
+        headers
+            .get("X-Honkbox-Delivery")
+            .map(|value| value.to_str().unwrap_or_default()),
+    ) {
+        Ok(delivery) => delivery,
+        Err((message, code)) => {
+            return openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
+        }
+    };
     let edit = match parse_image_edit_upload(multipart).await {
         Ok(edit) => edit,
         Err(response) => return *response,
@@ -414,10 +432,17 @@ pub(super) async fn post_images_edits(
             Some(refusal.code()),
         );
     }
-    // Shared admission gate (REQ-6 Option A): same slot acquisition as the
-    // generations route (lease dropped at the route ends below).
-    let lease = match crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await {
-        Ok(lease) => lease,
+    // Admission first, registration second: a 429 has no job or `X-Job-Id`.
+    // Edits stay non-interruptible (`false`), like the never-cancelled
+    // token passed to the pipeline below.
+    let (lease, job) = match admit_then_register(
+        crate::jobs_registry::global(),
+        crate::admission::acquire(honkbox_residency::ResourceKind::Sd).await,
+        crate::jobs_registry::JobKind::Images,
+        Some(slug.clone()),
+        false,
+    ) {
+        Ok(pair) => pair,
         Err((status, message)) => return openai_error_response(status, message, None),
     };
     // Stage the inputs as scratch PNGs (the vendor reads images from
@@ -443,10 +468,13 @@ pub(super) async fn post_images_edits(
         let _ = std::fs::remove_file(&init_path);
         let _ = std::fs::remove_file(&mask_path);
         drop(lease);
-        return openai_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to stage input image: {err}"),
-            Some("staging_failed"),
+        return with_job_id(
+            openai_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to stage input image: {err}"),
+                Some("staging_failed"),
+            ),
+            job.id(),
         );
     }
     let pipeline = Arc::clone(&config.sd);
@@ -491,9 +519,9 @@ pub(super) async fn post_images_edits(
         },
         format,
         compression,
-        // The edits route registers no job, so nothing can cancel it: a
-        // fresh flag and a never-cancelled token (the pipeline never
-        // observes a cancel here).
+        // The edits job is non-interruptible, so nothing can cancel this
+        // render: a fresh flag and a never-cancelled token (the pipeline
+        // never observes a cancel here).
         Arc::new(AtomicBool::new(false)),
         tokio_util::sync::CancellationToken::new(),
     )
@@ -511,20 +539,26 @@ pub(super) async fn post_images_edits(
                 GenerateFailure::Failed(message) => message,
                 GenerateFailure::Cancelled => String::from("generation cancelled"),
             };
-            return openai_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                message,
-                Some("generation_failed"),
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    message,
+                    Some("generation_failed"),
+                ),
+                job.id(),
             );
         }
     };
     let nsfw = match super::nsfw::classify(&bytes, format.extension()) {
         Ok(decision) => decision,
         Err(message) => {
-            return openai_error_response(
-                StatusCode::NOT_IMPLEMENTED,
-                message,
-                Some("nsfw_classifier_unavailable"),
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::NOT_IMPLEMENTED,
+                    message,
+                    Some("nsfw_classifier_unavailable"),
+                ),
+                job.id(),
             );
         }
     };
@@ -532,10 +566,13 @@ pub(super) async fn post_images_edits(
         super::nsfw::Decision::Skipped => Vec::new(),
         super::nsfw::Decision::Allowed(annotation) => vec![annotation],
         super::nsfw::Decision::Blocked => {
-            return openai_error_response(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "image blocked by the configured NSFW policy".to_string(),
-                Some("nsfw_blocked"),
+            return with_job_id(
+                openai_error_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "image blocked by the configured NSFW policy".to_string(),
+                    Some("nsfw_blocked"),
+                ),
+                job.id(),
             );
         }
     };
@@ -543,42 +580,99 @@ pub(super) async fn post_images_edits(
         .iter()
         .map(super::nsfw::bundle_annotation)
         .collect();
-    write_generation_bundle(
-        &config,
-        &crate::jobs::BundleInputs {
-            model_slug: slug,
-            prompt,
-            seed: recipe.seed_base,
-            steps: recipe.steps,
-            width,
-            height,
-            format,
-            backend_id,
-            model_sha256,
-            engine_version,
-            sampler: recipe.sampler.name().to_string(),
-            scheduler: image_scheduler_name(recipe.scheduler),
-            cfg_scale: recipe.cfg_scale,
-            negative_prompt: recipe.negative_prompt,
-            loras: lora_records,
-            strength: Some(strength),
-            recipe: recipe.name.map(str::to_owned),
-            hires: None,
-            annotations: bundle_annotations,
-        },
-        &bytes,
-        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    );
+    let bundle_inputs = crate::jobs::BundleInputs {
+        model_slug: slug,
+        prompt,
+        seed: recipe.seed_base,
+        steps: recipe.steps,
+        width,
+        height,
+        format,
+        backend_id,
+        model_sha256,
+        engine_version,
+        sampler: recipe.sampler.name().to_string(),
+        scheduler: image_scheduler_name(recipe.scheduler),
+        cfg_scale: recipe.cfg_scale,
+        negative_prompt: recipe.negative_prompt,
+        loras: lora_records,
+        strength: Some(strength),
+        recipe: recipe.name.map(str::to_owned),
+        hires: None,
+        annotations: bundle_annotations,
+    };
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut data = Vec::new();
+    let mut artifacts = Vec::new();
+    let mut bundle = None;
+    match delivery {
+        DeliveryMode::Inline => {
+            write_generation_bundle(&config, &bundle_inputs, &bytes, elapsed_ms);
+            data.push(ImageB64 {
+                b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            });
+        }
+        DeliveryMode::Artifact => {
+            let dir =
+                match write_generation_bundle_strict(&config, &bundle_inputs, &bytes, elapsed_ms) {
+                    Ok(dir) => dir,
+                    Err(message) => {
+                        return with_job_id(
+                            openai_error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                message,
+                                Some("bundle_write_failed"),
+                            ),
+                            job.id(),
+                        );
+                    }
+                };
+            let info = match config.artifacts.put_bytes(&bytes, format.mime()) {
+                Ok(info) => info,
+                Err(err) => {
+                    return with_job_id(
+                        openai_error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("artifact store failed: {err}"),
+                            Some("artifact_store_failed"),
+                        ),
+                        job.id(),
+                    );
+                }
+            };
+            let name = format!("final_00.{}", format.extension());
+            crate::jobs_registry::global().emit_result(
+                job.id(),
+                &info.id,
+                &info.sha256,
+                info.size_bytes,
+                crate::jobs_registry::ArtifactFrameMeta {
+                    name: &name,
+                    kind: "image",
+                    index: 0,
+                    primary: true,
+                },
+            );
+            artifacts.push(ImageArtifact {
+                artifact_id: info.id,
+                content_type: info.content_type,
+                size_bytes: info.size_bytes,
+                job_id: job.id().to_owned(),
+            });
+            bundle = Some(dir);
+        }
+    }
     drop(lease);
-    Json(ImagesGenerationResponse {
-        created: epoch_secs(),
-        data: vec![ImageB64 {
-            b64_json: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        }],
-        warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
-        artifacts: None,
-        bundle: None,
-        job_id: None,
-    })
-    .into_response()
+    with_job_id(
+        Json(ImagesGenerationResponse {
+            created: epoch_secs(),
+            data,
+            warnings: (!lora_warnings.is_empty()).then_some(lora_warnings),
+            artifacts: (!artifacts.is_empty()).then_some(artifacts),
+            bundle,
+            job_id: (delivery == DeliveryMode::Artifact).then(|| job.id().to_owned()),
+        })
+        .into_response(),
+        job.id(),
+    )
 }
