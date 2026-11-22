@@ -913,7 +913,11 @@ async fn voices_for_kokoro_backend_are_all_synthesizable() {
     let received = voices_seen.lock().expect("voice log poisoned");
     assert_eq!(received.len(), advertised.len());
     for (want, got) in advertised.iter().zip(received.iter()) {
-        assert_eq!(got.as_deref(), Some(*want), "voice {want} not passed through");
+        assert_eq!(
+            got.as_deref(),
+            Some(*want),
+            "voice {want} not passed through"
+        );
     }
 }
 

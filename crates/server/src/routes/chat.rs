@@ -134,6 +134,21 @@ pub(super) fn free_gpu_lease(slot: &Mutex<Option<crate::admission::GpuLease>>) {
         .take();
 }
 
+/// Bridge a registry job cancel into the per-request `RequestCancel` flag.
+/// Without this watcher the downstream reader only notices a cancel at the
+/// next token boundary, so a stalled upstream keeps the socket and GPU lease
+/// until its own timeout. The watcher is aborted when the SSE body drops.
+pub(super) fn watch_job_cancel(
+    token: tokio_util::sync::CancellationToken,
+    cancel: RequestCancel,
+) -> tokio::task::AbortHandle {
+    tokio::spawn(async move {
+        token.cancelled().await;
+        cancel.cancel();
+    })
+    .abort_handle()
+}
+
 /// SSE body wrapper: dropping the body (client disconnect, or the stream
 /// ending normally) marks the request cancelled and calls the pipeline's
 /// `abort` hook so the synchronous FFI generation stops at its next token
@@ -150,6 +165,8 @@ pub(super) struct CancelOnDrop<S> {
     pub(super) pipe: Arc<dyn LlmPipeline>,
     /// Per-request cancel token: only this stream's reader is interrupted.
     pub(super) cancel: RequestCancel,
+    /// Registry cancel watcher; aborted when the body ends for any reason.
+    pub(super) job_cancel_watcher: Option<tokio::task::AbortHandle>,
     /// Blocking worker task feeding `inner`.
     pub(super) _worker: tokio::task::JoinHandle<()>,
 }
@@ -164,6 +181,9 @@ impl<S: Stream + Unpin> Stream for CancelOnDrop<S> {
 
 impl<S> Drop for CancelOnDrop<S> {
     fn drop(&mut self) {
+        if let Some(watcher) = &self.job_cancel_watcher {
+            watcher.abort();
+        }
         if self.done.load(Ordering::Relaxed) {
             return;
         }
@@ -266,6 +286,7 @@ pub(super) async fn post_chat_stream(
     let body_cancel = cancel.clone();
     let worker_cancelled = cancelled.clone();
     let job_token = job.token().clone();
+    let job_cancel_watcher = watch_job_cancel(job_token.clone(), cancel.clone());
     let worker_done = done.clone();
     let job_id = job.id().to_owned();
     let worker = tokio::task::spawn_blocking(move || {
@@ -319,9 +340,37 @@ pub(super) async fn post_chat_stream(
             done,
             pipe: abort_pipe,
             cancel: body_cancel,
+            job_cancel_watcher: Some(job_cancel_watcher),
             _worker: worker,
         })
         .into_response(),
         &job_id,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn job_cancel_watcher_sets_only_its_request_cancel() {
+        let token = CancellationToken::new();
+        let request_cancel = RequestCancel::new();
+        let sibling = RequestCancel::new();
+        let handle = watch_job_cancel(token.clone(), request_cancel.clone());
+
+        token.cancel();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !request_cancel.is_cancelled() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(
+            request_cancel.is_cancelled(),
+            "job cancel did not reach the reader"
+        );
+        assert!(!sibling.is_cancelled(), "sibling request was cancelled");
+        handle.abort();
+    }
 }

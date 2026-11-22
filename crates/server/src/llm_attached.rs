@@ -654,6 +654,7 @@ mod tests {
     use std::io::Write;
     use std::net::TcpListener;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
 
     fn fake_server(body: &'static str, sse: bool) -> (String, std::thread::JoinHandle<()>) {
@@ -746,9 +747,11 @@ mod tests {
 
     /// SSE server: health + models, then `chats` streams that emit one
     /// token, pause long enough for a cancel to be observed, then `[DONE]`.
-    fn stalling_server(chats: usize) -> (String, std::thread::JoinHandle<()>) {
+    fn stalling_server(chats: usize) -> (String, std::thread::JoinHandle<()>, Arc<AtomicBool>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake");
         let port = listener.local_addr().expect("addr").port();
+        let closed = Arc::new(AtomicBool::new(false));
+        let closed_flag = Arc::clone(&closed);
         let handle = std::thread::spawn(move || {
             for stream in listener.incoming().take(2 + chats) {
                 let Ok(mut stream) = stream else { return };
@@ -783,17 +786,38 @@ mod tests {
                     let _ = stream
                         .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
                     let _ = stream.flush();
-                    std::thread::sleep(Duration::from_secs(2));
-                    let _ = stream.write_all(b"data: [DONE]\n\n");
+                    stream
+                        .set_read_timeout(Some(Duration::from_millis(20)))
+                        .expect("read timeout");
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    let mut probe = [0u8; 1];
+                    while Instant::now() < deadline {
+                        match stream.read(&mut probe) {
+                            Ok(0) => {
+                                closed_flag.store(true, Ordering::Release);
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(err)
+                                if matches!(
+                                    err.kind(),
+                                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                                ) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if !closed_flag.load(Ordering::Acquire) {
+                        let _ = stream.write_all(b"data: [DONE]\n\n");
+                    }
                 }
             }
         });
-        (format!("http://127.0.0.1:{port}"), handle)
+        (format!("http://127.0.0.1:{port}"), handle, closed)
     }
 
     #[test]
     fn cancel_is_request_scoped() {
-        let (url, server) = stalling_server(2);
+        let (url, server, _closed) = stalling_server(2);
         let llm = Arc::new(AttachedLlm::new(&url, Some("local")).expect("probe"));
         let token_a = RequestCancel::new();
         let token_b = RequestCancel::new();
@@ -833,7 +857,7 @@ mod tests {
 
     #[test]
     fn cancel_interrupts_stalled_stream() {
-        let (url, server) = stalling_server(1);
+        let (url, server, closed) = stalling_server(1);
         let llm = AttachedLlm::new(&url, Some("local")).expect("probe");
         let token = RequestCancel::new();
         let (tx, rx) = mpsc::channel::<String>();
@@ -857,11 +881,19 @@ mod tests {
         );
         token.cancel();
         let err = worker.join().expect("worker").expect_err("cancelled");
+        let cancel_elapsed = started.elapsed();
         assert!(matches!(err, LlmError::Cancelled), "{err:?}");
         assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "cancel took {:?}",
-            started.elapsed()
+            cancel_elapsed < Duration::from_secs(1),
+            "cancel took {cancel_elapsed:?}"
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            closed.load(Ordering::Acquire),
+            "upstream socket stayed open after cancel"
         );
         server.join().expect("server");
     }

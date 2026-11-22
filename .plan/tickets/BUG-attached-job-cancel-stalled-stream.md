@@ -1,6 +1,7 @@
 # BUG: job cancel cannot interrupt a stalled attached LLM stream
 
-Status: proposed
+Status: done (2026-11-22)
+- Verified: `cargo test --locked -p honkbox-server --bin honkbox cancel` (10 passed) and full `bun run check && bun run test` green (`.tmp/gates-attached-job-cancel.log`).
 Priority: P2
 Epic: epic-llm-expansion
 Owner: unassigned
@@ -17,6 +18,11 @@ Two gaps remain:
 
 - Job cancellation sets `RequestCancel` only when a token reaches the sink (`chat.rs:283`, `openai_stream.rs:93`). A stalled upstream produces no token, so the cancel flag is never set and generation plus lease persist until the 300 s bound (`llm_attached.rs:25`). Wire the job-registry cancel path to the same per-request cancel handle.
 - `cancel_interrupts_stalled_stream` (`llm_attached.rs:834-867`) asserts only client-side latency (<1 s); the local flag check at `:283` satisfies that while the fake server keeps sleeping 2 s (`:786`). Assert the fake server observes the client socket closing.
+
+## Fix
+
+- `routes/chat.rs::watch_job_cancel` awaits the job registry's `CancellationToken` on the server runtime and sets the stream's `RequestCancel` immediately; both chat and OpenAI SSE bodies carry the watcher and abort it on drop (`CancelOnDrop`). The existing `cancel_signal` poll then closes the upstream socket at the next poll, without waiting for a token boundary.
+- `stalling_server` now reports whether the fake upstream observed the client socket close; `cancel_interrupts_stalled_stream` asserts that flag, and a focused `job_cancel_watcher` unit test proves the bridge reaches only its own request.
 
 ## Non-goals
 

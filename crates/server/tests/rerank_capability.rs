@@ -145,11 +145,18 @@ fn configure_for(state: &str) {
 async fn get_capabilities(app: &Router) -> Value {
     let response = app
         .clone()
-        .oneshot(Request::builder().uri("/v1/capabilities").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .expect("infallible");
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
     serde_json::from_slice(&bytes).expect("capabilities JSON")
 }
 
@@ -169,7 +176,9 @@ async fn post_rerank(app: &Router) -> (StatusCode, String) {
         .await
         .expect("infallible");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -197,8 +206,14 @@ async fn run_state(state: &str) {
             // No sidecar venv exists in this harness, so a scoring result
             // cannot be produced here. Admission is proven by the absence
             // of the no-ranker 501: the request reached the sidecar seam.
-            assert!(!body.contains("no ranker model configured"), "{status} {body}");
-            assert!(status.is_success() || body.contains("sidecar"), "{status} {body}");
+            assert!(
+                !body.contains("no ranker model configured"),
+                "{status} {body}"
+            );
+            assert!(
+                status.is_success() || body.contains("sidecar"),
+                "{status} {body}"
+            );
         }
         other => panic!("unknown rerank state {other}"),
     }

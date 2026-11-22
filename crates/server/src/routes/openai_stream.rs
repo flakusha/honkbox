@@ -19,7 +19,7 @@ use honkbox_llm_worker::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use super::chat::{CancelOnDrop, free_gpu_lease};
+use super::chat::{CancelOnDrop, free_gpu_lease, watch_job_cancel};
 use super::chat_prep::with_job_id;
 use super::openai_chat::{epoch_secs, finish_reason, usage_of};
 use super::openai_constraints::llm_error_class;
@@ -68,6 +68,7 @@ pub(super) fn completions_stream(
     let worker_cancelled = cancelled.clone();
     let worker_done = done.clone();
     let job_token = job.token().clone();
+    let job_cancel_watcher = watch_job_cancel(job_token.clone(), cancel.clone());
     let job_id = job.id().to_owned();
     let frame_model = served_id.to_owned();
     // `REQ-3`: with tools on the table, pieces are buffered until the
@@ -179,6 +180,7 @@ pub(super) fn completions_stream(
             done,
             pipe: abort_pipe,
             cancel: body_cancel,
+            job_cancel_watcher: Some(job_cancel_watcher),
             _worker: worker,
         })
         .into_response(),
