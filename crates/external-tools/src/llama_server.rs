@@ -28,9 +28,29 @@ pub fn binary() -> PathBuf {
         .map_or_else(|| PathBuf::from(DEFAULT_LLAMA_SERVER), PathBuf::from)
 }
 
-/// Trim an operator-supplied base URL so `format!("{base}/health")` is stable.
-fn base_url(url: &str) -> &str {
-    url.trim().trim_end_matches('/')
+/// Largest `/v1/models` body the probe will buffer before parsing JSON.
+const MAX_MODELS_BYTES: usize = 1024 * 1024;
+
+/// Validate an operator-supplied base URL and return a concatenation-safe
+/// base: credential-free loopback HTTP, optional path prefix, no query or
+/// fragment — the same rules the attached client enforces.
+fn validated_base(url: &str) -> Result<String, Unavailable> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|err| Unavailable::ProbeFailed(format!("invalid llama-server URL: {err}")))?;
+    let loopback = matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    if parsed.scheme() != "http"
+        || !loopback
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(Unavailable::ProbeFailed(
+            "llama-server URL must be credential-free loopback HTTP without query or fragment"
+                .to_owned(),
+        ));
+    }
+    Ok(parsed.to_string().trim_end_matches('/').to_owned())
 }
 
 /// Prove the executable can answer a version request. No server capability is
@@ -49,7 +69,7 @@ pub(crate) async fn probe_endpoint(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<Vec<Capability>, Unavailable> {
-    let base = base_url(url);
+    let base = validated_base(url)?;
 
     let health = format!("{base}/health");
     let response = client
@@ -57,7 +77,7 @@ pub(crate) async fn probe_endpoint(
         .send()
         .await
         .map_err(|err| Unavailable::ProbeFailed(format!("{health}: {err}")))?;
-    if !response.status().is_success() {
+    if response.status().as_u16() != 200 {
         return Err(Unavailable::ProbeFailed(format!(
             "{health}: HTTP {}",
             response.status()
@@ -65,20 +85,31 @@ pub(crate) async fn probe_endpoint(
     }
 
     let models = format!("{base}/v1/models");
-    let response = client
+    let mut response = client
         .get(&models)
         .send()
         .await
         .map_err(|err| Unavailable::ProbeFailed(format!("{models}: {err}")))?;
-    if !response.status().is_success() {
+    if response.status().as_u16() != 200 {
         return Err(Unavailable::ProbeFailed(format!(
             "{models}: HTTP {}",
             response.status()
         )));
     }
-    let body = response
-        .json::<serde_json::Value>()
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
+        .map_err(|err| Unavailable::ProbeFailed(format!("{models}: {err}")))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_MODELS_BYTES {
+            return Err(Unavailable::ProbeFailed(format!(
+                "{models}: response body exceeds {MAX_MODELS_BYTES} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let body: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|err| Unavailable::ProbeFailed(format!("{models}: invalid JSON body ({err})")))?;
     if !body.get("data").is_some_and(serde_json::Value::is_array) {
         return Err(Unavailable::ProbeFailed(format!(
@@ -196,11 +227,32 @@ mod tests {
     }
 
     #[test]
-    fn base_urls_are_normalized() {
+    fn validated_base_accepts_loopback_urls_with_a_path_prefix() {
         assert_eq!(
-            base_url("  http://127.0.0.1:9931/  "),
-            "http://127.0.0.1:9931"
+            validated_base("http://127.0.0.1:9931/api/").expect("loopback"),
+            "http://127.0.0.1:9931/api"
         );
+        assert_eq!(
+            validated_base("http://localhost:9931").expect("localhost"),
+            "http://localhost:9931"
+        );
+        assert_eq!(
+            validated_base("http://[::1]:9931/api").expect("ipv6"),
+            "http://[::1]:9931/api"
+        );
+    }
+
+    #[test]
+    fn validated_base_rejects_unattachable_urls() {
+        for url in [
+            "http://192.168.1.5:8080",
+            "http://user:pass@127.0.0.1:8080",
+            "https://127.0.0.1:8080",
+            "http://127.0.0.1:8080/?x=1",
+            "http://127.0.0.1:8080/#frag",
+        ] {
+            assert!(validated_base(url).is_err(), "{url}");
+        }
     }
 
     /// Two fixed responses, one per probe request, on an ephemeral loopback
@@ -209,12 +261,14 @@ mod tests {
         health_status: u16,
         health: &str,
         models: &str,
+        location: Option<&str>,
     ) -> (String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let url = format!("http://{}", listener.local_addr().expect("addr"));
         let health = health.to_owned();
         let models = models.to_owned();
+        let location = location.map_or_else(String::new, |url| format!("Location: {url}\r\n"));
         let handle = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_millis(500);
             for _ in 0..2 {
@@ -244,7 +298,7 @@ mod tests {
                     format!("{health_status} NOT READY")
                 };
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
                     payload.len()
                 );
                 let _ = stream.write_all(response.as_bytes());
@@ -259,11 +313,9 @@ mod tests {
             200,
             r#"{"status":"ok"}"#,
             r#"{"object":"list","data":[{"id":"local"}]}"#,
+            None,
         );
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .expect("client");
+        let client = crate::probe_client(Duration::from_secs(2));
         let capabilities = probe_endpoint(&client, &url).await.expect("endpoint");
         assert!(capabilities.contains(&Capability::OpenAiCompat));
         server.join().expect("fake server");
@@ -275,15 +327,69 @@ mod tests {
             503,
             r#"{"error":{"message":"Loading model"}}"#,
             r#"{"object":"list","data":[]}"#,
+            None,
         );
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .expect("client");
+        let client = crate::probe_client(Duration::from_secs(2));
         let err = probe_endpoint(&client, &url)
             .await
             .expect_err("503 is not ready");
         assert!(matches!(err, Unavailable::ProbeFailed(_)), "{err:?}");
+        server.join().expect("fake server");
+    }
+
+    #[tokio::test]
+    async fn only_http_200_health_counts_as_ready() {
+        for status in [201, 204] {
+            let (url, server) = fake_endpoint(
+                status,
+                r#"{"status":"ok"}"#,
+                r#"{"object":"list","data":[]}"#,
+                None,
+            );
+            let client = crate::probe_client(Duration::from_secs(2));
+            let err = probe_endpoint(&client, &url)
+                .await
+                .expect_err("only 200 is ready");
+            assert!(err.to_string().contains(&format!("HTTP {status}")), "{err}");
+            server.join().expect("fake server");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_redirect_cannot_fake_readiness() {
+        let models = r#"{"object":"list","data":[{"id":"local"}]}"#;
+        let (target, target_server) = fake_endpoint(200, r#"{"status":"ok"}"#, models, None);
+        let location = format!("{target}/health");
+
+        // Control: a redirect-following client would be fooled by this server.
+        let (source, source_server) = fake_endpoint(302, "{}", models, Some(&location));
+        let following = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("client");
+        probe_endpoint(&following, &source)
+            .await
+            .expect("control client follows the local redirect");
+        source_server.join().expect("source server");
+
+        let (source, source_server) = fake_endpoint(302, "{}", models, Some(&location));
+        let err = probe_endpoint(&crate::probe_client(Duration::from_secs(2)), &source)
+            .await
+            .expect_err("no-follow client rejects the redirect");
+        assert!(err.to_string().contains("HTTP 302"), "{err}");
+        source_server.join().expect("source server");
+        target_server.join().expect("target server");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_models_body_is_rejected_before_parsing() {
+        let huge = "x".repeat(MAX_MODELS_BYTES + 1);
+        let (url, server) = fake_endpoint(200, r#"{"status":"ok"}"#, &huge, None);
+        let client = crate::probe_client(Duration::from_secs(5));
+        let err = probe_endpoint(&client, &url)
+            .await
+            .expect_err("oversized body");
+        assert!(err.to_string().contains("exceeds"), "{err}");
         server.join().expect("fake server");
     }
 }

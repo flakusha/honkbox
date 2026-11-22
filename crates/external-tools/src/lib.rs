@@ -258,13 +258,25 @@ pub struct Registry {
     blender_addons: BlenderAddons,
 }
 
+/// Shared HTTP client for startup probes. Redirects stay off so a loopback
+/// answer cannot move a probe off-host.
+pub(crate) fn probe_client(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("redirect-free client")
+        })
+}
+
 impl Registry {
     /// Probe every known tool once and cache the result.
     pub async fn discover(config: Config) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(config.timeout)
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let client = probe_client(config.timeout);
         let mut registry = Self {
             config,
             client,
@@ -281,7 +293,7 @@ impl Registry {
     pub fn from_statuses(config: Config, statuses: Vec<Status>) -> Self {
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: probe_client(Config::default().timeout),
             statuses,
             blender_addons: BlenderAddons::default(),
         }
