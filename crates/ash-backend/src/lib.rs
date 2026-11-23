@@ -69,6 +69,8 @@
 //!   level topology for one model family.
 //! - [`shape_infer`]: [`shape_infer::infer`], channel/kernel/linear widths read
 //!   from checkpoint tensor metadata.
+//! - [`cross_attention`]: [`cross_attention::CrossAttention`], fused QKV/KV
+//!   projections with cross-attention and residual add.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -174,6 +176,8 @@ pub mod conditioning;
 pub mod conv2d;
 #[cfg(feature = "ash-compute")]
 pub mod conv_transpose;
+#[cfg(feature = "ash-compute")]
+pub mod cross_attention;
 #[cfg(feature = "ash-compute")]
 pub mod ddim_sampler;
 #[cfg(feature = "ash-compute")]

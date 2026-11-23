@@ -705,3 +705,25 @@ pre-existing warnings); CLI `--help` shows the new subcommand; clippy
 
 Next: real text-conditioned sampling. Needs CLIP/text-encoder wiring, fused
 QKV cross-attention, and a full model loader — not a small slice.
+
+## Landed — slice 39 (2026-11-23, worktree)
+
+`cross_attention.rs` adds `FusedQkv::run` for diffusers-style
+`[parts·out, in]` weights (transpose → matmul → per-row column split) and
+`CrossAttention::run` for hidden queries × context keys/values, output
+projection and residual. Reuses the existing transpose, matmul, attention and
+add kernels; no new shader.
+
+Also hardened the downsample test's temp filename with a per-process counter
+after a full-suite run hit a same-nanosecond checkpoint collision.
+
+ponytail: single head, no mask. Multi-head split/concat and padded prompts
+need their own kernels and a real checkpoint to justify them.
+
+Evidence: 95 tests pass on `ash-compute` and 103 on `experimental-ash-sd`;
+fused split matched three independent matmuls within 1e-6; cross-attention
+matched a manual decomposition within 1e-6; wrong weight length rejected;
+clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: text-conditioned UNet stage that feeds these context tokens into the
+bottleneck, then the sampler loop.

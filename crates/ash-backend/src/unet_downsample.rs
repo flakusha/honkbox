@@ -127,7 +127,10 @@ impl UnetDownsample {
 mod tests {
     use super::*;
     use crate::VkError;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn checkpoint(kernel: &[f32], bias: &[f32]) -> (std::path::PathBuf, CheckpointMap) {
         let mut header = serde_json::Map::new();
@@ -162,8 +165,9 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "honkbox-ash-downsample-{}-{stamp}.safetensors",
-            std::process::id()
+            "honkbox-ash-downsample-{}-{}-{stamp}.safetensors",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, &bytes).expect("write checkpoint");
         (path.clone(), CheckpointMap::read(&path).expect("map"))
