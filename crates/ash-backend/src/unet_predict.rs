@@ -1,12 +1,11 @@
-//! Diffusion `predict` stage: timestep + text conditioning → `UNet` stages.
+//! Diffusion `predict` stage: timestep embedding + text cross-attention.
 //!
-//! ponytail: conditioning must already be projected to latent channels. Real
-//! SD injects text via cross-attention; broadcasting here is an explicit
-//! caller contract, not a claim of checkpoint parity. No down/up path or VAE
-//! decode yet — this returns a noise tensor for `DdimSampler`.
+//! ponytail: one attention head per stage, no cross-attention mask. Context
+//! tokens are caller-supplied and must already be in latent channels.
 
 use crate::{
     checkpoint::CheckpointMap,
+    cross_attention::{CrossAttention, CrossAttentionShape, CrossAttentionWeights},
     device::VulkanDevice,
     timestep::{TimestepEmbed, TimestepWeights},
     unet_attention::{UnetAttentionBlock, UnetAttentionShape, UnetAttentionWeights},
@@ -14,6 +13,14 @@ use crate::{
 };
 use std::path::Path;
 use std::sync::Arc;
+
+/// Caller-owned cross-attention weights and context-token count.
+pub struct UnetCrossConfig<'a> {
+    /// Projections from latent channels to queries and context K/V.
+    pub weights: CrossAttentionWeights<'a>,
+    /// Number of context tokens in the flattened `conditioning` slice.
+    pub context_rows: usize,
+}
 
 /// Caller-supplied weights and geometry for one prediction.
 pub struct UnetPredictConfig<'a> {
@@ -29,6 +36,8 @@ pub struct UnetPredictConfig<'a> {
     pub attention: UnetAttentionWeights<'a>,
     /// Spatial attention geometry; channels must equal the final block output.
     pub attention_shape: UnetAttentionShape,
+    /// Text cross-attention projections and context-token count.
+    pub cross: UnetCrossConfig<'a>,
     /// Group-norm epsilon for every stage.
     pub eps: f32,
 }
@@ -38,6 +47,7 @@ pub struct UnetPredictor {
     timestep: TimestepEmbed,
     stack: UnetStack,
     attention: UnetAttentionBlock,
+    cross: CrossAttention,
 }
 
 impl UnetPredictor {
@@ -47,6 +57,7 @@ impl UnetPredictor {
             timestep: TimestepEmbed::new(Arc::clone(device))?,
             stack: UnetStack::new(device, blocks)?,
             attention: UnetAttentionBlock::new(Arc::clone(device))?,
+            cross: CrossAttention::new(Arc::clone(device))?,
         })
     }
 
@@ -74,13 +85,22 @@ impl UnetPredictor {
             .checked_mul(channels)
             .and_then(|per_batch| per_batch.checked_mul(config.attention_shape.batch))
             .ok_or_else(|| UnetStackError::Shape("predict: tensor overflow".into()))?;
-        if latent.len() != expected || conditioning.len() != channels {
+        let context_len = config
+            .cross
+            .context_rows
+            .checked_mul(channels)
+            .ok_or_else(|| UnetStackError::Shape("predict: context overflow".into()))?;
+        if config.cross.context_rows == 0
+            || latent.len() != expected
+            || conditioning.len() != context_len
+        {
             return Err(UnetStackError::Shape(format!(
-                "predict: latent must be {}x{}x{}x{} and conditioning {channels}-wide",
+                "predict: latent must be {}x{}x{}x{} and conditioning {}x{channels}",
                 config.attention_shape.batch,
                 channels,
                 config.attention_shape.height,
-                config.attention_shape.width
+                config.attention_shape.width,
+                config.cross.context_rows
             )));
         }
         let last = config
@@ -100,26 +120,83 @@ impl UnetPredictor {
             config.timestep_hidden,
             channels,
         )?;
-        let injected: Vec<f32> = time.iter().zip(conditioning).map(|(t, c)| t + c).collect();
         let mut conditioned_latent = latent.to_vec();
-        for n in 0..config.attention_shape.batch {
-            for position in 0..spatial {
-                for (channel, injection) in injected.iter().enumerate() {
-                    let index = (n * channels + channel) * spatial + position;
-                    conditioned_latent[index] += injection;
-                }
-            }
-        }
+        inject_time(
+            &mut conditioned_latent,
+            &time,
+            config.attention_shape.batch,
+            channels,
+            spatial,
+        );
         let hidden = self
             .stack
             .run(&conditioned_latent, map, path, config.blocks, config.eps)?;
-        Ok(self.attention.run(
+        let attended = self.attention.run(
             &hidden,
             &config.attention,
             config.attention_shape,
             config.eps,
-        )?)
+        )?;
+        let tokens = nchw_to_tokens(&attended, config.attention_shape);
+        let crossed = self.cross.run(
+            &tokens,
+            conditioning,
+            &config.cross.weights,
+            CrossAttentionShape {
+                query_rows: tokens.len() / channels,
+                context_rows: config.cross.context_rows,
+                dim: channels,
+            },
+        )?;
+        Ok(tokens_to_nchw(
+            &crossed,
+            config.attention_shape.batch,
+            channels,
+            spatial,
+        ))
     }
+}
+
+/// Broadcast one timestep vector over every spatial position of an NCHW tensor.
+fn inject_time(latent: &mut [f32], time: &[f32], batch: usize, channels: usize, spatial: usize) {
+    for n in 0..batch {
+        for position in 0..spatial {
+            for (channel, value) in time.iter().enumerate() {
+                latent[(n * channels + channel) * spatial + position] += value;
+            }
+        }
+    }
+}
+
+/// NCHW `batch × channels × spatial` → row-major `batch·spatial × channels` tokens.
+fn nchw_to_tokens(input: &[f32], shape: UnetAttentionShape) -> Vec<f32> {
+    let spatial = shape.height * shape.width;
+    let mut tokens = vec![0.0_f32; input.len()];
+    for batch in 0..shape.batch {
+        for position in 0..spatial {
+            for channel in 0..shape.channels {
+                let source = (batch * shape.channels + channel) * spatial + position;
+                let target = (batch * spatial + position) * shape.channels + channel;
+                tokens[target] = input[source];
+            }
+        }
+    }
+    tokens
+}
+
+/// Inverse of [`nchw_to_tokens`].
+fn tokens_to_nchw(tokens: &[f32], batch: usize, channels: usize, spatial: usize) -> Vec<f32> {
+    let mut output = vec![0.0_f32; tokens.len()];
+    for n in 0..batch {
+        for position in 0..spatial {
+            for channel in 0..channels {
+                let source = (n * spatial + position) * channels + channel;
+                let target = (n * channels + channel) * spatial + position;
+                output[target] = tokens[source];
+            }
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -193,6 +270,19 @@ mod tests {
         }
     }
 
+    static CROSS_WKV: [f32; 8] = [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0];
+
+    fn cross_config<'a>(identity: &'a [f32], wkv: &'a [f32]) -> UnetCrossConfig<'a> {
+        UnetCrossConfig {
+            weights: CrossAttentionWeights {
+                wq: identity,
+                wkv,
+                wo: identity,
+            },
+            context_rows: 1,
+        }
+    }
+
     #[test]
     fn predict_matches_manual_stage_composition() {
         let Some(device) = device() else { return };
@@ -244,6 +334,7 @@ mod tests {
                 wo: &identity,
             },
             attention_shape,
+            cross: cross_config(&identity, &CROSS_WKV),
             eps: 1e-5,
         };
         let latent: Vec<f32> = (0..8)
@@ -260,16 +351,8 @@ mod tests {
             .expect("timestep")
             .run(5, &TimestepWeights { w1: &w1, w2: &w2 }, 4, 2, 2)
             .expect("time");
-        let injected: Vec<f32> = time.iter().zip(&conditioning).map(|(t, c)| t + c).collect();
         let mut conditioned_latent = latent.clone();
-        for n in 0..1 {
-            for position in 0..4 {
-                for (channel, injection) in injected.iter().enumerate() {
-                    let index = (n * 2 + channel) * 4 + position;
-                    conditioned_latent[index] += injection;
-                }
-            }
-        }
+        inject_time(&mut conditioned_latent, &time, 1, 2, 4);
         let hidden = UnetStack::new(&device, 1)
             .expect("stack")
             .run(&conditioned_latent, &map, &path, &blocks, 1e-5)
@@ -290,6 +373,14 @@ mod tests {
                 1e-5,
             )
             .expect("attention run");
+        // Single context token with identity K/V and output projection:
+        // cross-attention contributes that token to every spatial position.
+        let spatial = attention_shape.height * attention_shape.width;
+        let expected: Vec<f32> = expected
+            .iter()
+            .enumerate()
+            .map(|(index, value)| value + conditioning[(index / spatial) % 2])
+            .collect();
         assert_eq!(actual.len(), expected.len());
         for (got, want) in actual.iter().zip(&expected) {
             assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
@@ -349,6 +440,7 @@ mod tests {
                 width: 2,
                 groups: 1,
             },
+            cross: cross_config(&identity, &CROSS_WKV),
             eps: 1e-5,
         };
         assert!(matches!(

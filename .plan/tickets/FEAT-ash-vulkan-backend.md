@@ -727,3 +727,23 @@ clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
 
 Next: text-conditioned UNet stage that feeds these context tokens into the
 bottleneck, then the sampler loop.
+
+## Landed — slice 40 (2026-11-24, worktree)
+
+`UnetPredictor` now injects text via the cross-attention stage instead of
+broadcasting a channel vector: `conditioning` is a flattened
+`context_rows × channels` token matrix; `UnetCrossConfig` carries the fused
+K/V projections and token count. NCHW ↔ token layout conversion is explicit;
+timestep embedding remains additive. Manifold tests cover the single-token
+identity case and the traversal composition.
+
+ponytail: single head, no mask, context assumed pre-projected to latent
+channels. A real checkpoint decides whether pooled/sequence conditioning and
+multi-head attention are worth wiring.
+
+Evidence: 95 tests pass on `ash-compute`, 103 on `experimental-ash-sd`;
+server feature check clean (two pre-existing warnings); clippy `-D warnings`
+and fmt clean.
+
+Next: sampler loop that repeatedly calls this predictor, then real checkpoint
+key mapping from SD 1.5 tensor names.

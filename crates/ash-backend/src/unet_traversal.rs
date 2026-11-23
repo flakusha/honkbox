@@ -358,6 +358,14 @@ mod tests {
                         width: 4,
                         groups: 1,
                     },
+                    cross: crate::unet_predict::UnetCrossConfig {
+                        weights: crate::cross_attention::CrossAttentionWeights {
+                            wq: &ONE,
+                            wkv: &[1.0_f32, 1.0],
+                            wo: &ONE,
+                        },
+                        context_rows: 1,
+                    },
                     eps: 1e-5,
                 },
                 up_keys: UnetUpsampleKeys {
