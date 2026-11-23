@@ -55,6 +55,8 @@
 //!   shapes over the input-style blocks.
 //! - [`unet_attention`]: [`unet_attention::UnetAttentionBlock`], group norm →
 //!   spatial self-attention → residual add over NCHW tensors.
+//! - [`timestep`]: [`timestep::TimestepEmbed`], sinusoidal diffusion timestep
+//!   through two caller-weighted linear layers.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -198,6 +200,8 @@ pub mod stubs;
 pub mod text_conditioning;
 #[cfg(feature = "ash-compute")]
 pub mod text_encoder;
+#[cfg(feature = "ash-compute")]
+pub mod timestep;
 #[cfg(feature = "ash-compute")]
 pub mod tokenizer;
 #[cfg(feature = "ash-compute")]

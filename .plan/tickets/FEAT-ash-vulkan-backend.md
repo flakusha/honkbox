@@ -559,3 +559,23 @@ features; fmt clean.
 Next: timestep embedding and a `predict` closure that consumes the conditioned
 embedding, then end-to-end SD generation still needs the down/up sampling and
 VAE decode paths.
+
+## Landed — slice 31 (2026-11-23, worktree)
+
+`sinusoidal(timestep, dim, max_period)` builds the cos/sin frequency table on
+the host. `TimestepEmbed::run` feeds it through two caller-weighted linear
+layers with `SiLU` between them, returning a `channels`-wide timestep vector.
+
+Dimensions and timestep are limited to `u16::MAX` by the f32 conversions; SD
+schedules stay well inside that bound. No dependency or shader added for the
+frequency table.
+
+Evidence: 80 tests pass on `ash-compute` and 87 on `experimental-ash-sd`;
+t=0 produced [1, 0] in the first cos/sin pair, all frequencies stayed in
+[-1, 1], and the MLP matched a CPU reference within 1e-4; zero dimensions and
+wrong weight length rejected; clippy `-D warnings` clean with SD/STT/TTS
+features; fmt clean.
+
+Next: a `predict` closure that broadcasts the timestep embedding into spatial
+tokens, adds conditioned text, and runs the UNet stages — then down/up blocks
+and VAE decode remain for end-to-end generation.
