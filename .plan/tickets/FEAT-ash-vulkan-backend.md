@@ -766,3 +766,24 @@ short timestep list is rejected; server feature check clean (two pre-existing
 warnings); clippy `-D warnings` and fmt clean.
 
 Next: SD 1.5 checkpoint key mapping from tensor names to the local stage specs.
+
+## Landed — slice 42 (2026-11-24, worktree)
+
+`sd15_keys.rs` records the SD 1.5 tensor names for the stages actually built:
+time embedding, UNet input conv, middle-block self/cross attention and VAE
+decoder projections. `audit(CheckpointMap)` reports missing or non-f32 tensors
+without reading payloads; `load_fused_kv` concatenates SD 1.5's separate `to_k`/`to_v`
+into the `[2·dim, dim]` layout consumed by `FusedQkv`. Names cross-checked
+against the vendored stable-diffusion.cpp model headers. Partial map only —
+no claim of full SD 1.5 parity.
+
+Also added a per-process counter to `sd.rs` test temp filenames after a
+full-suite run hit a same-nanosecond collision.
+
+Evidence: 98 tests pass on `ash-compute`, 106 on `experimental-ash-sd`; audit
+covered ready/missing/F64 cases and fused K/V order + shape rejection; server
+feature check clean (two pre-existing warnings); clippy `-D warnings` and fmt
+clean.
+
+Next: text-encoder tensor names and tokenizer wiring for real prompts, or
+stop extending this map until a real SD 1.5 checkpoint is available.

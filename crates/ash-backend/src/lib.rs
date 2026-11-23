@@ -205,6 +205,8 @@ pub mod sampler;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;
 #[cfg(feature = "ash-compute")]
+pub mod sd15_keys;
+#[cfg(feature = "ash-compute")]
 pub mod shape_infer;
 #[cfg(feature = "ash-compute")]
 pub mod silu;
