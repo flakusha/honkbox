@@ -615,3 +615,20 @@ missing bias key and zero stride rejected; clippy `-D warnings` clean with
 SD/STT/TTS features; fmt clean.
 
 Next: upsample + skip-connection stack, then VAE decode to pixels.
+
+## Landed — slice 34 (2026-11-23, worktree)
+
+`UnetUpsample::run` loads checkpoint kernel/bias, applies the existing
+`ConvTranspose2d` to NCHW input, and adds a caller-supplied skip tensor of the
+exact output shape. Derived output geometry, missing/misshaped keys, wrong
+skip length and zero stride are rejected before dispatch.
+
+ponytail: one conv-transpose + add per stage, no per-stage attention.
+
+Evidence: 86 tests pass on `ash-compute` and 93 on `experimental-ash-sd`;
+the GPU output matched the shader-faithful CPU gather plus skip within 1e-6;
+missing bias key and wrong skip length rejected; clippy `-D warnings` clean
+with SD/STT/TTS features; fmt clean.
+
+Next: wire down/up stages into a full UNet traversal; `VaeDecode` already
+exists as a separate one-block decoder component.
