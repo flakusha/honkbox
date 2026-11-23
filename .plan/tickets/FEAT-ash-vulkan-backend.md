@@ -670,3 +670,19 @@ clean.
 
 Next: infer stage shapes from tensor metadata and wire the traversal into
 the server behind the experimental feature flag.
+
+## Landed — slice 37 (2026-11-23, worktree)
+
+`shape_infer::infer` reads checkpoint metadata for a spec: entry/down/mid/up/
+output conv channels and kernels, timestep linear widths, VAE entry/exit conv
+shapes. Rank errors and timestep channel disagreements are named and typed.
+Spatial sizes remain caller-supplied.
+
+Evidence: 92 tests pass on `ash-compute` and 99 on `experimental-ash-sd`;
+synthetic SD15-spec checkpoint inferred 4 channels / 3×3 kernels / 4→8→4
+timestep widths; bad rank and channel mismatch rejected; clippy `-D warnings`
+clean with SD/STT/TTS features; fmt clean.
+
+Next: server seam. This is a separate surface (api-types + routes + config + CI
+gates) and should land as its own slice with the feature flag disabled by
+default.

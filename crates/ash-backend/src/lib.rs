@@ -67,6 +67,8 @@
 //!   with bottleneck predict and a VAE decoder block.
 //! - [`model_spec`]: [`model_spec::UnetModelSpec`], checkpoint tensor names and
 //!   level topology for one model family.
+//! - [`shape_infer`]: [`shape_infer::infer`], channel/kernel/linear widths read
+//!   from checkpoint tensor metadata.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -198,6 +200,8 @@ pub mod raw;
 pub mod sampler;
 #[cfg(feature = "experimental-ash-sd")]
 pub mod sd;
+#[cfg(feature = "ash-compute")]
+pub mod shape_infer;
 #[cfg(feature = "ash-compute")]
 pub mod silu;
 #[cfg(feature = "ash-compute")]
