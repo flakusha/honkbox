@@ -747,3 +747,22 @@ and fmt clean.
 
 Next: sampler loop that repeatedly calls this predictor, then real checkpoint
 key mapping from SD 1.5 tensor names.
+
+## Landed — slice 41 (2026-11-24, worktree)
+
+`UnetTraversal::sample` drives the existing eta=0 DDIM loop with the same
+down → predict → up stage chain, keeping the diffusion state at latent
+resolution and decoding once after the final step. `SampleConfig` bundles
+timesteps, context tokens and cumulative alphas; traversal shape validation is
+shared with `run`. `UnetStackError` converts into `VkError` for the sampler
+closure.
+
+ponytail: fixed eta=0 schedule supplied by the caller, no variance sampling or
+scheduler generation. Add those when a real checkpoint needs them.
+
+Evidence: 96 tests pass on `ash-compute`, 104 on `experimental-ash-sd`; test
+asserts distinct timesteps change the output, decoded length is correct, and a
+short timestep list is rejected; server feature check clean (two pre-existing
+warnings); clippy `-D warnings` and fmt clean.
+
+Next: SD 1.5 checkpoint key mapping from tensor names to the local stage specs.

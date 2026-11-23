@@ -8,6 +8,7 @@ use crate::{
     checkpoint::CheckpointMap,
     conv_transpose::ConvTransposeShape,
     conv2d::ConvShape,
+    ddim_sampler::DdimSampler,
     device::VulkanDevice,
     unet_downsample::{UnetDownsample, UnetDownsampleKeys, UnetDownsampleShape},
     unet_predict::{UnetPredictConfig, UnetPredictor},
@@ -52,8 +53,84 @@ fn axes(actual: [usize; 3], expected: [usize; 3], label: &str) -> Result<(), Une
     }
 }
 
+/// Schedule, timestep mapping and text tokens for one sampling walk.
+pub struct SampleConfig<'a> {
+    /// One timestep index per interval in `cumprod`.
+    pub timesteps: &'a [usize],
+    /// `[context_rows, channels]` token matrix.
+    pub context: &'a [f32],
+    /// Cumulative alphas, non-increasing, with `steps + 1` entries.
+    pub cumprod: &'a [f32],
+}
+
+fn validate(config: &UnetTraversalConfig<'_>) -> Result<(), UnetStackError> {
+    let (down_h, down_w) = config.down_shape.output()?;
+    let attention = config.predict.attention_shape;
+    let first = config
+        .predict
+        .blocks
+        .first()
+        .ok_or_else(|| UnetStackError::Shape("traversal: no bottleneck blocks".into()))?;
+    axes(
+        [
+            config.down_shape.batch,
+            config.down_shape.out_c,
+            down_h * down_w,
+        ],
+        [
+            attention.batch,
+            attention.channels,
+            attention.height * attention.width,
+        ],
+        "traversal: encoder output vs bottleneck",
+    )?;
+    if first.shape.in_c != attention.channels {
+        return Err(UnetStackError::Shape(
+            "traversal: bottleneck block channels mismatch".into(),
+        ));
+    }
+    let (up_h, up_w) = config.up_shape.output()?;
+    axes(
+        [config.up_shape.batch, config.up_shape.out_c, up_h * up_w],
+        [
+            config.down_shape.batch,
+            config.down_shape.in_c,
+            config.down_shape.in_h * config.down_shape.in_w,
+        ],
+        "traversal: decoder output vs skip",
+    )?;
+    if config.up_shape.in_c != attention.channels {
+        return Err(UnetStackError::Shape(
+            "traversal: decoder input channels mismatch".into(),
+        ));
+    }
+    axes(
+        [
+            config.vae_up_shape.batch,
+            config.vae_up_shape.in_c,
+            config.vae_up_shape.in_h * config.vae_up_shape.in_w,
+        ],
+        [config.up_shape.batch, config.up_shape.out_c, up_h * up_w],
+        "traversal: VAE input vs decoder output",
+    )?;
+    axes(
+        [
+            config.vae_proj_shape.batch,
+            config.vae_proj_shape.in_c,
+            config.vae_proj_shape.in_h * config.vae_proj_shape.in_w,
+        ],
+        [
+            config.vae_up_shape.batch,
+            config.vae_up_shape.out_c,
+            config.vae_up_shape.out_h * config.vae_up_shape.out_w,
+        ],
+        "traversal: VAE projection vs upsample",
+    )
+}
+
 /// Composed one-level `UNet` traversal over one checkpoint.
 pub struct UnetTraversal {
+    device: Arc<VulkanDevice>,
     down: UnetDownsample,
     predict: UnetPredictor,
     up: UnetUpsample,
@@ -64,6 +141,7 @@ impl UnetTraversal {
     /// Instantiate every stage on the selected device.
     pub fn new(device: &Arc<VulkanDevice>, blocks: usize) -> Result<Self, VkError> {
         Ok(Self {
+            device: Arc::clone(device),
             down: UnetDownsample::new(Arc::clone(device))?,
             predict: UnetPredictor::new(device, blocks)?,
             up: UnetUpsample::new(Arc::clone(device))?,
@@ -81,68 +159,7 @@ impl UnetTraversal {
         path: &Path,
         config: &UnetTraversalConfig<'_>,
     ) -> Result<Vec<f32>, UnetStackError> {
-        let (down_h, down_w) = config.down_shape.output()?;
-        let attention = config.predict.attention_shape;
-        let first = config
-            .predict
-            .blocks
-            .first()
-            .ok_or_else(|| UnetStackError::Shape("traversal: no bottleneck blocks".into()))?;
-        axes(
-            [
-                config.down_shape.batch,
-                config.down_shape.out_c,
-                down_h * down_w,
-            ],
-            [
-                attention.batch,
-                attention.channels,
-                attention.height * attention.width,
-            ],
-            "traversal: encoder output vs bottleneck",
-        )?;
-        if first.shape.in_c != attention.channels {
-            return Err(UnetStackError::Shape(
-                "traversal: bottleneck block channels mismatch".into(),
-            ));
-        }
-        let (up_h, up_w) = config.up_shape.output()?;
-        axes(
-            [config.up_shape.batch, config.up_shape.out_c, up_h * up_w],
-            [
-                config.down_shape.batch,
-                config.down_shape.in_c,
-                config.down_shape.in_h * config.down_shape.in_w,
-            ],
-            "traversal: decoder output vs skip",
-        )?;
-        if config.up_shape.in_c != attention.channels {
-            return Err(UnetStackError::Shape(
-                "traversal: decoder input channels mismatch".into(),
-            ));
-        }
-        axes(
-            [
-                config.vae_up_shape.batch,
-                config.vae_up_shape.in_c,
-                config.vae_up_shape.in_h * config.vae_up_shape.in_w,
-            ],
-            [config.up_shape.batch, config.up_shape.out_c, up_h * up_w],
-            "traversal: VAE input vs decoder output",
-        )?;
-        axes(
-            [
-                config.vae_proj_shape.batch,
-                config.vae_proj_shape.in_c,
-                config.vae_proj_shape.in_h * config.vae_proj_shape.in_w,
-            ],
-            [
-                config.vae_up_shape.batch,
-                config.vae_up_shape.out_c,
-                config.vae_up_shape.out_h * config.vae_up_shape.out_w,
-            ],
-            "traversal: VAE projection vs upsample",
-        )?;
+        validate(config)?;
 
         let downsampled = self
             .down
@@ -165,6 +182,58 @@ impl UnetTraversal {
         )?;
         Ok(self.vae.run(
             &upsampled,
+            config.vae_up_shape,
+            config.vae_groups,
+            config.eps,
+            config.vae_proj_shape,
+            &config.vae_weights,
+        )?)
+    }
+
+    /// Walk an eta=0 DDIM schedule, predicting through the same traversal.
+    ///
+    /// `timesteps` has one entry per interval in `cumprod`; decoding happens
+    /// once after the last step. The closure reuses down/predict/up so the
+    /// diffusion state keeps the latent's full spatial shape.
+    pub fn sample(
+        &self,
+        initial: &[f32],
+        schedule: &SampleConfig<'_>,
+        map: &CheckpointMap,
+        path: &Path,
+        config: &UnetTraversalConfig<'_>,
+    ) -> Result<Vec<f32>, UnetStackError> {
+        validate(config)?;
+        if schedule.timesteps.len() + 1 != schedule.cumprod.len() {
+            return Err(UnetStackError::Shape(
+                "sample: need one timestep per schedule interval".into(),
+            ));
+        }
+        let sampler = DdimSampler::new(Arc::clone(&self.device))?;
+        let latent = sampler.run(initial, schedule.cumprod, |current, index| {
+            let timestep = schedule.timesteps[index];
+            let downsampled =
+                self.down
+                    .run(current, map, path, &config.down_keys, config.down_shape)?;
+            let predicted = self.predict.predict(
+                &downsampled,
+                timestep,
+                schedule.context,
+                map,
+                path,
+                &config.predict,
+            )?;
+            Ok(self.up.run(
+                &predicted,
+                current,
+                map,
+                path,
+                &config.up_keys,
+                config.up_shape,
+            )?)
+        })?;
+        Ok(self.vae.run(
+            &latent,
             config.vae_up_shape,
             config.vae_groups,
             config.eps,
@@ -459,6 +528,65 @@ mod tests {
         for (got, want) in actual.iter().zip(&expected) {
             assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
         }
+        std::fs::remove_file(&fixture.path).expect("cleanup");
+    }
+
+    #[test]
+    fn sample_uses_each_timestep_and_decodes_once() {
+        let Some(device) = device() else { return };
+        let fixture = Fixture::new();
+        let config = fixture.config();
+        let latent: Vec<f32> = (0..64)
+            .map(|i| f32::from(u8::try_from(i).expect("0..64")) * 0.05 - 0.3)
+            .collect();
+        let cumprod = [0.9_f32, 0.6, 0.3];
+        let context = [0.2_f32];
+        let traversal = UnetTraversal::new(&device, 1).expect("traversal");
+        let stepped = traversal
+            .sample(
+                &latent,
+                &SampleConfig {
+                    timesteps: &[5, 4],
+                    context: &context,
+                    cumprod: &cumprod,
+                },
+                &fixture.map,
+                &fixture.path,
+                &config,
+            )
+            .expect("stepped sample");
+        let constant = traversal
+            .sample(
+                &latent,
+                &SampleConfig {
+                    timesteps: &[5, 5],
+                    context: &context,
+                    cumprod: &cumprod,
+                },
+                &fixture.map,
+                &fixture.path,
+                &config,
+            )
+            .expect("constant sample");
+        assert_eq!(stepped.len(), 256);
+        assert_ne!(
+            stepped, constant,
+            "each timestep must change the prediction"
+        );
+        assert!(matches!(
+            traversal.sample(
+                &latent,
+                &SampleConfig {
+                    timesteps: &[5],
+                    context: &context,
+                    cumprod: &cumprod
+                },
+                &fixture.map,
+                &fixture.path,
+                &config
+            ),
+            Err(UnetStackError::Shape(_))
+        ));
         std::fs::remove_file(&fixture.path).expect("cleanup");
     }
 

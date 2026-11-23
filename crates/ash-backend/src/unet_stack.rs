@@ -56,6 +56,12 @@ impl Error for UnetStackError {
     }
 }
 
+impl From<UnetStackError> for VkError {
+    fn from(error: UnetStackError) -> Self {
+        Self::Device(error.to_string())
+    }
+}
+
 impl From<io::Error> for UnetStackError {
     fn from(value: io::Error) -> Self {
         Self::Io(value)
