@@ -499,3 +499,22 @@ fmt clean.
 
 Next: checkpoint key mapping for this block (safetensors tensors →
 `UnetInputWeights`) and a stack of blocks, then the attention/residual path.
+
+## Landed — slice 28 (2026-11-23, worktree)
+
+`load_unet_input` maps four caller-named safetensors keys to the tensors
+`UnetInputWeights` needs: kernel `[out_c, in_c, k, k]`, bias/gamma/beta
+`[out_c]`. All shapes are validated before any payload bytes are read;
+`F32`, `F16` and `BF16` decode to f32 via local bit expansion (std `f16`/`bf16`
+are unstable on this toolchain — no dependency added).
+
+No key family is assumed: SD 1.x/2.x and SDXL place the first convolution and
+norms under different paths, so guessing would bind wrong tensors silently.
+
+Evidence: 74 tests pass on `ash-compute` and 81 on `experimental-ash-sd`;
+F32/F16/BF16 decode matched exact f32 references, missing keys, wrong shapes
+and unsupported dtypes rejected; clippy `-D warnings` clean with SD/STT/TTS
+features; fmt clean.
+
+Next: stack these blocks with caller-supplied key sets, then the attention and
+residual path needed for a real `predict` closure.

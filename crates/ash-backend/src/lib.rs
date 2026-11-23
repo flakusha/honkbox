@@ -49,6 +49,8 @@
 //! - [`transpose`]: [`transpose::Transpose`], matrix transpose for `Kᵀ`.
 //! - [`unet_input`]: [`unet_input::UnetInputBlock`], NCHW conv → group norm →
 //!   `SiLU` block over caller-supplied weights.
+//! - [`unet_checkpoint`]: [`unet_checkpoint::load_unet_input`], safetensors key
+//!   lookup, shape checks and f32 decode for that block.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -198,6 +200,8 @@ pub mod tokenizer;
 pub mod transformer;
 #[cfg(feature = "ash-compute")]
 pub mod transpose;
+#[cfg(feature = "ash-compute")]
+pub mod unet_checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod unet_input;
 #[cfg(feature = "ash-compute")]
