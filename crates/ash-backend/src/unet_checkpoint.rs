@@ -16,6 +16,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// Checkpoint keys for one convolution + norm block.
+#[derive(Debug, Clone, Copy)]
 pub struct UnetInputKeys<'a> {
     /// `[out_c, in_c, kernel, kernel]` tensor.
     pub kernel: &'a str,

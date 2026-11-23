@@ -51,6 +51,8 @@
 //!   `SiLU` block over caller-supplied weights.
 //! - [`unet_checkpoint`]: [`unet_checkpoint::load_unet_input`], safetensors key
 //!   lookup, shape checks and f32 decode for that block.
+//! - [`unet_stack`]: [`unet_stack::UnetStack`], per-block keys and chained
+//!   shapes over the input-style blocks.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -204,5 +206,7 @@ pub mod transpose;
 pub mod unet_checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod unet_input;
+#[cfg(feature = "ash-compute")]
+pub mod unet_stack;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;

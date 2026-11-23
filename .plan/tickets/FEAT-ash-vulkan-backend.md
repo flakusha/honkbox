@@ -518,3 +518,23 @@ features; fmt clean.
 
 Next: stack these blocks with caller-supplied key sets, then the attention and
 residual path needed for a real `predict` closure.
+
+## Landed — slice 29 (2026-11-23, worktree)
+
+`UnetStack::run` loads four caller-named tensors per block and runs a fixed
+stack in order. Each `UnetStackBlockSpec` carries its own key set and NCHW
+geometry; adjacent blocks must chain on channels and spatial size, otherwise
+a named `UnetStackError::Shape` is returned before any load. Checkpoint and
+dispatch failures keep their own variants instead of being flattened into
+strings.
+
+Still the input-style block only — no timestep embedding, attention or
+residual path, so this is not yet a `predict` implementation.
+
+Evidence: 76 tests pass on `ash-compute` and 83 on `experimental-ash-sd`;
+a two-block stack (2→3→2 channels) matched direct sequential block runs within
+1e-6; wrong spec count and broken channel chain rejected; clippy `-D warnings`
+clean with SD/STT/TTS features; fmt clean.
+
+Next: attention + residual path inside the UNet stage, then a `predict`
+closure taking the conditioned embedding.
