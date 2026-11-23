@@ -348,3 +348,30 @@ Vulkan device; clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
 
 Next: CLIP tokenizer asset decision (REUSE entry) + prompt→ID conversion,
 then transformer block composition and sampling wiring.
+
+## Landed — slice 21 (2026-11-23, worktree)
+
+`ClipTokenizer` parses caller-supplied `vocab.json` / `merges.txt` and encodes
+a prompt to CLIP token IDs with BOS/EOS. `encode` lowercases, collapses
+whitespace, splits contractions and letter/non-letter runs, maps UTF-8 bytes
+through the published GPT-2/CLIP byte→unicode table, applies ranked merges,
+then resolves each token through the vocabulary. Unknown tokens and malformed
+assets produce `InvalidData` errors.
+
+Licensing decision: upstream CLIP assets are MIT (verified via openai/CLIP
+LICENSE), but no vocab/merge files are vendored — callers point at their own
+files — so no REUSE entry or license-header change is needed here. The
+byte→unicode algorithm is reimplemented from the published description, not
+copied verbatim.
+
+ponytail: segmentation is lowercase + whitespace + Unicode-letter runs; no
+ftfy/HTML unescaping or diacritic folding. Add when a prompt corpus shows the
+gap.
+
+Evidence: 57 tests pass on `ash-compute` and 64 on `experimental-ash-sd`;
+`encode("hello world")` and `encode("it's")` matched hand-built vocab/merge
+fixtures exactly; malformed assets and unknown tokens rejected; clippy
+`-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: transformer block composition (attention + residual + MLP + norms),
+then sampling wiring and end-to-end text conditioning.
