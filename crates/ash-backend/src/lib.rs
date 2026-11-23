@@ -57,6 +57,8 @@
 //!   spatial self-attention → residual add over NCHW tensors.
 //! - [`timestep`]: [`timestep::TimestepEmbed`], sinusoidal diffusion timestep
 //!   through two caller-weighted linear layers.
+//! - [`unet_predict`]: [`unet_predict::UnetPredictor`], timestep + conditioning
+//!   injection and the composed `UNet` stages.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -214,6 +216,8 @@ pub mod unet_attention;
 pub mod unet_checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod unet_input;
+#[cfg(feature = "ash-compute")]
+pub mod unet_predict;
 #[cfg(feature = "ash-compute")]
 pub mod unet_stack;
 #[cfg(feature = "ash-compute")]

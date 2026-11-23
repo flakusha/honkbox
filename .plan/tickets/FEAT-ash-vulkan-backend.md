@@ -579,3 +579,24 @@ features; fmt clean.
 Next: a `predict` closure that broadcasts the timestep embedding into spatial
 tokens, adds conditioned text, and runs the UNet stages — then down/up blocks
 and VAE decode remain for end-to-end generation.
+
+## Landed — slice 32 (2026-11-23, worktree)
+
+`UnetPredictor::predict` composes the timestep MLP, text-conditioning
+broadcast, per-block input stack, and spatial attention into one noise
+prediction. Caller supplies checkpoint key sets, projection weights and
+geometry; shape errors (empty blocks, misaligned conditioning, attention
+channel mismatch) are returned before any payload reads.
+
+ponytail: conditioning must already be projected to latent channels and is
+broadcast per spatial position — real SD uses cross-attention. No down/up
+blocks or VAE decode yet; this is not end-to-end generation or checkpoint
+parity.
+
+Evidence: 82 tests pass on `ash-compute` and 89 on `experimental-ash-sd`;
+the composed predictor matched a manual stage-by-stage run within 1e-6;
+misaligned conditioning length rejected; clippy `-D warnings` clean with
+SD/STT/TTS features; fmt clean.
+
+Next: down/up sampling blocks and VAE decode so a latent can travel through a
+full UNet and back to pixels.
