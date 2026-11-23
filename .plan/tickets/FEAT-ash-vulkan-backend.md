@@ -329,3 +329,22 @@ Vulkan device; clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
 
 Next: CLIP tokenizer assets + prompt→ID conversion (license review first),
 then transformer encoder blocks and sampling wiring.
+
+## Landed — slice 20 (2026-11-23, worktree)
+
+`Gelu::run` adds the tanh-approximated GELU activation on the Vulkan compute
+scaffold. `FeedForward::run` composes two matmuls around it
+(`w2 · GELU(w1 · x)`) over caller-supplied weight matrices; projections and
+biases stay with the caller, so no weights are bundled and no output is faked.
+`Op::Gelu` joins the vocabulary with the 4-byte elementwise floor.
+
+This lands before the tokenizer on purpose: CLIP vocab/merge assets are
+MIT-licensed upstream but still need a REUSE entry and a vendoring decision;
+the MLP compute primitive is asset-free and unblocks encoder blocks either way.
+
+Evidence: 54 tests pass on `ash-compute` and 61 on `experimental-ash-sd`;
+GELU and the composed MLP matched CPU references within 1e-4/1e-3 on the
+Vulkan device; clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: CLIP tokenizer asset decision (REUSE entry) + prompt→ID conversion,
+then transformer block composition and sampling wiring.

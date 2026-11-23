@@ -37,13 +37,15 @@ pub enum Op {
     ClassifierFreeGuidance,
     /// Row gather from a token/positional embedding table.
     EmbeddingGather,
+    /// Elementwise GELU (tanh approximation).
+    Gelu,
 }
 
 impl Op {
     /// Static floor for this pass; per-call shapes are checked again in `run`.
     pub fn requirements(self) -> CapacityRequirements {
         match self {
-            Self::ElementwiseAdd | Self::Silu => CapacityRequirements {
+            Self::ElementwiseAdd | Self::Silu | Self::Gelu => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()

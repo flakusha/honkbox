@@ -33,6 +33,7 @@ pub(crate) static CFG_GUIDANCE_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/cfg_guidance.spv"));
 pub(crate) static EMBEDDING_GATHER_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedding_gather.spv"));
+pub(crate) static GELU_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gelu.spv"));
 
 /// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
 pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {

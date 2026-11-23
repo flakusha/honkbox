@@ -35,6 +35,7 @@
 //!   header → tensor slot map; payload bytes are read on demand.
 //! - [`embedding`]: [`embedding::TextEncoder`], token + positional embedding
 //!   gather and sum over caller-supplied tables (no tokenizer assets yet).
+//! - [`mlp`]: [`mlp::FeedForward`], GELU activation and a two-matrix MLP block.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -150,6 +151,8 @@ pub mod group_norm;
 pub mod llm;
 #[cfg(feature = "ash-compute")]
 pub mod matmul;
+#[cfg(feature = "ash-compute")]
+pub mod mlp;
 #[cfg(feature = "ash-compute")]
 pub mod model;
 #[cfg(feature = "ash-compute")]

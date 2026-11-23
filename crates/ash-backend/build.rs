@@ -16,6 +16,7 @@ fn main() {
         ("shaders/ddim_step.comp", "ddim_step.spv"),
         ("shaders/cfg_guidance.comp", "cfg_guidance.spv"),
         ("shaders/embedding_gather.comp", "embedding_gather.spv"),
+        ("shaders/gelu.comp", "gelu.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");
