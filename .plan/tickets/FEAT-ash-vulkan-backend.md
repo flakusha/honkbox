@@ -395,7 +395,7 @@ for a 2-token/2-dim case within 1e-3; mismatched weights rejected; clippy
 Next: wire token IDs → embedding → stacked blocks → text conditioning, then
 DDIM sampling with caller-supplied model weights.
 
-## In progress — slice 23 (2026-11-23, worktree): server selection wiring
+## Landed — slice 23 (2026-11-23, worktree): server selection wiring (f1cedf3)
 
 Self-review found a blocking wiring gap: `experimental-ash-sd` was an empty
 server feature and no constructor selected `AshSdPipeline`, so the capability
@@ -417,3 +417,24 @@ snapshots now carry the updated flag description. `cargo test --locked
 
 Known nit: with SD-only features, ash stubs warn about unused `unimplemented`;
 default-feature clippy gates are unaffected.
+
+## Landed — slice 24 (2026-11-23, worktree)
+
+`ClipTextEncoder::run` chains `TextEncoder::encode` (token + positional table
+gather and sum) through a caller-weighted stack of `TransformerBlock`s,
+returning `tokens × dim` hidden states. `ClipTextEncoderWeights` carries the
+tables, one weight set per layer and a shared MLP width. Layer-count mismatch
+and oversized sequences are rejected before dispatch.
+
+ponytail: no causal or padding mask — attention is bidirectional here.
+Callers pass exactly the tokens that should attend to each other; add a mask
+to `Attention` when a real CLIP checkpoint needs padded prompts.
+
+Evidence: 64 tests pass on `ash-compute` and 71 on `experimental-ash-sd`;
+zero-layer output matched a CPU token+position reference within 1e-5, one
+layer matched a direct `TransformerBlock::run` within 1e-6, and both rejection
+paths were exercised; clippy `-D warnings` clean with SD/STT/TTS features;
+fmt clean.
+
+Next: pooled/sequence text conditioning over these hidden states, then DDIM
+sampling with caller-supplied model weights.
