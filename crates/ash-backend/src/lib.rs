@@ -29,6 +29,8 @@
 //!   the kernels above (weights come from the caller, never bundled).
 //! - [`sampler`]: [`sampler::DdimStep`], one DDIM eta=0 scheduler update, plus
 //!   deterministic seed-derived latent noise.
+//! - [`ddim_sampler`]: [`ddim_sampler::DdimSampler`], the schedule loop over
+//!   caller-supplied latents and predictions (no backbone bundled).
 //! - [`conditioning`]: [`conditioning::Cfg`] guidance over caller-supplied
 //!   positive/negative text embeddings (no prompt→embedding faking).
 //! - [`checkpoint`]: [`checkpoint::CheckpointMap`], a strict safetensors
@@ -150,6 +152,8 @@ pub mod conditioning;
 pub mod conv2d;
 #[cfg(feature = "ash-compute")]
 pub mod conv_transpose;
+#[cfg(feature = "ash-compute")]
+pub mod ddim_sampler;
 #[cfg(feature = "ash-compute")]
 pub mod device;
 #[cfg(feature = "ash-compute")]

@@ -458,3 +458,24 @@ clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
 
 Next: wire the conditioned embedding into `DdimStep` with caller-supplied
 scheduler alphas and latents, then the diffusion backbone.
+
+## Landed — slice 26 (2026-11-23, worktree)
+
+`DdimSampler::run` walks a caller-supplied cumulative-alpha schedule from an
+initial latent, calling a `predict` closure once per step and applying the
+shared `DdimStep` kernel. The closure receives the current latent and step
+index; the conditioned embedding can be captured there once the backbone
+lands. Schedules must have at least two finite alphas in (0, 1] and be
+non-increasing; predictor errors propagate by name.
+
+No diffusion backbone is bundled — `predict` is the explicit seam, so this
+slice never fakes a noise prediction.
+
+Evidence: 68 tests pass on `ash-compute` and 75 on `experimental-ash-sd`;
+the loop matched a sequential CPU DDIM reference within 1e-4 with the expected
+step indices; short schedules, empty latents, non-monotonic alphas, wrong-
+length predictions and closure errors were rejected; clippy `-D warnings`
+clean with SD/STT/TTS features; fmt clean.
+
+Next: the diffusion backbone itself — checkpoint tensor mapping for UNet
+blocks, then a `predict` implementation closing the conditioning seam.
