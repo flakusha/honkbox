@@ -824,3 +824,23 @@ and fmt clean.
 
 Next: nothing without a real checkpoint. Remaining gaps (bias path, EOS
 pooling, fused QKV parity) need one to justify them.
+
+## Landed — slice 45 (2026-11-24, worktree)
+
+Fixed a blocking mismatch found during whole-surface review: model specs use
+bare tensor names (`conv_in.weight`) but single-file SD 1.5 checkpoints prefix
+UNet tensors with `model.diffusion_model.` and decoder tensors with
+`first_stage_model.`. `CheckpointMap::get_aliased` now resolves both layouts;
+`model_spec::validate` and `shape_infer::shape` both route through it, so
+`inspect_checkpoint` accepts real checkpoint key conventions.
+
+Spec test fixtures now use unique names plus a `Drop` guard.
+
+Evidence: 102 tests pass on `ash-compute`, 111 on `experimental-ash-sd`;
+`inspect_checkpoint` was exercised end-to-end on a synthetic prefixed
+checkpoint and inferred 4 latent channels / 8-wide timestep hidden; server
+feature check clean (two pre-existing warnings); clippy `-D warnings` and fmt
+clean.
+
+Next: no more speculative mapping. A real SD 1.5 checkpoint is needed for
+parity work on bias handling, EOS pooling and fused QKV.

@@ -93,7 +93,7 @@ impl fmt::Display for ShapeError {
 impl Error for ShapeError {}
 
 fn shape<'a>(map: &'a CheckpointMap, key: &str) -> Result<&'a [usize], ShapeError> {
-    map.get(key)
+    map.get_aliased(key)
         .map(|meta| meta.shape.as_slice())
         .ok_or_else(|| ShapeError::Rank {
             key: key.to_owned(),

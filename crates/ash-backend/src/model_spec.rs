@@ -180,7 +180,7 @@ pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
 /// Check that every declared tensor exists in `map`.
 pub fn validate(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<(), SpecError> {
     for (role, key) in tensor_keys(spec) {
-        if map.get(&key).is_none() {
+        if map.get_aliased(&key).is_none() {
             return Err(SpecError::Missing { role, key });
         }
     }
@@ -357,9 +357,21 @@ pub static SD15_SINGLE_LEVEL: UnetModelSpec<'static> = UnetModelSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn checkpoint(keys: &[(String, String)]) -> (std::path::PathBuf, CheckpointMap) {
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// Owns one unique temp file; removal happens on every exit path.
+    struct TempFile(std::path::PathBuf);
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn checkpoint(keys: &[(String, String)]) -> (TempFile, CheckpointMap) {
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();
         for (_, key) in keys {
@@ -387,11 +399,15 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "honkbox-ash-model-spec-{}-{stamp}.safetensors",
-            std::process::id()
+            "honkbox-ash-model-spec-{}-{}-{stamp}.safetensors",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, &bytes).expect("write checkpoint");
-        (path.clone(), CheckpointMap::read(&path).expect("map"))
+        (
+            TempFile(path.clone()),
+            CheckpointMap::read(&path).expect("map"),
+        )
     }
 
     #[test]
@@ -412,12 +428,11 @@ mod tests {
     #[test]
     fn validate_reports_missing_tensor_role_and_key() {
         let mut keys = tensor_keys(&SD15_SINGLE_LEVEL);
-        let (path, map) = checkpoint(&keys);
+        let (_file, map) = checkpoint(&keys);
         assert!(validate(&SD15_SINGLE_LEVEL, &map).is_ok());
-        std::fs::remove_file(path).expect("cleanup");
 
         keys.retain(|(_, key)| key != "time_embedding.linear_2.bias");
-        let (path, map) = checkpoint(&keys);
+        let (_file, map) = checkpoint(&keys);
         match validate(&SD15_SINGLE_LEVEL, &map) {
             Err(SpecError::Missing { role, key }) => {
                 assert_eq!(role, "timestep linear 2");
@@ -425,6 +440,23 @@ mod tests {
             }
             Ok(()) => panic!("missing tensor accepted"),
         }
-        std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn validate_accepts_single_file_prefixed_keys() {
+        let keys: Vec<_> = tensor_keys(&SD15_SINGLE_LEVEL)
+            .into_iter()
+            .map(|(role, key)| {
+                let prefix = if key.starts_with("decoder.") {
+                    "first_stage_model."
+                } else {
+                    "model.diffusion_model."
+                };
+                (role, format!("{prefix}{key}"))
+            })
+            .collect();
+        let (_file, map) = checkpoint(&keys);
+        assert!(validate(&SD15_SINGLE_LEVEL, &map).is_ok());
+        assert!(map.get("conv_in.weight").is_none());
     }
 }

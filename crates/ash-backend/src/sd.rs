@@ -209,7 +209,7 @@ mod tests {
         path
     }
 
-    fn spec_checkpoint(omit: Option<&str>) -> PathBuf {
+    fn spec_checkpoint(omit: Option<&str>, prefixed: bool) -> PathBuf {
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();
         for (_, key) in tensor_keys(&SD15_SINGLE_LEVEL) {
@@ -229,8 +229,18 @@ mod tests {
             let start = payload.len();
             payload.resize(start + count * 4, 0);
             let end = payload.len();
+            let prefix = if key.starts_with("decoder.") {
+                "first_stage_model."
+            } else {
+                "model.diffusion_model."
+            };
+            let header_key = if prefixed {
+                format!("{prefix}{key}")
+            } else {
+                key
+            };
             header.insert(
-                key,
+                header_key,
                 serde_json::json!({
                     "dtype": "F32",
                     "shape": dims,
@@ -250,18 +260,27 @@ mod tests {
 
     #[test]
     fn inspect_checkpoint_validates_then_infers() {
-        let valid = spec_checkpoint(None);
+        let valid = spec_checkpoint(None, false);
         let shapes = inspect_checkpoint(&valid).expect("inspect");
         assert_eq!(shapes.latent_channels, 4);
         assert_eq!(shapes.timestep_hidden, 8);
         std::fs::remove_file(valid).expect("cleanup");
 
-        let missing = spec_checkpoint(Some("time_embedding.linear_2.bias"));
+        let missing = spec_checkpoint(Some("time_embedding.linear_2.bias"), false);
         assert!(
             matches!(inspect_checkpoint(&missing), Err(SdError::Backend(msg)) if msg.contains("timestep linear 2")),
             "missing declared tensor must be named"
         );
         std::fs::remove_file(missing).expect("cleanup");
+    }
+
+    #[test]
+    fn inspect_accepts_single_file_prefixed_keys() {
+        let path = spec_checkpoint(None, true);
+        let shapes = inspect_checkpoint(&path).expect("prefixed inspect");
+        assert_eq!(shapes.latent_channels, 4);
+        assert_eq!(shapes.timestep_hidden, 8);
+        std::fs::remove_file(path).expect("cleanup");
     }
 
     fn safetensors_bytes() -> Vec<u8> {

@@ -147,6 +147,24 @@ impl CheckpointMap {
         self.tensors.get(name)
     }
 
+    /// Look up a model-spec key in both single-file and spec-local layouts.
+    ///
+    /// Specs use bare names (`conv_in.weight`); SD 1.5 single-file checkpoints
+    /// prefix `UNet` tensors with `model.diffusion_model.` and decoder tensors
+    /// with `first_stage_model.decoder.`. Exact matches win, so fixtures and
+    /// split checkpoints keep working.
+    pub fn get_aliased(&self, name: &str) -> Option<&TensorMeta> {
+        if let Some(meta) = self.tensors.get(name) {
+            return Some(meta);
+        }
+        let prefix = if name.starts_with("decoder.") {
+            "first_stage_model."
+        } else {
+            "model.diffusion_model."
+        };
+        self.tensors.get(&format!("{prefix}{name}"))
+    }
+
     /// Number of tensors in the map.
     pub fn len(&self) -> usize {
         self.tensors.len()
