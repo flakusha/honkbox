@@ -600,3 +600,18 @@ SD/STT/TTS features; fmt clean.
 
 Next: down/up sampling blocks and VAE decode so a latent can travel through a
 full UNet and back to pixels.
+
+## Landed — slice 33 (2026-11-23, worktree)
+
+`UnetDownsample::run` loads `[out_c, in_c, k, k]` kernel and `[out_c]` bias
+from a checkpoint and runs a strided `Conv2d` over NCHW input. Output geometry
+is derived from input size, stride and padding; missing/misshaped tensors and
+zero stride are rejected before payload reads. `load_tensor` is now public for
+reuse by other checkpoint-backed stages.
+
+Evidence: 84 tests pass on `ash-compute` and 91 on `experimental-ash-sd`;
+a 4×4 → 2×2 stride-2 convolution matched a CPU reference within 1e-6;
+missing bias key and zero stride rejected; clippy `-D warnings` clean with
+SD/STT/TTS features; fmt clean.
+
+Next: upsample + skip-connection stack, then VAE decode to pixels.

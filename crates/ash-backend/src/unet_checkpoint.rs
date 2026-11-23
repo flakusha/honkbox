@@ -106,7 +106,8 @@ fn decode(bytes: &[u8], meta: &TensorMeta) -> io::Result<Vec<f32>> {
     }
 }
 
-fn load_tensor(
+/// Read one declared tensor as f32. Callers validate the shape first.
+pub fn load_tensor(
     map: &CheckpointMap,
     path: &Path,
     name: &str,

@@ -59,6 +59,8 @@
 //!   through two caller-weighted linear layers.
 //! - [`unet_predict`]: [`unet_predict::UnetPredictor`], timestep + conditioning
 //!   injection and the composed `UNet` stages.
+//! - [`unet_downsample`]: [`unet_downsample::UnetDownsample`], strided-conv
+//!   halving of the encoder feature map.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -214,6 +216,8 @@ pub mod transpose;
 pub mod unet_attention;
 #[cfg(feature = "ash-compute")]
 pub mod unet_checkpoint;
+#[cfg(feature = "ash-compute")]
+pub mod unet_downsample;
 #[cfg(feature = "ash-compute")]
 pub mod unet_input;
 #[cfg(feature = "ash-compute")]
