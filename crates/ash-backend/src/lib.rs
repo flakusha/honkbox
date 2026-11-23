@@ -42,8 +42,8 @@
 //!   `vocab.json` / `merges.txt` (assets are not bundled).
 //! - [`text_encoder`]: [`text_encoder::ClipTextEncoder`], token IDs through
 //!   embeddings and a caller-weighted stack of encoder blocks.
-//! - [`text_conditioning`]: [`text_conditioning::TextConditioner`], pooled
-//!   positive/negative embeddings blended by classifier-free guidance.
+//! - [`text_conditioning`]: [`text_conditioning::TextConditioner`], token-wise
+//!   positive/negative states blended by classifier-free guidance.
 //! - [`transformer`]: [`transformer::TransformerBlock`], single-head encoder
 //!   block built from attention, MLP, residual adds and layer norms.
 //! - [`transpose`]: [`transpose::Transpose`], matrix transpose for `Kᵀ`.

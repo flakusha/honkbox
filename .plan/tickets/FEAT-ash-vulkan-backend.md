@@ -787,3 +787,19 @@ clean.
 
 Next: text-encoder tensor names and tokenizer wiring for real prompts, or
 stop extending this map until a real SD 1.5 checkpoint is available.
+
+## Landed — slice 43 (2026-11-24, worktree)
+
+Fixed a contract mismatch exposed by slice 40: `TextConditioner::condition` no
+longer mean-pools into one vector. It now applies classifier-free guidance to
+every token via the existing `TextConditioning` container, returning the
+`tokens × dim` matrix that `UnetPredictor` consumes. Mean pooling and its test
+helper are gone. Mismatched positive/negative token counts are rejected.
+
+Evidence: 99 tests pass on `ash-compute`, 107 on `experimental-ash-sd`; tests
+assert output length is `tokens × dim`, scale-1 returns positive token states,
+per-token guidance matches the CPU reference, and unequal counts fail;
+clippy `-D warnings` and fmt clean.
+
+Next: optional checkpoint-backed text weights, or stop here until a real SD
+1.5 checkpoint is available for parity checks.
