@@ -65,6 +65,8 @@
 //!   with a skip-connection add.
 //! - [`unet_traversal`]: [`unet_traversal::UnetTraversal`], one down/up level
 //!   with bottleneck predict and a VAE decoder block.
+//! - [`model_spec`]: [`model_spec::UnetModelSpec`], checkpoint tensor names and
+//!   level topology for one model family.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -186,6 +188,8 @@ pub mod matmul;
 pub mod mlp;
 #[cfg(feature = "ash-compute")]
 pub mod model;
+#[cfg(feature = "ash-compute")]
+pub mod model_spec;
 #[cfg(feature = "ash-compute")]
 pub mod norm;
 #[cfg(feature = "ash-compute")]

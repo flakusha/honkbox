@@ -650,3 +650,23 @@ the traversal output matched a manual stage-by-stage run within 1e-6 on an
 
 Next: real-checkpoint model spec (tensor names + level topology), then
 wire this traversal to the server seam behind the experimental feature.
+
+## Landed — slice 36 (2026-11-23, worktree)
+
+`model_spec.rs` declares checkpoint tensor names as typed key structs
+(`ConvKeys`, `NormKeys`, `ResnetKeys`, `LevelSpec`) plus `UnetModelSpec` for a
+whole family. `SD15_SINGLE_LEVEL` names a one-level SD 1.5-style topology;
+`tensor_keys` enumerates roles and keys, `validate` reports the first missing
+tensor with its role. New model families add a sibling spec constant.
+
+ponytail: names and presence only — no shape inference, key remapping or
+server dispatch yet.
+
+Evidence: 90 tests pass on `ash-compute` and 97 on `experimental-ash-sd`;
+a synthetic checkpoint containing every declared key validated, removing
+`time_embedding.linear_2.bias` produced the named role/key error; topology
+counts asserted; clippy `-D warnings` clean with SD/STT/TTS features; fmt
+clean.
+
+Next: infer stage shapes from tensor metadata and wire the traversal into
+the server behind the experimental feature flag.
