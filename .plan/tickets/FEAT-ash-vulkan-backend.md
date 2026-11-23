@@ -632,3 +632,21 @@ with SD/STT/TTS features; fmt clean.
 
 Next: wire down/up stages into a full UNet traversal; `VaeDecode` already
 exists as a separate one-block decoder component.
+
+## Landed — slice 35 (2026-11-23, worktree)
+
+`UnetTraversal::run` wires the four composed stages: downsample →
+`UnetPredictor` bottleneck → upsample with the original latent as skip →
+`VaeDecode` block. Encoder/bottleneck/decoder/VAE shapes are checked before
+any dispatch; mismatched skip geometry is a named shape error.
+
+ponytail: one down/up level and one VAE decoder block. No multi-scale skips,
+no stacked VAE blocks, no real checkpoint spec, so this is not SD parity.
+
+Evidence: 88 tests pass on `ash-compute` and 95 on `experimental-ash-sd`;
+the traversal output matched a manual stage-by-stage run within 1e-6 on an
+8×8 → 16×16 synthetic path; mismatched skip geometry rejected; clippy
+`-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: real-checkpoint model spec (tensor names + level topology), then
+wire this traversal to the server seam behind the experimental feature.

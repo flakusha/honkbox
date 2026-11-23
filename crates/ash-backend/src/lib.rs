@@ -63,6 +63,8 @@
 //!   halving of the encoder feature map.
 //! - [`unet_upsample`]: [`unet_upsample::UnetUpsample`], transposed-conv doubling
 //!   with a skip-connection add.
+//! - [`unet_traversal`]: [`unet_traversal::UnetTraversal`], one down/up level
+//!   with bottleneck predict and a VAE decoder block.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -226,6 +228,8 @@ pub mod unet_input;
 pub mod unet_predict;
 #[cfg(feature = "ash-compute")]
 pub mod unet_stack;
+#[cfg(feature = "ash-compute")]
+pub mod unet_traversal;
 #[cfg(feature = "ash-compute")]
 pub mod unet_upsample;
 #[cfg(feature = "ash-compute")]
