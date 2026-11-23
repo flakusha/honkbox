@@ -311,3 +311,21 @@ clippy `-D warnings` clean with the SD, STT and TTS features; fmt clean.
 
 Next: text encoder seam (CLIP tokenizer assets + embedding lookup), then
 sampling wiring.
+
+## Landed — slice 19 (2026-11-23, worktree)
+
+`Embedding::run` gathers one row per token ID from a `vocab × dim` table on
+the Vulkan compute scaffold; IDs are range-checked on the host, shapes are
+validated, and out-of-range IDs are rejected by name. `TextEncoder::encode`
+composes two gathers (token table keyed by caller IDs, positional table keyed
+by sequence position) with the existing `ElementwiseAdd` kernel. No prompt is
+tokenized here: CLIP BPE needs vocab/merge assets and a license review, so no
+embedding is derived from a prompt string. `Op::EmbeddingGather` joins the
+vocabulary with a 12-byte floor.
+
+Evidence: 52 tests pass on `ash-compute` and 59 on `experimental-ash-sd`;
+gather and composed encoding matched CPU references within 1e-5/1e-6 on the
+Vulkan device; clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: CLIP tokenizer assets + prompt→ID conversion (license review first),
+then transformer encoder blocks and sampling wiring.

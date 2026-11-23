@@ -15,6 +15,7 @@ fn main() {
         ("shaders/conv_transpose.comp", "conv_transpose.spv"),
         ("shaders/ddim_step.comp", "ddim_step.spv"),
         ("shaders/cfg_guidance.comp", "cfg_guidance.spv"),
+        ("shaders/embedding_gather.comp", "embedding_gather.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

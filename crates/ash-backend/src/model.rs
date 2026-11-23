@@ -35,6 +35,8 @@ pub enum Op {
     SamplingStep,
     /// Classifier-free guidance on conditional/unconditional vectors.
     ClassifierFreeGuidance,
+    /// Row gather from a token/positional embedding table.
+    EmbeddingGather,
 }
 
 impl Op {
@@ -46,11 +48,13 @@ impl Op {
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()
             },
-            Self::MatMul | Self::Attention | Self::LayerNorm => CapacityRequirements {
-                workgroup_count: [1, 1, 1],
-                storage_range: 12, // matmul shape buffer
-                ..CapacityRequirements::default()
-            },
+            Self::MatMul | Self::Attention | Self::LayerNorm | Self::EmbeddingGather => {
+                CapacityRequirements {
+                    workgroup_count: [1, 1, 1],
+                    storage_range: 12, // shape/param buffer
+                    ..CapacityRequirements::default()
+                }
+            }
             Self::Softmax | Self::ClassifierFreeGuidance => CapacityRequirements {
                 workgroup_count: [1, 1, 1],
                 storage_range: 8, // two shape/scale u32s
