@@ -479,3 +479,23 @@ clean with SD/STT/TTS features; fmt clean.
 
 Next: the diffusion backbone itself — checkpoint tensor mapping for UNet
 blocks, then a `predict` implementation closing the conditioning seam.
+
+## Landed — slice 27 (2026-11-23, worktree)
+
+`UnetInputBlock::run` composes the first real backbone stage: NCHW convolution
+→ group norm → SiLU from caller-supplied tensors. `UnetInputShape` derives
+output spatial size with checked arithmetic; group count, tensor lengths and
+kernel geometry are validated before dispatch.
+
+This is one block, not `predict`: no timestep embedding, attention, residual
+or down/up path yet. No checkpoint keys are bound here — weights stay with
+the caller.
+
+Evidence: 70 tests pass on `ash-compute` and 77 on `experimental-ash-sd`;
+the composed block matched a CPU convolution/group-norm/SiLU reference within
+1e-3 on a 1×2×3×3 → 1×3×3×3 shape; empty input, invalid groups and oversized
+kernel were rejected; clippy `-D warnings` clean with SD/STT/TTS features;
+fmt clean.
+
+Next: checkpoint key mapping for this block (safetensors tensors →
+`UnetInputWeights`) and a stack of blocks, then the attention/residual path.
