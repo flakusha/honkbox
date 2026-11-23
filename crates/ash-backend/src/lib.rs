@@ -53,6 +53,8 @@
 //!   lookup, shape checks and f32 decode for that block.
 //! - [`unet_stack`]: [`unet_stack::UnetStack`], per-block keys and chained
 //!   shapes over the input-style blocks.
+//! - [`unet_attention`]: [`unet_attention::UnetAttentionBlock`], group norm →
+//!   spatial self-attention → residual add over NCHW tensors.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -202,6 +204,8 @@ pub mod tokenizer;
 pub mod transformer;
 #[cfg(feature = "ash-compute")]
 pub mod transpose;
+#[cfg(feature = "ash-compute")]
+pub mod unet_attention;
 #[cfg(feature = "ash-compute")]
 pub mod unet_checkpoint;
 #[cfg(feature = "ash-compute")]

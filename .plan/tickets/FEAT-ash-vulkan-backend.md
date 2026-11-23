@@ -538,3 +538,24 @@ clean with SD/STT/TTS features; fmt clean.
 
 Next: attention + residual path inside the UNet stage, then a `predict`
 closure taking the conditioned embedding.
+
+## Landed — slice 30 (2026-11-23, worktree)
+
+`UnetAttentionBlock::run` adds the spatial self-attention stage over NCHW
+tensors: group norm → `(batch·H·W) × C` sequence → caller-weighted Q/K/V →
+single-head `Attention` → output projection → residual add → NCHW reshape.
+Host-side layout conversion is used instead of a transpose kernel for the
+reshape (small tensors; no extra GPU pass).
+
+ponytail: one head, no cross-attention or timestep embedding. Add them when a
+real transformer block checkpoint requires them.
+
+Evidence: 78 tests pass on `ash-compute` and 85 on `experimental-ash-sd`;
+the composed block matched a CPU group-norm/attention/residual reference
+within 1e-3 on 1×2×2×2 tensors with identity projections; empty input and
+wrong projection length rejected; clippy `-D warnings` clean with SD/STT/TTS
+features; fmt clean.
+
+Next: timestep embedding and a `predict` closure that consumes the conditioned
+embedding, then end-to-end SD generation still needs the down/up sampling and
+VAE decode paths.
