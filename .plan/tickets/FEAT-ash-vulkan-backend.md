@@ -394,3 +394,26 @@ for a 2-token/2-dim case within 1e-3; mismatched weights rejected; clippy
 
 Next: wire token IDs → embedding → stacked blocks → text conditioning, then
 DDIM sampling with caller-supplied model weights.
+
+## In progress — slice 23 (2026-11-23, worktree): server selection wiring
+
+Self-review found a blocking wiring gap: `experimental-ash-sd` was an empty
+server feature and no constructor selected `AshSdPipeline`, so the capability
+flag advertised a backend the server could not drive.
+
+Changes: forward the feature to `honkbox-ash-backend/experimental-ash-sd`;
+add `ash-sd` to `--sd-backend` and `generate --backend`, constructing the
+pipeline with a headless device and a loud exit-1 on device failure; update
+the `FeatureFlags` doc and regenerate its TS snapshot. `generate` still stops
+with the named sampling error — no fake image is produced.
+
+Evidence: `cargo check --locked -p honkbox-server --features experimental-ash-sd`
+→ 0 errors (110 crates; only a pre-existing unused-`unimplemented` warning in
+ash stubs when SD-only features are selected). `cargo test --locked
+-p honkbox-api-types` → 16 pass; TS snapshot regenerated. OpenAPI snapshot
+regeneration → `openapi covers all 53 mounted routes`; both generated
+snapshots now carry the updated flag description. `cargo test --locked
+-p honkbox-server --features experimental-ash-sd` → 4900 passed (39 suites).
+
+Known nit: with SD-only features, ash stubs warn about unused `unimplemented`;
+default-feature clippy gates are unaffected.

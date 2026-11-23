@@ -1912,8 +1912,9 @@ export type FeatureFlags = {
    */
   vad: boolean;
   /**
-   * Experimental ash SD backend (compile feature
-   * `experimental-ash-sd`); empty until that backend's first code lands.
+   * Experimental direct-Vulkan SD backend (compile feature
+   * `experimental-ash-sd`): selectable via `--sd-backend ash-sd`, but
+   * `generate` stops with a named sampling error until diffusion lands.
    */
   experimental_ash_sd: boolean;
   /**

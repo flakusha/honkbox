@@ -138,6 +138,9 @@ pub enum SdBackend {
     Stub,
     /// Real txt2img via stable-diffusion.cpp on a registry checkpoint.
     SdCpp,
+    /// Experimental direct-Vulkan pipeline (sampling not implemented yet).
+    #[cfg(feature = "experimental-ash-sd")]
+    AshSd,
 }
 /// Image pipeline: stub unit struct, or file backend via `resolve` slug→path.
 #[must_use]
@@ -155,6 +158,20 @@ pub fn make_sd(
             });
             let path = resolve(slug);
             Arc::new(honkbox_sd_core::SdCppPipeline::new(path))
+        }
+        #[cfg(feature = "experimental-ash-sd")]
+        SdBackend::AshSd => {
+            let slug = model.unwrap_or_else(|| {
+                eprintln!("error: --sd-model <slug> is required with --sd-backend ash-sd");
+                std::process::exit(1);
+            });
+            let device = Arc::new(crate::or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Arc::new(honkbox_ash_backend::sd::AshSdPipeline::new(
+                device,
+                resolve(slug),
+            ))
         }
     }
 }

@@ -4599,7 +4599,7 @@
           },
           "experimental_ash_sd": {
             "type": "boolean",
-            "description": "Experimental ash SD backend (compile feature\n`experimental-ash-sd`); empty until that backend's first code lands."
+            "description": "Experimental direct-Vulkan SD backend (compile feature\n`experimental-ash-sd`): selectable via `--sd-backend ash-sd`, but\n`generate` stops with a named sampling error until diffusion lands."
           },
           "fizgig": {
             "type": "boolean",

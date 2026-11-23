@@ -203,6 +203,9 @@ impl From<Format> for honkbox_sd_core::OutputFormat {
 enum Backend {
     Stub,
     SdCpp,
+    /// Experimental direct-Vulkan pipeline (sampling not implemented yet).
+    #[cfg(feature = "experimental-ash-sd")]
+    AshSd,
 }
 
 /// `chat` flags: one prompt through the chat pipeline.
@@ -827,6 +830,15 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let pipeline: Box<dyn honkbox_sd_core::SdPipeline> = match backend {
         Backend::Stub => Box::new(honkbox_sd_core::StubPipeline),
         Backend::SdCpp => Box::new(honkbox_sd_core::SdCppPipeline::new(model_path)),
+        #[cfg(feature = "experimental-ash-sd")]
+        Backend::AshSd => {
+            let device = Arc::new(or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Box::new(honkbox_ash_backend::sd::AshSdPipeline::new(
+                device, model_path,
+            ))
+        }
     };
     let img = or_exit(pipeline.generate(
         &honkbox_sd_core::Txt2ImgRequest {

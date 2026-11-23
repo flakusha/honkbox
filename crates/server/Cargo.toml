@@ -84,9 +84,10 @@ rxing = { version = "0.9", default-features = false, features = [
 image = { workspace = true }
 
 [features]
-# Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
-# Empty until the first experimental code lands, then forwards to sd-core/ash-backend.
-experimental-ash-sd = []
+# Experimental direct-Vulkan SD backend (`--sd-backend ash-sd` /
+# `--backend ash-sd`): forwards to the ash-backend seam. The pipeline admits
+# request/device/checkpoint then returns a named sampling error; no fake image.
+experimental-ash-sd = ["honkbox-ash-backend/experimental-ash-sd"]
 # Experimental direct-Vulkan LLM backend (`--llm-backend ash-llm`): forwards
 # to the ash-backend seam. Device creation failure at construction time is a
 # loud named error (backends.rs), never a silent stub fallback.
