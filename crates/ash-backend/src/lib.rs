@@ -42,6 +42,8 @@
 //!   `vocab.json` / `merges.txt` (assets are not bundled).
 //! - [`text_encoder`]: [`text_encoder::ClipTextEncoder`], token IDs through
 //!   embeddings and a caller-weighted stack of encoder blocks.
+//! - [`clip_checkpoint`]: [`clip_checkpoint::ClipTensors`], SD 1.5 CLIP tensors
+//!   loaded into local matmul layout.
 //! - [`text_conditioning`]: [`text_conditioning::TextConditioner`], token-wise
 //!   positive/negative states blended by classifier-free guidance.
 //! - [`transformer`]: [`transformer::TransformerBlock`], single-head encoder
@@ -168,6 +170,8 @@ impl std::error::Error for VkError {}
 pub mod attention;
 #[cfg(feature = "ash-compute")]
 pub mod checkpoint;
+#[cfg(feature = "ash-compute")]
+pub mod clip_checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod compute;
 #[cfg(feature = "ash-compute")]

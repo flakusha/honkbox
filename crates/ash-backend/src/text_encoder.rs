@@ -19,7 +19,7 @@ pub struct ClipTextEncoderWeights<'a> {
     /// `[tokens, dim]` positional embedding table.
     pub position_table: &'a [f32],
     /// One entry per instantiated block, in execution order.
-    pub layers: &'a [TransformerWeights<'a>],
+    pub layers: Vec<TransformerWeights<'a>>,
     /// MLP expansion width shared by every block.
     pub ffn_hidden: usize,
 }
@@ -61,7 +61,7 @@ impl ClipTextEncoder {
         let mut hidden =
             self.embedding
                 .encode(ids, weights.token_table, weights.position_table, vocab, dim)?;
-        for (block, layer) in self.blocks.iter().zip(weights.layers) {
+        for (block, layer) in self.blocks.iter().zip(&weights.layers) {
             hidden = block.run(&hidden, layer, ids.len(), dim, weights.ffn_hidden)?;
         }
         Ok(hidden)
@@ -115,7 +115,7 @@ mod tests {
         let weights = ClipTextEncoderWeights {
             token_table: &token_table,
             position_table: &position_table,
-            layers: &[],
+            layers: Vec::new(),
             ffn_hidden: dim,
         };
         let actual = encoder.run(&ids, &weights, vocab, dim).expect("encode");
@@ -146,11 +146,11 @@ mod tests {
         let norm = [1.0_f32, 1.0];
         let zero = [0.0_f32, 0.0];
         let zero_matrix = [0.0_f32; 4];
-        let layers = [layer_weights(&identity, &zero_matrix, &norm, &zero)];
+        let layers = vec![layer_weights(&identity, &zero_matrix, &norm, &zero)];
         let weights = ClipTextEncoderWeights {
             token_table: &token_table,
             position_table: &position_table,
-            layers: &layers,
+            layers: layers.clone(),
             ffn_hidden: dim,
         };
 
@@ -177,11 +177,11 @@ mod tests {
         let matrix = [0.0_f32; 4];
         let norm = [1.0_f32, 1.0];
         let zero = [0.0_f32, 0.0];
-        let layers = [layer_weights(&matrix, &matrix, &norm, &zero)];
+        let layers = vec![layer_weights(&matrix, &matrix, &norm, &zero)];
         let weights = ClipTextEncoderWeights {
             token_table: &matrix,
             position_table: &norm,
-            layers: &[],
+            layers: Vec::new(),
             ffn_hidden: dim,
         };
         assert!(encoder.run(&[0], &weights, 2, dim).is_err());
@@ -189,7 +189,7 @@ mod tests {
         let weights = ClipTextEncoderWeights {
             token_table: &matrix,
             position_table: &norm,
-            layers: &layers,
+            layers: layers.clone(),
             ffn_hidden: dim,
         };
         assert!(encoder.run(&[0, 1, 2], &weights, 2, dim).is_err());

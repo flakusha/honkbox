@@ -16,6 +16,7 @@ use crate::{
 use std::sync::Arc;
 
 /// All caller-supplied weights and norm parameters for one encoder block.
+#[derive(Clone, Copy)]
 pub struct TransformerWeights<'a> {
     /// `[dim, dim]` query projection.
     pub wq: &'a [f32],

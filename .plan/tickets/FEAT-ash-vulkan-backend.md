@@ -803,3 +803,24 @@ clippy `-D warnings` and fmt clean.
 
 Next: optional checkpoint-backed text weights, or stop here until a real SD
 1.5 checkpoint is available for parity checks.
+
+## Landed — slice 44 (2026-11-24, worktree)
+
+`clip_checkpoint.rs` loads SD 1.5 CLIP text-tower tensors from safetensors:
+token/position embeddings plus per-layer attention, MLP and layer-norm
+weights. Checkpoint `[out, in]` matrices are transposed once at load time into
+the local `[in, out]` matmul layout. Bias tensors are deliberately skipped —
+the local transformer has no bias path, so this is not a parity claim.
+
+`ClipTextEncoderWeights::layers` now owns a `Vec<TransformerWeights>` instead of
+borrowing a temporary slice; `TransformerWeights` is `Copy` so callers can keep
+their own views. No leaked allocations.
+
+Evidence: 101 tests pass on `ash-compute`, 109 on `experimental-ash-sd`; tests
+assert transposed fc1 layout, declared shape/missing-key rejection, and zero
+geometry rejection; test temp file uses a unique name plus a `Drop` guard;
+server feature check clean (two pre-existing warnings); clippy `-D warnings`
+and fmt clean.
+
+Next: nothing without a real checkpoint. Remaining gaps (bias path, EOS
+pooling, fused QKV parity) need one to justify them.

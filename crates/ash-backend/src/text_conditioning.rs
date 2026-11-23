@@ -51,7 +51,6 @@ impl TextConditioner {
 mod tests {
     use super::*;
     use crate::text_encoder::ClipTextEncoderWeights;
-    use crate::transformer::TransformerWeights;
 
     fn device() -> Option<Arc<VulkanDevice>> {
         match VulkanDevice::headless() {
@@ -86,7 +85,7 @@ mod tests {
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
-            layers: &[] as &[TransformerWeights<'_>],
+            layers: Vec::new(),
             ffn_hidden: dim,
         };
         let actual = conditioner
@@ -111,7 +110,7 @@ mod tests {
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
-            layers: &[] as &[TransformerWeights<'_>],
+            layers: Vec::new(),
             ffn_hidden: dim,
         };
         let cond = embedded(&positive, &tokens, &positions, dim);
@@ -144,7 +143,7 @@ mod tests {
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
-            layers: &[] as &[TransformerWeights<'_>],
+            layers: Vec::new(),
             ffn_hidden: 2,
         };
         assert!(
