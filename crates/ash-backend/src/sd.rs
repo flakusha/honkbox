@@ -11,6 +11,8 @@ use crate::{
     checkpoint::CheckpointMap,
     device::{CapacityRequirements, VulkanDevice},
     model::{ModelSpec, Op},
+    model_spec::{SD15_SINGLE_LEVEL, validate},
+    shape_infer::{ShapeError, UnetShapes, infer},
 };
 use honkbox_sd_core::{GeneratedImage, MAX_EDGE, SdError, SdPipeline, Txt2ImgRequest};
 use std::io::Read;
@@ -123,6 +125,18 @@ fn admit_checkpoint(path: &Path) -> Result<(), SdError> {
     Ok(())
 }
 
+/// Validate a safetensors checkpoint against the declared model spec and
+/// return the stage widths inferred from its tensor metadata.
+///
+/// No device is needed: this is the CLI/capability seam for checking a model
+/// before reserving the GPU slot. Sampling still needs the full loader.
+pub fn inspect_checkpoint(path: &Path) -> Result<UnetShapes, SdError> {
+    let fail = |msg: String| SdError::Backend(format!("checkpoint '{}': {msg}", path.display()));
+    let map = CheckpointMap::read(path).map_err(|e| fail(e.to_string()))?;
+    validate(&SD15_SINGLE_LEVEL, &map).map_err(|e| fail(e.to_string()))?;
+    infer(&SD15_SINGLE_LEVEL, &map).map_err(|e: ShapeError| fail(e.to_string()))
+}
+
 impl SdPipeline for AshSdPipeline {
     fn backend_id(&self) -> &'static str {
         ASH_SD_BACKEND_ID
@@ -175,6 +189,7 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::VkError;
+    use crate::model_spec::tensor_keys;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_checkpoint(ext: &str, bytes: &[u8]) -> PathBuf {
@@ -186,6 +201,61 @@ mod tests {
             std::env::temp_dir().join(format!("honkbox-ash-{}-{stamp}.{ext}", std::process::id()));
         std::fs::write(&path, bytes).expect("write temp checkpoint");
         path
+    }
+
+    fn spec_checkpoint(omit: Option<&str>) -> PathBuf {
+        let mut header = serde_json::Map::new();
+        let mut payload = Vec::new();
+        for (_, key) in tensor_keys(&SD15_SINGLE_LEVEL) {
+            if omit == Some(key.as_str()) {
+                continue;
+            }
+            let dims = if key == "time_embedding.linear_1.weight" {
+                vec![8, 4]
+            } else if key == "time_embedding.linear_2.weight" {
+                vec![4, 8]
+            } else if key.ends_with(".weight") {
+                vec![4, 4, 3, 3]
+            } else {
+                vec![4]
+            };
+            let count: usize = dims.iter().product();
+            let start = payload.len();
+            payload.resize(start + count * 4, 0);
+            let end = payload.len();
+            header.insert(
+                key,
+                serde_json::json!({
+                    "dtype": "F32",
+                    "shape": dims,
+                    "data_offsets": [start, end],
+                }),
+            );
+        }
+        let header_bytes = serde_json::to_vec(&header).expect("header");
+        let mut bytes = u64::try_from(header_bytes.len())
+            .expect("header length")
+            .to_le_bytes()
+            .to_vec();
+        bytes.extend_from_slice(&header_bytes);
+        bytes.extend_from_slice(&payload);
+        temp_checkpoint("safetensors", &bytes)
+    }
+
+    #[test]
+    fn inspect_checkpoint_validates_then_infers() {
+        let valid = spec_checkpoint(None);
+        let shapes = inspect_checkpoint(&valid).expect("inspect");
+        assert_eq!(shapes.latent_channels, 4);
+        assert_eq!(shapes.timestep_hidden, 8);
+        std::fs::remove_file(valid).expect("cleanup");
+
+        let missing = spec_checkpoint(Some("time_embedding.linear_2.bias"));
+        assert!(
+            matches!(inspect_checkpoint(&missing), Err(SdError::Backend(msg)) if msg.contains("timestep linear 2")),
+            "missing declared tensor must be named"
+        );
+        std::fs::remove_file(missing).expect("cleanup");
     }
 
     fn safetensors_bytes() -> Vec<u8> {

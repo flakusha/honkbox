@@ -686,3 +686,22 @@ clean with SD/STT/TTS features; fmt clean.
 Next: server seam. This is a separate surface (api-types + routes + config + CI
 gates) and should land as its own slice with the feature flag disabled by
 default.
+
+## Landed — slice 38 (2026-11-23, worktree)
+
+Server seam is now usable without faking images: `AshSdPipeline` already had
+CLI/serve constructors behind `experimental-ash-sd`; this slice adds
+`sd::inspect_checkpoint(path)`, which validates the declared spec and infers
+stage widths from tensor metadata without reserving a GPU slot, plus the
+`honkbox models inspect-ash <slug>` CLI subcommand (same feature flag).
+`generate` still stops with the named sampling error — no fabricated output.
+
+Evidence: 92 tests pass on `ash-compute`, 100 on `experimental-ash-sd`;
+a synthetic spec checkpoint inferred 4 channels / 8-wide timestep hidden and
+a missing declared tensor produced the named role error; `cargo check -p
+honkbox-server --features experimental-ash-sd --all-targets` clean (two
+pre-existing warnings); CLI `--help` shows the new subcommand; clippy
+`-D warnings` and fmt clean.
+
+Next: real text-conditioned sampling. Needs CLIP/text-encoder wiring, fused
+QKV cross-attention, and a full model loader — not a small slice.

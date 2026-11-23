@@ -284,6 +284,12 @@ enum ModelsAction {
         #[arg(long)]
         json: bool,
     },
+    /// Infer `ash-sd` stage widths from a checkpoint's tensor metadata.
+    #[cfg(feature = "experimental-ash-sd")]
+    InspectAsh {
+        /// Registry slug of the safetensors checkpoint.
+        slug: String,
+    },
 }
 
 /// P1 swap manager for the chat modality: load-on-demand + TTL/LRU
@@ -365,6 +371,8 @@ async fn main() {
         }
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, data_dir, json),
+            #[cfg(feature = "experimental-ash-sd")]
+            ModelsAction::InspectAsh { slug } => models_inspect_ash(config, data_dir, &slug),
         },
     }
 }
@@ -746,6 +754,38 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
     }
 }
 
+/// `models inspect-ash`: validate a checkpoint against the declared spec and
+/// print the inferred stage widths. No GPU slot is reserved.
+#[cfg(feature = "experimental-ash-sd")]
+fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: &str) {
+    let loaded = or_exit(config::load(config, data_dir));
+    for warning in &loaded.warnings {
+        eprintln!("warn: {warning}");
+    }
+    let cfg = loaded.models;
+    let found = honkbox_registry::scan_roots(&honkbox_registry::ModelRoots {
+        llm_dirs: cfg.llm_dirs,
+        comfyui_dirs: cfg.comfyui_dirs,
+        stt_dirs: cfg.stt_dirs,
+        tts_dirs: cfg.tts_dirs,
+        ocr_dirs: cfg.ocr_dirs,
+    });
+    let path = resolve_model(&found, slug);
+    let shapes = or_exit(honkbox_ash_backend::sd::inspect_checkpoint(&path));
+    println!("family: sd15-single-level");
+    println!("latent_channels: {}", shapes.latent_channels);
+    println!("entry_kernel: {}", shapes.entry_kernel);
+    println!("down: {:?}", shapes.down);
+    println!("mid_channels: {}", shapes.mid_channels);
+    println!("up: {:?}", shapes.up);
+    println!("output_channels: {}", shapes.output_channels);
+    println!(
+        "timestep: dim={} hidden={} channels={}",
+        shapes.timestep_dim, shapes.timestep_hidden, shapes.timestep_channels
+    );
+    println!("vae_entry: {:?}", shapes.vae_entry);
+    println!("vae_exit: {:?}", shapes.vae_exit);
+}
 /// `bytes` as B/KB/MB/GB with one decimal (bare bytes stay integral; integer math, no float).
 fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
