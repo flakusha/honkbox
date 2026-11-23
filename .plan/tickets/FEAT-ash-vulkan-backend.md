@@ -375,3 +375,22 @@ fixtures exactly; malformed assets and unknown tokens rejected; clippy
 
 Next: transformer block composition (attention + residual + MLP + norms),
 then sampling wiring and end-to-end text conditioning.
+
+## Landed — slice 22 (2026-11-23, worktree)
+
+`Transpose::run` adds a row/column swap kernel for `Kᵀ` (no separate host
+round-trip layout juggling). `TransformerBlock::run` composes Q/K/V projections,
+single-head attention, output projection, two residual adds and two layer norms
+around `FeedForward`. All weights and norm parameters are caller-supplied; no
+checkpoint keys are mapped yet.
+
+ponytail: one head per block. Multi-head split/concat needs two more kernels;
+add them when a real CLIP checkpoint makes the gap observable.
+
+Evidence: 61 tests pass on `ash-compute` and 68 on `experimental-ash-sd`;
+transpose matched a 3×5 CPU reference; the full block matched a CPU reference
+for a 2-token/2-dim case within 1e-3; mismatched weights rejected; clippy
+`-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: wire token IDs → embedding → stacked blocks → text conditioning, then
+DDIM sampling with caller-supplied model weights.

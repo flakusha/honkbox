@@ -17,6 +17,7 @@ fn main() {
         ("shaders/cfg_guidance.comp", "cfg_guidance.spv"),
         ("shaders/embedding_gather.comp", "embedding_gather.spv"),
         ("shaders/gelu.comp", "gelu.spv"),
+        ("shaders/transpose.comp", "transpose.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

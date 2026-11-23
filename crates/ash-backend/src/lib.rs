@@ -38,6 +38,9 @@
 //! - [`mlp`]: [`mlp::FeedForward`], GELU activation and a two-matrix MLP block.
 //! - [`tokenizer`]: [`tokenizer::ClipTokenizer`], CLIP BPE over caller-supplied
 //!   `vocab.json` / `merges.txt` (assets are not bundled).
+//! - [`transformer`]: [`transformer::TransformerBlock`], single-head encoder
+//!   block built from attention, MLP, residual adds and layer norms.
+//! - [`transpose`]: [`transpose::Transpose`], matrix transpose for `Kᵀ`.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
@@ -177,5 +180,9 @@ pub mod softmax;
 pub mod stubs;
 #[cfg(feature = "ash-compute")]
 pub mod tokenizer;
+#[cfg(feature = "ash-compute")]
+pub mod transformer;
+#[cfg(feature = "ash-compute")]
+pub mod transpose;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;

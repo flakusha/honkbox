@@ -39,6 +39,8 @@ pub enum Op {
     EmbeddingGather,
     /// Elementwise GELU (tanh approximation).
     Gelu,
+    /// Row/column transpose of a f32 matrix.
+    Transpose,
 }
 
 impl Op {
@@ -50,7 +52,11 @@ impl Op {
                 storage_range: 4, // length uniform
                 ..CapacityRequirements::default()
             },
-            Self::MatMul | Self::Attention | Self::LayerNorm | Self::EmbeddingGather => {
+            Self::MatMul
+            | Self::Attention
+            | Self::LayerNorm
+            | Self::EmbeddingGather
+            | Self::Transpose => {
                 CapacityRequirements {
                     workgroup_count: [1, 1, 1],
                     storage_range: 12, // shape/param buffer
