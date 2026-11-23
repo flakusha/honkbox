@@ -438,3 +438,23 @@ fmt clean.
 
 Next: pooled/sequence text conditioning over these hidden states, then DDIM
 sampling with caller-supplied model weights.
+
+## Landed — slice 25 (2026-11-23, worktree)
+
+`TextConditioner::condition` encodes positive and negative token ID sequences
+through the same `ClipTextEncoder`, mean-pools each `tokens × dim` hidden state
+batch on the host, then blends them with `Cfg` classifier-free guidance.
+Tokenization stays with the caller, so no asset files are touched and Vulkan
+errors are not mixed with `io::Error`.
+
+ponytail: mean pooling on the host instead of a GPU reduction; real CLIP pools
+the projected EOS token. Add the projection head and pooling kernel when a
+checkpoint's text tower is wired in.
+
+Evidence: 66 tests pass on `ash-compute` and 73 on `experimental-ash-sd`;
+scale 1.0 matched CPU pooled embeddings within 1e-5, scale 2.5 matched the
+`uncond + scale*(cond - uncond)` reference within 1e-4, invalid scale rejected;
+clippy `-D warnings` clean with SD/STT/TTS features; fmt clean.
+
+Next: wire the conditioned embedding into `DdimStep` with caller-supplied
+scheduler alphas and latents, then the diffusion backbone.

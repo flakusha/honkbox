@@ -40,6 +40,8 @@
 //!   `vocab.json` / `merges.txt` (assets are not bundled).
 //! - [`text_encoder`]: [`text_encoder::ClipTextEncoder`], token IDs through
 //!   embeddings and a caller-weighted stack of encoder blocks.
+//! - [`text_conditioning`]: [`text_conditioning::TextConditioner`], pooled
+//!   positive/negative embeddings blended by classifier-free guidance.
 //! - [`transformer`]: [`transformer::TransformerBlock`], single-head encoder
 //!   block built from attention, MLP, residual adds and layer norms.
 //! - [`transpose`]: [`transpose::Transpose`], matrix transpose for `Kᵀ`.
@@ -180,6 +182,8 @@ pub mod softmax;
     feature = "experimental-ash-tts"
 ))]
 pub mod stubs;
+#[cfg(feature = "ash-compute")]
+pub mod text_conditioning;
 #[cfg(feature = "ash-compute")]
 pub mod text_encoder;
 #[cfg(feature = "ash-compute")]
