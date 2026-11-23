@@ -844,3 +844,29 @@ clean.
 
 Next: no more speculative mapping. A real SD 1.5 checkpoint is needed for
 parity work on bias handling, EOS pooling and fused QKV.
+
+## Review - SDXL-only checkpoint inventory (2026-11-24, worktree)
+
+- Blocking, fixed: `models inspect-ash` reported SDXL checkpoints as SD 1.5 with
+  missing keys. Added `checkpoint_family::detect` (marker keys only) and a
+  short-circuit that prints `family: sdxl` / `status: unsupported ...` / `reason:`.
+  Smoke-tested with a synthetic `label_emb.0.0.weight` checkpoint via the CLI;
+  observed the exact three-line output above.
+- Blocking, inferred from code + vendored SDXL constants: `inspect_checkpoint`
+  cannot validate SDXL even before readiness checks. Vendored `unet.hpp` sets
+  SDXL `time_embed_dim = model_channels * 4` (320 -> 1280), while
+  `shape_infer::infer` requires `timestep linear2` channels to equal
+  `conv_in.weight` out-channels (320). SDXL also uses 2048-wide context,
+  transformer depths `{1,2,10}` and `label_emb.0.0.weight`; none are in the
+  SD 1.5 spec. A real SDXL checkpoint was not available for a live run.
+- Non-blocking: SDXL text towers are dual (`conditioner.embedders.0.` and
+  `.1.`, or normalized `cond_stage_model.`/`cond_stage_model.1.` per vendored
+  `name_conversion.cpp:1760-1761`), with CLIP-L 768 and OpenCLIP 1280 dims.
+  `SD15_CLIP` and `clip_checkpoint::load` cannot serve them.
+- Legal: SDXL weights normally ship under CreativeML Open RAIL++-M; code
+  derived from vendored stable-diffusion.cpp stays MIT with attribution.
+  Weights remain external; no distribution change from this slice.
+
+Next real-checkpoint parity needs either an SD 1.5 checkpoint or a separate
+SDXL model spec + dual text tower loader (multi-slice). No more synthetic
+key-mapping work.

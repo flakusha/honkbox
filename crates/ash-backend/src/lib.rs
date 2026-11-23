@@ -171,6 +171,8 @@ pub mod attention;
 #[cfg(feature = "ash-compute")]
 pub mod checkpoint;
 #[cfg(feature = "ash-compute")]
+pub mod checkpoint_family;
+#[cfg(feature = "ash-compute")]
 pub mod clip_checkpoint;
 #[cfg(feature = "ash-compute")]
 pub mod compute;

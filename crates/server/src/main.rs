@@ -771,8 +771,18 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
         ocr_dirs: cfg.ocr_dirs,
     });
     let path = resolve_model(&found, slug);
+    let map = or_exit(
+        honkbox_ash_backend::checkpoint::CheckpointMap::read(&path).map_err(|e| e.to_string()),
+    );
+    let family = honkbox_ash_backend::checkpoint_family::detect(&map);
+    if family == honkbox_ash_backend::checkpoint_family::CheckpointFamily::Sdxl {
+        println!("family: sdxl");
+        println!("status: unsupported by experimental ash backend");
+        println!("reason: dual text towers, adm conditioning, 2048-wide context");
+        return;
+    }
     let shapes = or_exit(honkbox_ash_backend::sd::inspect_checkpoint(&path));
-    println!("family: sd15-single-level");
+    println!("family: {}", family.label());
     println!("latent_channels: {}", shapes.latent_channels);
     println!("entry_kernel: {}", shapes.entry_kernel);
     println!("down: {:?}", shapes.down);
@@ -785,6 +795,31 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
     );
     println!("vae_entry: {:?}", shapes.vae_entry);
     println!("vae_exit: {:?}", shapes.vae_exit);
+    let unet = honkbox_ash_backend::sd15_keys::audit(&map);
+    println!(
+        "unet_keys: ready={} missing={}",
+        unet.is_ready(),
+        unet.missing.len()
+    );
+    print_missing("unet", &unet.missing);
+    let clip = honkbox_ash_backend::clip_checkpoint::audit(
+        &map,
+        honkbox_ash_backend::clip_checkpoint::SD15_CLIP,
+    );
+    println!(
+        "clip_keys: ready={} missing={} wrong_shape={}",
+        clip.is_ready(),
+        clip.missing.len(),
+        clip.wrong_shape.len()
+    );
+    print_missing("clip", &clip.missing);
+}
+
+/// Print the first three missing keys, or nothing when the inventory is complete.
+fn print_missing(label: &str, missing: &[impl AsRef<str>]) {
+    for key in missing.iter().take(3) {
+        println!("{label}_missing: {}", key.as_ref());
+    }
 }
 /// `bytes` as B/KB/MB/GB with one decimal (bare bytes stay integral; integer math, no float).
 fn human_size(bytes: u64) -> String {

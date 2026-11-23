@@ -12,6 +12,7 @@ use crate::device::VulkanDevice;
 use std::sync::Arc;
 
 /// Named reason a direct-Vulkan STT/TTS seam cannot serve a request yet.
+#[cfg(any(feature = "experimental-ash-stt", feature = "experimental-ash-tts"))]
 fn unimplemented(modality: &str) -> String {
     format!(
         "direct-Vulkan {modality} seam is not implemented yet: \

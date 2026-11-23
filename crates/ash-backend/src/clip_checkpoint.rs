@@ -29,8 +29,87 @@ pub struct ClipGeometry {
     pub layers: usize,
 }
 
+/// SD 1.5 text tower geometry (CLIP ViT-L/14, 77 tokens).
+pub const SD15_CLIP: ClipGeometry = ClipGeometry {
+    vocab: 49408,
+    tokens: 77,
+    dim: 768,
+    ffn_hidden: 3072,
+    layers: 12,
+};
+
 fn name(suffix: &str) -> String {
     format!("{PREFIX}{suffix}")
+}
+
+/// Required tensor names and shapes for one text tower.
+pub fn required_tensors(geometry: ClipGeometry) -> Vec<(String, Vec<usize>)> {
+    let mut out = vec![
+        (
+            name("embeddings.token_embedding.weight"),
+            vec![geometry.vocab, geometry.dim],
+        ),
+        (
+            name("embeddings.position_embedding.weight"),
+            vec![geometry.tokens, geometry.dim],
+        ),
+    ];
+    for index in 0..geometry.layers {
+        for kind in ["q", "k", "v", "out"] {
+            out.push((
+                name(&format!("layers.{index}.self_attn.{kind}_proj.weight")),
+                vec![geometry.dim, geometry.dim],
+            ));
+        }
+        out.push((
+            name(&format!("layers.{index}.mlp.fc1.weight")),
+            vec![geometry.ffn_hidden, geometry.dim],
+        ));
+        out.push((
+            name(&format!("layers.{index}.mlp.fc2.weight")),
+            vec![geometry.dim, geometry.ffn_hidden],
+        ));
+        for number in 1..=2 {
+            out.push((
+                name(&format!("layers.{index}.layer_norm{number}.weight")),
+                vec![geometry.dim],
+            ));
+            out.push((
+                name(&format!("layers.{index}.layer_norm{number}.bias")),
+                vec![geometry.dim],
+            ));
+        }
+    }
+    out
+}
+
+/// Missing or wrongly shaped CLIP tensors in a checkpoint header.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ClipAudit {
+    /// Required names absent from the header.
+    pub missing: Vec<String>,
+    /// Required names present with an unexpected shape.
+    pub wrong_shape: Vec<String>,
+}
+
+impl ClipAudit {
+    /// True when every required tensor is present with the expected shape.
+    pub fn is_ready(&self) -> bool {
+        self.missing.is_empty() && self.wrong_shape.is_empty()
+    }
+}
+
+/// Inspect CLIP tensor metadata only; no payload is read.
+pub fn audit(map: &CheckpointMap, geometry: ClipGeometry) -> ClipAudit {
+    let mut report = ClipAudit::default();
+    for (key, shape) in required_tensors(geometry) {
+        match map.get(&key) {
+            None => report.missing.push(key),
+            Some(meta) if meta.shape != shape => report.wrong_shape.push(key),
+            Some(_) => {}
+        }
+    }
+    report
 }
 
 fn transpose(values: &[f32], rows: usize, cols: usize) -> Vec<f32> {
@@ -305,6 +384,20 @@ mod tests {
         // transpose: [0.0,0.2,0.4, 0.1,0.3,0.5].
         assert_eq!(layer.w1[1], 0.2);
         assert_eq!(layer.w1[2], 0.4);
+    }
+
+    #[test]
+    fn audit_checks_required_clip_tensors() {
+        let (file, map) = fixture(None);
+        assert!(audit(&map, geometry()).is_ready());
+        drop(file);
+
+        let omitted = name("layers.0.self_attn.q_proj.weight");
+        let (file, map) = fixture(Some(&omitted));
+        let report = audit(&map, geometry());
+        assert!(!report.is_ready());
+        assert!(report.missing.contains(&omitted));
+        drop(file);
     }
 
     #[test]
