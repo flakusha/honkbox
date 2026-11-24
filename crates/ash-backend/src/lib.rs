@@ -76,6 +76,8 @@
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
 //!   stops with a named sampling error until diffusion kernels land.
+//! - [`sdxl`]: [`sdxl::inspect_sdxl_checkpoint`], header-only SDXL shape
+//!   validation and dual-CLIP readiness report (no tensor payload decoded).
 //! - [`llm`]: [`llm::AshLlmPipeline`], implementing the `honkbox-llm-worker`
 //!   `LlmPipeline` (backend id `ash-llm`); a placeholder that returns a
 //!   named unimplemented error — no fake output — until transformer decode
@@ -212,6 +214,8 @@ pub mod sampler;
 pub mod sd;
 #[cfg(feature = "ash-compute")]
 pub mod sd15_keys;
+#[cfg(feature = "experimental-ash-sd")]
+pub mod sdxl;
 #[cfg(feature = "ash-compute")]
 pub mod shape_infer;
 #[cfg(feature = "ash-compute")]

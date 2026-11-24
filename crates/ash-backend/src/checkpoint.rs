@@ -261,17 +261,38 @@ impl CheckpointMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn checkpoint(entries: &serde_json::Value, payload: &[u8]) -> std::path::PathBuf {
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// Owns one unique temp file; removal happens on every exit path.
+    struct TempFile(std::path::PathBuf);
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempFile {
+        type Target = std::path::PathBuf;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    fn checkpoint(entries: &serde_json::Value, payload: &[u8]) -> TempFile {
         let header = serde_json::to_vec(entries).expect("header");
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "honkbox-ash-map-{}-{stamp}.safetensors",
-            std::process::id()
+            "honkbox-ash-map-{}-{}-{stamp}.safetensors",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let mut bytes = u64::try_from(header.len())
             .expect("len")
@@ -280,7 +301,7 @@ mod tests {
         bytes.extend_from_slice(&header);
         bytes.extend_from_slice(payload);
         std::fs::write(&path, bytes).expect("write checkpoint");
-        path
+        TempFile(path)
     }
 
     fn two_tensor_header() -> serde_json::Value {
@@ -315,7 +336,6 @@ mod tests {
             payload[16..]
         );
         assert!(map.read_tensor(&path, "missing").is_err());
-        std::fs::remove_file(path).expect("cleanup");
     }
 
     #[test]
@@ -343,7 +363,6 @@ mod tests {
         let empty = checkpoint(&serde_json::json!({}), b"");
         let map = CheckpointMap::read(&empty).expect("empty map");
         assert!(map.is_empty());
-        std::fs::remove_file(empty).expect("cleanup");
 
         let overlapping = serde_json::json!({
             "a": { "dtype": "F32", "shape": [2], "data_offsets": [0, 8] },
@@ -351,13 +370,11 @@ mod tests {
         });
         let path = checkpoint(&overlapping, &[0u8; 12]);
         assert!(CheckpointMap::read(&path).is_err());
-        std::fs::remove_file(path).expect("cleanup");
 
         let unknown = serde_json::json!({
             "a": { "dtype": "F128", "shape": [2], "data_offsets": [0, 8] }
         });
         let path = checkpoint(&unknown, &[0u8; 8]);
         assert!(CheckpointMap::read(&path).is_err());
-        std::fs::remove_file(path).expect("cleanup");
     }
 }

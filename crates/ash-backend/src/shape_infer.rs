@@ -178,12 +178,32 @@ pub fn infer(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<UnetShapes
 mod tests {
     use super::*;
     use crate::model_spec::{SD15_SINGLE_LEVEL, tensor_keys};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// Owns one unique temp file; removal happens on every exit path.
+    struct TempFile(std::path::PathBuf);
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempFile {
+        type Target = std::path::PathBuf;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
 
     fn checkpoint(
         keys: &[(String, String)],
         override_shape: Option<&(&str, Vec<usize>)>,
-    ) -> (std::path::PathBuf, CheckpointMap) {
+    ) -> (TempFile, CheckpointMap) {
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();
         for (_, key) in keys {
@@ -224,11 +244,13 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "honkbox-ash-shape-infer-{}-{stamp}.safetensors",
-            std::process::id()
+            "honkbox-ash-shape-infer-{}-{}-{stamp}.safetensors",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, &bytes).expect("write checkpoint");
-        (path.clone(), CheckpointMap::read(&path).expect("map"))
+        let map = CheckpointMap::read(&path).expect("map");
+        (TempFile(path), map)
     }
 
     fn default_shape(key: &str) -> Vec<usize> {
@@ -245,7 +267,7 @@ mod tests {
 
     #[test]
     fn infer_reads_channels_kernel_and_linear_widths() {
-        let (path, map) = checkpoint(&tensor_keys(&SD15_SINGLE_LEVEL), None);
+        let (_file, map) = checkpoint(&tensor_keys(&SD15_SINGLE_LEVEL), None);
         let shapes = infer(&SD15_SINGLE_LEVEL, &map).expect("infer");
         assert_eq!(shapes.latent_channels, 4);
         assert_eq!(shapes.entry_kernel, 3);
@@ -258,24 +280,21 @@ mod tests {
         assert_eq!(shapes.up.expect("up").in_c, 4);
         assert_eq!(shapes.vae_entry.out_c, 4);
         assert_eq!(shapes.vae_exit.in_c, 4);
-        std::fs::remove_file(path).expect("cleanup");
     }
 
     #[test]
     fn infer_rejects_bad_rank_and_channel_mismatch() {
         let keys = tensor_keys(&SD15_SINGLE_LEVEL);
-        let (path, map) = checkpoint(&keys, Some(&("time_embedding.linear_1.weight", vec![8])));
+        let (_file, map) = checkpoint(&keys, Some(&("time_embedding.linear_1.weight", vec![8])));
         assert!(matches!(
             infer(&SD15_SINGLE_LEVEL, &map),
             Err(ShapeError::Rank { .. })
         ));
-        std::fs::remove_file(path).expect("cleanup");
 
-        let (path, map) = checkpoint(&keys, Some(&("time_embedding.linear_2.weight", vec![2, 8])));
+        let (_file, map) = checkpoint(&keys, Some(&("time_embedding.linear_2.weight", vec![2, 8])));
         assert!(matches!(
             infer(&SD15_SINGLE_LEVEL, &map),
             Err(ShapeError::Mismatch { .. })
         ));
-        std::fs::remove_file(path).expect("cleanup");
     }
 }

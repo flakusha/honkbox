@@ -195,7 +195,24 @@ mod tests {
 
     static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-    fn temp_checkpoint(ext: &str, bytes: &[u8]) -> PathBuf {
+    /// Owns one unique temp file; removal happens on every exit path.
+    struct TempFile(std::path::PathBuf);
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TempFile {
+        type Target = std::path::PathBuf;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    fn temp_checkpoint(ext: &str, bytes: &[u8]) -> TempFile {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -206,10 +223,10 @@ mod tests {
             TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, bytes).expect("write temp checkpoint");
-        path
+        TempFile(path)
     }
 
-    fn spec_checkpoint(omit: Option<&str>, prefixed: bool) -> PathBuf {
+    fn spec_checkpoint(omit: Option<&str>, prefixed: bool) -> TempFile {
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();
         for (_, key) in tensor_keys(&SD15_SINGLE_LEVEL) {
@@ -264,14 +281,12 @@ mod tests {
         let shapes = inspect_checkpoint(&valid).expect("inspect");
         assert_eq!(shapes.latent_channels, 4);
         assert_eq!(shapes.timestep_hidden, 8);
-        std::fs::remove_file(valid).expect("cleanup");
 
         let missing = spec_checkpoint(Some("time_embedding.linear_2.bias"), false);
         assert!(
             matches!(inspect_checkpoint(&missing), Err(SdError::Backend(msg)) if msg.contains("timestep linear 2")),
             "missing declared tensor must be named"
         );
-        std::fs::remove_file(missing).expect("cleanup");
     }
 
     #[test]
@@ -280,7 +295,6 @@ mod tests {
         let shapes = inspect_checkpoint(&path).expect("prefixed inspect");
         assert_eq!(shapes.latent_channels, 4);
         assert_eq!(shapes.timestep_hidden, 8);
-        std::fs::remove_file(path).expect("cleanup");
     }
 
     fn safetensors_bytes() -> Vec<u8> {
@@ -364,8 +378,6 @@ mod tests {
             matches!(admit_checkpoint(&gguf), Err(SdError::Backend(msg)) if msg.contains("tensor map")),
             "GGUF must be refused by name"
         );
-        std::fs::remove_file(safetensors).expect("cleanup");
-        std::fs::remove_file(gguf).expect("cleanup");
     }
 
     #[test]
@@ -389,8 +401,6 @@ mod tests {
             matches!(admit_checkpoint(&wrong), Err(SdError::Backend(msg)) if msg.contains("shape")),
             "wrong latent channels must be refused"
         );
-        std::fs::remove_file(missing).expect("cleanup");
-        std::fs::remove_file(wrong).expect("cleanup");
     }
 
     #[test]
@@ -404,21 +414,18 @@ mod tests {
         bad_len.extend_from_slice(b"{}");
         let huge_header = temp_checkpoint("safetensors", &bad_len);
         for path in [
-            &missing,
-            &empty,
-            &wrong_ext,
-            &bad_magic,
-            &truncated,
-            &huge_header,
+            missing.as_path(),
+            empty.as_path(),
+            wrong_ext.as_path(),
+            bad_magic.as_path(),
+            truncated.as_path(),
+            huge_header.as_path(),
         ] {
             assert!(
                 matches!(admit_checkpoint(path), Err(SdError::Backend(_))),
                 "expected rejection for {}",
                 path.display()
             );
-        }
-        for path in [empty, wrong_ext, bad_magic, truncated, huge_header] {
-            std::fs::remove_file(path).expect("cleanup");
         }
     }
 
@@ -437,7 +444,6 @@ mod tests {
             pipeline.generate(&request(512, 512), &AtomicBool::new(false)),
             Err(SdError::Backend(msg)) if msg.contains("UNet")
         ));
-        std::fs::remove_file(path).expect("cleanup");
     }
 
     #[test]
@@ -471,6 +477,5 @@ mod tests {
             ready.generate(&request(512, 512), &AtomicBool::new(false)),
             Err(SdError::Backend(msg)) if msg.contains("sampling not implemented")
         ));
-        std::fs::remove_file(valid).expect("cleanup");
     }
 }

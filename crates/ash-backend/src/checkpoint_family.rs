@@ -28,10 +28,12 @@ impl CheckpointFamily {
     }
 }
 
-const SDXL_MARKERS: [&str; 3] = [
+const SDXL_MARKERS: [&str; 4] = [
     "model.diffusion_model.label_emb.0.0.weight",
     "conditioner.embedders.1.transformer.text_model.embeddings.token_embedding.weight",
     "cond_stage_model.1.transformer.text_model.embeddings.token_embedding.weight",
+    // Real single-file SDXL (comfy/fooocus) OpenCLIP bigG tower.
+    "conditioner.embedders.1.model.token_embedding.weight",
 ];
 
 const SD15_MARKER: &str = "model.diffusion_model.input_blocks.0.0.weight";
@@ -108,6 +110,9 @@ mod tests {
         assert_eq!(detect(&map), CheckpointFamily::Sd15);
 
         let (_file, map) = header(&[SD15_MARKER, SDXL_MARKERS[0]]);
+        assert_eq!(detect(&map), CheckpointFamily::Sdxl);
+
+        let (_file, map) = header(&[SDXL_MARKERS[3]]);
         assert_eq!(detect(&map), CheckpointFamily::Sdxl);
 
         let (_file, map) = header(&[]);

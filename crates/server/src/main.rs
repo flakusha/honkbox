@@ -776,9 +776,32 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
     );
     let family = honkbox_ash_backend::checkpoint_family::detect(&map);
     if family == honkbox_ash_backend::checkpoint_family::CheckpointFamily::Sdxl {
+        let (shapes, keys) = or_exit(honkbox_ash_backend::sdxl::inspect_sdxl_checkpoint(&path));
         println!("family: sdxl");
-        println!("status: unsupported by experimental ash backend");
-        println!("reason: dual text towers, adm conditioning, 2048-wide context");
+        println!("latent_channels: {}", shapes.latent_channels);
+        println!("entry_kernel: {}", shapes.entry_kernel);
+        println!(
+            "timestep: dim={} hidden={} channels={}",
+            shapes.timestep_dim, shapes.timestep_hidden, shapes.timestep_channels
+        );
+        println!("label_emb_in: {}", shapes.label_emb_in);
+        println!("context_dim: {}", shapes.context_dim);
+        println!("vae_entry_in: {}", shapes.vae_entry_in);
+        println!("vae_entry_out: {}", shapes.vae_entry_out);
+        println!("vae_exit_in: {}", shapes.vae_exit_in);
+        println!("vae_exit_out: {}", shapes.vae_exit_out);
+        println!(
+            "unet_keys: ready={} missing={}",
+            keys.unet_ready,
+            keys.unet_missing.len()
+        );
+        println!(
+            "clip_keys: ready={} missing={}",
+            keys.clip_ready,
+            keys.clip_missing.len()
+        );
+        print_missing("unet", &keys.unet_missing);
+        print_missing("clip", &keys.clip_missing);
         return;
     }
     let shapes = or_exit(honkbox_ash_backend::sd::inspect_checkpoint(&path));
