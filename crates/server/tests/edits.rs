@@ -62,7 +62,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
+use honkbox_api_types::{
+    ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind, ModelMetadata,
+    SafetensorsMetadata,
+};
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
 use serde_json::{Value, json};
@@ -697,6 +700,15 @@ fn lora_entry(id: &str, path: &str) -> ModelCatalogEntry {
     }
 }
 
+fn tagged_entry(mut entry: ModelCatalogEntry, base: &str) -> ModelCatalogEntry {
+    entry.metadata = Some(ModelMetadata::Safetensors(SafetensorsMetadata {
+        tensor_count: 0,
+        dtypes: Vec::new(),
+        base_model: Some(base.to_owned()),
+    }));
+    entry
+}
+
 /// A multipart edits request with `loras` as a JSON array text part.
 fn loras_part(value: &Value) -> Part {
     part("loras", &value.to_string())
@@ -727,6 +739,70 @@ async fn edits_unknown_lora_slug_is_400() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "slug {slug}: {body}");
         assert_eq!(body["error"]["code"], "unknown_lora", "slug {slug}: {body}");
     }
+}
+
+/// A known SDXL `LoRA` on an SD1.5 checkpoint is refused before GPU work.
+#[tokio::test]
+async fn known_base_model_mismatch_is_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let catalog = catalog_with(&[
+        tagged_entry(sd_entry("comfy:sd15.safetensors"), "sd15"),
+        tagged_entry(
+            lora_entry(
+                "comfy:loras/sdxl.safetensors",
+                "/models/loras/sdxl.safetensors",
+            ),
+            "sdxl",
+        ),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("model", "comfy:sd15.safetensors"),
+            part("prompt", "redo this"),
+            loras_part(&json!([{ "slug": "comfy:loras/sdxl.safetensors" }])),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "base_model_mismatch", "{body}");
+}
+
+/// Matching tags pass and both tags land in the job sidecar for replay.
+#[tokio::test]
+async fn matching_base_model_tags_are_recorded_in_sidecar() {
+    let _slot = SLOT_LOCK.lock().await;
+    let data_dir = std::env::temp_dir().join(format!("honkbox-edit-base-{}", ulid::Ulid::new()));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let catalog = catalog_with(&[
+        tagged_entry(sd_entry("comfy:sd15.safetensors"), "sd15"),
+        tagged_entry(
+            lora_entry(
+                "comfy:loras/detail.safetensors",
+                "/models/loras/detail.safetensors",
+            ),
+            "sd15",
+        ),
+    ]);
+    let (status, body) = edits(
+        app_with(catalog, Some(data_dir.clone())),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            part("model", "comfy:sd15.safetensors"),
+            part("prompt", "redo this"),
+            loras_part(&json!([{ "slug": "comfy:loras/detail.safetensors" }])),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+    let dir = jobs.next().expect("one bundle").unwrap().path();
+    let request: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
+    assert_eq!(request["checkpoint_base_model"], "sd15", "{request}");
+    assert_eq!(request["loras"][0]["base_model"], "sd15", "{request}");
+    std::fs::remove_dir_all(&data_dir).ok();
 }
 
 /// More than two adapters per request is the documented `too_many_loras`

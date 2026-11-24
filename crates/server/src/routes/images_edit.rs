@@ -30,7 +30,7 @@ use super::images_generate::{
 use super::images_inputs::{
     DeliveryMode, parse_output_format, resolve_loras, validate_prompt_safety,
 };
-use super::images_recipe::{resolve_sd_model, validate_recipe};
+use super::images_recipe::{base_model_of, resolve_sd_model, validate_recipe};
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
 
@@ -420,18 +420,27 @@ pub(super) async fn post_images_edits(
     // Per-request `loras`: validated and resolved by the shared
     // [`resolve_loras`] (max 2, strength `[-2, 2]` reject-not-clamp, catalog
     // lookup, single directory) — identical to `/v1/images/generations`.
-    let (pipeline_loras, lora_records, lora_warnings) =
-        match resolve_loras(edit.loras.as_deref().unwrap_or_default(), &catalog) {
-            Ok(resolved) => resolved,
-            Err((message, code)) => {
-                let status = if code.starts_with("model_license_") {
-                    StatusCode::PRECONDITION_FAILED
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                return openai_error_response(status, message, Some(code));
-            }
-        };
+    let checkpoint_base = edit
+        .model
+        .as_deref()
+        .and_then(|model| resolve_sd_model(model, &catalog))
+        .or(config.sd_model.as_deref())
+        .and_then(|slug| base_model_of(slug, &catalog));
+    let (pipeline_loras, lora_records, lora_warnings) = match resolve_loras(
+        edit.loras.as_deref().unwrap_or_default(),
+        &catalog,
+        checkpoint_base,
+    ) {
+        Ok(resolved) => resolved,
+        Err((message, code)) => {
+            let status = if code.starts_with("model_license_") {
+                StatusCode::PRECONDITION_FAILED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return openai_error_response(status, message, Some(code));
+        }
+    };
     let slug: String = match edit
         .model
         .as_deref()
@@ -609,6 +618,7 @@ pub(super) async fn post_images_edits(
         strength: Some(strength),
         mask_mode,
         mask_sha256,
+        checkpoint_base_model: checkpoint_base.map(str::to_owned),
         recipe: recipe.name.map(str::to_owned),
         hires: None,
         annotations: bundle_annotations,

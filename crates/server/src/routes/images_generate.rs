@@ -23,7 +23,7 @@ use honkbox_api_types::{
 use super::chat_prep::{admit_then_register, with_job_id};
 use super::images_controlnet::resolve_controlnet;
 use super::images_inputs::{DeliveryMode, resolve_loras, validate_images_request};
-use super::images_recipe::resolve_sd_model;
+use super::images_recipe::{base_model_of, resolve_sd_model};
 use super::request_cache::RequestCache;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
 use crate::catalog::license_gate::LicenseRefusal;
@@ -354,18 +354,27 @@ pub(super) async fn post_images_generations(
     {
         return axum::Json((*hit).clone()).into_response();
     }
-    let (pipeline_loras, lora_records, lora_warnings) =
-        match resolve_loras(req.loras.as_deref().unwrap_or_default(), &catalog) {
-            Ok(resolved) => resolved,
-            Err((message, code)) => {
-                let status = if code.starts_with("model_license_") {
-                    StatusCode::PRECONDITION_FAILED
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                return super::openai_error_response(status, message, Some(code));
-            }
-        };
+    let checkpoint_base = req
+        .model
+        .as_deref()
+        .and_then(|model| resolve_sd_model(model, &catalog))
+        .or(config.sd_model.as_deref())
+        .and_then(|slug| base_model_of(slug, &catalog));
+    let (pipeline_loras, lora_records, lora_warnings) = match resolve_loras(
+        req.loras.as_deref().unwrap_or_default(),
+        &catalog,
+        checkpoint_base,
+    ) {
+        Ok(resolved) => resolved,
+        Err((message, code)) => {
+            let status = if code.starts_with("model_license_") {
+                StatusCode::PRECONDITION_FAILED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return super::openai_error_response(status, message, Some(code));
+        }
+    };
     // ControlNet (honkbox extension): slug + conditioning image are
     // validated here; a fully valid pair rides the generation request when
     // the configured pipeline can apply it, and pipelines that cannot are
@@ -568,6 +577,7 @@ pub(super) async fn post_images_generations(
             strength: None,
             mask_mode: None,
             mask_sha256: None,
+            checkpoint_base_model: checkpoint_base.map(str::to_owned),
             recipe: recipe.name.map(str::to_owned),
             hires: hires.as_ref().map(|fix| crate::jobs::HiresRecord {
                 upscaler: "latent",

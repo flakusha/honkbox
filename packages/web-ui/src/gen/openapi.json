@@ -7745,6 +7745,13 @@
           "dtypes"
         ],
         "properties": {
+          "base_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base-model tag from the safetensors header (`sd15`/`sdxl`/`sd3` when\nrecognized, raw text otherwise); `null` when the header has none."
+          },
           "dtypes": {
             "type": "array",
             "items": {

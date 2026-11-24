@@ -20,7 +20,8 @@ mask semantics, and base-model compatibility tags. All work belongs in the
 - `FEAT-sd-edit-loras.md` — thread LoRAs into `/v1/images/edits` (P1).
 - `TASK-sd-inpaint-mask-semantics.md` — P1, landed 2026-11-24: explicit
   replace/inpaint mode, mask sha256 in sidecar, mismatched dims rejected.
-- `TASK-sd-base-model-tags.md` — scan-time tags + mismatch warning (P2).
+- `TASK-sd-base-model-tags.md` — P2, landed 2026-11-24: normalized safetensors
+  base tags, known-mismatch 400, unknown warnings, sidecar tags.
 
 ## Acceptance
 

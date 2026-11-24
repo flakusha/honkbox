@@ -78,6 +78,8 @@ pub struct BundleInputs {
     pub mask_mode: Option<&'static str>,
     /// Lowercase sha256 of the staged mask PNG bytes; `None` without a mask.
     pub mask_sha256: Option<String>,
+    /// Scan-time base-model tag of the checkpoint actually used.
+    pub checkpoint_base_model: Option<String>,
     /// Named generation recipe actually applied, verbatim from the request
     /// (explicit per-field overrides may have replaced individual recipe
     /// values — the sampler/scheduler/cfg/steps fields above are what ran).
@@ -105,6 +107,8 @@ pub struct LoraRecord {
     pub slug: String,
     /// Multiplier actually used.
     pub strength: f32,
+    /// Scan-time base-model tag, when the `LoRA` header carries one.
+    pub base_model: Option<String>,
 }
 
 /// Hires-fix second pass actually applied (sidecar record).
@@ -271,6 +275,7 @@ pub fn write_bundle_into(
         "strength": inputs.strength,
         "mask_mode": inputs.mask_mode,
         "mask_sha256": inputs.mask_sha256,
+        "checkpoint_base_model": inputs.checkpoint_base_model,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "inputs_sha256": inputs_sha256,
@@ -295,6 +300,7 @@ pub fn write_bundle_into(
         "strength": inputs.strength,
         "mask_mode": inputs.mask_mode,
         "mask_sha256": inputs.mask_sha256,
+        "checkpoint_base_model": inputs.checkpoint_base_model,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "annotations": inputs.annotations,
@@ -663,6 +669,7 @@ mod tests {
             strength: None,
             mask_mode: None,
             mask_sha256: None,
+            checkpoint_base_model: None,
             recipe: None,
             hires: None,
             annotations: Vec::new(),
@@ -795,6 +802,7 @@ mod tests {
         bundle.loras = vec![LoraRecord {
             slug: "comfy:loras/detail.safetensors".to_string(),
             strength: 0.8,
+            base_model: Some("sdxl".to_owned()),
         }];
         bundle.strength = Some(0.6);
         write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");

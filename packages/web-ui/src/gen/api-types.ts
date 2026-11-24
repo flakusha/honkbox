@@ -1096,6 +1096,11 @@ export type SafetensorsMetadata = {
    * Unique dtype names, sorted (`F32`, `F16`, `BF16`, …).
    */
   dtypes: Array<string>;
+  /**
+   * Base-model tag from the safetensors header (`sd15`/`sdxl`/`sd3` when
+   * recognized, raw text otherwise); `null` when the header has none.
+   */
+  base_model: string | null;
 };
 export type ModelMetadata =
   | { "format": "gguf"; } & GgufMetadata

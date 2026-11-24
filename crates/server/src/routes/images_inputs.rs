@@ -7,7 +7,10 @@
 
 use std::path::PathBuf;
 
-use honkbox_api_types::{ImagesGenerationRequest, ImagesLora, ModelCatalog, ModelKind};
+use honkbox_api_types::{
+    ImagesGenerationRequest, ImagesLora, ModelCatalog, ModelKind, ModelMetadata,
+    is_known_base_model,
+};
 
 use super::images_recipe::{ImageRecipe, validate_hires_fix, validate_recipe};
 
@@ -228,10 +231,9 @@ pub(super) const IMAGE_LORA_MAX: usize = 2;
 /// License rule on record (ReviewedLicense-AGPL §2b/§2c): honkbox never
 /// bundles `LoRA` weights. The curated catalog `license` is surfaced as a
 /// response warning when a manifest row matches the local file name; a
-/// missing license means all-rights-reserved, i.e. local-only use. A
-/// base-model mismatch cannot be detected today (no base tags are recorded
-/// on scan entries or `LoRA` files), so it is neither warned about nor
-/// rejected — an honest gap, not a silent pass.
+/// missing license means all-rights-reserved, i.e. local-only use.
+/// Base-model compatibility uses scan-time tags: a known mismatch is rejected
+/// with `base_model_mismatch`; unknown or one-sided tags only warn.
 /// Resolved `LoRA` request: pipeline-ready refs, sidecar records, and the
 /// advisory license warnings (a tuple alias keeps `resolve_loras`'s
 /// signature readable).
@@ -241,9 +243,40 @@ pub(super) type ResolvedLoras = (
     Vec<String>,
 );
 
+fn check_base_compatibility(
+    slug: &str,
+    checkpoint: Option<&str>,
+    lora: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Result<(), (String, &'static str)> {
+    match (checkpoint, lora) {
+        (Some(checkpoint), Some(base)) if checkpoint != base => {
+            if is_known_base_model(checkpoint) && is_known_base_model(base) {
+                return Err((
+                    format!("lora {slug:?}: base model {base} mismatches checkpoint {checkpoint}"),
+                    "base_model_mismatch",
+                ));
+            }
+            warnings.push(format!(
+                "lora {slug}: base model {base} differs from checkpoint {checkpoint} — compatibility unverified"
+            ));
+        }
+        (None, Some(base)) => warnings.push(format!(
+            "lora {slug}: checkpoint base model unknown for {base} — compatibility unverified"
+        )),
+        (Some(_), None) => warnings.push(format!(
+            "lora {slug}: base model unknown — compatibility unverified"
+        )),
+        // Both untagged: nothing actionable to warn about.
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn resolve_loras(
     loras: &[ImagesLora],
     catalog: &ModelCatalog,
+    checkpoint_base: Option<&str>,
 ) -> Result<ResolvedLoras, (String, &'static str)> {
     if loras.len() > IMAGE_LORA_MAX {
         return Err((
@@ -278,6 +311,10 @@ pub(super) fn resolve_loras(
         {
             return Err((refusal.message(), refusal.code()));
         }
+        let lora_base = match &entry.metadata {
+            Some(ModelMetadata::Safetensors(meta)) => meta.base_model.as_deref(),
+            _ => None,
+        };
         let strength = match lora.strength {
             Some(v) if IMAGE_LORA_STRENGTH_RANGE.contains(&v) && v.is_finite() => v,
             Some(v) => {
@@ -305,6 +342,7 @@ pub(super) fn resolve_loras(
                 "lora {slug}: no license recorded — treat as all-rights-reserved (local-only)"
             ),
         });
+        check_base_compatibility(slug, checkpoint_base, lora_base, &mut warnings)?;
         refs.push(honkbox_sd_core::LoraRef {
             path: PathBuf::from(&entry.path),
             strength,
@@ -312,6 +350,7 @@ pub(super) fn resolve_loras(
         records.push(crate::jobs::LoraRecord {
             slug: entry.slug.clone(),
             strength,
+            base_model: lora_base.map(str::to_owned),
         });
     }
     if let Some(first) = refs.first() {

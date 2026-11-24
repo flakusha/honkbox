@@ -1,6 +1,15 @@
 # TASK: Base-model compatibility tags
 
-Status: proposed
+Status: done (2026-11-24)
+- Scan-time safetensors `__metadata__` base tags normalized to
+  `sd15`/`sdxl`/`sd3` (unknown text preserved), surfaced through
+  `ModelMetadata::Safetensors.base_model` in `/v1/models`.
+- Known checkpoint/LoRA mismatch is a named 400 `base_model_mismatch` before
+  GPU work; one-sided or unknown tags warn. Both tags are written to the job
+  sidecar (`checkpoint_base_model`, `loras[].base_model`).
+- Verified 2026-11-24: registry 26/26; server edits 186/186 (mismatch, warning,
+  sidecar cases), determinism/asset-packs/capabilities/bin suites green;
+  clippy `-D warnings` clean for server/registry/api-types; codegen refreshed.
 Priority: P2
 Epic: epic-sd-native-backend
 Owner: unassigned

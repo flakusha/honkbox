@@ -3,7 +3,7 @@
 //! Pure helpers: no router registrations live here, so the `OpenAPI`
 //! coverage gate in `routes.rs` is unaffected.
 
-use honkbox_api_types::{ImagesHiresFix, ModelCatalog, ModelKind};
+use honkbox_api_types::{ImagesHiresFix, ModelCatalog, ModelKind, ModelMetadata};
 
 /// SD-side model resolution for `POST /v1/images/generations` (REQ-10):
 /// alias-or-slug over the catalog, restricted to `ModelKind::Sd` entries
@@ -12,6 +12,14 @@ pub(super) fn resolve_sd_model<'a>(model: &str, catalog: &'a ModelCatalog) -> Op
     super::resolve_model_entry(model, catalog)
         .filter(|e| e.kind == ModelKind::Sd)
         .map(|e| e.slug.as_str())
+}
+
+/// Scan-time base-model tag of one catalog entry, for `LoRA` compatibility.
+pub(super) fn base_model_of<'a>(slug: &str, catalog: &'a ModelCatalog) -> Option<&'a str> {
+    super::resolve_model_entry(slug, catalog).and_then(|entry| match &entry.metadata {
+        Some(ModelMetadata::Safetensors(meta)) => meta.base_model.as_deref(),
+        _ => None,
+    })
 }
 
 /// Validated image request: parsed size, clamped count, and the resolved

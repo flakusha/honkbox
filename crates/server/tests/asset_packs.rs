@@ -242,6 +242,7 @@ fn bundle_inputs() -> jobs::BundleInputs {
         strength: None,
         mask_mode: None,
         mask_sha256: None,
+        checkpoint_base_model: None,
         recipe: None,
         hires: None,
         annotations: Vec::new(),

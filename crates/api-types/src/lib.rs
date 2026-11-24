@@ -1999,6 +1999,15 @@ pub struct SafetensorsMetadata {
     pub tensor_count: u64,
     /// Unique dtype names, sorted (`F32`, `F16`, `BF16`, …).
     pub dtypes: Vec<String>,
+    /// Base-model tag from the safetensors header (`sd15`/`sdxl`/`sd3` when
+    /// recognized, raw text otherwise); `null` when the header has none.
+    pub base_model: Option<String>,
+}
+
+/// Known canonical base-model tags. Unknown tags degrade to a warning, never
+/// a silent pass; known mismatches are rejected before GPU work.
+pub fn is_known_base_model(tag: &str) -> bool {
+    matches!(tag, "sd15" | "sdxl" | "sd3")
 }
 
 /// Optional on-disk header metadata, tagged by container format.

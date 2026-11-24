@@ -35,6 +35,9 @@ pub struct SafetensorsMetadata {
     pub tensor_count: u64,
     /// Unique dtype names, sorted (`F32`, `F16`, `BF16`, …).
     pub dtypes: Vec<String>,
+    /// Base-model tag from the safetensors `__metadata__` header, normalized
+    /// to `sd15`/`sdxl`/`sd3` when recognized; raw text when unknown.
+    pub base_model: Option<String>,
 }
 
 /// Header-derived metadata for one weight file.
@@ -267,10 +270,48 @@ fn probe_safetensors(path: &Path) -> Option<SafetensorsMetadata> {
         }
     }
     dtypes.sort_unstable();
+    let base_model = entries
+        .get("__metadata__")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|meta| {
+            [
+                "ss_base_model",
+                "base_model",
+                "ss_base_model_version",
+                "modelspec.base_model",
+            ]
+            .into_iter()
+            .find_map(|key| {
+                meta.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(normalize_base_model)
+            })
+        });
     Some(SafetensorsMetadata {
         tensor_count,
         dtypes,
+        base_model,
     })
+}
+
+/// Canonicalize the common ComfyUI/diffusers base-model spellings. Unknown
+/// text is preserved so the wire surface can warn instead of silently pass.
+fn normalize_base_model(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let lower = value.to_ascii_lowercase();
+    let known = if lower.contains("sdxl") || lower.contains("sd_xl") || lower.contains("sd-xl") {
+        Some("sdxl")
+    } else if lower.contains("sd3") || lower.contains("sd 3") {
+        Some("sd3")
+    } else if lower.contains("1.5") || lower.contains("v1-5") || lower.contains("v1_5") {
+        Some("sd15")
+    } else {
+        None
+    };
+    Some(known.unwrap_or(value).to_owned())
 }
 
 #[cfg(test)]
@@ -451,7 +492,7 @@ mod tests {
 
     #[test]
     fn safetensors_counts_tensors_and_dtypes() {
-        let header = br#"{"__metadata__":{"format":"pt"},"emb":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]},"blk.0.w":{"dtype":"F16","shape":[2],"data_offsets":[16,20]},"blk.1.w":{"dtype":"F32","shape":[2],"data_offsets":[20,24]}}"#;
+        let header = br#"{"__metadata__":{"format":"pt","ss_base_model":"SDXL 1.0"},"emb":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]},"blk.0.w":{"dtype":"F16","shape":[2],"data_offsets":[16,20]},"blk.1.w":{"dtype":"F32","shape":[2],"data_offsets":[20,24]}}"#;
         let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
         bytes.extend_from_slice(header);
         let path = write_scratch("st-ok.safetensors", &bytes);
@@ -462,6 +503,25 @@ mod tests {
             Some(ModelFileMetadata::Safetensors(SafetensorsMetadata {
                 tensor_count: 3,
                 dtypes: vec!["F16".to_owned(), "F32".to_owned()],
+                base_model: Some("sdxl".to_owned()),
+            }))
+        );
+    }
+
+    #[test]
+    fn safetensors_unknown_base_model_tag_is_preserved() {
+        let header = br#"{"__metadata__":{"base_model":"flux-dev"},"w":{"dtype":"F16","shape":[1],"data_offsets":[0,2]}}"#;
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(header);
+        let path = write_scratch("st-unknown.safetensors", &bytes);
+        let metadata = probe(&path, "safetensors");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            metadata,
+            Some(ModelFileMetadata::Safetensors(SafetensorsMetadata {
+                tensor_count: 1,
+                dtypes: vec!["F16".to_owned()],
+                base_model: Some("flux-dev".to_owned()),
             }))
         );
     }

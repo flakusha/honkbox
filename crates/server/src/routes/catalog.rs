@@ -294,6 +294,7 @@ fn catalog_metadata(metadata: honkbox_registry::ModelFileMetadata) -> ModelMetad
             ModelMetadata::Safetensors(SafetensorsMetadata {
                 tensor_count: meta.tensor_count,
                 dtypes: meta.dtypes,
+                base_model: meta.base_model,
             })
         }
     }

@@ -216,6 +216,7 @@ pub fn bundle_record(inputs: &BundleInputs) -> Value {
         "strength": inputs.strength,
         "mask_mode": inputs.mask_mode,
         "mask_sha256": inputs.mask_sha256,
+        "checkpoint_base_model": inputs.checkpoint_base_model,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "annotations": inputs.annotations,

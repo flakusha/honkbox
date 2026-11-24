@@ -42,6 +42,7 @@ fn fixture() -> BundleInputs {
         strength: None,
         mask_mode: None,
         mask_sha256: None,
+        checkpoint_base_model: None,
         recipe: None,
         hires: None,
         annotations: Vec::new(),
@@ -189,6 +190,7 @@ fn equal_full_requests_share_the_key() {
         loras: vec![jobs::LoraRecord {
             slug: "comfy:loras/detail.safetensors".to_string(),
             strength: 0.8,
+            base_model: Some("sdxl".to_owned()),
         }],
         strength: Some(0.6),
         recipe: Some("sdxl".to_string()),
