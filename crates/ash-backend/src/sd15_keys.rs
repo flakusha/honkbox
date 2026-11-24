@@ -39,6 +39,21 @@ pub const CROSS_ATTN_V: &str =
 /// Middle-block cross-attention output projection.
 pub const CROSS_ATTN_OUT: &str =
     "model.diffusion_model.middle_block.1.transformer_blocks.0.attn2.to_out.0.weight";
+/// Bias of the middle-block self-attention query projection.
+pub const SELF_ATTN_Q_BIAS: &str =
+    "model.diffusion_model.middle_block.1.transformer_blocks.0.attn1.to_q.bias";
+/// Bias of the middle-block cross-attention query projection.
+pub const CROSS_ATTN_Q_BIAS: &str =
+    "model.diffusion_model.middle_block.1.transformer_blocks.0.attn2.to_q.bias";
+/// Bias of the middle-block cross-attention key projection.
+pub const CROSS_ATTN_K_BIAS: &str =
+    "model.diffusion_model.middle_block.1.transformer_blocks.0.attn2.to_k.bias";
+/// Bias of the middle-block cross-attention value projection.
+pub const CROSS_ATTN_V_BIAS: &str =
+    "model.diffusion_model.middle_block.1.transformer_blocks.0.attn2.to_v.bias";
+/// Bias of the middle-block cross-attention output projection.
+pub const CROSS_ATTN_OUT_BIAS: &str =
+    "model.diffusion_model.middle_block.1.transformer_blocks.0.attn2.to_out.0.bias";
 /// VAE decoder entry convolution.
 pub const VAE_DECODER_IN: &str = "first_stage_model.decoder.conv_in.weight";
 /// VAE decoder output convolution.
@@ -106,6 +121,21 @@ pub fn load_fused_kv(
     let shape = [dim, dim];
     let mut key = load_tensor(map, path, key_name, &shape)?;
     let value = load_tensor(map, path, value_name, &shape)?;
+    key.extend_from_slice(&value);
+    Ok(key)
+}
+
+/// SD 1.5 stores `to_k`/`to_v` biases separately; stack them K then V to match
+/// [`load_fused_kv`] and [`crate::cross_attention::FusedQkv`].
+pub fn load_fused_kv_bias(
+    map: &CheckpointMap,
+    path: &Path,
+    key_name: &str,
+    value_name: &str,
+    dim: usize,
+) -> io::Result<Vec<f32>> {
+    let mut key = load_tensor(map, path, key_name, &[dim])?;
+    let value = load_tensor(map, path, value_name, &[dim])?;
     key.extend_from_slice(&value);
     Ok(key)
 }

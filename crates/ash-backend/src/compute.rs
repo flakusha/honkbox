@@ -345,11 +345,38 @@ impl ElementwiseAdd {
         )?;
         Ok(f32_from_bytes(&bytes))
     }
+
+    /// Add a row-wise bias: `result[row * bias.len() + i] = values[…] + bias[i]`.
+    ///
+    /// ponytail: the bias is repeated on the host before the existing kernel
+    /// runs; no second shader for a few thousand floats. Add a broadcast
+    /// shader when profiling shows the copy matters.
+    pub fn run_broadcast(&self, values: &[f32], bias: &[f32]) -> Result<Vec<f32>, VkError> {
+        if bias.is_empty() || !values.len().is_multiple_of(bias.len()) {
+            return Err(VkError::Device(
+                "elementwise_add: bias must be non-empty and divide the value count".into(),
+            ));
+        }
+        let repeats = values.len() / bias.len();
+        let mut expanded = Vec::with_capacity(values.len());
+        for _ in 0..repeats {
+            expanded.extend_from_slice(bias);
+        }
+        self.run(values, &expanded)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device() -> Option<Arc<VulkanDevice>> {
+        match VulkanDevice::headless() {
+            Ok(device) => Some(Arc::new(device)),
+            Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => None,
+            Err(e) => panic!("vulkan api failed: {e:?}"),
+        }
+    }
 
     #[test]
     fn embedded_shaders_are_valid_spirv() {
@@ -386,5 +413,21 @@ mod tests {
             vec![3.75; 4097]
         );
         assert!(matches!(kernel.run(&[], &[]), Err(VkError::Device(_))));
+    }
+
+    #[test]
+    fn elementwise_add_broadcasts_row_bias() {
+        let Some(device) = device() else { return };
+        let kernel = ElementwiseAdd::new(device).expect("pipeline");
+        let values = [1.0_f32, 2.0, 3.0, 4.0];
+        let bias = [0.5_f32, -0.5];
+        assert_eq!(
+            kernel.run_broadcast(&values, &bias).expect("broadcast"),
+            vec![1.5_f32, 1.5, 3.5, 3.5]
+        );
+        assert!(matches!(
+            kernel.run_broadcast(&values, &[1.0, 2.0, 3.0]),
+            Err(VkError::Device(_))
+        ));
     }
 }

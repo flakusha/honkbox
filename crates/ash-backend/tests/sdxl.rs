@@ -1,5 +1,3 @@
-#![cfg(feature = "experimental-ash-sd")]
-
 //! Header-only integration tests for SDXL inspection and the SD 1.5 regression.
 //!
 //! Fixtures are synthetic safetensors headers mirroring the tensor names and
@@ -9,6 +7,7 @@
 //! The reader also requires the file to be long enough for the declared
 //! payload: `8 + header_len + total_payload`. The payload bytes themselves are
 //! never written; the file is extended sparsely to that length.
+#![cfg(feature = "experimental-ash-sd")]
 
 use honkbox_ash_backend::{sd, sdxl};
 use std::fs::OpenOptions;

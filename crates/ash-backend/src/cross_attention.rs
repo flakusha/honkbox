@@ -18,6 +18,7 @@ use std::sync::Arc;
 pub struct FusedQkv {
     reorder: Transpose,
     project: MatMul,
+    add: ElementwiseAdd,
 }
 
 impl FusedQkv {
@@ -25,15 +26,18 @@ impl FusedQkv {
     pub fn new(device: Arc<VulkanDevice>) -> Result<Self, VkError> {
         Ok(Self {
             reorder: Transpose::new(Arc::clone(&device))?,
-            project: MatMul::new(device)?,
+            project: MatMul::new(Arc::clone(&device))?,
+            add: ElementwiseAdd::new(device)?,
         })
     }
 
     /// Apply a `[parts·out_dim, in_dim]` weight and split into `parts` outputs.
-    pub fn run(
+    #[allow(clippy::too_many_arguments)] // kernel signature: input/weight/bias + shape
+    pub fn run_with_bias(
         &self,
         input: &[f32],
         weight: &[f32],
+        bias: Option<&[f32]>,
         rows: usize,
         in_dim: usize,
         out_dim: usize,
@@ -55,6 +59,10 @@ impl FusedQkv {
         let projected = self
             .project
             .run(input, &reordered, rows, in_dim, out_dim * parts)?;
+        let projected = match bias {
+            Some(bias) if !bias.is_empty() => self.add.run_broadcast(&projected, bias)?,
+            _ => projected,
+        };
         let plane = out_dim
             .checked_mul(parts)
             .ok_or_else(|| VkError::Device("fused qkv: output overflow".into()))?;
@@ -67,6 +75,19 @@ impl FusedQkv {
         }
         Ok(split)
     }
+
+    /// Apply a `[parts·out_dim, in_dim]` weight and split into `parts` outputs.
+    pub fn run(
+        &self,
+        input: &[f32],
+        weight: &[f32],
+        rows: usize,
+        in_dim: usize,
+        out_dim: usize,
+        parts: usize,
+    ) -> Result<Vec<Vec<f32>>, VkError> {
+        self.run_with_bias(input, weight, None, rows, in_dim, out_dim, parts)
+    }
 }
 
 /// Weights for one cross-attention block.
@@ -77,6 +98,17 @@ pub struct CrossAttentionWeights<'a> {
     pub wkv: &'a [f32],
     /// `[dim, dim]` attention output projection (`to_out.0`).
     pub wo: &'a [f32],
+}
+
+/// Optional linear biases for one cross-attention block.
+#[derive(Clone, Copy, Default)]
+pub struct CrossAttentionBias<'a> {
+    /// Query projection bias `[dim]`.
+    pub bq: Option<&'a [f32]>,
+    /// Fused key/value bias `[2·dim]`, key rows then value rows.
+    pub bkv: Option<&'a [f32]>,
+    /// Output projection bias `[dim]`.
+    pub bo: Option<&'a [f32]>,
 }
 
 /// Row counts and shared channel width for one cross-attention head.
@@ -113,20 +145,25 @@ impl CrossAttention {
         })
     }
 
-    /// Run cross-attention with caller-owned weights and context tokens.
-    pub fn run(
+    /// Run cross-attention with optional projection biases.
+    pub fn run_with_bias(
         &self,
         hidden: &[f32],
         context: &[f32],
         weights: &CrossAttentionWeights<'_>,
+        bias: &CrossAttentionBias<'_>,
         shape: CrossAttentionShape,
     ) -> Result<Vec<f32>, VkError> {
-        let q = self
+        let mut q = self
             .query
             .run(hidden, weights.wq, shape.query_rows, shape.dim, shape.dim)?;
-        let mut kv = self.kv.run(
+        if let Some(extra) = bias.bq {
+            q = self.add.run_broadcast(&q, extra)?;
+        }
+        let mut kv = self.kv.run_with_bias(
             context,
             weights.wkv,
+            bias.bkv,
             shape.context_rows,
             shape.dim,
             shape.dim,
@@ -149,14 +186,34 @@ impl CrossAttention {
                 value_dim: shape.dim,
             },
         )?;
-        let projected = self.output.run(
+        let mut projected = self.output.run(
             &attended,
             weights.wo,
             shape.query_rows,
             shape.dim,
             shape.dim,
         )?;
+        if let Some(extra) = bias.bo {
+            projected = self.add.run_broadcast(&projected, extra)?;
+        }
         self.add.run(hidden, &projected)
+    }
+
+    /// Run cross-attention with caller-owned weights and context tokens.
+    pub fn run(
+        &self,
+        hidden: &[f32],
+        context: &[f32],
+        weights: &CrossAttentionWeights<'_>,
+        shape: CrossAttentionShape,
+    ) -> Result<Vec<f32>, VkError> {
+        self.run_with_bias(
+            hidden,
+            context,
+            weights,
+            &CrossAttentionBias::default(),
+            shape,
+        )
     }
 }
 
@@ -222,6 +279,21 @@ mod tests {
                 .run(&[1.0, 2.0], &[0.5], 2, 2, 2, 3)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn fused_qkv_bias_keeps_key_before_value() {
+        let Some(device) = device() else { return };
+        let fused = FusedQkv::new(device).expect("fused");
+        // Rows: k0,k1,v0,v1. K is identity; V swaps the two inputs.
+        let weight = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let bias = [0.1_f32, 0.2, 0.3, 0.4];
+        let parts = fused
+            .run_with_bias(&[1.0_f32, 2.0], &weight, Some(&bias), 1, 2, 2, 2)
+            .expect("biased run");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], vec![1.1_f32, 2.2]);
+        assert_eq!(parts[1], vec![2.3_f32, 1.4]);
     }
 
     #[test]

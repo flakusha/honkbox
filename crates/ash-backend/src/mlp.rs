@@ -6,7 +6,9 @@
 
 use crate::{
     VkError,
-    compute::{GELU_SPIRV, GpuBuffer, Kernel, f32_bytes, f32_from_bytes, spirv_words},
+    compute::{
+        ElementwiseAdd, GELU_SPIRV, GpuBuffer, Kernel, f32_bytes, f32_from_bytes, spirv_words,
+    },
     device::{CapacityRequirements, VulkanDevice},
     matmul::MatMul,
 };
@@ -69,6 +71,7 @@ pub struct FeedForward {
     expand: MatMul,
     activation: Gelu,
     project: MatMul,
+    add: ElementwiseAdd,
 }
 
 impl FeedForward {
@@ -77,8 +80,35 @@ impl FeedForward {
         Ok(Self {
             expand: MatMul::new(Arc::clone(&device))?,
             activation: Gelu::new(Arc::clone(&device))?,
-            project: MatMul::new(device)?,
+            project: MatMul::new(Arc::clone(&device))?,
+            add: ElementwiseAdd::new(device)?,
         })
+    }
+
+    /// Run one MLP block with optional row-wise biases. Empty slices mean
+    /// "no bias", preserving the original call shape for bias-free weights.
+    #[allow(clippy::too_many_arguments)] // kernel signature: two matrices + two biases + shape
+    pub fn run_with_bias(
+        &self,
+        input: &[f32],
+        w1: &[f32],
+        b1: &[f32],
+        w2: &[f32],
+        b2: &[f32],
+        rows: usize,
+        dim: usize,
+        hidden: usize,
+    ) -> Result<Vec<f32>, VkError> {
+        let mut expanded = self.expand.run(input, w1, rows, dim, hidden)?;
+        if !b1.is_empty() {
+            expanded = self.add.run_broadcast(&expanded, b1)?;
+        }
+        let activated = self.activation.run(&expanded)?;
+        let mut projected = self.project.run(&activated, w2, rows, hidden, dim)?;
+        if !b2.is_empty() {
+            projected = self.add.run_broadcast(&projected, b2)?;
+        }
+        Ok(projected)
     }
 
     /// Run one MLP block with caller-supplied `[dim, hidden]` and
@@ -92,9 +122,7 @@ impl FeedForward {
         dim: usize,
         hidden: usize,
     ) -> Result<Vec<f32>, VkError> {
-        let expanded = self.expand.run(input, w1, rows, dim, hidden)?;
-        let activated = self.activation.run(&expanded)?;
-        self.project.run(&activated, w2, rows, hidden, dim)
+        self.run_with_bias(input, w1, &[], w2, &[], rows, dim, hidden)
     }
 }
 

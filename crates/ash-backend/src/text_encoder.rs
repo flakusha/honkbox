@@ -8,7 +8,8 @@ use crate::{
     VkError,
     device::VulkanDevice,
     embedding::TextEncoder,
-    transformer::{TransformerBlock, TransformerWeights},
+    norm::LayerNorm,
+    transformer::{TransformerBias, TransformerBlock, TransformerWeights},
 };
 use std::sync::Arc;
 
@@ -20,14 +21,33 @@ pub struct ClipTextEncoderWeights<'a> {
     pub position_table: &'a [f32],
     /// One entry per instantiated block, in execution order.
     pub layers: Vec<TransformerWeights<'a>>,
+    /// Optional linear biases, one entry per block.
+    pub biases: Vec<TransformerBias<'a>>,
     /// MLP expansion width shared by every block.
     pub ffn_hidden: usize,
+}
+
+/// Final CLIP layer norm used for the pooled (EOS) conditioning vector.
+///
+/// ponytail: no `text_projection` field — pruned SD 1.5 checkpoints omit it,
+/// and the hidden width already matches the `UNet` cross-attention width. Add a
+/// projection when a checkpoint family actually ships one.
+pub struct ClipPooling<'a> {
+    /// Final layer-norm gain `[dim]`.
+    pub gamma: &'a [f32],
+    /// Final layer-norm bias `[dim]`.
+    pub beta: &'a [f32],
+    /// Layer-norm epsilon.
+    pub eps: f32,
+    /// End-of-text token id (`49407` in the SD 1.5 CLIP tokenizer).
+    pub eos: u32,
 }
 
 /// A fixed-depth stack over the shared embedding and transformer kernels.
 pub struct ClipTextEncoder {
     embedding: TextEncoder,
     blocks: Vec<TransformerBlock>,
+    pool_norm: LayerNorm,
 }
 
 impl ClipTextEncoder {
@@ -38,13 +58,14 @@ impl ClipTextEncoder {
             blocks.push(TransformerBlock::new(Arc::clone(&device))?);
         }
         Ok(Self {
-            embedding: TextEncoder::new(device)?,
+            embedding: TextEncoder::new(Arc::clone(&device))?,
             blocks,
+            pool_norm: LayerNorm::new(device)?,
         })
     }
 
-    /// Run the whole stack over `ids`, returning `tokens × dim` hidden states.
-    pub fn run(
+    /// Run the stack with optional per-layer linear biases.
+    pub fn run_with_bias(
         &self,
         ids: &[u32],
         weights: &ClipTextEncoderWeights<'_>,
@@ -58,13 +79,66 @@ impl ClipTextEncoder {
                 weights.layers.len()
             )));
         }
+        if weights.biases.len() != self.blocks.len() {
+            return Err(VkError::Device(format!(
+                "clip text encoder: expected {} bias sets, got {}",
+                self.blocks.len(),
+                weights.biases.len()
+            )));
+        }
         let mut hidden =
             self.embedding
                 .encode(ids, weights.token_table, weights.position_table, vocab, dim)?;
-        for (block, layer) in self.blocks.iter().zip(&weights.layers) {
-            hidden = block.run(&hidden, layer, ids.len(), dim, weights.ffn_hidden)?;
+        for (block, (layer, bias)) in self
+            .blocks
+            .iter()
+            .zip(weights.layers.iter().zip(weights.biases.iter()))
+        {
+            hidden =
+                block.run_with_bias(&hidden, layer, bias, ids.len(), dim, weights.ffn_hidden)?;
         }
         Ok(hidden)
+    }
+
+    /// Run the stack over `ids`, returning `tokens × dim` hidden states.
+    pub fn run(
+        &self,
+        ids: &[u32],
+        weights: &ClipTextEncoderWeights<'_>,
+        vocab: usize,
+        dim: usize,
+    ) -> Result<Vec<f32>, VkError> {
+        let biases = vec![TransformerBias::default(); self.blocks.len()];
+        let weights = ClipTextEncoderWeights {
+            token_table: weights.token_table,
+            position_table: weights.position_table,
+            layers: weights.layers.clone(),
+            biases,
+            ffn_hidden: weights.ffn_hidden,
+        };
+        self.run_with_bias(ids, &weights, vocab, dim)
+    }
+
+    /// Run the stack and pool the first EOS token through the final layer norm.
+    pub fn run_pooled(
+        &self,
+        ids: &[u32],
+        weights: &ClipTextEncoderWeights<'_>,
+        vocab: usize,
+        dim: usize,
+        pooling: &ClipPooling<'_>,
+    ) -> Result<Vec<f32>, VkError> {
+        if ids.is_empty() {
+            return Err(VkError::Device("clip pooling: empty token sequence".into()));
+        }
+        let hidden = self.run_with_bias(ids, weights, vocab, dim)?;
+        let eos = ids
+            .iter()
+            .position(|&id| id == pooling.eos)
+            .unwrap_or(ids.len() - 1);
+        let row = &hidden[eos * dim..(eos + 1) * dim];
+        self.pool_norm
+            .run(row, 1, dim, pooling.gamma, pooling.beta, pooling.eps)
     }
 }
 
@@ -116,6 +190,7 @@ mod tests {
             token_table: &token_table,
             position_table: &position_table,
             layers: Vec::new(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
         let actual = encoder.run(&ids, &weights, vocab, dim).expect("encode");
@@ -131,6 +206,39 @@ mod tests {
             .collect();
         for (got, want) in actual.iter().zip(&expected) {
             assert!((got - want).abs() < 1e-5, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn pooled_state_uses_first_eos_token_and_final_norm() {
+        let Some(device) = device() else { return };
+        let encoder = ClipTextEncoder::new(device, 0).expect("encoder");
+        let (dim, vocab, eos) = (2usize, 3usize, 2u32);
+        let token_table = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
+        let position_table = [0.01_f32, 0.02, 0.03, 0.04];
+        let weights = ClipTextEncoderWeights {
+            token_table: &token_table,
+            position_table: &position_table,
+            layers: Vec::new(),
+            biases: Vec::new(),
+            ffn_hidden: dim,
+        };
+        let pooling = ClipPooling {
+            gamma: &[2.0_f32, 3.0],
+            beta: &[0.5_f32, -0.5],
+            eps: 1e-5,
+            eos,
+        };
+        let actual = encoder
+            .run_pooled(&[1, eos], &weights, vocab, dim, &pooling)
+            .expect("pooled");
+        let row = [0.53_f32, 0.64];
+        let mean = 0.585_f32;
+        let variance = f32::midpoint((row[0] - mean).powi(2), (row[1] - mean).powi(2));
+        for (index, got) in actual.iter().enumerate() {
+            let normalized = (row[index] - mean) / (variance + pooling.eps).sqrt();
+            let want = pooling.gamma[index] * normalized + pooling.beta[index];
+            assert!((got - want).abs() < 1e-3, "got {got}, want {want}");
         }
     }
 
@@ -151,6 +259,7 @@ mod tests {
             token_table: &token_table,
             position_table: &position_table,
             layers: layers.clone(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
 
@@ -182,6 +291,7 @@ mod tests {
             token_table: &matrix,
             position_table: &norm,
             layers: Vec::new(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
         assert!(encoder.run(&[0], &weights, 2, dim).is_err());
@@ -190,6 +300,7 @@ mod tests {
             token_table: &matrix,
             position_table: &norm,
             layers: layers.clone(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
         assert!(encoder.run(&[0, 1, 2], &weights, 2, dim).is_err());

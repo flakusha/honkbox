@@ -1,13 +1,15 @@
 //! SD 1.5 CLIP text-tower tensors → [`ClipTextEncoderWeights`].
 //!
 //! Checkpoints store linear weights `[out, in]`; the local matmuls expect
-//! `[in, out]`, so matrices are transposed once at load time. Bias tensors are
-//! intentionally skipped — the local transformer block has no bias path. This
-//! is a structural loader, not a parity claim against the upstream CLIP math.
+//! `[in, out]`, so matrices are transposed once at load time. Linear biases
+//! and the final layer norm are loaded too, feeding the bias-aware encoder and
+//! EOS pooling path.
 
 use crate::{
-    checkpoint::CheckpointMap, text_encoder::ClipTextEncoderWeights,
-    transformer::TransformerWeights, unet_checkpoint::load_tensor,
+    checkpoint::CheckpointMap,
+    text_encoder::{ClipPooling, ClipTextEncoderWeights},
+    transformer::{TransformerBias, TransformerWeights},
+    unet_checkpoint::load_tensor,
 };
 use std::io;
 use std::path::Path;
@@ -65,14 +67,26 @@ pub fn required_tensors(geometry: ClipGeometry) -> Vec<(String, Vec<usize>)> {
                 name(&format!("layers.{index}.self_attn.{kind}_proj.weight")),
                 vec![geometry.dim, geometry.dim],
             ));
+            out.push((
+                name(&format!("layers.{index}.self_attn.{kind}_proj.bias")),
+                vec![geometry.dim],
+            ));
         }
         out.push((
             name(&format!("layers.{index}.mlp.fc1.weight")),
             vec![geometry.ffn_hidden, geometry.dim],
         ));
         out.push((
+            name(&format!("layers.{index}.mlp.fc1.bias")),
+            vec![geometry.ffn_hidden],
+        ));
+        out.push((
             name(&format!("layers.{index}.mlp.fc2.weight")),
             vec![geometry.dim, geometry.ffn_hidden],
+        ));
+        out.push((
+            name(&format!("layers.{index}.mlp.fc2.bias")),
+            vec![geometry.dim],
         ));
         for number in 1..=2 {
             out.push((
@@ -85,6 +99,8 @@ pub fn required_tensors(geometry: ClipGeometry) -> Vec<(String, Vec<usize>)> {
             ));
         }
     }
+    out.push((name("final_layer_norm.weight"), vec![geometry.dim]));
+    out.push((name("final_layer_norm.bias"), vec![geometry.dim]));
     out
 }
 
@@ -155,6 +171,18 @@ pub struct LayerTensors {
     pub expand: Vec<f32>,
     /// MLP contraction `[hidden, dim]`.
     pub contract: Vec<f32>,
+    /// Query projection bias `[dim]`.
+    pub query_bias: Vec<f32>,
+    /// Key projection bias `[dim]`.
+    pub key_bias: Vec<f32>,
+    /// Value projection bias `[dim]`.
+    pub value_bias: Vec<f32>,
+    /// Attention output projection bias `[dim]`.
+    pub output_bias: Vec<f32>,
+    /// MLP expansion bias `[hidden]`.
+    pub expand_bias: Vec<f32>,
+    /// MLP contraction bias `[dim]`.
+    pub contract_bias: Vec<f32>,
     /// First layer-norm gain.
     pub norm1_gain: Vec<f32>,
     /// First layer-norm bias.
@@ -174,6 +202,7 @@ fn load_layer(
     let dim = geometry.dim;
     let hidden = geometry.ffn_hidden;
     let attn = |kind: &str| name(&format!("layers.{index}.self_attn.{kind}_proj.weight"));
+    let attn_bias = |kind: &str| name(&format!("layers.{index}.self_attn.{kind}_proj.bias"));
     let norm =
         |number: usize, kind: &str| name(&format!("layers.{index}.layer_norm{number}.{kind}"));
     let first_norm_gain = norm(1, "weight");
@@ -193,6 +222,22 @@ fn load_layer(
         output: load_matrix(map, path, &o_key, dim, dim)?,
         expand: load_matrix(map, path, &fc1_key, hidden, dim)?,
         contract: load_matrix(map, path, &fc2_key, dim, hidden)?,
+        query_bias: load_tensor(map, path, &attn_bias("q"), &[dim])?,
+        key_bias: load_tensor(map, path, &attn_bias("k"), &[dim])?,
+        value_bias: load_tensor(map, path, &attn_bias("v"), &[dim])?,
+        output_bias: load_tensor(map, path, &attn_bias("out"), &[dim])?,
+        expand_bias: load_tensor(
+            map,
+            path,
+            &name(&format!("layers.{index}.mlp.fc1.bias")),
+            &[hidden],
+        )?,
+        contract_bias: load_tensor(
+            map,
+            path,
+            &name(&format!("layers.{index}.mlp.fc2.bias")),
+            &[dim],
+        )?,
         norm1_gain: load_tensor(map, path, &first_norm_gain, &[dim])?,
         norm1_bias: load_tensor(map, path, &first_norm_bias, &[dim])?,
         norm2_gain: load_tensor(map, path, &second_norm_gain, &[dim])?,
@@ -207,6 +252,8 @@ pub struct ClipTensors {
     layers: Vec<LayerTensors>,
     ffn_hidden: usize,
     eps: f32,
+    final_norm_gain: Vec<f32>,
+    final_norm_bias: Vec<f32>,
 }
 
 impl ClipTensors {
@@ -233,6 +280,10 @@ impl ClipTensors {
         let token_table = load_tensor(map, path, &token_key, &[geometry.vocab, geometry.dim])?;
         let position_table =
             load_tensor(map, path, &position_key, &[geometry.tokens, geometry.dim])?;
+        let final_norm_gain =
+            load_tensor(map, path, &name("final_layer_norm.weight"), &[geometry.dim])?;
+        let final_norm_bias =
+            load_tensor(map, path, &name("final_layer_norm.bias"), &[geometry.dim])?;
         let mut layers = Vec::with_capacity(geometry.layers);
         for index in 0..geometry.layers {
             layers.push(load_layer(map, path, index, geometry)?);
@@ -243,6 +294,8 @@ impl ClipTensors {
             layers,
             ffn_hidden: geometry.ffn_hidden,
             eps,
+            final_norm_gain,
+            final_norm_bias,
         })
     }
 
@@ -265,11 +318,34 @@ impl ClipTensors {
                 eps: self.eps,
             })
             .collect();
+        let biases: Vec<TransformerBias<'_>> = self
+            .layers
+            .iter()
+            .map(|layer| TransformerBias {
+                bq: Some(&layer.query_bias),
+                bk: Some(&layer.key_bias),
+                bv: Some(&layer.value_bias),
+                bo: Some(&layer.output_bias),
+                b1: Some(&layer.expand_bias),
+                b2: Some(&layer.contract_bias),
+            })
+            .collect();
         ClipTextEncoderWeights {
             token_table: &self.token_table,
             position_table: &self.position_table,
             layers: blocks,
+            biases,
             ffn_hidden: self.ffn_hidden,
+        }
+    }
+
+    /// Final layer norm and EOS id for pooled conditioning.
+    pub fn pooling(&self) -> ClipPooling<'_> {
+        ClipPooling {
+            gamma: &self.final_norm_gain,
+            beta: &self.final_norm_bias,
+            eps: self.eps,
+            eos: 49407,
         }
     }
 }
@@ -322,9 +398,15 @@ mod tests {
                     name(&format!("layers.{index}.self_attn.{kind}_proj.weight")),
                     vec![2, 2],
                 ));
+                weights.push((
+                    name(&format!("layers.{index}.self_attn.{kind}_proj.bias")),
+                    vec![2],
+                ));
             }
             weights.push((name(&format!("layers.{index}.mlp.fc1.weight")), vec![3, 2]));
+            weights.push((name(&format!("layers.{index}.mlp.fc1.bias")), vec![3]));
             weights.push((name(&format!("layers.{index}.mlp.fc2.weight")), vec![2, 3]));
+            weights.push((name(&format!("layers.{index}.mlp.fc2.bias")), vec![2]));
             for number in 1..=2 {
                 for field in ["weight", "bias"] {
                     weights.push((
@@ -334,6 +416,8 @@ mod tests {
                 }
             }
         }
+        weights.push((name("final_layer_norm.weight"), vec![2]));
+        weights.push((name("final_layer_norm.bias"), vec![2]));
         weights.retain(|(key, _)| Some(key.as_str()) != omit);
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();

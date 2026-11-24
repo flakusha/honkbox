@@ -8,7 +8,7 @@ use crate::{
     VkError,
     conditioning::{Cfg, TextConditioning},
     device::VulkanDevice,
-    text_encoder::{ClipTextEncoder, ClipTextEncoderWeights},
+    text_encoder::{ClipPooling, ClipTextEncoder, ClipTextEncoderWeights},
 };
 use std::sync::Arc;
 
@@ -40,10 +40,36 @@ impl TextConditioner {
         dim: usize,
         scale: f32,
     ) -> Result<Vec<f32>, VkError> {
-        let positive = self.encoder.run(positive_ids, weights, vocab, dim)?;
-        let negative = self.encoder.run(negative_ids, weights, vocab, dim)?;
+        let positive = self
+            .encoder
+            .run_with_bias(positive_ids, weights, vocab, dim)?;
+        let negative = self
+            .encoder
+            .run_with_bias(negative_ids, weights, vocab, dim)?;
         let tokens = positive_ids.len();
         TextConditioning::new(positive, negative, tokens, dim)?.guided(&self.guidance, scale)
+    }
+
+    /// Encode and pool the EOS hidden state, then apply CFG to the single
+    /// `dim`-wide conditioning vector used by the `UNet`.
+    #[allow(clippy::too_many_arguments)] // mirrors condition(): ids + weights + shape + scale
+    pub fn condition_pooled(
+        &self,
+        positive_ids: &[u32],
+        negative_ids: &[u32],
+        weights: &ClipTextEncoderWeights<'_>,
+        vocab: usize,
+        dim: usize,
+        pooling: &ClipPooling<'_>,
+        scale: f32,
+    ) -> Result<Vec<f32>, VkError> {
+        let positive = self
+            .encoder
+            .run_pooled(positive_ids, weights, vocab, dim, pooling)?;
+        let negative = self
+            .encoder
+            .run_pooled(negative_ids, weights, vocab, dim, pooling)?;
+        TextConditioning::new(positive, negative, 1, dim)?.guided(&self.guidance, scale)
     }
 }
 
@@ -86,6 +112,7 @@ mod tests {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
         let actual = conditioner
@@ -111,6 +138,7 @@ mod tests {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
+            biases: Vec::new(),
             ffn_hidden: dim,
         };
         let cond = embedded(&positive, &tokens, &positions, dim);
@@ -135,6 +163,40 @@ mod tests {
     }
 
     #[test]
+    fn pooled_conditioning_blends_one_vector_per_prompt() {
+        let Some(device) = device() else { return };
+        let conditioner = TextConditioner::new(device, 0).expect("conditioner");
+        let (dim, vocab, eos) = (2usize, 3usize, 2u32);
+        let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
+        let positions = [0.01_f32, 0.02, 0.03, 0.04];
+        let weights = ClipTextEncoderWeights {
+            token_table: &tokens,
+            position_table: &positions,
+            layers: Vec::new(),
+            biases: Vec::new(),
+            ffn_hidden: dim,
+        };
+        let pooling = ClipPooling {
+            gamma: &[1.0_f32, 1.0],
+            beta: &[0.0_f32, 0.0],
+            eps: 1e-5,
+            eos,
+        };
+        let actual = conditioner
+            .condition_pooled(&[1, eos], &[eos], &weights, vocab, dim, &pooling, 1.0)
+            .expect("pooled condition");
+        assert_eq!(actual.len(), dim);
+        // EOS token row after the final layer norm; scale 1 keeps positive.
+        let row = [0.53_f32, 0.64];
+        let mean = 0.585_f32;
+        let variance = f32::midpoint((row[0] - mean).powi(2), (row[1] - mean).powi(2));
+        for (got, value) in actual.iter().zip(&row) {
+            let want = (*value - mean) / (variance + pooling.eps).sqrt();
+            assert!((got - want).abs() < 1e-3, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
     fn rejects_different_positive_and_negative_token_counts() {
         let Some(device) = device() else { return };
         let conditioner = TextConditioner::new(device, 0).expect("conditioner");
@@ -144,6 +206,7 @@ mod tests {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
+            biases: Vec::new(),
             ffn_hidden: 2,
         };
         assert!(

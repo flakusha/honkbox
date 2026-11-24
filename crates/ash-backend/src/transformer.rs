@@ -42,6 +42,23 @@ pub struct TransformerWeights<'a> {
     pub eps: f32,
 }
 
+/// Optional linear biases for one encoder block. Empty means "no bias".
+#[derive(Clone, Copy, Default)]
+pub struct TransformerBias<'a> {
+    /// Query projection bias `[dim]`.
+    pub bq: Option<&'a [f32]>,
+    /// Key projection bias `[dim]`.
+    pub bk: Option<&'a [f32]>,
+    /// Value projection bias `[dim]`.
+    pub bv: Option<&'a [f32]>,
+    /// Attention output projection bias `[dim]`.
+    pub bo: Option<&'a [f32]>,
+    /// MLP expansion bias `[hidden]`.
+    pub b1: Option<&'a [f32]>,
+    /// MLP contraction bias `[dim]`.
+    pub b2: Option<&'a [f32]>,
+}
+
 /// Pre-attention norm + attention + residual + MLP + residual + final norm.
 pub struct TransformerBlock {
     query: MatMul,
@@ -73,19 +90,26 @@ impl TransformerBlock {
         })
     }
 
-    /// Run one encoder block over `seq × dim` row-major tokens.
-    pub fn run(
+    /// Run one encoder block over `seq × dim` row-major tokens with biases.
+    pub fn run_with_bias(
         &self,
         input: &[f32],
         weights: &TransformerWeights<'_>,
+        bias: &TransformerBias<'_>,
         seq: usize,
         dim: usize,
         hidden: usize,
     ) -> Result<Vec<f32>, VkError> {
-        let q = self.query.run(input, weights.wq, seq, dim, dim)?;
-        let k = self.key.run(input, weights.wk, seq, dim, dim)?;
+        let add_bias = |values: Vec<f32>, extra: Option<&[f32]>| -> Result<Vec<f32>, VkError> {
+            match extra {
+                Some(extra) if !extra.is_empty() => self.add.run_broadcast(&values, extra),
+                _ => Ok(values),
+            }
+        };
+        let q = add_bias(self.query.run(input, weights.wq, seq, dim, dim)?, bias.bq)?;
+        let k = add_bias(self.key.run(input, weights.wk, seq, dim, dim)?, bias.bk)?;
         let k_t = self.transpose.run(&k, seq, dim)?;
-        let v = self.value.run(input, weights.wv, seq, dim, dim)?;
+        let v = add_bias(self.value.run(input, weights.wv, seq, dim, dim)?, bias.bv)?;
         let attended = self.attention.run(
             &q,
             &k_t,
@@ -97,7 +121,10 @@ impl TransformerBlock {
                 value_dim: dim,
             },
         )?;
-        let projected = self.output.run(&attended, weights.wo, seq, dim, dim)?;
+        let projected = add_bias(
+            self.output.run(&attended, weights.wo, seq, dim, dim)?,
+            bias.bo,
+        )?;
         let residual = self.add.run(input, &projected)?;
         let normed = self.norm1.run(
             &residual,
@@ -107,9 +134,16 @@ impl TransformerBlock {
             weights.norm1_beta,
             weights.eps,
         )?;
-        let fed = self
-            .feed_forward
-            .run(&normed, weights.w1, weights.w2, seq, dim, hidden)?;
+        let fed = self.feed_forward.run_with_bias(
+            &normed,
+            weights.w1,
+            bias.b1.unwrap_or(&[]),
+            weights.w2,
+            bias.b2.unwrap_or(&[]),
+            seq,
+            dim,
+            hidden,
+        )?;
         let residual2 = self.add.run(&normed, &fed)?;
         self.norm2.run(
             &residual2,
@@ -118,6 +152,25 @@ impl TransformerBlock {
             weights.norm2_gamma,
             weights.norm2_beta,
             weights.eps,
+        )
+    }
+
+    /// Run one encoder block over `seq × dim` row-major tokens.
+    pub fn run(
+        &self,
+        input: &[f32],
+        weights: &TransformerWeights<'_>,
+        seq: usize,
+        dim: usize,
+        hidden: usize,
+    ) -> Result<Vec<f32>, VkError> {
+        self.run_with_bias(
+            input,
+            weights,
+            &TransformerBias::default(),
+            seq,
+            dim,
+            hidden,
         )
     }
 }
