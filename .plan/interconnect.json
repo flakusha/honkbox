@@ -1,0 +1,5234 @@
+{
+  "version": 2,
+  "nodes": [
+    {
+      "id": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md",
+      "title": "job cancel cannot interrupt a stalled attached LLM stream",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/llm_attached.rs",
+        "src/routes/chat.rs",
+        "src/routes/openai_constraints.rs",
+        "src/routes/openai_stream.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md",
+      "title": "capabilities advertises rerank without a ranker model",
+      "status": "done",
+      "srcRefs": [
+        "src/integrations/honkbox/capabilities.ts",
+        "src/lib.rs",
+        "src/memory/rerank.ts",
+        "src/routes.rs",
+        "src/routes/capabilities.rs",
+        "src/routes/rerank.rs",
+        "src/runtime_config.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "BUG-comfyui-readiness-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-comfyui-readiness-probe.md",
+      "title": "managed ComfyUI readiness probes a route it does not serve",
+      "status": "done",
+      "srcRefs": [
+        "src/apps.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-fizgig-artifact-cap-and-gc.md",
+      "title": "Bound Fizgig artifacts, GC the work dir, retain resume state",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs.rs",
+        "src/main.rs",
+        "src/routes/fizgig_run.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "BUG-fizgig-family-model-resolution",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-fizgig-family-model-resolution.md",
+      "title": "Fizgig cache stages resolve VAE/text-encoder per family",
+      "status": "done",
+      "srcRefs": [
+        "src/fizgig/families/cache.py",
+        "src/routes/fizgig_run.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "BUG-openapi-embeddings-unlisted",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-openapi-embeddings-unlisted.md",
+      "title": "`/v1/embeddings` missing from the served OpenAPI document",
+      "status": "done",
+      "srcRefs": [
+        "src/gen/openapi.json",
+        "src/routes.rs",
+        "src/routes/openapi.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-3d-training-jobs",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-3d-training-jobs.md",
+      "title": "3D training jobs",
+      "status": "postponed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-artifact-delivery-and-job-result-events",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-artifact-delivery-and-job-result-events.md",
+      "title": "Artifact delivery and job-result events",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-ash-vulkan-backend",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-vulkan-backend.md",
+      "title": "Pure-Vulkan (`ash`) inference backend",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-audio-output-formats",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-audio-output-formats.md",
+      "title": "Opus/FLAC audio output",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-blender-asset-preflight",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-blender-asset-preflight.md",
+      "title": "Blender asset preflight",
+      "status": "done",
+      "srcRefs": [
+        "src/blender_assets.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-blender-job-route",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-blender-job-route.md",
+      "title": "Typed Blender job route",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs_registry.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/routes.rs",
+        "src/routes/blender.rs",
+        "src/routes/blender_exec.rs",
+        "src/routes/blender_stages.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-blender-rigging",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-blender-rigging.md",
+      "title": "Blender rigging and skinning jobs",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-capabilities-api",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-capabilities-api.md",
+      "title": "Server capabilities API",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-cli-app-manager",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-cli-app-manager.md",
+      "title": "Managed lifecycle for user-installed CLI apps",
+      "status": "done",
+      "srcRefs": [
+        "src/apps.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-comfy-video-audio-templates",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-comfy-video-audio-templates.md",
+      "title": "ComfyUI video-to-audio template family",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-comfyui-workflow-pipeline",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md",
+      "title": "ComfyUI workflow pipelines",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-decision-systemone-endpoint",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-decision-systemone-endpoint.md",
+      "title": "decision-model systemone endpoint",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-download-provider-adapters",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-download-provider-adapters.md",
+      "title": "download provider adapters over the options contract",
+      "status": "proposed",
+      "srcRefs": [
+        "src/downloads.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-fizgig-lora-training-jobs",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-fizgig-lora-training-jobs.md",
+      "title": "Fizgig LoRA training jobs (first slice)",
+      "status": "done",
+      "srcRefs": [
+        "src/routes/python_sidecar.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-game-engine-export-bundles",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-game-engine-export-bundles.md",
+      "title": "Engine-agnostic export bundles",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-hunyuanworld-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-hunyuanworld-spike.md",
+      "title": "HunyuanWorld scene spike (layered mesh world)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-image-output-formats",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-image-output-formats.md",
+      "title": "JPEG/WebP image output over HTTP",
+      "status": "done",
+      "srcRefs": [
+        "src/formats.rs",
+        "src/lib.rs",
+        "src/routes/image_ops_exec.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-image-to-3d-idol-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-image-to-3d-idol-spike.md",
+      "title": "Image-to-3D object spike (IDOL sidecar)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-job-bundle-zip",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-job-bundle-zip.md",
+      "title": "Downloadable job bundle zip",
+      "status": "done",
+      "srcRefs": [
+        "src/routes/job_content.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-jobs-snapshot-artifact-ids-and-frame-metadata",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-jobs-snapshot-artifact-ids-and-frame-metadata.md",
+      "title": "Jobs snapshot artifact ids and frame metadata",
+      "status": "done",
+      "srcRefs": [
+        "src/gen"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-llama-server-client-backend",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-llama-server-client-backend.md",
+      "title": "Consume an attached llama-server through the LLM seam",
+      "status": "done",
+      "srcRefs": [
+        "src/backends.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-location-flythrough-job",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-location-flythrough-job.md",
+      "title": "Location fly-through job (imported scene + preset path)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-location-panorama",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-location-panorama.md",
+      "title": "Location panorama job (text → equirect sky)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-model-modality-advertisement",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-model-modality-advertisement.md",
+      "title": "per-model modality advertisement",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-ocr-ingest",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ocr-ingest.md",
+      "title": "OCR ingest stage",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-props-hunyuan-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-props-hunyuan-spike.md",
+      "title": "Props spike (Hunyuan3D-2.1 shape + paint)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-rag-pipeline",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-rag-pipeline.md",
+      "title": "Local RAG pipeline",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-rerank-endpoint",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-rerank-endpoint.md",
+      "title": "rerank endpoint",
+      "status": "done",
+      "srcRefs": [
+        "src/memory/rerank.ts"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-residency-control-plane",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-residency-control-plane.md",
+      "title": "residency drain honesty in the shipped readout",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs",
+        "src/routes/capabilities.rs",
+        "src/routes/models.rs",
+        "src/routes/runtime.rs",
+        "src/swap.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-response-compression",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-response-compression.md",
+      "title": "Response compression",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-sd-edit-loras",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-sd-edit-loras.md",
+      "title": "LoRA on image edits",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs.rs",
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-streaming-stt",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-streaming-stt.md",
+      "title": "Streaming STT with SSE partials",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-video-i2v-frames",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-video-i2v-frames.md",
+      "title": "Image-to-video PNG frame sequence",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-video-mux",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-video-mux.md",
+      "title": "WebP/WebM muxing for video",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-video-output",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-video-output.md",
+      "title": "Video output (vendor-blocked)",
+      "status": "postponed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "FEAT-video-source-audio-reuse",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-video-source-audio-reuse.md",
+      "title": "reuse engine-provided video audio as mix or context",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-api-version-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-api-version-policy.md",
+      "title": "API version bump policy",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-backend-promote",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-backend-promote.md",
+      "title": "Promote the ash Vulkan backend slices",
+      "status": "proposed",
+      "srcRefs": [
+        "src/gen/api-types.ts",
+        "src/gen/openapi.json",
+        "src/lib.rs",
+        "src/main.rs",
+        "src/sdxl.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audio-resampler-quality",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audio-resampler-quality.md",
+      "title": "Resampler quality",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audio-vad-surface",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audio-vad-surface.md",
+      "title": "Surface Silero VAD",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md",
+      "title": "Make /v1/audio/voices reflect the loaded TTS backend",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes/audio_speech.rs",
+        "src/routes/audio_voices.rs",
+        "src/routes/capabilities.rs",
+        "src/tts.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-capabilities",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-capabilities.md",
+      "title": "audio.cpp capability advertisement",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-diarization",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-diarization.md",
+      "title": "audio.cpp speaker diarization",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-streaming-stt",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-streaming-stt.md",
+      "title": "audio.cpp streaming STT partials",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-stt-provider",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-stt-provider.md",
+      "title": "audio.cpp STT provider",
+      "status": "done",
+      "srcRefs": [
+        "src/audiocpp.rs",
+        "src/backends.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-tts-provider",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-tts-provider.md",
+      "title": "audio.cpp TTS provider",
+      "status": "proposed",
+      "srcRefs": [
+        "src/tts.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-vad-decision",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-vad-decision.md",
+      "title": "VAD consolidation decision (ort vs audio.cpp bundled Silero)",
+      "status": "proposed",
+      "srcRefs": [
+        "src/vad.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audiocpp-vendor-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audiocpp-vendor-spike.md",
+      "title": "audio.cpp vendor/linkage spike",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-bake-job-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-bake-job-contract.md",
+      "title": "Bake job contract",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-barcode-decode",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-barcode-decode.md",
+      "title": "Barcode/QR decode via rxing",
+      "status": "landed (stage 1, 2026-11-18 — synchronous `/v1/recognize` route; the job registry /",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-batch-generation-request",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-batch-generation-request.md",
+      "title": "Batch generation with contact sheet",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-binary-artifact-api",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-binary-artifact-api.md",
+      "title": "Binary artifact transport",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-blender-addon-capability-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-blender-addon-capability-probe.md",
+      "title": "Blender addon capability probe",
+      "status": "done",
+      "srcRefs": [
+        "src/blender_addons.py",
+        "src/blender_addons.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-blender-bake-extended-maps",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-blender-bake-extended-maps.md",
+      "title": "Blender bake extension (metallic/AO/height + thumbnail)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-camera-path-schema",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-camera-path-schema.md",
+      "title": "Camera-path preset schema + validator",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-candle-backend-decision",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-candle-backend-decision.md",
+      "title": "Decide on candle as a Rust inference backend",
+      "status": "postponed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-canonical-hash-dedup-cache",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-canonical-hash-dedup-cache.md",
+      "title": "Canonical-hash dedup cache without GPU lease",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-capabilities-contract-test",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-capabilities-contract-test.md",
+      "title": "Capability flag/route agreement test",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-capabilities-golden-fixture",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-capabilities-golden-fixture.md",
+      "title": "Checked-in capabilities contract fixture",
+      "status": "done",
+      "srcRefs": [
+        "src/apps.rs",
+        "src/nsfw.rs",
+        "src/routes/apps.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-capability-signed-urls",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-capability-signed-urls.md",
+      "title": "Capability-advertised short-lived signed content URLs",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-caption-alt-text-sidecar",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-caption-alt-text-sidecar.md",
+      "title": "Caption/alt-text output for generated images",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-cc0-pack-fetch",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-cc0-pack-fetch.md",
+      "title": "CC0 pack fetch (PolyHaven API + Kenney/KayKit)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-cheap-ops-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-cheap-ops-spike.md",
+      "title": "Cheap pixel-ops spike",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-comfy-custom-node-capability-gate",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-comfy-custom-node-capability-gate.md",
+      "title": "ComfyUI custom-node capability gating and operator policy note",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-comfy-texture-workflow-templates",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-comfy-texture-workflow-templates.md",
+      "title": "Curated ComfyUI texture workflow templates",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-comfyui-operator-lifecycle",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-comfyui-operator-lifecycle.md",
+      "title": "document the managed ComfyUI setup contract",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-comfyui-serve-compat-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-comfyui-serve-compat-spike.md",
+      "title": "ComfyUI-compatible serve subset spike",
+      "status": "done",
+      "srcRefs": [
+        "src/generation/providers/comfyui"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-comfyui-typed-surface-honesty",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-comfyui-typed-surface-honesty.md",
+      "title": "make the typed ComfyUI reads honest and usable",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-container-safety",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-container-safety.md",
+      "title": "Container safety limits",
+      "status": "done",
+      "srcRefs": [
+        "src/container.rs",
+        "src/ora.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-content-record-provenance",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-content-record-provenance.md",
+      "title": "Embed generation records in delivered images",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-controlnet-rendering",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-controlnet-rendering.md",
+      "title": "Accept and render ControlNet requests",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-determinism-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-determinism-contract.md",
+      "title": "Determinism contract",
+      "status": "done",
+      "srcRefs": [
+        "src/determinism.rs",
+        "src/jobs.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-device-capacity-gates",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-device-capacity-gates.md",
+      "title": "Device capacity gates in the ledger",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-device-selection-rank-review",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-device-selection-rank-review.md",
+      "title": "Device selection ranking review",
+      "status": "proposed",
+      "srcRefs": [
+        "src/device.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-diarization-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-diarization-spike.md",
+      "title": "Diarization spike (sherpa-onnx)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-docs-site-decision",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-docs-site-decision.md",
+      "title": "Docs site decision",
+      "status": "postponed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-download-options-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-download-options-contract.md",
+      "title": "provider-neutral download options contract",
+      "status": "proposed",
+      "srcRefs": [
+        "src/downloads.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-engine-bundle-verification",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-engine-bundle-verification.md",
+      "title": "Engine bundle verification fixtures",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-exr-format-support",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-exr-format-support.md",
+      "title": "EXR format support in the artifact registry",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-external-api-catalog-links",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-external-api-catalog-links.md",
+      "title": "External API catalog links",
+      "status": "done",
+      "srcRefs": [
+        "src/routes/health.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-external-edit-process-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-external-edit-process-spike.md",
+      "title": "External edit-process spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-external-tool-registry",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-external-tool-registry.md",
+      "title": "External tool registry",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-external-upscale-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-external-upscale-probe.md",
+      "title": "External upscale probe",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-face-detection-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-face-detection-policy.md",
+      "title": "Face/person detection privacy policy decision",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-fizgig-admission-contract-tests",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-fizgig-admission-contract-tests.md",
+      "title": "Close Fizgig admission and lifecycle contract gaps",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs_registry.rs",
+        "src/routes/fizgig.rs",
+        "src/routes/fizgig_run.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-fizgig-cli-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-fizgig-cli-probe.md",
+      "title": "Fizgig CLI probe and supervised three-stage smoke",
+      "status": "done",
+      "srcRefs": [
+        "src/fizgig/families/train.py",
+        "src/routes/python_sidecar.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-fizgig-license-gate",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-fizgig-license-gate.md",
+      "title": "Fizgig weight-license and territory gate",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-fizgig-probe-honesty",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-fizgig-probe-honesty.md",
+      "title": "Honest, retryable Fizgig probe and capability contract",
+      "status": "done",
+      "srcRefs": [
+        "src/routes/capabilities.rs",
+        "src/routes/fizgig.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-format-capability-advertisement",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-format-capability-advertisement.md",
+      "title": "Advertise format capabilities",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-format-registry",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-format-registry.md",
+      "title": "Binary format registry",
+      "status": "done",
+      "srcRefs": [
+        "src/formats.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-generation-record-history-api",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-generation-record-history-api.md",
+      "title": "Read-only generation record/history API",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-generation-replay-endpoint",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-generation-replay-endpoint.md",
+      "title": "Replay a recorded generation",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-generations-loras",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-generations-loras.md",
+      "title": "Per-request LoRAs on `/v1/images/generations`",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-gimp-plugin-fixture",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-gimp-plugin-fixture.md",
+      "title": "GIMP 3 Python plugin fixture",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-godot-importer-fixture",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-godot-importer-fixture.md",
+      "title": "Godot importer fixture",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-gpu-slot-audit-hook",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-gpu-slot-audit-hook.md",
+      "title": "Gate the GPU-slot serialization contract",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-honkbox-federated-provider-assessment",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-honkbox-federated-provider-assessment.md",
+      "title": "Federated provider assessment (mesh lane)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-image-compat-shim-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-image-compat-shim-spike.md",
+      "title": "sd.cpp/sdapi image-compat shim spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-image-ops-command-dto",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-image-ops-command-dto.md",
+      "title": "Image-ops command DTO",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-image-ops-job-route",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-image-ops-job-route.md",
+      "title": "Image-ops job route",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-image-tagging-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-image-tagging-spike.md",
+      "title": "Image tagging/classification spike via ort",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md",
+      "title": "Add artifact delivery and job provenance to /v1/images/edits",
+      "status": "done",
+      "srcRefs": [
+        "src/image-edit/providers/honkbox-provider.ts",
+        "src/jobs_registry.rs",
+        "src/routes/images_edit.rs",
+        "src/routes/images_inputs.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-job-result-artifact-selection-metadata",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md",
+      "title": "Carry artifact selection metadata in job_result events",
+      "status": "done",
+      "srcRefs": [
+        "src/artifacts.rs",
+        "src/gen",
+        "src/integrations/honkbox/result-ingest.ts",
+        "src/jobs.rs",
+        "src/jobs_registry.rs",
+        "src/lib.rs",
+        "src/routes/blender_exec.rs",
+        "src/routes/images_generate.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-krita-plugin-fixture",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-krita-plugin-fixture.md",
+      "title": "Krita pykrita plugin fixture",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-llama-server-attach",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llama-server-attach.md",
+      "title": "Attach a user-installed llama-server",
+      "status": "done",
+      "srcRefs": [
+        "src/llama_server.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-prompt-cache",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-prompt-cache.md",
+      "title": "Bounded prompt/KV cache controls",
+      "status": "done",
+      "srcRefs": [
+        "src/config.rs",
+        "src/metrics.rs",
+        "src/swap.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-speculative-decoding-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-speculative-decoding-spike.md",
+      "title": "Speculative decoding spike (ngram-mod)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-tool-choice-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-tool-choice-contract.md",
+      "title": "Tool-choice fidelity contract",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-vision-default",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-vision-default.md",
+      "title": "Make llm-vision an honest default",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/playground.ts"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-lod-naming-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-lod-naming-contract.md",
+      "title": "LOD naming contract",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-loop-lore-provider-smoke",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-loop-lore-provider-smoke.md",
+      "title": "loop-lore provider smoke path",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-markdown-gate-decision",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-markdown-gate-decision.md",
+      "title": "Markdown formatting and link gate decision",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-material-generator-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-material-generator-spike.md",
+      "title": "Material generator spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-material-map-validation",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-material-map-validation.md",
+      "title": "PBR map-set validation",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-material-tool-capability-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-material-tool-capability-probe.md",
+      "title": "Material tool capability probe",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-mesh-capability-advertisement",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-mesh-capability-advertisement.md",
+      "title": "Advertise external mesh providers",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-mesh-client-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-mesh-client-spike.md",
+      "title": "Mesh client spike (chat only)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-mesh-from-splat-watch",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-mesh-from-splat-watch.md",
+      "title": "Mesh-from-splat watch (no build)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-mesh-provider-discovery",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-mesh-provider-discovery.md",
+      "title": "Mesh provider discovery cache",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-model-bundle-validation",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-model-bundle-validation.md",
+      "title": "Model bundle validation gate",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-model-format-validation",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-model-format-validation.md",
+      "title": "3D model format validation",
+      "status": "done",
+      "srcRefs": [
+        "src/formats.rs",
+        "src/main.rs",
+        "src/model_formats.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-model-license-registry",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-model-license-registry.md",
+      "title": "Model-license registry + product-license rendering",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-multi-gpu-device-axis",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-multi-gpu-device-axis.md",
+      "title": "Device-aware GPU slots",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-nc-weight-gate",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-nc-weight-gate.md",
+      "title": "Non-commercial weight gate (NC-flagged artifacts)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-negative-prompt-preset-library",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-negative-prompt-preset-library.md",
+      "title": "Versioned prompt/style preset library",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-nsfw-score-signal",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-nsfw-score-signal.md",
+      "title": "NSFW score signal on rendered images",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-ocr-ocrs-backend",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ocr-ocrs-backend.md",
+      "title": "OCR backend — ocrs (pure Rust)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-ocr-paddle-onnx-backend",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ocr-paddle-onnx-backend.md",
+      "title": "OCR backend — PaddleOCR ONNX via ort",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-ocr-tesseract-cli-engine",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ocr-tesseract-cli-engine.md",
+      "title": "Tesseract CLI engine (external supervisor lane)",
+      "status": "proposed — BLOCKED on TASK-external-tool-registry + TASK-process-supervisor",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-operability-surfaces",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-operability-surfaces.md",
+      "title": "Operability surfaces for jobs and GC",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-ora-output",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ora-output.md",
+      "title": "OpenRaster output",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-otio-sidecar",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-otio-sidecar.md",
+      "title": "Deterministic OTIO sidecar",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-per-consumer-api-scopes",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-per-consumer-api-scopes.md",
+      "title": "Per-consumer API scopes keyed by env name",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-precommit-gates",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-precommit-gates.md",
+      "title": "Hardened pre-commit gates",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-process-supervisor",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-process-supervisor.md",
+      "title": "External process supervisor",
+      "status": "done",
+      "srcRefs": [
+        "src/routes.rs",
+        "src/supervisor.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-proxy-stream-safety",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-proxy-stream-safety.md",
+      "title": "Proxy stream safety",
+      "status": "in_progress",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-python-sidecar-subprocess",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-python-sidecar-subprocess.md",
+      "title": "Off-by-default Python sidecar subprocess seam",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-qal-guard",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-qal-guard.md",
+      "title": "Redistribution-restricted pack guard (QAL)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-queue-introspection",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-queue-introspection.md",
+      "title": "Read-only queue introspection",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-realtime-envelope-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-realtime-envelope-contract.md",
+      "title": "Transport-agnostic realtime envelope contract",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-recognition-provider-trait",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-recognition-provider-trait.md",
+      "title": "Recognition provider trait and capability surface",
+      "status": "landed (stage 1, 2026-11-18 — trait + stub + DTOs + `/v1/recognize` + `recognition`",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-recognition-vlm-ocr-profile",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-recognition-vlm-ocr-profile.md",
+      "title": "VLM recognition profile (OCR/handwriting/charts via mtmd)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-remote-vision-url-fetch",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-remote-vision-url-fetch.md",
+      "title": "Opt-in remote image URLs for vision",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-render-critique-loop",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-render-critique-loop.md",
+      "title": "Render-critique loop fixture",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-reroute-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-reroute-policy.md",
+      "title": "Bounded reroute policy",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-resource-ledger-bounded-queue",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-resource-ledger-bounded-queue.md",
+      "title": "Resource ledger and bounded queues",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-safety-surface-minors",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-safety-surface-minors.md",
+      "title": "Minors-facing safety surface for generation",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-migration-decision",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-migration-decision.md",
+      "title": "Decide on salvo.rs as the server framework",
+      "status": "postponed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-websocket-chat-stream",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-websocket-chat-stream.md",
+      "title": "Salvo WebSocket chat-stream route (mirror of SSE)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-webtransport-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-webtransport-spike.md",
+      "title": "Salvo WebTransport spike (quinn, gated, not shipped)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-scene-spec-schema",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-scene-spec-schema.md",
+      "title": "Versioned scene-spec schema",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-sd-base-model-tags",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-sd-base-model-tags.md",
+      "title": "Base-model compatibility tags",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-sd-controlnet-execution",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-sd-controlnet-execution.md",
+      "title": "Execute ControlNet requests",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-sd-ffi-cancel",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-sd-ffi-cancel.md",
+      "title": "Wrap native SD cancellation",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-sd-inpaint-mask-semantics",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-sd-inpaint-mask-semantics.md",
+      "title": "Inpaint mask semantics",
+      "status": "done",
+      "srcRefs": [
+        "src/routes/images_edit.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-shader-validate-hook",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-shader-validate-hook.md",
+      "title": "Headless shader-compile check hook",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-speech-input-cap",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-speech-input-cap.md",
+      "title": "Cap SpeechRequest input",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-splat-render-vkgs-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-splat-render-vkgs-probe.md",
+      "title": "vk_gaussian_splatting renderer probe",
+      "status": "in_progress",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-splat-turntable-job",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-splat-turntable-job.md",
+      "title": "Splat turntable job (vkgs preset ring)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-splat-viewer-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-splat-viewer-spike.md",
+      "title": "Gaussian-splat viewer spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-support-doc-truth",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-support-doc-truth.md",
+      "title": "Remove stale video/vision claims",
+      "status": "done",
+      "srcRefs": [
+        "src/db.rs",
+        "src/downloads.rs",
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-svg-artifact-validation",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-svg-artifact-validation.md",
+      "title": "Safe SVG artifact validation",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-svg-generator-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-svg-generator-spike.md",
+      "title": "SVG generator spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-svg-ora-support",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-svg-ora-support.md",
+      "title": "Safe SVG/ORA read path",
+      "status": "done",
+      "srcRefs": [
+        "src/formats.rs",
+        "src/ora.rs",
+        "src/raster.rs",
+        "src/routes.rs",
+        "src/svg.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-texture-postprocess-oiio",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-texture-postprocess-oiio.md",
+      "title": "Texture post-process (mip/tile/colorspace/ORM via oiiotool)",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-texture-postprocess-wiring",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-texture-postprocess-wiring.md",
+      "title": "Wire OIIO texture post-process into the server",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-training-reservation-class",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-training-reservation-class.md",
+      "title": "dedicated reservation class for long training jobs",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/metrics.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-truthful-reserved-capability-rows",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-truthful-reserved-capability-rows.md",
+      "title": "Truthful reserved capability rows",
+      "status": "done",
+      "srcRefs": [
+        "src/jobs_registry.rs",
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-unirig-probe",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-unirig-probe.md",
+      "title": "UniRig probe (ML auto-rig for generated meshes)",
+      "status": "in_progress",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-video-ffi-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-video-ffi-spike.md",
+      "title": "Video FFI support spike",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-video-job-class",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-video-job-class.md",
+      "title": "Video job class and admission",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-voice-clone-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-voice-clone-policy.md",
+      "title": "Voice cloning consent policy",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-3d-capture",
+      "kind": "epic",
+      "path": ".plan/epics/epic-3d-capture.md",
+      "title": "3D capture and splat viewing",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-audio-streaming",
+      "kind": "epic",
+      "path": ".plan/epics/epic-audio-streaming.md",
+      "title": "Audio streaming and quality",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-authn-authz",
+      "kind": "epic",
+      "path": ".plan/epics/epic-authn-authz.md",
+      "title": "Authentication, authorization, and content credentials",
+      "status": "active",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-binary-formats",
+      "kind": "epic",
+      "path": ".plan/epics/epic-binary-formats.md",
+      "title": "Binary formats and containers",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-blender-assets",
+      "kind": "epic",
+      "path": ".plan/epics/epic-blender-assets.md",
+      "title": "Blender asset workstream",
+      "status": "in_progress",
+      "srcRefs": [
+        "src/routes/blender"
+      ],
+      "related": []
+    },
+    {
+      "id": "epic-capabilities-contract",
+      "kind": "epic",
+      "path": ".plan/epics/epic-capabilities-contract.md",
+      "title": "Truthful capabilities and version contract",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-comfyui-managed-runtime",
+      "kind": "epic",
+      "path": ".plan/epics/epic-comfyui-managed-runtime.md",
+      "title": "Managed ComfyUI runtime and typed surface",
+      "status": "active (2026-11-24; runtime landed, workflow pipeline open)",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-cross-app-integration",
+      "kind": "epic",
+      "path": ".plan/epics/epic-cross-app-integration.md",
+      "title": "Cross-app heavy-lifting contract",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-docs-tooling",
+      "kind": "epic",
+      "path": ".plan/epics/epic-docs-tooling.md",
+      "title": "Docs tooling decisions",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-editor-integration",
+      "kind": "epic",
+      "path": ".plan/epics/epic-editor-integration.md",
+      "title": "GIMP/Krita editor integration",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-external-tools",
+      "kind": "epic",
+      "path": ".plan/epics/epic-external-tools.md",
+      "title": "External tool registry and process supervision",
+      "status": "in_progress",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-full-ai-cycle",
+      "kind": "epic",
+      "path": ".plan/epics/epic-full-ai-cycle.md",
+      "title": "Full AI cycle",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-game-engine-export",
+      "kind": "epic",
+      "path": ".plan/epics/epic-game-engine-export.md",
+      "title": "Game-engine export bundles",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-llm-expansion",
+      "kind": "epic",
+      "path": ".plan/epics/epic-llm-expansion.md",
+      "title": "LLM surface expansion",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-media-timeline",
+      "kind": "epic",
+      "path": ".plan/epics/epic-media-timeline.md",
+      "title": "Media timeline interchange",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-mesh-integration",
+      "kind": "epic",
+      "path": ".plan/epics/epic-mesh-integration.md",
+      "title": "Mesh integration and external routing",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-model-feedback",
+      "kind": "epic",
+      "path": ".plan/epics/epic-model-feedback.md",
+      "title": "Model pipeline and multimodal feedback loops",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-output-formats",
+      "kind": "epic",
+      "path": ".plan/epics/epic-output-formats.md",
+      "title": "Output formats and bounded payloads",
+      "status": "in_progress",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-sd-native-backend",
+      "kind": "epic",
+      "path": ".plan/epics/epic-sd-native-backend.md",
+      "title": "Native SD backend completeness",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-trust-safety",
+      "kind": "epic",
+      "path": ".plan/epics/epic-trust-safety.md",
+      "title": "Trust and safety signals",
+      "status": "active",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-vector-materials",
+      "kind": "epic",
+      "path": ".plan/epics/epic-vector-materials.md",
+      "title": "Vector and material assets",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-video-support",
+      "kind": "epic",
+      "path": ".plan/epics/epic-video-support.md",
+      "title": "Video support (gated)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "epic-voice-identity",
+      "kind": "epic",
+      "path": ".plan/epics/epic-voice-identity.md",
+      "title": "Voice identity (consent-gated)",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    }
+  ],
+  "srcNodes": [
+    {
+      "path": "src/apps.rs",
+      "owners": [
+        "BUG-comfyui-readiness-probe",
+        "FEAT-cli-app-manager",
+        "TASK-capabilities-golden-fixture"
+      ]
+    },
+    {
+      "path": "src/artifacts.rs",
+      "owners": [
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/audiocpp.rs",
+      "owners": [
+        "TASK-audiocpp-stt-provider"
+      ]
+    },
+    {
+      "path": "src/backends.rs",
+      "owners": [
+        "FEAT-llama-server-client-backend",
+        "TASK-audiocpp-stt-provider"
+      ]
+    },
+    {
+      "path": "src/blender_addons.py",
+      "owners": [
+        "TASK-blender-addon-capability-probe"
+      ]
+    },
+    {
+      "path": "src/blender_addons.rs",
+      "owners": [
+        "TASK-blender-addon-capability-probe"
+      ]
+    },
+    {
+      "path": "src/blender_assets.rs",
+      "owners": [
+        "FEAT-blender-asset-preflight"
+      ]
+    },
+    {
+      "path": "src/config.rs",
+      "owners": [
+        "TASK-llm-prompt-cache"
+      ]
+    },
+    {
+      "path": "src/container.rs",
+      "owners": [
+        "TASK-container-safety"
+      ]
+    },
+    {
+      "path": "src/db.rs",
+      "owners": [
+        "TASK-support-doc-truth"
+      ]
+    },
+    {
+      "path": "src/determinism.rs",
+      "owners": [
+        "TASK-determinism-contract"
+      ]
+    },
+    {
+      "path": "src/device.rs",
+      "owners": [
+        "TASK-device-selection-rank-review"
+      ]
+    },
+    {
+      "path": "src/downloads.rs",
+      "owners": [
+        "FEAT-download-provider-adapters",
+        "TASK-download-options-contract",
+        "TASK-support-doc-truth"
+      ]
+    },
+    {
+      "path": "src/fizgig/families/cache.py",
+      "owners": [
+        "BUG-fizgig-family-model-resolution"
+      ]
+    },
+    {
+      "path": "src/fizgig/families/train.py",
+      "owners": [
+        "TASK-fizgig-cli-probe"
+      ]
+    },
+    {
+      "path": "src/formats.rs",
+      "owners": [
+        "FEAT-image-output-formats",
+        "TASK-format-registry",
+        "TASK-model-format-validation",
+        "TASK-svg-ora-support"
+      ]
+    },
+    {
+      "path": "src/gen",
+      "owners": [
+        "FEAT-jobs-snapshot-artifact-ids-and-frame-metadata",
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/gen/api-types.ts",
+      "owners": [
+        "TASK-ash-backend-promote"
+      ]
+    },
+    {
+      "path": "src/gen/openapi.json",
+      "owners": [
+        "BUG-openapi-embeddings-unlisted",
+        "TASK-ash-backend-promote"
+      ]
+    },
+    {
+      "path": "src/generation/providers/comfyui",
+      "owners": [
+        "TASK-comfyui-serve-compat-spike"
+      ]
+    },
+    {
+      "path": "src/image-edit/providers/honkbox-provider.ts",
+      "owners": [
+        "TASK-images-edits-artifact-delivery-parity"
+      ]
+    },
+    {
+      "path": "src/integrations/honkbox/capabilities.ts",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker"
+      ]
+    },
+    {
+      "path": "src/integrations/honkbox/result-ingest.ts",
+      "owners": [
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/jobs.rs",
+      "owners": [
+        "BUG-fizgig-artifact-cap-and-gc",
+        "FEAT-sd-edit-loras",
+        "TASK-determinism-contract",
+        "TASK-generations-loras",
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/jobs_registry.rs",
+      "owners": [
+        "FEAT-blender-job-route",
+        "TASK-fizgig-admission-contract-tests",
+        "TASK-images-edits-artifact-delivery-parity",
+        "TASK-job-result-artifact-selection-metadata",
+        "TASK-truthful-reserved-capability-rows"
+      ]
+    },
+    {
+      "path": "src/lib.rs",
+      "owners": [
+        "BUG-attached-job-cancel-stalled-stream",
+        "BUG-capabilities-rerank-flag-without-ranker",
+        "FEAT-ash-vulkan-backend",
+        "FEAT-blender-job-route",
+        "FEAT-image-output-formats",
+        "FEAT-residency-control-plane",
+        "FEAT-sd-edit-loras",
+        "TASK-api-version-policy",
+        "TASK-ash-backend-promote",
+        "TASK-audio-resampler-quality",
+        "TASK-audio-voices-loaded-backend-truth",
+        "TASK-audiocpp-capabilities",
+        "TASK-cheap-ops-spike",
+        "TASK-controlnet-rendering",
+        "TASK-face-detection-policy",
+        "TASK-gpu-slot-audit-hook",
+        "TASK-job-result-artifact-selection-metadata",
+        "TASK-llm-tool-choice-contract",
+        "TASK-llm-vision-default",
+        "TASK-sd-base-model-tags",
+        "TASK-support-doc-truth",
+        "TASK-training-reservation-class",
+        "TASK-truthful-reserved-capability-rows"
+      ]
+    },
+    {
+      "path": "src/llama_server.rs",
+      "owners": [
+        "TASK-llama-server-attach"
+      ]
+    },
+    {
+      "path": "src/llm_attached.rs",
+      "owners": [
+        "BUG-attached-job-cancel-stalled-stream"
+      ]
+    },
+    {
+      "path": "src/main.rs",
+      "owners": [
+        "BUG-fizgig-artifact-cap-and-gc",
+        "TASK-ash-backend-promote",
+        "TASK-model-format-validation"
+      ]
+    },
+    {
+      "path": "src/memory/rerank.ts",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker",
+        "FEAT-rerank-endpoint"
+      ]
+    },
+    {
+      "path": "src/metrics.rs",
+      "owners": [
+        "FEAT-blender-job-route",
+        "TASK-llm-prompt-cache",
+        "TASK-training-reservation-class"
+      ]
+    },
+    {
+      "path": "src/model_formats.rs",
+      "owners": [
+        "TASK-model-format-validation"
+      ]
+    },
+    {
+      "path": "src/nsfw.rs",
+      "owners": [
+        "TASK-capabilities-golden-fixture"
+      ]
+    },
+    {
+      "path": "src/ora.rs",
+      "owners": [
+        "TASK-container-safety",
+        "TASK-svg-ora-support"
+      ]
+    },
+    {
+      "path": "src/playground.ts",
+      "owners": [
+        "TASK-llm-vision-default"
+      ]
+    },
+    {
+      "path": "src/raster.rs",
+      "owners": [
+        "TASK-svg-ora-support"
+      ]
+    },
+    {
+      "path": "src/routes.rs",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker",
+        "BUG-openapi-embeddings-unlisted",
+        "FEAT-blender-job-route",
+        "FEAT-residency-control-plane",
+        "FEAT-sd-edit-loras",
+        "TASK-audiocpp-capabilities",
+        "TASK-controlnet-rendering",
+        "TASK-generations-loras",
+        "TASK-gpu-slot-audit-hook",
+        "TASK-llm-tool-choice-contract",
+        "TASK-process-supervisor",
+        "TASK-svg-ora-support",
+        "TASK-truthful-reserved-capability-rows"
+      ]
+    },
+    {
+      "path": "src/routes/apps.rs",
+      "owners": [
+        "TASK-capabilities-golden-fixture"
+      ]
+    },
+    {
+      "path": "src/routes/audio_speech.rs",
+      "owners": [
+        "TASK-audio-voices-loaded-backend-truth"
+      ]
+    },
+    {
+      "path": "src/routes/audio_voices.rs",
+      "owners": [
+        "TASK-audio-voices-loaded-backend-truth"
+      ]
+    },
+    {
+      "path": "src/routes/blender",
+      "owners": [
+        "epic-blender-assets"
+      ]
+    },
+    {
+      "path": "src/routes/blender.rs",
+      "owners": [
+        "FEAT-blender-job-route"
+      ]
+    },
+    {
+      "path": "src/routes/blender_exec.rs",
+      "owners": [
+        "FEAT-blender-job-route",
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/routes/blender_stages.rs",
+      "owners": [
+        "FEAT-blender-job-route"
+      ]
+    },
+    {
+      "path": "src/routes/capabilities.rs",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker",
+        "FEAT-residency-control-plane",
+        "TASK-audio-voices-loaded-backend-truth",
+        "TASK-fizgig-probe-honesty"
+      ]
+    },
+    {
+      "path": "src/routes/chat.rs",
+      "owners": [
+        "BUG-attached-job-cancel-stalled-stream"
+      ]
+    },
+    {
+      "path": "src/routes/fizgig.rs",
+      "owners": [
+        "TASK-fizgig-admission-contract-tests",
+        "TASK-fizgig-probe-honesty"
+      ]
+    },
+    {
+      "path": "src/routes/fizgig_run.rs",
+      "owners": [
+        "BUG-fizgig-artifact-cap-and-gc",
+        "BUG-fizgig-family-model-resolution",
+        "TASK-fizgig-admission-contract-tests"
+      ]
+    },
+    {
+      "path": "src/routes/health.rs",
+      "owners": [
+        "TASK-external-api-catalog-links"
+      ]
+    },
+    {
+      "path": "src/routes/image_ops_exec.rs",
+      "owners": [
+        "FEAT-image-output-formats"
+      ]
+    },
+    {
+      "path": "src/routes/images_edit.rs",
+      "owners": [
+        "TASK-images-edits-artifact-delivery-parity",
+        "TASK-sd-inpaint-mask-semantics"
+      ]
+    },
+    {
+      "path": "src/routes/images_generate.rs",
+      "owners": [
+        "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/routes/images_inputs.rs",
+      "owners": [
+        "TASK-images-edits-artifact-delivery-parity"
+      ]
+    },
+    {
+      "path": "src/routes/job_content.rs",
+      "owners": [
+        "FEAT-job-bundle-zip"
+      ]
+    },
+    {
+      "path": "src/routes/models.rs",
+      "owners": [
+        "FEAT-residency-control-plane"
+      ]
+    },
+    {
+      "path": "src/routes/openai_constraints.rs",
+      "owners": [
+        "BUG-attached-job-cancel-stalled-stream"
+      ]
+    },
+    {
+      "path": "src/routes/openai_stream.rs",
+      "owners": [
+        "BUG-attached-job-cancel-stalled-stream"
+      ]
+    },
+    {
+      "path": "src/routes/openapi.rs",
+      "owners": [
+        "BUG-openapi-embeddings-unlisted"
+      ]
+    },
+    {
+      "path": "src/routes/python_sidecar.rs",
+      "owners": [
+        "FEAT-fizgig-lora-training-jobs",
+        "TASK-fizgig-cli-probe"
+      ]
+    },
+    {
+      "path": "src/routes/rerank.rs",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker"
+      ]
+    },
+    {
+      "path": "src/routes/runtime.rs",
+      "owners": [
+        "FEAT-residency-control-plane"
+      ]
+    },
+    {
+      "path": "src/runtime_config.rs",
+      "owners": [
+        "BUG-capabilities-rerank-flag-without-ranker"
+      ]
+    },
+    {
+      "path": "src/sdxl.rs",
+      "owners": [
+        "TASK-ash-backend-promote"
+      ]
+    },
+    {
+      "path": "src/supervisor.rs",
+      "owners": [
+        "TASK-process-supervisor"
+      ]
+    },
+    {
+      "path": "src/svg.rs",
+      "owners": [
+        "TASK-svg-ora-support"
+      ]
+    },
+    {
+      "path": "src/swap.rs",
+      "owners": [
+        "FEAT-residency-control-plane",
+        "TASK-llm-prompt-cache"
+      ]
+    },
+    {
+      "path": "src/tts.rs",
+      "owners": [
+        "TASK-audio-voices-loaded-backend-truth",
+        "TASK-audiocpp-tts-provider"
+      ]
+    },
+    {
+      "path": "src/vad.rs",
+      "owners": [
+        "TASK-audiocpp-vad-decision"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "produces",
+      "to": "src/llm_attached.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "produces",
+      "to": "src/routes/chat.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "produces",
+      "to": "src/routes/openai_constraints.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "produces",
+      "to": "src/routes/openai_stream.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/integrations/honkbox/capabilities.ts"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/memory/rerank.ts"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/routes/rerank.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "produces",
+      "to": "src/runtime_config.rs"
+    },
+    {
+      "from": "BUG-comfyui-readiness-probe",
+      "kind": "produces",
+      "to": "src/apps.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "produces",
+      "to": "src/main.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "produces",
+      "to": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "BUG-fizgig-family-model-resolution",
+      "kind": "produces",
+      "to": "src/fizgig/families/cache.py"
+    },
+    {
+      "from": "BUG-fizgig-family-model-resolution",
+      "kind": "produces",
+      "to": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "produces",
+      "to": "src/gen/openapi.json"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "produces",
+      "to": "src/routes/openapi.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-asset-preflight",
+      "kind": "produces",
+      "to": "src/blender_assets.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/metrics.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/routes/blender.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "produces",
+      "to": "src/routes/blender_stages.rs"
+    },
+    {
+      "from": "FEAT-cli-app-manager",
+      "kind": "produces",
+      "to": "src/apps.rs"
+    },
+    {
+      "from": "FEAT-download-provider-adapters",
+      "kind": "produces",
+      "to": "src/downloads.rs"
+    },
+    {
+      "from": "FEAT-fizgig-lora-training-jobs",
+      "kind": "produces",
+      "to": "src/routes/python_sidecar.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "produces",
+      "to": "src/formats.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "produces",
+      "to": "src/routes/image_ops_exec.rs"
+    },
+    {
+      "from": "FEAT-job-bundle-zip",
+      "kind": "produces",
+      "to": "src/routes/job_content.rs"
+    },
+    {
+      "from": "FEAT-jobs-snapshot-artifact-ids-and-frame-metadata",
+      "kind": "produces",
+      "to": "src/gen"
+    },
+    {
+      "from": "FEAT-llama-server-client-backend",
+      "kind": "produces",
+      "to": "src/backends.rs"
+    },
+    {
+      "from": "FEAT-rerank-endpoint",
+      "kind": "produces",
+      "to": "src/memory/rerank.ts"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/routes/models.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/routes/runtime.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "produces",
+      "to": "src/swap.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "produces",
+      "to": "src/gen/api-types.ts"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "produces",
+      "to": "src/gen/openapi.json"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "produces",
+      "to": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "produces",
+      "to": "src/sdxl.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "produces",
+      "to": "src/routes/audio_speech.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "produces",
+      "to": "src/routes/audio_voices.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "produces",
+      "to": "src/tts.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-stt-provider",
+      "kind": "produces",
+      "to": "src/audiocpp.rs"
+    },
+    {
+      "from": "TASK-audiocpp-stt-provider",
+      "kind": "produces",
+      "to": "src/backends.rs"
+    },
+    {
+      "from": "TASK-audiocpp-tts-provider",
+      "kind": "produces",
+      "to": "src/tts.rs"
+    },
+    {
+      "from": "TASK-audiocpp-vad-decision",
+      "kind": "produces",
+      "to": "src/vad.rs"
+    },
+    {
+      "from": "TASK-blender-addon-capability-probe",
+      "kind": "produces",
+      "to": "src/blender_addons.py"
+    },
+    {
+      "from": "TASK-blender-addon-capability-probe",
+      "kind": "produces",
+      "to": "src/blender_addons.rs"
+    },
+    {
+      "from": "TASK-capabilities-golden-fixture",
+      "kind": "produces",
+      "to": "src/apps.rs"
+    },
+    {
+      "from": "TASK-capabilities-golden-fixture",
+      "kind": "produces",
+      "to": "src/nsfw.rs"
+    },
+    {
+      "from": "TASK-capabilities-golden-fixture",
+      "kind": "produces",
+      "to": "src/routes/apps.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfyui-serve-compat-spike",
+      "kind": "produces",
+      "to": "src/generation/providers/comfyui"
+    },
+    {
+      "from": "TASK-container-safety",
+      "kind": "produces",
+      "to": "src/container.rs"
+    },
+    {
+      "from": "TASK-container-safety",
+      "kind": "produces",
+      "to": "src/ora.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "produces",
+      "to": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-device-selection-rank-review",
+      "kind": "produces",
+      "to": "src/device.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "produces",
+      "to": "src/downloads.rs"
+    },
+    {
+      "from": "TASK-external-api-catalog-links",
+      "kind": "produces",
+      "to": "src/routes/health.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "produces",
+      "to": "src/routes/fizgig.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "produces",
+      "to": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "TASK-fizgig-cli-probe",
+      "kind": "produces",
+      "to": "src/fizgig/families/train.py"
+    },
+    {
+      "from": "TASK-fizgig-cli-probe",
+      "kind": "produces",
+      "to": "src/routes/python_sidecar.rs"
+    },
+    {
+      "from": "TASK-fizgig-probe-honesty",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "TASK-fizgig-probe-honesty",
+      "kind": "produces",
+      "to": "src/routes/fizgig.rs"
+    },
+    {
+      "from": "TASK-format-registry",
+      "kind": "produces",
+      "to": "src/formats.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "produces",
+      "to": "src/image-edit/providers/honkbox-provider.ts"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "produces",
+      "to": "src/routes/images_edit.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "produces",
+      "to": "src/routes/images_inputs.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/artifacts.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/gen"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/integrations/honkbox/result-ingest.ts"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/routes/blender_exec.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "produces",
+      "to": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-llama-server-attach",
+      "kind": "produces",
+      "to": "src/llama_server.rs"
+    },
+    {
+      "from": "TASK-llm-prompt-cache",
+      "kind": "produces",
+      "to": "src/config.rs"
+    },
+    {
+      "from": "TASK-llm-prompt-cache",
+      "kind": "produces",
+      "to": "src/metrics.rs"
+    },
+    {
+      "from": "TASK-llm-prompt-cache",
+      "kind": "produces",
+      "to": "src/swap.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "produces",
+      "to": "src/playground.ts"
+    },
+    {
+      "from": "TASK-model-format-validation",
+      "kind": "produces",
+      "to": "src/formats.rs"
+    },
+    {
+      "from": "TASK-model-format-validation",
+      "kind": "produces",
+      "to": "src/main.rs"
+    },
+    {
+      "from": "TASK-model-format-validation",
+      "kind": "produces",
+      "to": "src/model_formats.rs"
+    },
+    {
+      "from": "TASK-process-supervisor",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-process-supervisor",
+      "kind": "produces",
+      "to": "src/supervisor.rs"
+    },
+    {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-sd-inpaint-mask-semantics",
+      "kind": "produces",
+      "to": "src/routes/images_edit.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "produces",
+      "to": "src/db.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "produces",
+      "to": "src/downloads.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "produces",
+      "to": "src/formats.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "produces",
+      "to": "src/ora.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "produces",
+      "to": "src/raster.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "produces",
+      "to": "src/svg.rs"
+    },
+    {
+      "from": "TASK-training-reservation-class",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-training-reservation-class",
+      "kind": "produces",
+      "to": "src/metrics.rs"
+    },
+    {
+      "from": "TASK-truthful-reserved-capability-rows",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-truthful-reserved-capability-rows",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-truthful-reserved-capability-rows",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "epic-blender-assets",
+      "kind": "produces",
+      "to": "src/routes/blender"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "BUG-capabilities-rerank-flag-without-ranker",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-ash-vulkan-backend",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-blender-job-route",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-image-output-formats",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "BUG-openapi-embeddings-unlisted",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-ash-vulkan-backend",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-blender-job-route",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-image-output-formats",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-rerank-endpoint",
+      "via": "src/memory/rerank.ts"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs; src/routes/capabilities.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-comfyui-readiness-probe",
+      "kind": "sibling",
+      "to": "FEAT-cli-app-manager",
+      "via": "src/apps.rs"
+    },
+    {
+      "from": "BUG-comfyui-readiness-probe",
+      "kind": "sibling",
+      "to": "TASK-capabilities-golden-fixture",
+      "via": "src/apps.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "BUG-fizgig-family-model-resolution",
+      "via": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-determinism-contract",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-fizgig-admission-contract-tests",
+      "via": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "BUG-fizgig-family-model-resolution",
+      "kind": "sibling",
+      "to": "TASK-fizgig-admission-contract-tests",
+      "via": "src/routes/fizgig_run.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "FEAT-blender-job-route",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/gen/openapi.json"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "FEAT-blender-job-route",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "FEAT-image-output-formats",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "FEAT-image-output-formats",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-fizgig-admission-contract-tests",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-images-edits-artifact-delivery-parity",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs_registry.rs; src/lib.rs; src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-prompt-cache",
+      "via": "src/metrics.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs; src/metrics.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs; src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-cli-app-manager",
+      "kind": "sibling",
+      "to": "TASK-capabilities-golden-fixture",
+      "via": "src/apps.rs"
+    },
+    {
+      "from": "FEAT-download-provider-adapters",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/downloads.rs"
+    },
+    {
+      "from": "FEAT-download-provider-adapters",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/downloads.rs"
+    },
+    {
+      "from": "FEAT-fizgig-lora-training-jobs",
+      "kind": "sibling",
+      "to": "TASK-fizgig-cli-probe",
+      "via": "src/routes/python_sidecar.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-format-registry",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-jobs-snapshot-artifact-ids-and-frame-metadata",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/gen"
+    },
+    {
+      "from": "FEAT-llama-server-client-backend",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-stt-provider",
+      "via": "src/backends.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs; src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-prompt-cache",
+      "via": "src/swap.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-determinism-contract",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/jobs.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs.rs; src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-ash-backend-promote",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-backend-promote",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-tts-provider",
+      "via": "src/tts.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-container-safety",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/ora.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/downloads.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/fizgig.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "sibling",
+      "to": "TASK-images-edits-artifact-delivery-parity",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-fizgig-admission-contract-tests",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-format-registry",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "TASK-format-registry",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-generations-loras",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "sibling",
+      "to": "TASK-sd-inpaint-mask-semantics",
+      "via": "src/routes/images_edit.rs"
+    },
+    {
+      "from": "TASK-images-edits-artifact-delivery-parity",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs; src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-prompt-cache",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/metrics.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-model-format-validation",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "TASK-process-supervisor",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-process-supervisor",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-svg-ora-support",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-training-reservation-class",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    }
+  ]
+}
