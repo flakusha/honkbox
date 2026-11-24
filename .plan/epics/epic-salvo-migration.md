@@ -24,10 +24,10 @@ evidence. The migration touches four coupled seams: ~53 mounted routes with
 - `TASK-salvo-dto-schema-bridge.md` — done 2026-11-24, P1: coexist
   `utoipa::ToSchema` and `salvo::oapi::ToSchema` on shared DTOs without hand
   edits to generated files.
-- `TASK-salvo-route-and-test-cutover.md` — proposed, P1: cut ~53 route
+- `TASK-salvo-route-and-test-cutover.md` — in progress (salvo router serving all 64 routes; test conversion partial), P1: cut ~53 route
   annotations and 40+ oneshot test files over to salvo's endpoint/listener
   pattern, preserving route behavior and parallel-safe test contracts.
-- `TASK-salvo-middleware-and-codegen.md` — in progress (codegen union landed), P1: replace tower-http
+- `TASK-salvo-middleware-and-codegen.md` — in progress (codegen union + salvo hoops landed; hoops installed on API router), P1: replace tower-http
   layers with salvo middleware and move OpenAPI generation to the salvo oapi
   artifact while keeping the codegen gate green.
 
