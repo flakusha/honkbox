@@ -71,7 +71,7 @@ fn bfloat16_bits_to_f32(bits: u16) -> f32 {
     f32::from_bits(u32::from(bits) << 16)
 }
 
-fn decode(bytes: &[u8], meta: &TensorMeta) -> io::Result<Vec<f32>> {
+pub(crate) fn decode(bytes: &[u8], meta: &TensorMeta) -> io::Result<Vec<f32>> {
     let expected = meta.byte_len;
     if bytes.len() != expected {
         return Err(invalid(format!(
@@ -114,7 +114,7 @@ pub fn load_tensor(
     expected_shape: &[usize],
 ) -> io::Result<Vec<f32>> {
     let meta = map
-        .get(name)
+        .get_aliased(name)
         .ok_or_else(|| invalid(format!("checkpoint missing tensor '{name}'")))?;
     if meta.shape != expected_shape {
         return Err(invalid(format!(
@@ -122,7 +122,9 @@ pub fn load_tensor(
             meta.shape
         )));
     }
-    decode(&map.read_tensor(path, name)?, meta)
+    // Read by the canonical checkpoint name: `get_aliased` may have matched
+    // an original single-file key that differs from the spec-style `name`.
+    decode(&map.read_tensor(path, &meta.name)?, meta)
 }
 
 /// Load and validate the four tensors described by `keys` for `shape`.
@@ -144,7 +146,7 @@ pub fn load_unet_input(
         (keys.beta, &channel_shape[..]),
     ] {
         let meta = map
-            .get(name)
+            .get_aliased(name)
             .ok_or_else(|| invalid(format!("checkpoint missing tensor '{name}'")))?;
         if meta.shape != expected {
             return Err(invalid(format!(

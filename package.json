@@ -42,7 +42,7 @@
     "test:residency": "cargo test --locked -p honkbox-residency",
     "test:registry": "cargo test --locked -p honkbox-registry",
     "test:server": "cargo test --locked -p honkbox-server",
-    "test:ash": "cargo test --locked -p honkbox-ash-backend --features ash-compute && cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd",
+    "test:ash": "cargo test --locked -p honkbox-ash-backend --features ash-compute && cargo test --locked -p honkbox-ash-backend --features ash-sd",
     "test:parity": "cargo test --locked -p honkbox-sd-core --test parity -- --include-ignored",
     "lint:rs": "cargo clippy --workspace --all-targets -- -D warnings",
     "fmt:rs": "cargo fmt --all",

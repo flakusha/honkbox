@@ -6,7 +6,7 @@
 //! in this repo). The default build stays on the shortcut stack
 //! (`honkbox-sd-core`'s [`honkbox_sd_core::SdCppPipeline`]); this crate is the
 //! promoted home of the ground-up path. `ash-compute` builds the kernel stack
-//! alone; `experimental-ash-sd` adds the `SdPipeline` seam and forwards to
+//! alone; `ash-sd` adds the `SdPipeline` seam and forwards to
 //! `honkbox-sd-core/ash-backend`.
 //!
 //! # Layout
@@ -81,10 +81,10 @@
 //! - [`llm`]: [`llm::AshLlmPipeline`], implementing the `honkbox-llm-worker`
 //!   `LlmPipeline` (backend id `ash-llm`); a placeholder that returns a
 //!   named unimplemented error — no fake output — until transformer decode
-//!   kernels land. Gated by `experimental-ash-llm`.
+//!   kernels land. Gated by `ash-llm`.
 //! - [`stubs`]: STT/TTS seam types `stubs::AshSttPipeline` /
 //!   `stubs::AshTtsPipeline` (backend ids `ash-stt`, `ash-tts`); gated
-//!   `experimental-ash-stt` / `experimental-ash-tts`, they implement the
+//!   `ash-stt` / `ash-tts`, they implement the
 //!   `honkbox-audio-worker` traits as placeholders returning named
 //!   unimplemented errors — no fake output.
 //!
@@ -226,7 +226,7 @@ pub mod device;
 pub mod embedding;
 #[cfg(feature = "ash-compute")]
 pub mod group_norm;
-#[cfg(feature = "experimental-ash-llm")]
+#[cfg(feature = "ash-llm")]
 pub mod llm;
 #[cfg(feature = "ash-compute")]
 pub mod matmul;
@@ -238,15 +238,17 @@ pub mod model;
 pub mod model_spec;
 #[cfg(feature = "ash-compute")]
 pub mod norm;
+#[cfg(feature = "ash-sd")]
+pub mod prompt;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
 #[cfg(feature = "ash-compute")]
 pub mod sampler;
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-sd")]
 pub mod sd;
 #[cfg(feature = "ash-compute")]
 pub mod sd15_keys;
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-sd")]
 pub mod sdxl;
 #[cfg(feature = "ash-compute")]
 pub mod shape_infer;
@@ -254,11 +256,7 @@ pub mod shape_infer;
 pub mod silu;
 #[cfg(feature = "ash-compute")]
 pub mod softmax;
-#[cfg(any(
-    feature = "experimental-ash-sd",
-    feature = "experimental-ash-stt",
-    feature = "experimental-ash-tts"
-))]
+#[cfg(any(feature = "ash-sd", feature = "ash-stt", feature = "ash-tts"))]
 pub mod stubs;
 #[cfg(feature = "ash-compute")]
 pub mod text_conditioning;
@@ -282,6 +280,8 @@ pub mod unet_downsample;
 pub mod unet_input;
 #[cfg(feature = "ash-compute")]
 pub mod unet_predict;
+#[cfg(feature = "ash-sd")]
+pub mod unet_real;
 #[cfg(feature = "ash-compute")]
 pub mod unet_stack;
 #[cfg(feature = "ash-compute")]
@@ -290,6 +290,8 @@ pub mod unet_traversal;
 pub mod unet_upsample;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;
+#[cfg(feature = "ash-sd")]
+pub mod vae_real;
 
 #[cfg(all(test, feature = "ash-compute"))]
 mod tests {

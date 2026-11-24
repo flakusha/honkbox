@@ -4599,7 +4599,7 @@
           },
           "experimental_ash_sd": {
             "type": "boolean",
-            "description": "Experimental direct-Vulkan SD backend (compile feature\n`experimental-ash-sd`): selectable via `--sd-backend ash-sd`, but\n`generate` stops with a named sampling error until diffusion lands."
+            "description": "Direct-Vulkan SD 1.5 backend (compile feature `ash-sd`): selectable\nvia `--sd-backend ash-sd`. The field name stays `experimental_ash_sd`\nfor wire compatibility; it does not mean generation is stubbed."
           },
           "fizgig": {
             "type": "boolean",

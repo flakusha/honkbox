@@ -26,10 +26,10 @@ impl DdimSampler {
 
     /// Walk `cumprod` from `t` to `t-1`, calling `predict` once per step.
     ///
-    /// `cumprod` holds `steps + 1` values in (0, 1], non-increasing from the
-    /// noisiest timestep to the cleanest; the initial latent is supplied by
-    /// the caller. The closure receives that latent and the zero-based step
-    /// index.
+    /// `cumprod` holds `steps + 1` values in (0, 1], strictly increasing from
+    /// the noisiest timestep to the cleanest (real SD `alphas_cumprod` decrease
+    /// with t); the initial latent is supplied by the caller. The closure
+    /// receives that latent and the zero-based step index.
     pub fn run<F>(
         &self,
         initial_latent: &[f32],
@@ -50,9 +50,9 @@ impl DdimSampler {
                 || VkError::Device("ddim sampler: schedule index out of range".into());
             let alpha = cumprod.get(index).copied().ok_or_else(out_of_range)?;
             let alpha_prev = cumprod.get(index + 1).copied().ok_or_else(out_of_range)?;
-            if alpha_prev > alpha {
+            if alpha_prev <= alpha {
                 return Err(VkError::Device(
-                    "ddim sampler: cumulative alphas must be non-increasing".into(),
+                    "ddim sampler: cumulative alphas must increase while denoising".into(),
                 ));
             }
             let alphas = DdimAlphas::from_cumprod(alpha, alpha_prev)?;
@@ -95,7 +95,7 @@ mod tests {
         let Some(device) = device() else { return };
         let sampler = DdimSampler::new(device).expect("sampler");
         let latent = [0.4_f32, -0.2, 0.7, 0.1];
-        let schedule = [0.9_f32, 0.6, 0.3, 0.1];
+        let schedule = [0.1_f32, 0.3, 0.6, 0.9];
         let mut expected = latent.to_vec();
         for index in 0..schedule.len() - 1 {
             let prediction: Vec<f32> = expected.iter().map(|x| x * 0.25).collect();
@@ -122,7 +122,7 @@ mod tests {
         let Some(device) = device() else { return };
         let sampler = DdimSampler::new(device).expect("sampler");
         let latent = [0.5_f32, -0.5];
-        let good = [0.9_f32, 0.4];
+        let good = [0.4_f32, 0.9];
         let bad_scale = |_current: &[f32], _index: usize| Ok(vec![0.0; 3]);
         let failed =
             |_current: &[f32], _index: usize| Err(VkError::Device("predictor failed".into()));
@@ -131,7 +131,7 @@ mod tests {
         assert!(sampler.run(&[], &good, |c, _| Ok(c.to_vec())).is_err());
         assert!(
             sampler
-                .run(&latent, &[0.4, 0.9], |c, _| Ok(c.to_vec()))
+                .run(&latent, &[0.9, 0.4], |c, _| Ok(c.to_vec()))
                 .is_err()
         );
         assert!(sampler.run(&latent, &good, bad_scale).is_err());

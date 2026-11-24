@@ -732,7 +732,7 @@ pub(crate) mod tests {
     fn headless_init_smoke() {
         // P0 smoke: loader → instance → select → compute queue. Skips
         // gracefully on loader-less machines; the default CI matrix builds
-        // without `experimental-ash-sd`, so this only runs in opt-in
+        // without `ash-sd`, so this only runs in opt-in
         // (--features) local/dev runs.
         match VulkanDevice::headless() {
             Ok(dev) => {

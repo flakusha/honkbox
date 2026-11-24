@@ -146,6 +146,7 @@ impl UnetPredictor {
                 query_rows: tokens.len() / channels,
                 context_rows: config.cross.context_rows,
                 dim: channels,
+                context_dim: channels,
             },
         )?;
         Ok(tokens_to_nchw(

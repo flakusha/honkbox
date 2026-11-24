@@ -87,17 +87,17 @@ image = { workspace = true }
 # Experimental direct-Vulkan SD backend (`--sd-backend ash-sd` /
 # `--backend ash-sd`): forwards to the ash-backend seam. The pipeline admits
 # request/device/checkpoint then returns a named sampling error; no fake image.
-experimental-ash-sd = ["honkbox-ash-backend/experimental-ash-sd"]
+ash-sd = ["honkbox-ash-backend/ash-sd"]
 # Experimental direct-Vulkan LLM backend (`--llm-backend ash-llm`): forwards
 # to the ash-backend seam. Device creation failure at construction time is a
 # loud named error (backends.rs), never a silent stub fallback.
-experimental-ash-llm = ["honkbox-ash-backend/experimental-ash-llm"]
+ash-llm = ["honkbox-ash-backend/ash-llm"]
 # Experimental direct-Vulkan STT/TTS backends (`--stt-backend ash-stt`,
 # `--tts-backend ash-tts`): forwards to the ash-backend seams. Device
 # creation failure at construction time is a loud named error
 # (backends.rs), never a silent stub fallback.
-experimental-ash-stt = ["honkbox-ash-backend/experimental-ash-stt"]
-experimental-ash-tts = ["honkbox-ash-backend/experimental-ash-tts"]
+ash-stt = ["honkbox-ash-backend/ash-stt"]
+ash-tts = ["honkbox-ash-backend/ash-tts"]
 # Vulkan execution for the sd-cpp backend (honkbox-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
 vulkan = ["honkbox-sd-core/vulkan"]

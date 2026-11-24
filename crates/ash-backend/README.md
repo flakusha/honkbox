@@ -10,13 +10,14 @@ Design record: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11
 ## Status
 
 - **Experimental and opt-in.** The default build is unchanged. Enable
-  `experimental-ash-sd` on this crate (or `server/experimental-ash-sd` on the
+  `ash-sd` on this crate (or `server/ash-sd` on the
   server, which forwards to it) to select this backend.
-- **No sampling yet.** `AshSdPipeline::generate` validates the request, device,
-  and checkpoint, then stops with a named unimplemented error. It never returns
-  fake images or silently falls back to another backend.
-- **No bundled weights.** Checkpoints and tokenizer assets are supplied by the
-  caller and read from disk only when needed.
+- **Real SD 1.5 sampling.** `AshSdPipeline::generate` runs CLIP text encoding,
+  a reduced UNet + DDIM loop, and a reduced VAE decoder entirely on Vulkan
+  compute. The reduced topology is square-latent only, not pixel-equal to
+  sd.cpp; it never returns fake images or silently falls back.
+- **No bundled weights.** Checkpoints and CLIP `vocab.json` / `merges.txt` are
+  supplied by the caller (CLI: `--clip-vocab-dir <dir>`) and read on demand.
 - **Unsafe policy.** `unsafe` is confined to `src/raw.rs`, one audited wrapper
   per Vulkan entry point; the crate root denies `unsafe_code` everywhere else.
 
@@ -36,11 +37,11 @@ Design record: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11
   `src/shape_infer.rs` — safetensors header parsing, family detection, exact key
   and shape validation, and width inference (the "checkpoint" layer).
 - `src/sd.rs` — `AshSdPipeline`, the `SdPipeline` implementation behind
-  `experimental-ash-sd`.
+  `ash-sd`.
 - `src/llm.rs` — `AshLlmPipeline`, a placeholder `LlmPipeline` behind
-  `experimental-ash-llm` that returns a named unimplemented error.
-- `src/stubs.rs` — STT/TTS seam types behind `experimental-ash-stt` /
-  `experimental-ash-tts`, likewise named-error placeholders.
+  `ash-llm` that returns a named unimplemented error.
+- `src/stubs.rs` — STT/TTS seam types behind `ash-stt` /
+  `ash-tts`, likewise named-error placeholders.
 - `shaders/` — GLSL compute sources; build-time compiled to SPIR-V (see
   `build.rs`), never compiled at runtime.
 
@@ -49,21 +50,23 @@ Design record: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11
 From the workspace root:
 
 ```
-cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd
+cargo test --locked -p honkbox-ash-backend --features ash-sd
 honkbox models inspect-ash comfy:stable-diffusion/v1-5-pruned-emaonly-fp16.safetensors
 ```
 
 The tests validate headers, keys, shapes, and readiness from the safetensors
-metadata; they do not download models or run Vulkan sampling. `models
-inspect-ash` reports the detected family plus the same shape/readiness summary
-for a user-supplied checkpoint, so a file can be checked before enabling the
-experimental backend.
+metadata; they do not download models. `models inspect-ash` reports the detected
+family plus the same shape/readiness summary for a user-supplied checkpoint.
+End-to-end sampling with a local checkpoint and tokenizer assets is opt-in via
+`bun run test:parity` after setting `HONKBOX_ASH_PARITY_MODEL` and
+`HONKBOX_ASH_CLIP_VOCAB_DIR`.
 
 ## Supported checkpoint families
 
-- **SD 1.5** — checkpoint validation is implemented: exact key and shape checks
-  for UNet, VAE, and CLIP tensors, plus header-only readiness reporting.
-  End-to-end sampling is still pending.
+- **SD 1.5** — checkpoint validation plus end-to-end Vulkan sampling: full CLIP
+  text tower, reduced UNet (three downsampling stages, mid cross-attention,
+  nearest-neighbour upsample), DDIM eta=0, and reduced VAE decoder. Square
+  latent sizes only; both decoder tails skip blocks present in the full model.
 - **SDXL** — header validation is implemented: UNet entry/timestep/label and
   context widths, VAE decoder entry/exit shapes, and both CLIP towers (CLIP-L
   and OpenCLIP bigG) are checked, with group counts and representative

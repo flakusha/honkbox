@@ -539,7 +539,7 @@ mod tests {
         let latent: Vec<f32> = (0..64)
             .map(|i| f32::from(u8::try_from(i).expect("0..64")) * 0.05 - 0.3)
             .collect();
-        let cumprod = [0.9_f32, 0.6, 0.3];
+        let cumprod = [0.3_f32, 0.6, 0.9];
         let context = [0.2_f32];
         let traversal = UnetTraversal::new(&device, 1).expect("traversal");
         let stepped = traversal

@@ -118,8 +118,10 @@ pub struct CrossAttentionShape {
     pub query_rows: usize,
     /// Context tokens (key/value rows).
     pub context_rows: usize,
-    /// Query/key/value channel width.
+    /// Query/output channel width.
     pub dim: usize,
+    /// Context (key/value) channel width; differs from `dim` in SD 1.5.
+    pub context_dim: usize,
 }
 
 /// `Attention(W_q·hidden, W_kv·context)` plus output projection and residual.
@@ -165,7 +167,7 @@ impl CrossAttention {
             weights.wkv,
             bias.bkv,
             shape.context_rows,
-            shape.dim,
+            shape.context_dim,
             shape.dim,
             2,
         )?;
@@ -315,6 +317,7 @@ mod tests {
             query_rows,
             context_rows,
             dim,
+            context_dim: dim,
         };
         let actual = CrossAttention::new(Arc::clone(&device))
             .expect("cross")

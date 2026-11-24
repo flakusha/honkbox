@@ -5,7 +5,7 @@ Priority: P1
 Epic: epic-full-ai-cycle
 Owner: unassigned
 Acceptance: The future capacity ledger gates kernel dispatch on Vulkan features/limits before model load; dispatch paths cannot exceed reported limits.
-Verification: `cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd`
+Verification: `cargo test --locked -p honkbox-ash-backend --features ash-sd`
 Links: `.tmp/research/ReviewedAsh-DirectVulkan.md`, `.plan/tickets/TASK-resource-ledger-bounded-queue.md`
 Resources: PhysicalDeviceInfo limits/features already collected; no new device enumeration
 

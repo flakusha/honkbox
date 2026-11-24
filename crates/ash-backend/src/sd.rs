@@ -8,11 +8,21 @@
 //! sites.
 
 use crate::{
+    VkError,
     checkpoint::CheckpointMap,
+    checkpoint_family::{self, CheckpointFamily},
+    clip_checkpoint::{ClipTensors, SD15_CLIP},
+    ddim_sampler::DdimSampler,
     device::{CapacityRequirements, VulkanDevice},
     model::{ModelSpec, Op},
     model_spec::{SD15_SINGLE_LEVEL, validate},
+    prompt,
+    sampler::seeded_uniform_noise,
     shape_infer::{ShapeError, UnetShapes, infer},
+    text_conditioning::TextConditioner,
+    unet_checkpoint::decode,
+    unet_real::{UnetReal, UnetRealWeights},
+    vae_real::{VaeReal, VaeRealWeights},
 };
 use honkbox_sd_core::{GeneratedImage, MAX_EDGE, SdError, SdPipeline, Txt2ImgRequest};
 use std::io::Read;
@@ -32,18 +42,48 @@ pub const ASH_SD_BACKEND_ID: &str = "ash-sd";
 pub struct AshSdPipeline {
     device: Arc<VulkanDevice>,
     model_path: PathBuf,
+    vocab_dir: Option<PathBuf>,
 }
 
 /// Passes the first checkpoints will use. Grows with the kernel inventory.
+const SD_OPS: &[Op] = &[
+    Op::ElementwiseAdd,
+    Op::MatMul,
+    Op::Softmax,
+    Op::Attention,
+    Op::LayerNorm,
+    Op::Conv2d,
+    Op::Silu,
+    Op::GroupNorm,
+    Op::SamplingStep,
+    Op::ClassifierFreeGuidance,
+    Op::EmbeddingGather,
+    Op::Gelu,
+    Op::Transpose,
+];
+
 const SD_SPEC: ModelSpec = ModelSpec {
-    name: "sd",
-    ops: &[Op::ElementwiseAdd, Op::MatMul],
+    name: "sd15-ash",
+    ops: SD_OPS,
 };
 
 impl AshSdPipeline {
     /// Bind the execution device and the already-resolved checkpoint path.
     pub fn new(device: Arc<VulkanDevice>, model_path: PathBuf) -> Self {
-        Self { device, model_path }
+        Self::new_with_vocab_dir(device, model_path, None)
+    }
+
+    /// Same seam with an explicit CLIP tokenizer asset directory.
+    pub fn new_with_vocab_dir(
+        device: Arc<VulkanDevice>,
+        model_path: PathBuf,
+        vocab_dir: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            device,
+            model_path,
+            vocab_dir,
+        }
     }
 
     /// The device this pipeline will execute on.
@@ -62,6 +102,19 @@ impl AshSdPipeline {
 const UNET_INPUT_TENSOR: &str = "model.diffusion_model.input_blocks.0.0.weight";
 /// Latent channels the diffusion backbone consumes.
 const LATENT_CHANNELS: usize = 4;
+/// CLIP sequence length used by SD 1.5.
+const CLIP_TOKENS: usize = 77;
+/// CLIP EOS token id used for padding and pooling.
+const CLIP_EOS: u32 = 49407;
+/// CLIP vocabulary size and hidden width.
+const CLIP_VOCAB: usize = 49408;
+const CLIP_DIM: usize = 768;
+/// Discrete diffusion steps baked into the SD 1.5 alpha schedule.
+const DIFFUSION_STEPS: usize = 1000;
+/// Default classifier-free guidance scale.
+const DEFAULT_CFG: f32 = 7.0;
+/// Sentinel used to translate a mid-run cancel into `SdError::Cancelled`.
+const CANCELLED: &str = "ash-sd: cancelled";
 
 fn validate_unet_input(map: &CheckpointMap) -> Result<(), String> {
     let tensor = map
@@ -137,11 +190,99 @@ pub fn inspect_checkpoint(path: &Path) -> Result<UnetShapes, SdError> {
     infer(&SD15_SINGLE_LEVEL, &map).map_err(|e: ShapeError| fail(e.to_string()))
 }
 
+fn backend_error(message: impl std::fmt::Display) -> SdError {
+    SdError::Backend(format!("ash-sd: {message}"))
+}
+
+/// Read the checkpoint's alpha schedule, or derive the SD 1.5 scaled-linear
+/// fallback. ponytail: one host-side table; add other schedulers when a model
+/// family declares one.
+#[allow(clippy::cast_precision_loss)] // ponytail: index <= 999, exact in f32
+fn alphas_cumprod(map: &CheckpointMap, path: &Path) -> Result<Vec<f32>, SdError> {
+    if let Some(meta) = map.get_aliased("alphas_cumprod")
+        && meta.shape == [DIFFUSION_STEPS]
+    {
+        let bytes = map.read_tensor(path, &meta.name).map_err(backend_error)?;
+        let values = decode(&bytes, meta).map_err(backend_error)?;
+        if values
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+        {
+            return Ok(values);
+        }
+        return Err(backend_error("checkpoint alphas_cumprod is out of range"));
+    }
+    let (start, end) = (0.00085_f32.sqrt(), 0.012_f32.sqrt());
+    let mut product = 1.0_f32;
+    Ok((0..DIFFUSION_STEPS)
+        .map(|index| {
+            let fraction = index as f32 / (DIFFUSION_STEPS - 1) as f32;
+            let beta = (start + (end - start) * fraction).powi(2);
+            product *= 1.0 - beta;
+            product
+        })
+        .collect())
+}
+
+/// Discrete timesteps and their alphas, plus the clean terminal alpha.
+fn schedule(steps: u32, alphas: &[f32]) -> Result<(Vec<usize>, Vec<f32>), SdError> {
+    if steps == 0 || alphas.len() != DIFFUSION_STEPS {
+        return Err(backend_error(
+            "steps must be positive with a 1000-step schedule",
+        ));
+    }
+    let count = usize::try_from(steps).map_err(backend_error)?;
+    let timesteps = if count == 1 {
+        vec![DIFFUSION_STEPS - 1]
+    } else {
+        (0..count)
+            .map(|index| DIFFUSION_STEPS - 1 - ((DIFFUSION_STEPS - 1) * index / (count - 1)))
+            .collect()
+    };
+    let mut cumprod: Vec<f32> = timesteps.iter().map(|&t| alphas[t]).collect();
+    cumprod.push(1.0);
+    Ok((timesteps, cumprod))
+}
+
+fn latent_shape(width: u32, height: u32) -> Result<(usize, usize), SdError> {
+    if width == 0 || height == 0 || !width.is_multiple_of(8) || !height.is_multiple_of(8) {
+        return Err(backend_error(
+            "image dimensions must be positive multiples of 8",
+        ));
+    }
+    Ok(((height / 8) as usize, (width / 8) as usize))
+}
+
+/// NCHW `[1,3,H,W]` f32 → row-major RGBA8 with alpha 255.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=255 above
+fn rgba(pixels: &[f32], width: usize, height: usize) -> Result<Vec<u8>, SdError> {
+    let plane = width
+        .checked_mul(height)
+        .ok_or_else(|| backend_error("pixel overflow"))?;
+    if pixels.len() != 3 * plane {
+        return Err(backend_error(format!(
+            "decoder returned {} floats, expected {}",
+            pixels.len(),
+            3 * plane
+        )));
+    }
+    let mut out = vec![0_u8; plane * 4];
+    for index in 0..plane {
+        for channel in 0..3 {
+            let value = (pixels[channel * plane + index] + 1.0) * 127.5;
+            out[index * 4 + channel] = value.clamp(0.0, 255.0) as u8;
+        }
+        out[index * 4 + 3] = 255;
+    }
+    Ok(out)
+}
+
 impl SdPipeline for AshSdPipeline {
     fn backend_id(&self) -> &'static str {
         ASH_SD_BACKEND_ID
     }
 
+    #[allow(clippy::too_many_lines)] // one linear load → encode → sample → decode pipeline
     fn generate(
         &self,
         req: &Txt2ImgRequest,
@@ -164,17 +305,93 @@ impl SdPipeline for AshSdPipeline {
             ))
         })?;
         admit_checkpoint(&self.model_path)?;
-        // Sampling needs text encoders, diffusion backbone, VAE and a
-        // scheduler; only the first two compute passes exist so far. Stop
-        // here rather than return a plausible-looking image.
-        Err(SdError::Backend(format!(
-            "{}: sampling not implemented for '{}' ({}x{}, {} steps)",
-            self.backend_id(),
-            req.model_slug,
-            req.width,
-            req.height,
-            req.steps
-        )))
+        let (latent_height, latent_width) = latent_shape(req.width, req.height)?;
+        // ponytail: reduced UNet/VAE path assumes square latents; generalize
+        // square_side() in both modules before accepting arbitrary WxH.
+        if latent_height != latent_width {
+            return Err(backend_error(
+                "reduced ash path supports square latents only",
+            ));
+        }
+        let map = CheckpointMap::read(&self.model_path).map_err(backend_error)?;
+        match checkpoint_family::detect(&map) {
+            CheckpointFamily::Sd15 => {}
+            other => {
+                return Err(backend_error(format!(
+                    "only SD 1.5 checkpoints are supported, found {}",
+                    other.label()
+                )));
+            }
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err(SdError::Cancelled);
+        }
+        let tokenizer = prompt::tokenizer_from(self.vocab_dir.as_deref()).map_err(backend_error)?;
+        let positive = prompt::pad_ids(
+            tokenizer.encode(&req.prompt).map_err(backend_error)?,
+            CLIP_TOKENS,
+            CLIP_EOS,
+        );
+        let negative = prompt::pad_ids(
+            tokenizer
+                .encode(req.negative_prompt.as_deref().unwrap_or(""))
+                .map_err(backend_error)?,
+            CLIP_TOKENS,
+            CLIP_EOS,
+        );
+        let clip =
+            ClipTensors::load(&map, &self.model_path, SD15_CLIP, 1e-5).map_err(backend_error)?;
+        let conditioner = TextConditioner::new(Arc::clone(&self.device), SD15_CLIP.layers)
+            .map_err(|e| backend_error(format!("text encoder: {e}")))?;
+        let scale = req.cfg_scale.unwrap_or(DEFAULT_CFG);
+        let context = conditioner
+            .condition(
+                &positive,
+                &negative,
+                &clip.weights(),
+                CLIP_VOCAB,
+                CLIP_DIM,
+                scale,
+            )
+            .map_err(|e| backend_error(format!("conditioning: {e}")))?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(SdError::Cancelled);
+        }
+        let unet_weights = UnetRealWeights::load(&map, &self.model_path).map_err(backend_error)?;
+        let vae_weights = VaeRealWeights::load(&map, &self.model_path).map_err(backend_error)?;
+        let unet = UnetReal::new(Arc::clone(&self.device))
+            .map_err(|e| backend_error(format!("unet: {e}")))?;
+        let vae = VaeReal::new(Arc::clone(&self.device))
+            .map_err(|e| backend_error(format!("vae: {e}")))?;
+        let sampler = DdimSampler::new(Arc::clone(&self.device))
+            .map_err(|e| backend_error(format!("sampler: {e}")))?;
+        let alphas = alphas_cumprod(&map, &self.model_path)?;
+        let (timesteps, cumprod) = schedule(req.steps, &alphas)?;
+        let noise = seeded_uniform_noise(LATENT_CHANNELS * latent_height * latent_width, req.seed)
+            .map_err(|e| backend_error(format!("latent noise: {e}")))?;
+        let latent = sampler
+            .run(&noise, &cumprod, |current, index| {
+                if cancel.load(Ordering::Acquire) {
+                    return Err(VkError::Device(CANCELLED.into()));
+                }
+                let timestep = timesteps[index];
+                unet.predict(current, timestep, &context, &unet_weights)
+            })
+            .map_err(|e| {
+                if matches!(&e, VkError::Device(message) if message == CANCELLED) {
+                    SdError::Cancelled
+                } else {
+                    backend_error(format!("sampling: {e}"))
+                }
+            })?;
+        let pixels = vae
+            .decode(&latent, &vae_weights)
+            .map_err(|e| backend_error(format!("vae: {e}")))?;
+        Ok(GeneratedImage {
+            width: req.width,
+            height: req.height,
+            rgba: rgba(&pixels, latent_width * 8, latent_height * 8)?,
+        })
     }
 }
 
@@ -475,7 +692,38 @@ mod tests {
         let ready = AshSdPipeline::new(device, valid.clone());
         assert!(matches!(
             ready.generate(&request(512, 512), &AtomicBool::new(false)),
-            Err(SdError::Backend(msg)) if msg.contains("sampling not implemented")
+            Err(SdError::Backend(msg)) if msg.contains("CLIP_VOCAB_DIR")
         ));
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)] // synthetic index <= 999
+    fn fallback_alphas_and_schedule_are_denoising_ordered() {
+        let alphas: Vec<f32> = (0..DIFFUSION_STEPS)
+            .map(|i| 0.999 - i as f32 * 0.0009)
+            .collect();
+        assert!(alphas.windows(2).all(|w| w[0] > w[1]));
+        let (timesteps, cumprod) = schedule(4, &alphas).expect("schedule");
+        assert_eq!(timesteps, vec![999, 666, 333, 0]);
+        assert!(cumprod.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(cumprod.len(), 5);
+        assert_eq!(cumprod[4], 1.0);
+    }
+
+    #[test]
+    fn latent_shape_and_rgba_validate_geometry() {
+        assert_eq!(latent_shape(64, 128).expect("shape"), (16, 8));
+        assert!(latent_shape(63, 128).is_err());
+        let pixels = vec![1.0_f32; 3 * 64];
+        let image = rgba(&pixels, 8, 8).expect("rgba");
+        assert_eq!(image.len(), 8 * 8 * 4);
+        assert!(
+            image
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px == &[255, 255, 255, 255])
+        );
+        assert!(rgba(&pixels, 4, 4).is_err());
     }
 }

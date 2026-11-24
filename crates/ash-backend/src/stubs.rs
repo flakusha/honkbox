@@ -1,18 +1,18 @@
 //! Direct-Vulkan STT/TTS seams: real worker traits, no inference yet.
 //!
 //! Like [`crate::llm`], these are placeholders on the direct-Vulkan path,
-//! NOT deterministic emulators: behind `experimental-ash-stt` /
-//! `experimental-ash-tts` the types implement the `honkbox-audio-worker`
+//! NOT deterministic emulators: behind `ash-stt` /
+//! `ash-tts` the types implement the `honkbox-audio-worker`
 //! traits, and every verb returns a named `Model` error from the own
 //! worker enum — no fake transcript text or audio is ever produced. The
-//! module also builds under plain `experimental-ash-sd`, where the types
+//! module also builds under plain `ash-sd`, where the types
 //! exist without the worker traits (reservation only, as before).
 
 use crate::device::VulkanDevice;
 use std::sync::Arc;
 
 /// Named reason a direct-Vulkan STT/TTS seam cannot serve a request yet.
-#[cfg(any(feature = "experimental-ash-stt", feature = "experimental-ash-tts"))]
+#[cfg(any(feature = "ash-stt", feature = "ash-tts"))]
 fn unimplemented(modality: &str) -> String {
     format!(
         "direct-Vulkan {modality} seam is not implemented yet: \
@@ -23,8 +23,8 @@ fn unimplemented(modality: &str) -> String {
 /// Direct-Vulkan STT seam (backend id `ash-stt`).
 ///
 /// Holds the selected execution device so later slices build kernels on it
-/// without re-plumbing the server seam. With `experimental-ash-stt`, the
-/// `SttPipeline` impl (feature `experimental-ash-stt`) fails every
+/// without re-plumbing the server seam. With `ash-stt`, the
+/// `SttPipeline` impl (feature `ash-stt`) fails every
 /// transcription with `SttError::Model` naming the missing
 /// capability — the pipeline has no model, so model-load failure is the
 /// honest classification.
@@ -45,7 +45,7 @@ impl AshSttPipeline {
     }
 }
 
-#[cfg(feature = "experimental-ash-stt")]
+#[cfg(feature = "ash-stt")]
 impl honkbox_audio_worker::SttPipeline for AshSttPipeline {
     fn transcribe(
         &self,
@@ -63,7 +63,7 @@ impl honkbox_audio_worker::SttPipeline for AshSttPipeline {
 
 /// Direct-Vulkan TTS seam (backend id `ash-tts`).
 ///
-/// Same posture as [`AshSttPipeline`]: with `experimental-ash-tts`, the
+/// Same posture as [`AshSttPipeline`]: with `ash-tts`, the
 /// `TtsPipeline` impl fails every synthesis with `TtsError::Model` naming
 /// the missing capability.
 #[derive(Debug)]
@@ -83,7 +83,7 @@ impl AshTtsPipeline {
     }
 }
 
-#[cfg(feature = "experimental-ash-tts")]
+#[cfg(feature = "ash-tts")]
 impl honkbox_audio_worker::TtsPipeline for AshTtsPipeline {
     fn synthesize(
         &self,
@@ -105,10 +105,7 @@ const _: () = {
     assert_send_sync::<AshTtsPipeline>();
 };
 
-#[cfg(all(
-    test,
-    any(feature = "experimental-ash-stt", feature = "experimental-ash-tts")
-))]
+#[cfg(all(test, any(feature = "ash-stt", feature = "ash-tts")))]
 mod tests {
     use crate::VkError;
     use crate::device::VulkanDevice;
@@ -127,7 +124,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "experimental-ash-stt")]
+    #[cfg(feature = "ash-stt")]
     mod stt {
         use super::test_device;
         use crate::stubs::AshSttPipeline;
@@ -166,7 +163,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "experimental-ash-tts")]
+    #[cfg(feature = "ash-tts")]
     mod tts {
         use super::test_device;
         use crate::stubs::AshTtsPipeline;

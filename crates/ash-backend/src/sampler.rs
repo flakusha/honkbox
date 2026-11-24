@@ -9,7 +9,7 @@ use crate::{
     compute::{DDIM_STEP_SPIRV, GpuBuffer, Kernel, f32_bytes, f32_from_bytes, spirv_words},
     device::{CapacityRequirements, VulkanDevice},
 };
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-sd")]
 use honkbox_sd_core::splitmix64;
 use std::sync::Arc;
 
@@ -118,7 +118,7 @@ impl DdimStep {
 ///
 /// ponytail: uniform `[-1, 1]` rather than `N(0, 1)`; add Box-Muller when a
 /// real sampler consumes it and requires Gaussian noise.
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-sd")]
 pub fn seeded_uniform_noise(len: usize, seed: u64) -> Result<Vec<f32>, VkError> {
     let count = u64::try_from(len)
         .map_err(|_| VkError::Device("latent noise: length exceeds u64".into()))?;
@@ -168,7 +168,7 @@ mod tests {
         assert!((alphas.sqrt_alpha_prev - 0.9_f32.sqrt()).abs() < 1e-6);
     }
 
-    #[cfg(feature = "experimental-ash-sd")]
+    #[cfg(feature = "ash-sd")]
     #[test]
     fn seeded_noise_is_reproducible_and_seed_sensitive() {
         let first = seeded_uniform_noise(96, 42).expect("noise");

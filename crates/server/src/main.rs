@@ -178,6 +178,10 @@ struct GenerateArgs {
     /// Standalone VAE slug from `models show`.
     #[arg(long)]
     vae: Option<String>,
+    /// Directory with CLIP `vocab.json` and `merges.txt` (ash backend).
+    #[cfg(feature = "ash-sd")]
+    #[arg(long)]
+    clip_vocab_dir: Option<PathBuf>,
 }
 
 /// `generate` output containers (clap-level; mapped to sd-core).
@@ -203,8 +207,8 @@ impl From<Format> for honkbox_sd_core::OutputFormat {
 enum Backend {
     Stub,
     SdCpp,
-    /// Experimental direct-Vulkan pipeline (sampling not implemented yet).
-    #[cfg(feature = "experimental-ash-sd")]
+    /// Direct-Vulkan pipeline sampling a real SD 1.5 checkpoint.
+    #[cfg(feature = "ash-sd")]
     AshSd,
 }
 
@@ -285,7 +289,7 @@ enum ModelsAction {
         json: bool,
     },
     /// Infer `ash-sd` stage widths from a checkpoint's tensor metadata.
-    #[cfg(feature = "experimental-ash-sd")]
+    #[cfg(feature = "ash-sd")]
     InspectAsh {
         /// Registry slug of the safetensors checkpoint.
         slug: String,
@@ -371,7 +375,7 @@ async fn main() {
         }
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, data_dir, json),
-            #[cfg(feature = "experimental-ash-sd")]
+            #[cfg(feature = "ash-sd")]
             ModelsAction::InspectAsh { slug } => models_inspect_ash(config, data_dir, &slug),
         },
     }
@@ -756,7 +760,7 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
 
 /// `models inspect-ash`: validate a checkpoint against the declared spec and
 /// print the inferred stage widths. No GPU slot is reserved.
-#[cfg(feature = "experimental-ash-sd")]
+#[cfg(feature = "ash-sd")]
 fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: &str) {
     let loaded = or_exit(config::load(config, data_dir));
     for warning in &loaded.warnings {
@@ -893,6 +897,8 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         backend,
         clip,
         vae,
+        #[cfg(feature = "ash-sd")]
+        clip_vocab_dir,
     } = args;
     let loaded = or_exit(config::load(config, data_dir_flag));
     let data_dir = loaded.data_dir;
@@ -928,13 +934,15 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let pipeline: Box<dyn honkbox_sd_core::SdPipeline> = match backend {
         Backend::Stub => Box::new(honkbox_sd_core::StubPipeline),
         Backend::SdCpp => Box::new(honkbox_sd_core::SdCppPipeline::new(model_path)),
-        #[cfg(feature = "experimental-ash-sd")]
+        #[cfg(feature = "ash-sd")]
         Backend::AshSd => {
             let device = Arc::new(or_exit(
                 honkbox_ash_backend::device::VulkanDevice::headless(),
             ));
-            Box::new(honkbox_ash_backend::sd::AshSdPipeline::new(
-                device, model_path,
+            Box::new(honkbox_ash_backend::sd::AshSdPipeline::new_with_vocab_dir(
+                device,
+                model_path,
+                clip_vocab_dir,
             ))
         }
     };
@@ -1048,7 +1056,7 @@ fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>)
         LlmBackend::LlamaCpp => scan_models(cfg),
         // Direct-Vulkan placeholder needs no registry model: device
         // selection happens inside `make_llm` (loud exit-1 on failure).
-        #[cfg(feature = "experimental-ash-llm")]
+        #[cfg(feature = "ash-llm")]
         LlmBackend::AshLlm => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
@@ -1115,7 +1123,7 @@ fn transcribe(args: TranscribeArgs, config: Option<PathBuf>, data_dir_flag: Opti
         SttBackend::Whisper => scan_models(cfg),
         // Direct-Vulkan placeholder needs no registry model: device
         // selection happens inside `make_stt` (loud exit-1 on failure).
-        #[cfg(feature = "experimental-ash-stt")]
+        #[cfg(feature = "ash-stt")]
         SttBackend::AshStt => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
@@ -1185,7 +1193,7 @@ fn synthesize(args: SynthesizeArgs, config: Option<PathBuf>, data_dir_flag: Opti
         TtsBackend::Kokoro => scan_models(cfg),
         // Direct-Vulkan placeholder needs no registry model: device
         // selection happens inside `make_tts` (loud exit-1 on failure).
-        #[cfg(feature = "experimental-ash-tts")]
+        #[cfg(feature = "ash-tts")]
         TtsBackend::AshTts => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);

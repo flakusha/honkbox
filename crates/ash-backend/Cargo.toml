@@ -33,27 +33,27 @@ default = []
 # build and test without pulling the vendored diffusion-rs stack.
 ash-compute = ["dep:ash"]
 # Experimental direct-Vulkan path: one flag for the whole ash surface.
-# `server/experimental-ash-sd` forwards here (server wiring is a later
+# `server/ash-sd` forwards here (server wiring is a later
 # ticket), and this forwards `ash-backend` to sd-core, mirroring
 # `server/vulkan → sd-core/vulkan`.
-experimental-ash-sd = [
+ash-sd = [
   "dep:ash",
   "dep:honkbox-sd-core",
   "honkbox-sd-core/ash-backend",
   "ash-compute",
 ]
 # Experimental direct-Vulkan LLM seam (slice 8): the `LlmPipeline` placeholder
-# in `llm.rs`. Kept separate from `experimental-ash-sd` so each modality can
-# land and be enabled independently; `server/experimental-ash-llm` forwards
+# in `llm.rs`. Kept separate from `ash-sd` so each modality can
+# land and be enabled independently; `server/ash-llm` forwards
 # here. `honkbox-llm-worker` is declared by path (the workspace table does
 # not carry it — `crates/server` uses the same form).
-experimental-ash-llm = ["dep:ash", "dep:honkbox-llm-worker", "ash-compute"]
+ash-llm = ["dep:ash", "dep:honkbox-llm-worker", "ash-compute"]
 # Experimental direct-Vulkan STT/TTS seams (slice 15): trait-implementing
-# placeholders in `stubs.rs`, same posture as `experimental-ash-llm`. One
+# placeholders in `stubs.rs`, same posture as `ash-llm`. One
 # optional path dep shared by both features (the workspace table does not
 # carry `honkbox-audio-worker` — `crates/server` uses the same form).
-experimental-ash-stt = ["dep:ash", "dep:honkbox-audio-worker", "ash-compute"]
-experimental-ash-tts = ["dep:ash", "dep:honkbox-audio-worker", "ash-compute"]
+ash-stt = ["dep:ash", "dep:honkbox-audio-worker", "ash-compute"]
+ash-tts = ["dep:ash", "dep:honkbox-audio-worker", "ash-compute"]
 
 [dependencies]
 ash = { workspace = true, optional = true }

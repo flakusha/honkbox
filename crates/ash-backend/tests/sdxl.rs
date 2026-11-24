@@ -7,7 +7,7 @@
 //! The reader also requires the file to be long enough for the declared
 //! payload: `8 + header_len + total_payload`. The payload bytes themselves are
 //! never written; the file is extended sparsely to that length.
-#![cfg(feature = "experimental-ash-sd")]
+#![cfg(feature = "ash-sd")]
 
 use honkbox_ash_backend::{sd, sdxl};
 use std::fs::OpenOptions;

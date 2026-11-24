@@ -21,11 +21,11 @@ pub enum LlmBackend {
     /// The endpoint comes from `[tools] llama_server_url`; no process is started.
     Attached,
     /// Experimental direct-Vulkan placeholder (slice 8 of the ash lane).
-    /// Requires the `experimental-ash-llm` cargo feature. Construction
+    /// Requires the `ash-llm` cargo feature. Construction
     /// selects a Vulkan device (loud named exit-1 on failure — never a
     /// silent stub fallback); every completion then returns the named
     /// unimplemented error. No model slug needed.
-    #[cfg(feature = "experimental-ash-llm")]
+    #[cfg(feature = "ash-llm")]
     AshLlm,
 }
 
@@ -43,11 +43,11 @@ pub enum SttBackend {
     /// as `controlnet_available` on the SD side).
     AudioCpp,
     /// Experimental direct-Vulkan placeholder (slice 15 of the ash lane).
-    /// Requires the `experimental-ash-stt` cargo feature. Construction
+    /// Requires the `ash-stt` cargo feature. Construction
     /// selects a Vulkan device (loud named exit-1 on failure — never a
     /// silent stub fallback); every transcription then returns the named
     /// unimplemented error. No model slug needed.
-    #[cfg(feature = "experimental-ash-stt")]
+    #[cfg(feature = "ash-stt")]
     AshStt,
 }
 
@@ -60,11 +60,11 @@ pub enum TtsBackend {
     /// Real synthesis via kokoro on a registry voice/model file.
     Kokoro,
     /// Experimental direct-Vulkan placeholder (slice 15 of the ash lane).
-    /// Requires the `experimental-ash-tts` cargo feature. Construction
+    /// Requires the `ash-tts` cargo feature. Construction
     /// selects a Vulkan device (loud named exit-1 on failure — never a
     /// silent stub fallback); every synthesis then returns the named
     /// unimplemented error. No model slug needed.
-    #[cfg(feature = "experimental-ash-tts")]
+    #[cfg(feature = "ash-tts")]
     AshTts,
 }
 
@@ -116,7 +116,7 @@ pub fn make_llm(
                 url, model,
             )))
         }
-        #[cfg(feature = "experimental-ash-llm")]
+        #[cfg(feature = "ash-llm")]
         LlmBackend::AshLlm => {
             // Device selection happens now: a Vulkan-less environment is a
             // loud named exit-1 (see `or_exit`), not a degraded stub. The
@@ -139,7 +139,7 @@ pub enum SdBackend {
     /// Real txt2img via stable-diffusion.cpp on a registry checkpoint.
     SdCpp,
     /// Experimental direct-Vulkan pipeline (sampling not implemented yet).
-    #[cfg(feature = "experimental-ash-sd")]
+    #[cfg(feature = "ash-sd")]
     AshSd,
 }
 /// Image pipeline: stub unit struct, or file backend via `resolve` slug→path.
@@ -159,7 +159,7 @@ pub fn make_sd(
             let path = resolve(slug);
             Arc::new(honkbox_sd_core::SdCppPipeline::new(path))
         }
-        #[cfg(feature = "experimental-ash-sd")]
+        #[cfg(feature = "ash-sd")]
         SdBackend::AshSd => {
             let slug = model.unwrap_or_else(|| {
                 eprintln!("error: --sd-model <slug> is required with --sd-backend ash-sd");
@@ -229,7 +229,7 @@ pub fn make_stt(
                 )))
             }
         }
-        #[cfg(feature = "experimental-ash-stt")]
+        #[cfg(feature = "ash-stt")]
         SttBackend::AshStt => {
             // Device selection happens now: a Vulkan-less environment is a
             // loud named exit-1 (see `or_exit`), not a degraded stub. The
@@ -260,7 +260,7 @@ pub fn make_tts(
             let path = resolve(slug);
             Arc::new(crate::or_exit(KokoroTts::load(&path)))
         }
-        #[cfg(feature = "experimental-ash-tts")]
+        #[cfg(feature = "ash-tts")]
         TtsBackend::AshTts => {
             // Device selection happens now: a Vulkan-less environment is a
             // loud named exit-1 (see `or_exit`), not a degraded stub. The

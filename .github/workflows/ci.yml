@@ -311,7 +311,7 @@ jobs:
       - name: Install native build deps
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
       - name: Check experimental feature
-        run: cargo check -p honkbox-server --features experimental-ash-sd --locked
+        run: cargo check -p honkbox-server --features ash-sd --locked
 
   ash:
     name: Ash backend
@@ -331,12 +331,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
       - name: Clippy (ash-compute)
         run: cargo clippy --locked -p honkbox-ash-backend --features ash-compute --all-targets -- -D warnings
-      - name: Clippy (experimental-ash-sd)
-        run: cargo clippy --locked -p honkbox-ash-backend --features experimental-ash-sd --all-targets -- -D warnings
+      - name: Clippy (ash-sd)
+        run: cargo clippy --locked -p honkbox-ash-backend --features ash-sd --all-targets -- -D warnings
       - name: Test (ash-compute)
         run: cargo test --locked -p honkbox-ash-backend --features ash-compute
-      - name: Test (experimental-ash-sd)
-        run: cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd
+      - name: Test (ash-sd)
+        run: cargo test --locked -p honkbox-ash-backend --features ash-sd
 
   build:
     name: Build release (${{ matrix.os }})

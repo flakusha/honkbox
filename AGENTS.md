@@ -15,7 +15,7 @@ CLI (clap) / HTTP (axum)
   → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (<data_dir>/jobs/<ulid>/, .part + fsync + rename)
 ```
 
-- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `experimental-ash-sd` gates the direct-Vulkan skeleton in `crates/ash-backend` (`honkbox-ash-backend`, empty until the server forwards the flag; `generate` still returns an unimplemented error).
+- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `ash-sd` gates the direct-Vulkan skeleton in `crates/ash-backend` (`honkbox-ash-backend`, empty until the server forwards the flag; `generate` still returns an unimplemented error).
 - TS types flow one way: `crates/api-types` (serde + ts-rs + utoipa) → generated `packages/web-ui/src/gen/` (never hand-edit); CI gates drift via `bun run codegen:check` and the server `openapi` subcommand.
 
 ## Key Directories
