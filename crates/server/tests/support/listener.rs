@@ -47,7 +47,7 @@ impl TestServer {
     }
 
     /// Auto-decompression disabled so compression assertions see wire bytes.
-    pub fn client(&self) -> reqwest::Client {
+    pub fn client() -> reqwest::Client {
         reqwest::Client::builder()
             .no_gzip()
             .no_brotli()
@@ -103,13 +103,12 @@ impl TestServer {
     }
 
     pub async fn get(&self, path: &str) -> ResponseEnvelope {
-        let response = self.client().get(self.url(path)).send().await.unwrap();
+        let response = Self::client().get(self.url(path)).send().await.unwrap();
         self.envelope(response).await
     }
 
     pub async fn post_json(&self, path: &str, body: &serde_json::Value) -> ResponseEnvelope {
-        let response = self
-            .client()
+        let response = Self::client()
             .post(self.url(path))
             .json(body)
             .send()

@@ -24,7 +24,7 @@ if (code !== 0) {
   process.exit(code);
 }
 const payload = JSON.parse(body) as { utoipa: string; salvo: string; routes?: string[]; };
-type Doc = { paths: Record<string, unknown>; components: { schemas: Record<string, unknown> }; };
+type Doc = { paths: Record<string, unknown>; components: { schemas: Record<string, unknown>; }; };
 const doc = JSON.parse(payload.utoipa) as Doc;
 const salvo = JSON.parse(payload.salvo) as Doc;
 Object.assign(doc.paths, salvo.paths);

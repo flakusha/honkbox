@@ -27,7 +27,7 @@ evidence. The migration touches four coupled seams: ~53 mounted routes with
 - `TASK-salvo-route-and-test-cutover.md` — proposed, P1: cut ~53 route
   annotations and 40+ oneshot test files over to salvo's endpoint/listener
   pattern, preserving route behavior and parallel-safe test contracts.
-- `TASK-salvo-middleware-and-codegen.md` — proposed, P1: replace tower-http
+- `TASK-salvo-middleware-and-codegen.md` — in progress (codegen union landed), P1: replace tower-http
   layers with salvo middleware and move OpenAPI generation to the salvo oapi
   artifact while keeping the codegen gate green.
 
