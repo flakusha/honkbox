@@ -264,7 +264,7 @@ mod openapi;
 mod state;
 
 #[path = "routes/middleware.rs"]
-mod middleware;
+pub(crate) mod middleware;
 
 #[path = "runtime_config.rs"]
 pub(crate) mod runtime_config;

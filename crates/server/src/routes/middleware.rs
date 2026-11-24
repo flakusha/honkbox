@@ -78,7 +78,7 @@ pub(super) async fn require_bearer(
 
 /// Keyless routes: the liveness/metrics probes, GET only (so a scraper
 /// cannot write anything and probes stay cheap).
-pub(super) fn is_probe_exempt(method: &axum::http::Method, path: &str) -> bool {
+pub(crate) fn is_probe_exempt(method: &axum::http::Method, path: &str) -> bool {
     method == axum::http::Method::GET && (path == "/health" || path == "/metrics")
 }
 
@@ -86,7 +86,7 @@ pub(super) fn is_probe_exempt(method: &axum::http::Method, path: &str) -> bool {
 /// Presence alone grants passage through this layer: `job_content` verifies
 /// the HMAC and expiry before any file read, so a forged set still gets the
 /// named `invalid_signed_url` 401. Only the two content routes qualify.
-fn is_signed_content_request(req: &Request) -> bool {
+pub(crate) fn is_signed_content_request(req: &Request) -> bool {
     if req.method() != axum::http::Method::GET {
         return false;
     }
@@ -111,7 +111,7 @@ fn is_signed_content_request(req: &Request) -> bool {
 
 /// `Some(allowed)` when the presented key belongs to a configured scoped env
 /// name; `None` when it is not a scoped consumer (legacy or unknown key).
-fn scoped_key_verdict(
+pub(crate) fn scoped_key_verdict(
     key: Option<&str>,
     scope_map: &[(String, Vec<String>)],
     required: &str,
@@ -128,14 +128,14 @@ fn scoped_key_verdict(
 
 /// `POST /v1/content-urls` mints a signed READ credential, so a scoped
 /// consumer needs both `write` (the verb) and `read` (what it hands back).
-fn mints_read_credential(method: &axum::http::Method, path: &str) -> bool {
+pub(crate) fn mints_read_credential(method: &axum::http::Method, path: &str) -> bool {
     method == axum::http::Method::POST && path == "/v1/content-urls"
 }
 
 /// Route-family → required scope. Admin families are checked first for every
 /// verb, then all non-GET verbs are writes, then GET is a read. Family-level
 /// only: no per-route special cases.
-fn required_scope(method: &axum::http::Method, path: &str) -> &'static str {
+pub(crate) fn required_scope(method: &axum::http::Method, path: &str) -> &'static str {
     if path.starts_with("/v1/downloads")
         || path.starts_with("/v1/external-tools")
         || path == "/v1/models/refresh"
@@ -151,7 +151,7 @@ fn required_scope(method: &axum::http::Method, path: &str) -> &'static str {
 }
 
 /// Named 403 carrying the required scope; no key value is echoed.
-fn insufficient_scope_response(required: &str) -> Response {
+pub(crate) fn insufficient_scope_response(required: &str) -> Response {
     super::openai_constraints::openai_error_response(
         StatusCode::FORBIDDEN,
         format!("Missing required scope: {required}"),
@@ -166,7 +166,7 @@ fn insufficient_scope_response(required: &str) -> Response {
 /// mutating the process-global env; the real env is still consulted first
 /// when the name is not overridden.
 #[cfg(not(test))]
-pub(super) fn env_var(name: &str) -> Option<String> {
+pub(crate) fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
@@ -196,7 +196,7 @@ pub fn set_env_var(name: &str, value: Option<&str>) {
 }
 
 #[cfg(test)]
-pub(super) fn env_var(name: &str) -> Option<String> {
+pub(crate) fn env_var(name: &str) -> Option<String> {
     let slot = ENV_OVERRIDES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -209,7 +209,7 @@ pub(super) fn env_var(name: &str) -> Option<String> {
 /// Double-pass over the longer slice with zero-fill for the shorter one, so
 /// the work done does not depend on where (or whether) the inputs differ;
 /// the length XOR folds any length mismatch into the same accumulator.
-pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let mut acc = (a.len() ^ b.len()) as u64;
     for i in 0..a.len().max(b.len()) {
         let x = u64::from(a.get(i).copied().unwrap_or(0));
@@ -223,7 +223,7 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// `OpenAiError::new` maps non-400/404/429/5xx classes to `server_error`,
 /// and auth needs `authentication_error` + `invalid_api_key`; api-types is
 /// shared DTO territory we do not extend here.
-pub(super) fn unauthorized_response() -> Response {
+pub(crate) fn unauthorized_response() -> Response {
     let body = serde_json::json!({
         "error": {
             "message": "Invalid API key provided.",

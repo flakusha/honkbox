@@ -18,7 +18,11 @@ mod model_formats;
 mod ora;
 mod raster;
 mod routes;
+#[allow(dead_code)] // wired into the salvo server at the route cutover
+mod salvo_middleware;
 mod salvo_version;
+#[allow(dead_code)] // helpers land with the salvo route batches
+mod salvo_support;
 mod svg;
 mod swap;
 mod texture_postprocess;

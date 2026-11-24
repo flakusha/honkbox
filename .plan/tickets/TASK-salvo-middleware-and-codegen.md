@@ -1,6 +1,6 @@
 # TASK: Salvo middleware and codegen parity
 
-Status: in progress (2026-11-24; codegen union landed, middleware pending)
+Status: in progress (2026-11-24; codegen union + middleware module landed)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
@@ -46,3 +46,14 @@ unchanged. `cargo check --locked -p honkbox-server --all-targets` PASS,
 `cargo test --locked -p honkbox-server --test salvo_version` PASS (2/2),
 `bun run check` PASS. Middleware parity and final salvo-only artifact remain
 pending the route cutover.
+
+Middleware module `crates/server/src/salvo_middleware.rs` ports bearer auth
+(scope/401 JSON shape, signed-content bypass, probe exemption, env-at-request-time,
+constant-time compare), metrics/`Retry-After`, and compression (1 KiB floor, SSE,
+`image/*`, gRPC, partial-content exclusions) as salvo hoops; shared auth helpers
+are reused from `routes::middleware` (widened to `pub(crate)`), not duplicated.
+`crates/server/tests/salvo_middleware.rs` adds 5 named parity tests using the
+port-0 listener helper; `cargo test --locked -p honkbox-server --test
+salvo_middleware` PASS (162 tests incl. included-module units), `bun run check`
+PASS. The hoops are not yet installed on the serving router — that lands with
+the route cutover.
