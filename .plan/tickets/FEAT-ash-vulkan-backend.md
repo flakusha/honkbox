@@ -957,3 +957,21 @@ warnings` clean; `--features ash-compute` regression suite green; hooks,
 GPU-slot audit, REUSE, oxlint, tsc and dprint clean. Generated TS/OpenAPI
 snapshots stable across two regeneration passes. Feature flags renamed from
 `experimental-ash-*` to `ash-*` across manifests, server, CI, docs and snapshots.
+
+## Landed — multi-head attention (2026-11-24, worktree)
+
+Step 0 of `.tmp/research/ash-next-networks-shareability-2026-11-24.md`:
+`AttentionShape` now carries `heads`, and `Attention::run` splits/concatenates
+Q/Kᵀ/V on the host over the existing matmul/softmax pipelines — no new shader.
+CLIP self-attention uses 12 heads (768/12=64) and SD1.5 UNet cross-attention
+uses 8 (1280/8=160); spatial UNet attention stays single-head by design. Shape
+validation rejects a zero head count or a `dim` not divisible by heads.
+Regression test compares multi-head GPU output with a split CPU reference.
+
+Evidence: `cargo test -p honkbox-ash-backend --features ash-sd --locked` →
+134 unit + 3 integration passed; opt-in real SD1.5 parity at
+`/home/flak/git-ai/ai-models/Data/Models/StableDiffusion/v1-5-pruned-emaonly-fp16.safetensors`
+→ 1 passed (64×64, one step, same-seed repeat). `/tmp/cargo` was locked by
+sibling sessions, so clippy ran in isolated `/tmp/cargo-ash-multihead`:
+`--features ash-sd --all-targets -- -D warnings` clean; fmt and diff whitespace
+clean.

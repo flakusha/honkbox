@@ -1,7 +1,7 @@
-//! Single-head transformer encoder block composed from shared Vulkan kernels.
+//! Multi-head transformer encoder block composed from shared Vulkan kernels.
 //!
-//! ponytail: one head per block. Multi-head split/concat needs two more
-//! kernels; add them when a real CLIP checkpoint makes the gap observable.
+//! ponytail: split/concat runs on the host; no dedicated shader until a
+//! profiled real checkpoint shows the copies dominate.
 
 use crate::{
     VkError,
@@ -61,6 +61,7 @@ pub struct TransformerBias<'a> {
 
 /// Pre-attention norm + attention + residual + MLP + residual + final norm.
 pub struct TransformerBlock {
+    heads: usize,
     query: MatMul,
     key: MatMul,
     value: MatMul,
@@ -75,8 +76,14 @@ pub struct TransformerBlock {
 
 impl TransformerBlock {
     /// Ten pipelines; weights stay with the caller and no assets are bundled.
-    pub fn new(device: Arc<VulkanDevice>) -> Result<Self, VkError> {
+    pub fn new(device: Arc<VulkanDevice>, heads: usize) -> Result<Self, VkError> {
+        if heads == 0 {
+            return Err(VkError::Device(
+                "transformer: heads must be positive".into(),
+            ));
+        }
         Ok(Self {
+            heads,
             query: MatMul::new(Arc::clone(&device))?,
             key: MatMul::new(Arc::clone(&device))?,
             value: MatMul::new(Arc::clone(&device))?,
@@ -100,6 +107,12 @@ impl TransformerBlock {
         dim: usize,
         hidden: usize,
     ) -> Result<Vec<f32>, VkError> {
+        if dim == 0 || !dim.is_multiple_of(self.heads) {
+            return Err(VkError::Device(
+                "transformer: dim must be positive and divisible by heads".into(),
+            ));
+        }
+        let head_dim = dim / self.heads;
         let add_bias = |values: Vec<f32>, extra: Option<&[f32]>| -> Result<Vec<f32>, VkError> {
             match extra {
                 Some(extra) if !extra.is_empty() => self.add.run_broadcast(&values, extra),
@@ -117,8 +130,9 @@ impl TransformerBlock {
             AttentionShape {
                 seq_q: seq,
                 seq_k: seq,
-                head_dim: dim,
-                value_dim: dim,
+                head_dim,
+                value_dim: head_dim,
+                heads: self.heads,
             },
         )?;
         let projected = add_bias(
@@ -200,7 +214,7 @@ mod tests {
             Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => return,
             Err(e) => panic!("vulkan api failed: {e:?}"),
         };
-        let block = TransformerBlock::new(device).expect("pipeline");
+        let block = TransformerBlock::new(device, 1).expect("pipeline");
         let dim = 2usize;
         let matrix = vec![0.0; dim * dim];
         let bad_matrix = vec![0.0; dim * dim + 1];
@@ -301,7 +315,7 @@ mod tests {
         let residual2: Vec<f32> = normed.iter().zip(&fed).map(|(a, b)| a + b).collect();
         let expected = cpu_layer_norm(&residual2, dim, eps);
 
-        let block = TransformerBlock::new(device).expect("pipeline");
+        let block = TransformerBlock::new(device, 1).expect("pipeline");
         let actual = block
             .run(&input, &weights, seq, dim, hidden)
             .expect("gpu block");

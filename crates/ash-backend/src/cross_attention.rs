@@ -2,7 +2,7 @@
 //!
 //! Diffusers stores these weights `[out_features, in_features]`; the shared
 //! `MatMul` wants `[in, out]`, so a transpose pass converts them before dispatch.
-//! ponytail: one head, no attention mask, no scaling override.
+//! ponytail: host-side head split/concat, no attention mask, no scaling override.
 
 use crate::{
     VkError,
@@ -111,7 +111,7 @@ pub struct CrossAttentionBias<'a> {
     pub bo: Option<&'a [f32]>,
 }
 
-/// Row counts and shared channel width for one cross-attention head.
+/// Row counts and channel widths for one cross-attention block.
 #[derive(Debug, Clone, Copy)]
 pub struct CrossAttentionShape {
     /// Hidden-state tokens (query rows).
@@ -122,6 +122,8 @@ pub struct CrossAttentionShape {
     pub dim: usize,
     /// Context (key/value) channel width; differs from `dim` in SD 1.5.
     pub context_dim: usize,
+    /// Parallel attention heads; `dim` must be divisible by this.
+    pub heads: usize,
 }
 
 /// `Attention(W_q·hidden, W_kv·context)` plus output projection and residual.
@@ -156,6 +158,12 @@ impl CrossAttention {
         bias: &CrossAttentionBias<'_>,
         shape: CrossAttentionShape,
     ) -> Result<Vec<f32>, VkError> {
+        if shape.heads == 0 || !shape.dim.is_multiple_of(shape.heads) {
+            return Err(VkError::Device(
+                "cross attention: heads must be positive and divide dim".into(),
+            ));
+        }
+        let head_dim = shape.dim / shape.heads;
         let mut q = self
             .query
             .run(hidden, weights.wq, shape.query_rows, shape.dim, shape.dim)?;
@@ -184,8 +192,9 @@ impl CrossAttention {
             AttentionShape {
                 seq_q: shape.query_rows,
                 seq_k: shape.context_rows,
-                head_dim: shape.dim,
-                value_dim: shape.dim,
+                head_dim,
+                value_dim: head_dim,
+                heads: shape.heads,
             },
         )?;
         let mut projected = self.output.run(
@@ -318,6 +327,7 @@ mod tests {
             context_rows,
             dim,
             context_dim: dim,
+            heads: 1,
         };
         let actual = CrossAttention::new(Arc::clone(&device))
             .expect("cross")
@@ -347,6 +357,7 @@ mod tests {
                     seq_k: context_rows,
                     head_dim: dim,
                     value_dim: dim,
+                    heads: 1,
                 },
             )
             .expect("attention run");

@@ -19,10 +19,10 @@ pub struct TextConditioner {
 }
 
 impl TextConditioner {
-    /// `layers` encoder blocks plus the CFG pipeline.
-    pub fn new(device: Arc<VulkanDevice>, layers: usize) -> Result<Self, VkError> {
+    /// `layers` encoder blocks with `heads` attention heads plus the CFG pipeline.
+    pub fn new(device: Arc<VulkanDevice>, layers: usize, heads: usize) -> Result<Self, VkError> {
         Ok(Self {
-            encoder: ClipTextEncoder::new(Arc::clone(&device), layers)?,
+            encoder: ClipTextEncoder::new(Arc::clone(&device), layers, heads)?,
             guidance: Cfg::new(device)?,
         })
     }
@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn scale_one_returns_positive_token_states() {
         let Some(device) = device() else { return };
-        let conditioner = TextConditioner::new(device, 0).expect("conditioner");
+        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let (dim, vocab) = (2usize, 3usize);
         let positive = [1u32, 2];
         let negative = [2u32, 1];
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn guidance_scale_is_applied_per_token() {
         let Some(device) = device() else { return };
-        let conditioner = TextConditioner::new(device, 0).expect("conditioner");
+        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let (dim, vocab) = (2usize, 3usize);
         let positive = [1u32];
         let negative = [2u32];
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn pooled_conditioning_blends_one_vector_per_prompt() {
         let Some(device) = device() else { return };
-        let conditioner = TextConditioner::new(device, 0).expect("conditioner");
+        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let (dim, vocab, eos) = (2usize, 3usize, 2u32);
         let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let positions = [0.01_f32, 0.02, 0.03, 0.04];
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn rejects_different_positive_and_negative_token_counts() {
         let Some(device) = device() else { return };
-        let conditioner = TextConditioner::new(device, 0).expect("conditioner");
+        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let positions = [0.01_f32, 0.02, 0.03, 0.04];
         let weights = ClipTextEncoderWeights {

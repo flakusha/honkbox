@@ -434,6 +434,7 @@ mod tests {
                             wo: &ONE,
                         },
                         context_rows: 1,
+                        heads: 1,
                     },
                     eps: 1e-5,
                 },

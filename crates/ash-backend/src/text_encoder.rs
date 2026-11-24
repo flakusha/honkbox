@@ -52,10 +52,15 @@ pub struct ClipTextEncoder {
 
 impl ClipTextEncoder {
     /// Instantiate `layers` blocks plus the embedding gather/add pipelines.
-    pub fn new(device: Arc<VulkanDevice>, layers: usize) -> Result<Self, VkError> {
+    pub fn new(device: Arc<VulkanDevice>, layers: usize, heads: usize) -> Result<Self, VkError> {
+        if heads == 0 {
+            return Err(VkError::Device(
+                "clip encoder: heads must be positive".into(),
+            ));
+        }
         let mut blocks = Vec::with_capacity(layers);
         for _ in 0..layers {
-            blocks.push(TransformerBlock::new(Arc::clone(&device))?);
+            blocks.push(TransformerBlock::new(Arc::clone(&device), heads)?);
         }
         Ok(Self {
             embedding: TextEncoder::new(Arc::clone(&device))?,
@@ -182,7 +187,7 @@ mod tests {
     #[test]
     fn zero_layers_return_plain_token_plus_position_embeddings() {
         let Some(device) = device() else { return };
-        let encoder = ClipTextEncoder::new(device.clone(), 0).expect("encoder");
+        let encoder = ClipTextEncoder::new(device.clone(), 0, 1).expect("encoder");
         let (dim, vocab, ids) = (2usize, 3usize, [1u32, 2]);
         let token_table = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let position_table = [0.01_f32, 0.02, 0.03, 0.04];
@@ -212,7 +217,7 @@ mod tests {
     #[test]
     fn pooled_state_uses_first_eos_token_and_final_norm() {
         let Some(device) = device() else { return };
-        let encoder = ClipTextEncoder::new(device, 0).expect("encoder");
+        let encoder = ClipTextEncoder::new(device, 0, 1).expect("encoder");
         let (dim, vocab, eos) = (2usize, 3usize, 2u32);
         let token_table = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let position_table = [0.01_f32, 0.02, 0.03, 0.04];
@@ -245,7 +250,7 @@ mod tests {
     #[test]
     fn one_layer_matches_direct_transformer_block() {
         let Some(device) = device() else { return };
-        let encoder = ClipTextEncoder::new(device.clone(), 1).expect("encoder");
+        let encoder = ClipTextEncoder::new(device.clone(), 1, 1).expect("encoder");
         let (dim, vocab) = (2usize, 3usize);
         let ids = [1u32, 2];
         let token_table = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
@@ -268,7 +273,7 @@ mod tests {
             .expect("embedding")
             .encode(&ids, &token_table, &position_table, vocab, dim)
             .expect("embed");
-        let expected = crate::transformer::TransformerBlock::new(device)
+        let expected = crate::transformer::TransformerBlock::new(device, 1)
             .expect("block")
             .run(&embedded, &layers[0], ids.len(), dim, dim)
             .expect("block run");
@@ -281,7 +286,7 @@ mod tests {
     #[test]
     fn rejects_wrong_layer_count_and_oversized_sequence() {
         let Some(device) = device() else { return };
-        let encoder = ClipTextEncoder::new(device.clone(), 1).expect("encoder");
+        let encoder = ClipTextEncoder::new(device.clone(), 1, 1).expect("encoder");
         let dim = 2usize;
         let matrix = [0.0_f32; 4];
         let norm = [1.0_f32, 1.0];

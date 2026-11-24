@@ -29,6 +29,8 @@ pub struct ClipGeometry {
     pub ffn_hidden: usize,
     /// Number of encoder blocks.
     pub layers: usize,
+    /// Attention heads per encoder block.
+    pub heads: usize,
 }
 
 /// SD 1.5 text tower geometry (CLIP ViT-L/14, 77 tokens).
@@ -38,6 +40,7 @@ pub const SD15_CLIP: ClipGeometry = ClipGeometry {
     dim: 768,
     ffn_hidden: 3072,
     layers: 12,
+    heads: 12,
 };
 
 fn name(suffix: &str) -> String {
@@ -387,6 +390,7 @@ mod tests {
             dim: 2,
             ffn_hidden: 3,
             layers: 1,
+            heads: 1,
         };
         let mut weights: Vec<(String, Vec<usize>)> = vec![
             (name("embeddings.token_embedding.weight"), vec![3, 2]),
@@ -465,6 +469,7 @@ mod tests {
             dim: 2,
             ffn_hidden: 3,
             layers: 1,
+            heads: 1,
         }
     }
 

@@ -33,6 +33,8 @@ const TIME_DIM: usize = 320;
 const TIME_CHANNELS: usize = 1280;
 const CONTEXT_ROWS: usize = 77;
 const CONTEXT_DIM: usize = 768;
+/// SD 1.5 `UNet` cross-attention heads (`1280 / 8 = 160` per head).
+const CROSS_HEADS: usize = 8;
 const GROUPS: usize = 32;
 const EPS: f32 = 1e-5;
 const UPSAMPLE: usize = 8;
@@ -603,6 +605,7 @@ impl UnetReal {
                 context_rows: CONTEXT_ROWS,
                 dim: TIME_CHANNELS,
                 context_dim: CONTEXT_DIM,
+                heads: CROSS_HEADS,
             },
         )?;
         x = transpose_2d(&attended, tokens, TIME_CHANNELS);

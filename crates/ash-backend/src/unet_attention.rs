@@ -124,6 +124,7 @@ impl UnetAttentionBlock {
                 seq_k: rows,
                 head_dim: width,
                 value_dim: width,
+                heads: 1,
             },
         )?;
         let projected = self.output.run(&attended, weights.wo, rows, width, width)?;

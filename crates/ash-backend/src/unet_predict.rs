@@ -20,6 +20,8 @@ pub struct UnetCrossConfig<'a> {
     pub weights: CrossAttentionWeights<'a>,
     /// Number of context tokens in the flattened `conditioning` slice.
     pub context_rows: usize,
+    /// Parallel attention heads; `channels` must be divisible by this.
+    pub heads: usize,
 }
 
 /// Caller-supplied weights and geometry for one prediction.
@@ -147,6 +149,7 @@ impl UnetPredictor {
                 context_rows: config.cross.context_rows,
                 dim: channels,
                 context_dim: channels,
+                heads: config.cross.heads,
             },
         )?;
         Ok(tokens_to_nchw(
@@ -281,6 +284,7 @@ mod tests {
                 wo: identity,
             },
             context_rows: 1,
+            heads: 1,
         }
     }
 

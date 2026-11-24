@@ -6,7 +6,7 @@
 use crate::{VkError, device::VulkanDevice, matmul::MatMul, softmax::Softmax};
 use std::sync::Arc;
 
-/// Matrix shapes for one attention head.
+/// Matrix shapes for one or more attention heads.
 #[derive(Debug, Clone, Copy)]
 pub struct AttentionShape {
     /// Query rows.
@@ -17,6 +17,8 @@ pub struct AttentionShape {
     pub head_dim: usize,
     /// Per-head value width.
     pub value_dim: usize,
+    /// Number of heads concatenated in each input matrix.
+    pub heads: usize,
 }
 
 /// `softmax(Q · Kᵀ / sqrt(head_dim)) · V`.
@@ -34,22 +36,22 @@ fn validate_shapes(
 ) -> Result<(), VkError> {
     let invalid =
         || VkError::Device("attention: non-empty shapes must match all input lengths".into());
-    let q_len = shape
-        .seq_q
-        .checked_mul(shape.head_dim)
-        .ok_or_else(invalid)?;
-    let k_len = shape
+    let dim = shape
         .head_dim
-        .checked_mul(shape.seq_k)
+        .checked_mul(shape.heads)
         .ok_or_else(invalid)?;
-    let v_len = shape
-        .seq_k
-        .checked_mul(shape.value_dim)
+    let value = shape
+        .value_dim
+        .checked_mul(shape.heads)
         .ok_or_else(invalid)?;
+    let q_len = shape.seq_q.checked_mul(dim).ok_or_else(invalid)?;
+    let k_len = dim.checked_mul(shape.seq_k).ok_or_else(invalid)?;
+    let v_len = shape.seq_k.checked_mul(value).ok_or_else(invalid)?;
     if shape.seq_q == 0
         || shape.seq_k == 0
         || shape.head_dim == 0
         || shape.value_dim == 0
+        || shape.heads == 0
         || q.len() != q_len
         || k_t.len() != k_len
         || v.len() != v_len
@@ -69,7 +71,10 @@ impl Attention {
         })
     }
 
-    /// Run one attention head and return `seq_q × value_dim` row-major output.
+    /// Run `heads` parallel heads over concatenated Q/Kᵀ/V matrices.
+    ///
+    /// ponytail: split/concat on the host; no dedicated shader until a
+    /// profiled real checkpoint shows the copies dominate.
     pub fn run(
         &self,
         q: &[f32],
@@ -78,6 +83,54 @@ impl Attention {
         shape: AttentionShape,
     ) -> Result<Vec<f32>, VkError> {
         validate_shapes(q, k_t, v, shape)?;
+        if shape.heads == 1 {
+            return self.run_single(q, k_t, v, shape);
+        }
+        let q_stride = shape
+            .seq_q
+            .checked_mul(shape.head_dim)
+            .ok_or_else(|| VkError::Device("attention: head stride overflow".into()))?;
+        let k_stride = shape
+            .head_dim
+            .checked_mul(shape.seq_k)
+            .ok_or_else(|| VkError::Device("attention: head stride overflow".into()))?;
+        let v_stride = shape
+            .seq_k
+            .checked_mul(shape.value_dim)
+            .ok_or_else(|| VkError::Device("attention: head stride overflow".into()))?;
+        let capacity = shape
+            .seq_q
+            .checked_mul(shape.value_dim)
+            .and_then(|per| per.checked_mul(shape.heads))
+            .ok_or_else(|| VkError::Device("attention: output overflow".into()))?;
+        let mut out = Vec::with_capacity(capacity);
+        for head in 0..shape.heads {
+            let start = head
+                .checked_mul(q_stride)
+                .ok_or_else(|| VkError::Device("attention: head offset overflow".into()))?;
+            let k_start = head
+                .checked_mul(k_stride)
+                .ok_or_else(|| VkError::Device("attention: head offset overflow".into()))?;
+            let v_start = head
+                .checked_mul(v_stride)
+                .ok_or_else(|| VkError::Device("attention: head offset overflow".into()))?;
+            out.extend_from_slice(&self.run_single(
+                &q[start..start + q_stride],
+                &k_t[k_start..k_start + k_stride],
+                &v[v_start..v_start + v_stride],
+                AttentionShape { heads: 1, ..shape },
+            )?);
+        }
+        Ok(out)
+    }
+
+    fn run_single(
+        &self,
+        q: &[f32],
+        k_t: &[f32],
+        v: &[f32],
+        shape: AttentionShape,
+    ) -> Result<Vec<f32>, VkError> {
         // Head dimensions are far below u16::MAX in every model we target;
         // the bound keeps the f32 conversion lossless for clippy and math.
         let dim = u16::try_from(shape.head_dim)
@@ -146,6 +199,7 @@ mod tests {
                     seq_k: 3,
                     head_dim: 2,
                     value_dim: 2,
+                    heads: 1,
                 }
             )
             .is_ok()
@@ -160,6 +214,7 @@ mod tests {
                     seq_k: 3,
                     head_dim: 2,
                     value_dim: 3,
+                    heads: 1,
                 }
             )
             .is_err()
@@ -174,6 +229,7 @@ mod tests {
                     seq_k: 3,
                     head_dim: 2,
                     value_dim: 2,
+                    heads: 1,
                 }
             )
             .is_err()
@@ -202,6 +258,7 @@ mod tests {
             seq_k,
             head_dim,
             value_dim,
+            heads: 1,
         };
         let actual = attention.run(&q, &k_t, &v, shape).expect("gpu dispatch");
         let expected = cpu_attention(&q, &k_t, &v, seq_q, seq_k, head_dim, value_dim);
@@ -209,5 +266,70 @@ mod tests {
         for (got, want) in actual.iter().zip(&expected) {
             assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
         }
+    }
+
+    #[test]
+    fn multi_head_attention_matches_split_cpu_reference() {
+        let device = match VulkanDevice::headless() {
+            Ok(device) => Arc::new(device),
+            Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => {
+                eprintln!("skipping: no usable Vulkan environment");
+                return;
+            }
+            Err(e) => panic!("vulkan api failed: {e:?}"),
+        };
+        let (heads, seq_q, seq_k, head_dim, value_dim) = (3usize, 2usize, 4usize, 3usize, 2usize);
+        let value = |i: usize| f32::from(u8::try_from(i % 11).expect("0..11")) * 0.125;
+        let q: Vec<f32> = (0..heads * seq_q * head_dim).map(value).collect();
+        let k_t: Vec<f32> = (0..heads * head_dim * seq_k)
+            .map(|i| value(i + 3))
+            .collect();
+        let v: Vec<f32> = (0..heads * seq_k * value_dim)
+            .map(|i| value(i + 7))
+            .collect();
+        let mut expected = Vec::new();
+        for head in 0..heads {
+            let q_head = &q[head * seq_q * head_dim..(head + 1) * seq_q * head_dim];
+            let k_head = &k_t[head * head_dim * seq_k..(head + 1) * head_dim * seq_k];
+            let v_head = &v[head * seq_k * value_dim..(head + 1) * seq_k * value_dim];
+            expected.extend_from_slice(&cpu_attention(
+                q_head, k_head, v_head, seq_q, seq_k, head_dim, value_dim,
+            ));
+        }
+        let attention = Attention::new(device).expect("pipeline creation");
+        let actual = attention
+            .run(
+                &q,
+                &k_t,
+                &v,
+                AttentionShape {
+                    seq_q,
+                    seq_k,
+                    head_dim,
+                    value_dim,
+                    heads,
+                },
+            )
+            .expect("gpu dispatch");
+        assert_eq!(actual.len(), expected.len());
+        for (got, want) in actual.iter().zip(&expected) {
+            assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
+        }
+        assert!(
+            attention
+                .run(
+                    &q[..q.len() - 1],
+                    &k_t,
+                    &v,
+                    AttentionShape {
+                        seq_q,
+                        seq_k,
+                        head_dim,
+                        value_dim,
+                        heads,
+                    },
+                )
+                .is_err()
+        );
     }
 }

@@ -46,7 +46,7 @@
 //!   loaded into local matmul layout.
 //! - [`text_conditioning`]: [`text_conditioning::TextConditioner`], token-wise
 //!   positive/negative states blended by classifier-free guidance.
-//! - [`transformer`]: [`transformer::TransformerBlock`], single-head encoder
+//! - [`transformer`]: [`transformer::TransformerBlock`], multi-head encoder
 //!   block built from attention, MLP, residual adds and layer norms.
 //! - [`transpose`]: [`transpose::Transpose`], matrix transpose for `Kᵀ`.
 //! - [`unet_input`]: [`unet_input::UnetInputBlock`], NCHW conv → group norm →

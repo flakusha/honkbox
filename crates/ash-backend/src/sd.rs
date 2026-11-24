@@ -341,8 +341,9 @@ impl SdPipeline for AshSdPipeline {
         );
         let clip =
             ClipTensors::load(&map, &self.model_path, SD15_CLIP, 1e-5).map_err(backend_error)?;
-        let conditioner = TextConditioner::new(Arc::clone(&self.device), SD15_CLIP.layers)
-            .map_err(|e| backend_error(format!("text encoder: {e}")))?;
+        let conditioner =
+            TextConditioner::new(Arc::clone(&self.device), SD15_CLIP.layers, SD15_CLIP.heads)
+                .map_err(|e| backend_error(format!("text encoder: {e}")))?;
         let scale = req.cfg_scale.unwrap_or(DEFAULT_CFG);
         let context = conditioner
             .condition(
