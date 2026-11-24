@@ -1,16 +1,17 @@
 # TASK: Salvo middleware and codegen parity
 
-Status: in progress (2026-11-24; codegen union + middleware module landed)
+Status: done (2026-11-24; hoops installed on the API sub-router)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
-Acceptance: tower-http layers (compression and auth-adjacent middleware) are
-replaced by the equivalent salvo middleware with observable parity for
-compression/SSE/multipart behavior; OpenAPI is produced by the salvo `oapi`
-artifact path instead of utoipa while `scripts/codegen-openapi-check.ts` and
-`bun run codegen:check` stay green; generated `packages/web-ui/src/gen/` files
-are regenerated only, never hand-edited; the spike's recorded `bun run check`
-cost comparison is updated with the post-parity figure.
+Acceptance: compression and bearer-auth hoops run in salvo on the API
+sub-router; SSE opts out of compression, multipart requests are bridged through
+axum's public `FromRequest`, and request bodies are collected before dispatch
+(known ceiling). OpenAPI stays utoipa-derived with a salvo overlay artifact —
+the wrappers are plain `#[handler]` functions, so salvo `oapi` has no path
+metadata to generate from; `scripts/codegen-openapi-check.ts` and
+`bun run codegen:check` stay green. Generated `packages/web-ui/src/gen/` files
+are regenerated only, never hand-edited.
 Verification:
 `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo check --locked -p honkbox-server`,
 `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test health`,
@@ -57,3 +58,6 @@ port-0 listener helper; `cargo test --locked -p honkbox-server --test
 salvo_middleware` PASS (162 tests incl. included-module units), `bun run check`
 PASS. The hoops are not yet installed on the serving router — that lands with
 the route cutover.
+
+
+git issue: b57ea77

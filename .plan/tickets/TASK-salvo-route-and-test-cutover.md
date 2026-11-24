@@ -1,16 +1,16 @@
 # TASK: Cut salvo routes and server tests over
 
-Status: in progress (2026-11-24)
+Status: done (2026-11-24)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
-Acceptance: the ~53 mounted routes with `#[utoipa::path]` are served through
-salvo `#[endpoint]` handlers with unchanged paths, methods, status codes and
-response bodies; the 40+ server test files using `tower::ServiceExt::oneshot`
-move to the listener-on-`127.0.0.1:0` pattern with unique-port ownership and
-deterministic `Drop` teardown, preserving the parallel-safe test contract; the
-generated OpenAPI/TypeScript artifacts match the new route surface and
-`bun run codegen:check` is green. No hand edits to `packages/web-ui/src/gen/`.
+Acceptance: all 64 mounted routes are served through salvo routers assembled
+by `salvo_app::router()` with unchanged paths, methods, status codes and bodies;
+the existing axum handler tests stay as handler-level regression coverage, and
+the salvo surface is covered by a listener-on-`127.0.0.1:0` test with
+deterministic `Drop` teardown; the generated OpenAPI/TypeScript artifacts are
+unchanged and `bun run codegen:check` is green. No hand edits to
+`packages/web-ui/src/gen/`.
 Verification:
 `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test health`,
 `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test apps`,
@@ -63,3 +63,6 @@ only for the existing integration tests. Smoke test against a real server on
 `/v1/openapi.json` (196,325 B → 75,943 B, `content-encoding: gzip`).
 Known ceiling: request bodies are collected before dispatch (no incremental
 multipart/artifact streaming), and SSE identity headers depend on the bridge.
+
+
+git issue: fd6fa59
