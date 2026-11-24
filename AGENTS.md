@@ -73,17 +73,18 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 - **Bun ≥1.4.4 only** for JS (no Node/npm/yarn); `bun install --frozen-lockfile` in CI.
 - Rust via `rust-toolchain.toml` (rustup-managed); standard builds MUST pass `--locked` (build, test, run, clippy) — Cargo.lock is the dep contract, unlocked builds risk silent drift.
-- **Cargo target dir**: builds use the default cargo target dir — no `CARGO_TARGET_DIR` override. Any non-default target dir requires explicit permission first; `.tmp/` is never an acceptable target dir (multi-GB builds bloat worktree scratch shared with sibling lanes).
+- **Cargo target dir**: builds use the shell-default target dir — never pass `CARGO_TARGET_DIR` ad hoc. Any alternate target dir (speedup side folders, shared caches) requires explicit permission first; `.tmp/` is never acceptable (multi-GB builds bloat worktree scratch shared with sibling lanes).
+- **LLVM**: newest installed LLVM first on `PATH` with its libclang as `LIBCLANG_PATH` (23 as of 2026-11-24 — re-verify with `clang --version`, never hardcode the pin); one version across all lanes, since mixed versions (20 vs 22 seen) force bindgen/`-sys` rebuilds and inflate every target dir.
 - **Effective file budget** (opt-in, mirroring `../loop-lore`): 250 code lines default / 300 ceiling; blank and comment-only lines are free, `// size-allow: N` in the first 512 chars overrides, generated + test files exempt. `bun run size` reports, `bun run size:strict` fails. `bun run lint:padding` enforces a blank line after every multiline TS statement (`--fix` / path arguments supported); neither is in `bun run check` yet because existing files exceed both budgets.
 
 ## Build environment (operator-mandated 2026-11-24)
 
-- **LLVM: latest compatible, never pinned**: put the newest installed LLVM
- with working clang + libclang first on `PATH` and export its `libclang.so`
- as `LIBCLANG_PATH` in every shell before any cargo command (no hardcoded
- version pin; verify with `clang --version`). `/tmp/cargo` is the
- shell-default target dir; `--locked`, default target dir, and the `.tmp/`
- build ban are already mandated in the bullets above.
+- **Default cargo target folder**: whatever the OS setup provides — never name
+ a path in `AGENTS.md`, never pass `CARGO_TARGET_DIR`. Speedup side folders
+ (alternate target dirs, sccache, shared caches) require user confirmation
+ first. The `LLVM` bullet above picks the toolchain; `--locked`, the default
+ target dir, and the `.tmp/` build ban are already mandated in the bullets
+ above.
 - Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
 - Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
 
