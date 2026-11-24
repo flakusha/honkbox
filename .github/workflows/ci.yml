@@ -64,6 +64,8 @@ jobs:
       # oxlint correctness rules are errors by default, so a bare run denies them.
       - name: Lint TS
         run: bunx oxlint
+      - name: Audit GPU slot serialization
+        run: bun run audit:gpu-slot
 
   typecheck:
     name: Typecheck
@@ -311,11 +313,36 @@ jobs:
       - name: Check experimental feature
         run: cargo check -p honkbox-server --features experimental-ash-sd --locked
 
+  ash:
+    name: Ash backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch vendored sources
+        run: bun scripts/vendor-patches.ts sync
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libvulkan-dev glslang-tools spirv-headers
+      - name: Clippy (ash-compute)
+        run: cargo clippy --locked -p honkbox-ash-backend --features ash-compute --all-targets -- -D warnings
+      - name: Clippy (experimental-ash-sd)
+        run: cargo clippy --locked -p honkbox-ash-backend --features experimental-ash-sd --all-targets -- -D warnings
+      - name: Test (ash-compute)
+        run: cargo test --locked -p honkbox-ash-backend --features ash-compute
+      - name: Test (experimental-ash-sd)
+        run: cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd
+
   build:
     name: Build release (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    needs: [fmt, lint-ts, typecheck, test-ts, clippy, test-rs, lavapipe, deny, reuse, notice, doc, codegen]
+    needs: [fmt, lint-ts, typecheck, test-ts, clippy, ash, test-rs, lavapipe, deny, reuse, notice, doc, codegen]
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]

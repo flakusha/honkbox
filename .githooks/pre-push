@@ -43,6 +43,17 @@ if [ -n "$(changed '*.rs' 'Cargo.toml' 'Cargo.lock' '**/Cargo.toml')" ]; then
   fi
 fi
 
+# --- ash backend tests: feature-gated modules are skipped by workspace test -
+if [ -n "$(changed 'crates/ash-backend/**')" ]; then
+  echo "Running ash backend tests..."
+  if bun run test:ash; then
+    echo "PASS: test:ash"
+  else
+    echo "FAIL: test:ash — run 'bun run test:ash'"
+    failures=$((failures + 1))
+  fi
+fi
+
 # --- codegen drift: builds server (minutes) — only when relevant -----------
 if [ -n "$(changed 'packages/web-ui/src/gen/**' 'crates/api-types/**' \
                 'crates/server/src/**' 'scripts/codegen-openapi-check.ts')" ]; then
