@@ -27,7 +27,8 @@ use super::runtime_config;
 /// route family is checked here and a miss is a named 403. An empty scope map
 /// keeps the legacy single-key path byte-for-byte. Signed content requests
 /// bypass the header check because their HMAC is verified in `job_content`.
-pub(super) async fn require_bearer(
+#[allow(dead_code)] // axum middleware fixture; salvo has its own hoops
+pub(crate) async fn require_bearer(
     State(cfg): State<AppConfig>,
     req: Request,
     next: Next,
@@ -242,7 +243,8 @@ pub(crate) fn unauthorized_response() -> Response {
 /// route, whose body/status do not change. The admission queue's own
 /// rejections rely on this default (the queue has no better estimate than
 /// the operator's retry cadence), so an explicit header is never clobbered.
-pub(super) async fn track_metrics(req: Request, next: Next) -> Response {
+#[allow(dead_code)] // axum middleware fixture; salvo has its own hoops
+pub(crate) async fn track_metrics(req: Request, next: Next) -> Response {
     let route = crate::metrics::route_label(req.uri().path());
     let started = Instant::now();
     let mut response = next.run(req).await;

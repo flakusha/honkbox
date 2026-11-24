@@ -152,6 +152,7 @@ pub(crate) const SPEECH_INPUT_MAX_CHARS: usize = 4096;
 /// (`DefaultPredicate`'s `NotForContentType` arm); it keys on the
 /// `Content-Range` header instead so arbitrary artifact content types are
 /// covered, and plain 200 downloads still compress when negotiated.
+#[allow(dead_code)] // axum compression predicate fixture; salvo compression is in salvo_middleware
 pub(crate) fn partial_content_stays_plain(
     _: StatusCode,
     _: HttpVersion,

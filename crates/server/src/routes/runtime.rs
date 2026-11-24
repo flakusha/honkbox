@@ -97,7 +97,7 @@ fn with_drain(mut response: Response, state: DrainState) -> Response {
     path = "/v1/memory",
     responses((status = 200, description = "Residency readout", body = MemoryInfo))
 )]
-pub(super) async fn get_memory(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn get_memory(State(config): State<AppConfig>) -> Response {
     let catalog = config.catalog_snapshot();
     let (resident, capacity, bytes_reserved) = match &config.swap {
         Some(swap) => {
@@ -168,7 +168,7 @@ pub(super) async fn get_memory(State(config): State<AppConfig>) -> Response {
     path = "/running",
     responses((status = 200, description = "Running (resident) models", body = RunningList))
 )]
-pub(super) async fn get_running(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn get_running(State(config): State<AppConfig>) -> Response {
     let now_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -198,7 +198,7 @@ pub(super) async fn get_running(State(config): State<AppConfig>) -> Response {
     path = "/api/models/unload",
     responses((status = 200, description = "Non-pinned residents evicted; X-Honkbox-Drain: drained|in-flight|reloaded (evicted entries only)", body = UnloadAllResult))
 )]
-pub(super) async fn post_unload_all(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn post_unload_all(State(config): State<AppConfig>) -> Response {
     // Capture weak handles BEFORE eviction; pinned survivors are not probed.
     let probes = config
         .swap
@@ -249,7 +249,7 @@ pub(super) async fn post_unload_all(State(config): State<AppConfig>) -> Response
         (status = 409, description = "Model is pinned; explicit refusal")
     )
 )]
-pub(super) async fn post_unload_one(
+pub(crate) async fn post_unload_one(
     State(config): State<AppConfig>,
     AxumPath(model): AxumPath<String>,
 ) -> Response {

@@ -49,6 +49,15 @@ mod raster;
 mod routes;
 #[allow(dead_code)]
 #[path = "../src/salvo_middleware.rs"]
+#[allow(dead_code)]
+#[path = "../src/salvo_app.rs"]
+mod salvo_app;
+#[allow(dead_code)]
+#[path = "../src/salvo_version.rs"]
+mod salvo_version;
+#[allow(dead_code)]
+#[path = "../src/salvo_routes/mod.rs"]
+mod salvo_routes;
 mod salvo_middleware;
 #[allow(dead_code)]
 #[path = "../src/salvo_support.rs"]
@@ -277,4 +286,44 @@ async fn sse_response_has_no_content_encoding() {
     assert!(!response.headers.contains_key(CONTENT_ENCODING));
     set_env_var(key_env, None);
     server.shutdown().await;
+}
+
+/// The assembled salvo router serves the cutover surface with the same hoops
+/// as the old axum stack: probes stay open, API routes need the bearer key.
+#[tokio::test]
+async fn assembled_salvo_router_serves_cutover_surface() {
+    let key_env = "HONKBOX_SALVO_CUTOVER_KEY";
+    set_env_var(key_env, Some("cutover-key"));
+    let cfg = config(key_env);
+    let server = TestServer::start(salvo_app::router(&cfg)).await;
+
+    let health = server.get("/health").await;
+    assert_eq!(health.status, StatusCode::OK);
+    assert_eq!(health.json::<Value>().unwrap()["status"], "ok");
+
+    let unauth = server.get("/v1/queue").await;
+    assert_eq!(unauth.status, StatusCode::UNAUTHORIZED);
+
+    let version = server
+        .request(
+            TestServer::client()
+                .get(server.url("/api/version"))
+                .bearer_auth("cutover-key"),
+        )
+        .await;
+    assert_eq!(version.status, StatusCode::OK);
+    assert_eq!(version.json::<Value>().unwrap()["name"], "honkbox");
+
+    let queue = server
+        .request(
+            TestServer::client()
+                .get(server.url("/v1/queue"))
+                .bearer_auth("cutover-key"),
+        )
+        .await;
+    assert_eq!(queue.status, StatusCode::OK);
+    assert_eq!(queue.json::<Value>().unwrap()["queued"], 0);
+
+    server.shutdown().await;
+    set_env_var(key_env, None);
 }

@@ -136,7 +136,7 @@ fn require_admin(headers: &HeaderMap) -> Option<Response> {
     path = "/v1/apps",
     responses((status = 200, description = "Declared managed apps", body = ManagedAppList))
 )]
-pub(super) async fn get_apps() -> Json<ManagedAppList> {
+pub(crate) async fn get_apps() -> Json<ManagedAppList> {
     let apps = manager().map_or_else(Vec::new, |manager| manager.list());
     Json(ManagedAppList {
         apps: apps.into_iter().map(app_dto).collect(),
@@ -153,7 +153,7 @@ pub(super) async fn get_apps() -> Json<ManagedAppList> {
         (status = 404, description = "Unknown app id")
     )
 )]
-pub(super) async fn get_app(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn get_app(AxumPath(id): AxumPath<String>) -> Response {
     let Some(status) = manager().and_then(|manager| manager.status(&id)) else {
         return (StatusCode::NOT_FOUND, format!("unknown app {id}")).into_response();
     };
@@ -172,7 +172,7 @@ pub(super) async fn get_app(AxumPath(id): AxumPath<String>) -> Response {
         (status = 501, description = "App not enabled or unsupported platform")
     )
 )]
-pub(super) async fn post_app_start(headers: HeaderMap, AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn post_app_start(headers: HeaderMap, AxumPath(id): AxumPath<String>) -> Response {
     if let Some(forbidden) = require_admin(&headers) {
         return forbidden;
     }
@@ -199,7 +199,7 @@ pub(super) async fn post_app_start(headers: HeaderMap, AxumPath(id): AxumPath<St
         (status = 500, description = "Teardown timed out")
     )
 )]
-pub(super) async fn post_app_stop(headers: HeaderMap, AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn post_app_stop(headers: HeaderMap, AxumPath(id): AxumPath<String>) -> Response {
     if let Some(forbidden) = require_admin(&headers) {
         return forbidden;
     }
@@ -279,7 +279,7 @@ fn upstream_error() -> Response {
     path = "/comfyui/status",
     responses((status = 200, description = "ComfyUI readiness", body = ComfyUiStatus))
 )]
-pub(super) async fn get_comfyui_status() -> Response {
+pub(crate) async fn get_comfyui_status() -> Response {
     let Some((source, state, capabilities, version, available)) = comfy_probe() else {
         return comfy_unavailable();
     };
@@ -303,7 +303,7 @@ pub(super) async fn get_comfyui_status() -> Response {
         (status = 501, description = "No probed ready ComfyUI")
     )
 )]
-pub(super) async fn get_comfyui_queue() -> Response {
+pub(crate) async fn get_comfyui_queue() -> Response {
     let Some(manager) = comfy_ready_upstream() else {
         return comfy_unavailable();
     };
@@ -334,7 +334,7 @@ pub(super) async fn get_comfyui_queue() -> Response {
         (status = 501, description = "No probed ready ComfyUI")
     )
 )]
-pub(super) async fn get_comfyui_history(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn get_comfyui_history(AxumPath(id): AxumPath<String>) -> Response {
     if !safe_component(&id) {
         return (StatusCode::BAD_REQUEST, "invalid prompt id").into_response();
     }
@@ -478,7 +478,7 @@ fn history_progress(entry: &serde_json::Value) -> ComfyUiProgress {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ViewQuery {
+pub(crate) struct ViewQuery {
     filename: String,
     #[serde(default)]
     subfolder: Option<String>,
@@ -503,7 +503,7 @@ pub(super) struct ViewQuery {
         (status = 501, description = "No probed ready ComfyUI")
     )
 )]
-pub(super) async fn get_comfyui_view(Query(query): Query<ViewQuery>) -> Response {
+pub(crate) async fn get_comfyui_view(Query(query): Query<ViewQuery>) -> Response {
     let subfolder = query.subfolder.as_deref().unwrap_or_default();
     if !safe_component(&query.filename)
         || (!subfolder.is_empty() && !safe_component(subfolder))

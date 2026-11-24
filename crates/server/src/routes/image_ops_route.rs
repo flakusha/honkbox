@@ -109,7 +109,7 @@ pub(super) fn validate_image_op_request(
         (status = 500, description = "Decode/transform/encode failed", body = OpenAiError)
     )
 )]
-pub(super) async fn post_image_ops(
+pub(crate) async fn post_image_ops(
     State(config): State<AppConfig>,
     body: Result<Json<ImageOpRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {

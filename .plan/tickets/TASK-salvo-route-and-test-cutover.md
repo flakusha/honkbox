@@ -1,6 +1,6 @@
 # TASK: Cut salvo routes and server tests over
 
-Status: proposed
+Status: in progress (2026-11-24)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
@@ -35,3 +35,31 @@ GPU. Split into small per-route/per-file diffs per `.plan/README.md`.
 
 Middleware parity (separate ticket), behavior changes to any endpoint, and
 manual edits to generated files.
+
+## Approach note (2026-11-24)
+
+All 64 mounted handlers (31 files) are inventoried in
+`.tmp/salvo_inventory_out.txt`. Route modules and mounted handlers were widened
+to `pub(crate)` so a crate-root `salvo_routes` module can call them. Six
+file-disjoint batches port the router surface to `salvo_routes/*.rs`; ordinary
+handlers are reused through `salvo_support::respond` (axum `IntoResponse`
+rendered byte-for-byte by salvo), while SSE/multipart/streaming routes need
+native salvo paths. Existing axum oneshot tests stay as handler-level
+regression coverage; new salvo parity tests use `tests/support/listener.rs`
+(port 0, graceful stop + Drop). The final flip installs `salvo_app::router()`.
+
+## Cutover record (2026-11-24)
+
+All 64 mounted paths now live in six `salvo_routes/*.rs` routers merged by
+`salvo_app::router()`. Ordinary handlers are reused through
+`salvo_support::respond` (status/headers/body preserved byte-for-byte); SSE and
+streamed job/artifact bodies use salvo `ResBody::Stream`; multipart requests
+are rebuilt through axum's public `FromRequest` impl so the existing parsers
+stay authoritative. `main.rs::serve` binds with `salvo::conn::tcp::TcpListener`
+and serves `salvo_app::router(&Arc<AppConfig>)`; the axum `app()` builder stays
+only for the existing integration tests. Smoke test against a real server on
+127.0.0.1:18081: `/health`, `/api/version`, `/v1/queue`, `/v1/models`,
+`/v1/capabilities` → 200, unknown path → 404, gzip applied to
+`/v1/openapi.json` (196,325 B → 75,943 B, `content-encoding: gzip`).
+Known ceiling: request bodies are collected before dispatch (no incremental
+multipart/artifact streaming), and SSE identity headers depend on the bridge.

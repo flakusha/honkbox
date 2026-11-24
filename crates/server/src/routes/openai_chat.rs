@@ -93,7 +93,7 @@ pub(super) fn usage_of(reply: &honkbox_llm_worker::ChatResponse) -> OpenAiUsage 
 // dispatch would break the REQ-6/NEW-3 ordering story (register, queue,
 // branch on the stream flag) across two functions.
 #[allow(clippy::too_many_lines)]
-pub(super) async fn post_chat_completions(
+pub(crate) async fn post_chat_completions(
     State(config): State<AppConfig>,
     body: Bytes,
 ) -> Response {

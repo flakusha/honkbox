@@ -43,7 +43,7 @@ fn enqueue_rejection(err: &crate::downloads::EnqueueError) -> (StatusCode, Strin
         (status = 500, description = "No managed models root or target directory create failed")
     )
 )]
-pub(super) async fn post_download(
+pub(crate) async fn post_download(
     State(config): State<AppConfig>,
     Json(request): Json<DownloadRequest>,
 ) -> Response {
@@ -62,7 +62,7 @@ pub(super) async fn post_download(
         (status = 200, description = "Known downloads", body = DownloadList),
     )
 )]
-pub(super) async fn list_downloads(State(config): State<AppConfig>) -> Json<DownloadList> {
+pub(crate) async fn list_downloads(State(config): State<AppConfig>) -> Json<DownloadList> {
     Json(DownloadList {
         downloads: config.downloads.states(),
     })
@@ -78,7 +78,7 @@ pub(super) async fn list_downloads(State(config): State<AppConfig>) -> Json<Down
         (status = 404, description = "Unknown download id")
     )
 )]
-pub(super) async fn get_download(
+pub(crate) async fn get_download(
     State(config): State<AppConfig>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
@@ -101,7 +101,7 @@ pub(super) async fn get_download(
         (status = 409, description = "Download already finished")
     )
 )]
-pub(super) async fn delete_download(
+pub(crate) async fn delete_download(
     State(config): State<AppConfig>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {

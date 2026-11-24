@@ -19,11 +19,16 @@ mod ora;
 mod raster;
 mod routes;
 #[allow(dead_code)] // wired into the salvo server at the route cutover
+mod salvo_app;
+#[allow(dead_code)] // wired into the salvo server at the route cutover
 mod salvo_middleware;
+#[allow(dead_code)] // route batch modules land with their endpoints
+mod salvo_routes;
 mod salvo_version;
 #[allow(dead_code)] // helpers land with the salvo route batches
 mod salvo_support;
 mod svg;
+use salvo::conn::Listener as _;
 mod swap;
 mod texture_postprocess;
 
@@ -35,7 +40,7 @@ use std::time::Duration;
 
 use backends::{LlmBackend, SdBackend, SttBackend, TtsBackend};
 use clap::{Parser, Subcommand};
-use routes::{ApiDoc, AppConfig, app};
+use routes::{ApiDoc, AppConfig};
 use tracing::{info, warn};
 use utoipa::OpenApi as _;
 
@@ -588,9 +593,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         allow_unauthenticated_bind,
     ));
     info!("honkbox serving on http://{addr} (dev: {dev})");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("bind address");
+    let acceptor = salvo::conn::tcp::TcpListener::new(addr).bind().await;
     // Clone the swap tunables out before `cfg` is partially moved into the
     // registry roots below.
     let swap_cfg = cfg.swap.clone();
@@ -732,9 +735,9 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         app_config.clone(),
         rescan_signal,
     ));
-    axum::serve(listener, app(app_config).into_make_service())
-        .await
-        .expect("serve app");
+    salvo::Server::new(acceptor)
+        .serve(salvo_app::router(&std::sync::Arc::new(app_config)))
+        .await;
     // Every managed app dies with the server; no helper survives shutdown.
     apps.shutdown().await;
 }

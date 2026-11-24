@@ -88,7 +88,7 @@ fn gate(available: bool) -> Option<Response> {
     )
 )]
 #[allow(clippy::too_many_lines)] // one validation + staging + sidecar flow by design
-pub(super) async fn post_texture_postprocess(
+pub(crate) async fn post_texture_postprocess(
     State(config): State<AppConfig>,
     body: Result<Json<TexturePostprocessRequest>, JsonRejection>,
 ) -> Response {

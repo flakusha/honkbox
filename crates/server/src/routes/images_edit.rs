@@ -269,7 +269,7 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
         (status = 501, description = "Image/lora inputs accepted but not applicable by the sd pipeline (conditioning_unsupported)", body = OpenAiError)
     )
 )]
-pub(super) async fn post_images_edits(
+pub(crate) async fn post_images_edits(
     State(config): State<AppConfig>,
     headers: HeaderMap,
     multipart: Multipart,

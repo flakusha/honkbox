@@ -103,7 +103,7 @@ fn validate_embeddings_request(
         (status = 500, description = "Embedding failed", body = OpenAiError)
     )
 )]
-pub(super) async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Response {
+pub(crate) async fn post_embeddings(State(config): State<AppConfig>, body: Bytes) -> Response {
     let (entry, inputs) = match validate_embeddings_request(&config, &body) {
         Ok(pair) => pair,
         Err(rejection) => return rejection.response(),

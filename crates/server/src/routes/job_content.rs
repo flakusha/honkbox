@@ -258,7 +258,7 @@ fn zip_options() -> SimpleFileOptions {
         (status = 413, description = "Bundle exceeds the entry or byte caps", body = honkbox_api_types::OpenAiError)
     )
 )]
-pub(super) async fn get_job_bundle(
+pub(crate) async fn get_job_bundle(
     State(config): State<AppConfig>,
     AxumPath(id): AxumPath<String>,
     Query(signed): Query<signed_urls::SignedQuery>,
@@ -374,7 +374,7 @@ fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
         (status = 413, description = "File exceeds the byte cap", body = honkbox_api_types::OpenAiError)
     )
 )]
-pub(super) async fn get_job_content(
+pub(crate) async fn get_job_content(
     State(config): State<AppConfig>,
     AxumPath((id, name)): AxumPath<(String, String)>,
     Query(signed): Query<signed_urls::SignedQuery>,

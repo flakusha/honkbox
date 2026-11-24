@@ -40,7 +40,7 @@ use super::{AppConfig, SPEECH_INPUT_MAX_CHARS, validate_model};
         (status = 500, description = "Transcription failed")
     )
 )]
-pub(super) async fn post_transcribe(
+pub(crate) async fn post_transcribe(
     State(config): State<AppConfig>,
     Query(query): Query<TranscribeQuery>,
     headers: HeaderMap,
@@ -136,7 +136,7 @@ pub(super) async fn post_transcribe(
         (status = 500, description = "Synthesis failed")
     )
 )]
-pub(super) async fn post_synthesize(
+pub(crate) async fn post_synthesize(
     State(config): State<AppConfig>,
     Json(req): Json<SynthesizeRequest>,
 ) -> Result<Response, (StatusCode, String)> {

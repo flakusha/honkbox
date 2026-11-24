@@ -39,7 +39,7 @@ pub(crate) fn install_mesh_config(config: MeshConfig) {
 }
 
 /// Runtime config for the mounted handler; default-off when unset (tests).
-pub(super) fn runtime_mesh_config() -> &'static MeshConfig {
+pub(crate) fn runtime_mesh_config() -> &'static MeshConfig {
     RUNTIME_CONFIG.get_or_init(MeshConfig::default)
 }
 

@@ -190,7 +190,7 @@ async fn rerank(body: Bytes) -> Response {
         (status = 500, description = "Rerank failed")
     )
 )]
-pub(super) async fn post_rerank(body: Bytes) -> Response {
+pub(crate) async fn post_rerank(body: Bytes) -> Response {
     rerank(body).await
 }
 
@@ -206,7 +206,7 @@ pub(super) async fn post_rerank(body: Bytes) -> Response {
         (status = 500, description = "Rerank failed")
     )
 )]
-pub(super) async fn post_rerank_slash(body: Bytes) -> Response {
+pub(crate) async fn post_rerank_slash(body: Bytes) -> Response {
     rerank(body).await
 }
 

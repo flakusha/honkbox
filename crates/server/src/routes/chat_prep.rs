@@ -28,7 +28,7 @@ use super::openai_constraints::openai_error_response;
 /// route, consumed once per-kind swap actors land (audio pipelines are
 /// startup-loaded today).
 #[derive(Debug, Deserialize)]
-pub(super) struct TranscribeQuery {
+pub(crate) struct TranscribeQuery {
     pub(super) model: Option<String>,
     pub(super) language: Option<String>,
     pub(super) sample_rate: Option<u32>,

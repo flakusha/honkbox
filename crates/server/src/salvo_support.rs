@@ -10,14 +10,14 @@ use axum::response::IntoResponse;
 use salvo::http::{ResBody, StatusCode};
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
-use std::sync::Arc;
 
 use crate::routes::AppConfig;
 
 /// The config affixed to the API router. Panics only on a wiring bug.
-pub fn config(depot: &Depot) -> Arc<AppConfig> {
+/// Returns an owned `AppConfig` clone so callers can pass `State(config)`.
+pub fn config(depot: &Depot) -> AppConfig {
     depot
-        .get_typed::<Arc<AppConfig>>()
+        .get_typed::<AppConfig>()
         .expect("AppConfig must be affixed to the salvo router")
         .clone()
 }

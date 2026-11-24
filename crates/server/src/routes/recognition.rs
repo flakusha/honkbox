@@ -59,7 +59,7 @@ fn not_served(detail: &str, code: &'static str) -> Response {
         (status = 500, description = "Recognition engine failure", body = OpenAiError)
     )
 )]
-pub(super) async fn post_recognize(
+pub(crate) async fn post_recognize(
     State(config): State<AppConfig>,
     body: Result<Json<RecognizeRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {

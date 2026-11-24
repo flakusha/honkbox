@@ -96,7 +96,7 @@ pub(super) struct JobPlan {
         (status = 503, description = "No data dir: the artifact store and the job bundles are disabled", body = OpenAiError)
     )
 )]
-pub(super) async fn post_blender_job(
+pub(crate) async fn post_blender_job(
     State(config): State<AppConfig>,
     body: Result<Json<BlenderJobRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {

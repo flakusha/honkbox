@@ -497,7 +497,7 @@ fn prune_jobs(jobs: &mut HashMap<String, LiveJob>) {
         (status = 501, description = "Backend disabled, CLI probe failed, or no data dir", body = OpenAiError)
     )
 )]
-pub(super) async fn post_fizgig_train(
+pub(crate) async fn post_fizgig_train(
     State(app): State<AppConfig>,
     body: Result<Json<FizgigTrainRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
@@ -568,7 +568,7 @@ pub(super) async fn post_fizgig_train(
         (status = 404, description = "Unknown job id", body = OpenAiError)
     )
 )]
-pub(super) async fn get_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn get_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
     let jobs = JOBS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -599,7 +599,7 @@ pub(super) async fn get_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
         (status = 409, description = "Job already ended", body = OpenAiError)
     )
 )]
-pub(super) async fn cancel_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn cancel_fizgig_job(AxumPath(id): AxumPath<String>) -> Response {
     // Hold the lock across the marker write: a cancel that arrives after the
     // runner's terminal `set` must not leave a pause marker on a finished run.
     let mut jobs = JOBS

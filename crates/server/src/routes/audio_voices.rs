@@ -51,7 +51,7 @@ pub(super) fn kokoro_voice_meta(id: &str) -> (&'static str, &'static str) {
     path = "/v1/audio/voices",
     responses((status = 200, description = "Supported TTS voices", body = VoiceList))
 )]
-pub(super) async fn get_audio_voices(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn get_audio_voices(State(config): State<AppConfig>) -> Response {
     let data = if config.tts.backend_id() == honkbox_audio_worker::KOKORO_BACKEND_ID {
         honkbox_audio_worker::KOKORO_VOICES
             .iter()

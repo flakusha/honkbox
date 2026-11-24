@@ -88,7 +88,7 @@ fn invalid(reason: String) -> Response {
         (status = 501, description = "Validator absent or broken", body = honkbox_api_types::OpenAiError)
     )
 )]
-pub(super) async fn post_shader_validate(
+pub(crate) async fn post_shader_validate(
     body: Result<Json<ShaderValidateRequest>, JsonRejection>,
 ) -> Response {
     let bin = binary();

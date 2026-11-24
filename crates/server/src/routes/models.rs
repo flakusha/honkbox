@@ -26,7 +26,7 @@ use super::AppConfig;
         (status = 200, description = "Curated catalog with local presence + fit pills", body = CatalogList),
     )
 )]
-pub(super) async fn get_catalog(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn get_catalog(State(config): State<AppConfig>) -> Response {
     let snapshot = config.catalog_snapshot();
     let list = crate::catalog::build(&snapshot, config.vram_budget);
     match serde_json::to_string(&list) {
@@ -43,7 +43,7 @@ pub(super) async fn get_catalog(State(config): State<AppConfig>) -> Response {
 /// envelope (`{object: "list", data: [...]}`). Served from the shared scan
 /// snapshot; `POST /v1/models/refresh` re-scans and swaps it.
 #[utoipa::path(get, path = "/v1/models", responses((status = 200, description = "Discovered model catalog", body = ModelCatalog)))]
-pub(super) async fn get_models(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn get_models(State(config): State<AppConfig>) -> Response {
     let catalog = config.catalog_snapshot();
     // Serialized inline from the shared snapshot (`Arc<T>` only serializes
     // with serde's `rc` feature, so `Json(Arc<…>)` is not `IntoResponse`);
@@ -64,7 +64,7 @@ pub(super) async fn get_models(State(config): State<AppConfig>) -> Response {
 /// they contribute empty results). Root *configuration* still needs a
 /// restart; refresh picks up files added under the configured roots.
 #[utoipa::path(post, path = "/v1/models/refresh", responses((status = 200, description = "Freshly scanned model catalog", body = ModelCatalog)))]
-pub(super) async fn refresh_models(State(config): State<AppConfig>) -> Response {
+pub(crate) async fn refresh_models(State(config): State<AppConfig>) -> Response {
     match super::rescan_catalog(&config).await {
         Ok(catalog) => match serde_json::to_string(&catalog) {
             Ok(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
@@ -133,7 +133,7 @@ pub(super) fn unload_response(outcome: crate::swap::EvictOutcome, slug: String) 
         (status = 409, description = "Model is pinned; explicit refusal")
     )
 )]
-pub(super) async fn post_model_unload(
+pub(crate) async fn post_model_unload(
     State(config): State<AppConfig>,
     AxumPath(model): AxumPath<String>,
 ) -> Response {
@@ -169,7 +169,7 @@ pub(super) async fn post_model_unload(
         (status = 500, description = "File removal failed", body = OpenAiError)
     )
 )]
-pub(super) async fn delete_model(
+pub(crate) async fn delete_model(
     State(config): State<AppConfig>,
     AxumPath(model): AxumPath<String>,
 ) -> Response {

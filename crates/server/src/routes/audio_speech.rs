@@ -96,7 +96,7 @@ fn parse_speech_request(req: &SpeechRequest) -> Result<SpeechFormat, SpeechReque
         (status = 500, description = "Synthesis or audio encoding failed", body = OpenAiError)
     )
 )]
-pub(super) async fn post_audio_speech(
+pub(crate) async fn post_audio_speech(
     State(config): State<AppConfig>,
     Json(req): Json<SpeechRequest>,
 ) -> Response {

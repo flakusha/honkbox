@@ -32,7 +32,7 @@ use honkbox_recognition_worker::RecKind as WorkerRecKind;
     path = "/v1/capabilities",
     responses((status = 200, description = "Server capability contract (feature flags, formats, queue knobs, and the chat tool-choice fidelity note)", body = Capabilities))
 )]
-pub(super) async fn get_capabilities(State(config): State<super::AppConfig>) -> Json<Capabilities> {
+pub(crate) async fn get_capabilities(State(config): State<super::AppConfig>) -> Json<Capabilities> {
     Json(capabilities_document(&config))
 }
 

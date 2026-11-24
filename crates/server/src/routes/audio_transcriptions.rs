@@ -71,7 +71,7 @@ pub struct AudioSampleRateQuery {
         (status = 500, description = "Transcription failed", body = OpenAiError)
     )
 )]
-pub(super) async fn post_audio_transcriptions(
+pub(crate) async fn post_audio_transcriptions(
     State(config): State<AppConfig>,
     Query(query): Query<AudioSampleRateQuery>,
     multipart: Multipart,
@@ -195,7 +195,7 @@ pub(super) async fn post_audio_transcriptions(
         (status = 500, description = "Translation failed", body = OpenAiError)
     )
 )]
-pub(super) async fn post_audio_translations(
+pub(crate) async fn post_audio_translations(
     State(config): State<AppConfig>,
     Query(query): Query<AudioSampleRateQuery>,
     multipart: Multipart,

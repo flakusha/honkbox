@@ -29,10 +29,10 @@ use tower_http::compression::predicate::SizeAbove;
 use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate as _};
 
 #[path = "routes/external_tools.rs"]
-mod external_tools;
+pub(super) mod external_tools;
 
 #[path = "routes/apps.rs"]
-mod apps;
+pub(super) mod apps;
 
 #[allow(unused_imports)] // handler names are used by .route() and the OpenApi derive
 use self::apps::{
@@ -61,16 +61,16 @@ use self::external_tools::{
 };
 
 #[path = "routes/health.rs"]
-mod health;
+pub(super) mod health;
 
 #[path = "routes/capabilities.rs"]
-mod capabilities;
+pub(super) mod capabilities;
 
 #[path = "routes/models.rs"]
-mod models;
+pub(super) mod models;
 
 #[path = "routes/runtime.rs"]
-mod runtime;
+pub(super) mod runtime;
 
 #[allow(unused_imports)]
 use self::capabilities::{__path_get_capabilities, get_capabilities};
@@ -101,16 +101,16 @@ mod catalog;
 mod bindings;
 
 #[path = "routes/downloads.rs"]
-mod downloads;
+pub(super) mod downloads;
 
 #[path = "routes/asset_packs.rs"]
-mod asset_packs;
+pub(super) mod asset_packs;
 
 #[path = "routes/ui.rs"]
 mod ui;
 
 #[path = "routes/blender.rs"]
-mod blender;
+pub(super) mod blender;
 
 #[path = "routes/blender_stages.rs"]
 mod blender_stages;
@@ -130,10 +130,10 @@ use self::job_records::{
 };
 
 #[path = "routes/texture_postprocess.rs"]
-mod texture_postprocess;
+pub(super) mod texture_postprocess;
 
 #[path = "routes/mesh.rs"]
-mod mesh;
+pub(super) mod mesh;
 
 #[allow(unused_imports)] // main.rs installs the operator config at startup
 pub(crate) use self::mesh::install_mesh_config;
@@ -141,7 +141,7 @@ pub(crate) use self::mesh::install_mesh_config;
 use self::mesh::{__path_post_mesh_reroute, post_mesh_reroute};
 
 #[path = "routes/shader_validate.rs"]
-mod shader_validate;
+pub(super) mod shader_validate;
 
 #[allow(unused_imports)]
 // handler names are used by .route() and the OpenApi derive's generated types
@@ -180,16 +180,16 @@ use self::downloads::{
 pub(super) use self::ui::{fallback, resolve_model_slug, validate_model};
 
 #[path = "routes/chat_prep.rs"]
-mod chat_prep;
+pub(super) mod chat_prep;
 
 #[path = "routes/chat.rs"]
-mod chat;
+pub(super) mod chat;
 
 #[path = "routes/openai_constraints.rs"]
 mod openai_constraints;
 
 #[path = "routes/embeddings.rs"]
-mod embeddings;
+pub(super) mod embeddings;
 
 #[path = "routes/images_recipe.rs"]
 mod images_recipe;
@@ -201,34 +201,34 @@ mod images_inputs;
 mod images_controlnet;
 
 #[path = "routes/images_generate.rs"]
-mod images_generate;
+pub(super) mod images_generate;
 
 #[path = "routes/images_edit.rs"]
-mod images_edit;
+pub(super) mod images_edit;
 
 #[path = "routes/openai_chat.rs"]
-mod openai_chat;
+pub(super) mod openai_chat;
 
 #[path = "routes/openai_stream.rs"]
 mod openai_stream;
 
 #[path = "routes/audio_upload.rs"]
-mod audio_upload;
+pub(super) mod audio_upload;
 
 #[path = "routes/audio_multipart.rs"]
 mod audio_multipart;
 
 #[path = "routes/audio_transcriptions.rs"]
-mod audio_transcriptions;
+pub(super) mod audio_transcriptions;
 
 #[path = "routes/audio_subtitles.rs"]
 mod audio_subtitles;
 
 #[path = "routes/jobs.rs"]
-mod jobs;
+pub(super) mod jobs;
 
 #[path = "routes/audio_voices.rs"]
-mod audio_voices;
+pub(super) mod audio_voices;
 
 #[path = "routes/image_ops_limits.rs"]
 mod image_ops_limits;
@@ -246,16 +246,16 @@ mod image_ops_exec;
 mod image_ops_settle;
 
 #[path = "routes/image_ops_route.rs"]
-mod image_ops_route;
+pub(super) mod image_ops_route;
 
 #[path = "routes/recognition.rs"]
-mod recognition;
+pub(super) mod recognition;
 
 #[path = "routes/ocr_ingest.rs"]
 pub(crate) mod ocr_ingest;
 
 #[path = "routes/audio_speech.rs"]
-mod audio_speech;
+pub(super) mod audio_speech;
 
 #[path = "routes/openapi.rs"]
 mod openapi;
@@ -282,23 +282,23 @@ pub(crate) mod request_cache;
 pub(crate) mod signed_urls;
 
 #[path = "routes/queue.rs"]
-mod queue;
+pub(super) mod queue;
 
 #[path = "routes/rerank.rs"]
-mod rerank;
+pub(super) mod rerank;
 
 #[path = "routes/python_sidecar.rs"]
 mod python_sidecar;
 
 #[path = "routes/fizgig.rs"]
-mod fizgig;
+pub(super) mod fizgig;
 
 #[cfg(unix)]
 #[path = "routes/fizgig_run.rs"]
 mod fizgig_run;
 
 #[path = "routes/content_urls.rs"]
-mod content_urls;
+pub(super) mod content_urls;
 
 #[allow(unused_imports)]
 use self::content_urls::{__path_post_content_urls, post_content_urls};
@@ -394,7 +394,7 @@ use self::recognition::{__path_post_recognize, post_recognize, recognition_501_m
 /// Build the full router.
 // The route list is the map of the HTTP surface; splitting it for line count
 // hides which handler serves which path from the same view.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, dead_code)] // kept for axum-level integration tests
 pub fn app(config: AppConfig) -> Router {
     let mesh_router = Router::new()
         .route(mesh::MESH_REROUTE_PATH, post(post_mesh_reroute))

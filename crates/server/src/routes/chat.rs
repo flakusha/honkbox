@@ -39,7 +39,7 @@ use super::chat_prep::{
         (status = 500, description = "Inference failed")
     )
 )]
-pub(super) async fn post_chat(
+pub(crate) async fn post_chat(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Response, (StatusCode, String)> {
@@ -213,7 +213,7 @@ impl<S> Drop for CancelOnDrop<S> {
         (status = 500, description = "Inference failed")
     )
 )]
-pub(super) async fn post_chat_stream(
+pub(crate) async fn post_chat_stream(
     State(config): State<AppConfig>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Response, (StatusCode, String)> {

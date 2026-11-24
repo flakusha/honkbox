@@ -29,7 +29,7 @@ use honkbox_residency::ResourceKind;
     path = "/v1/queue",
     responses((status = 200, description = "Live queue snapshot", body = QueueSnapshot))
 )]
-pub(super) async fn get_queue() -> Json<QueueSnapshot> {
+pub(crate) async fn get_queue() -> Json<QueueSnapshot> {
     let ledger = honkbox_residency::global();
     // Same ledger snapshot capabilities uses for `queue.gpu_slots` and the
     // per-kind TTL; one read keeps all derived fields mutually consistent.

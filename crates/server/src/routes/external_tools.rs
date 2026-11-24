@@ -127,7 +127,7 @@ fn external_tool_501(tool: &str, missing: &str) -> Response {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub(super) struct ExternalToolQuery {
+pub(crate) struct ExternalToolQuery {
     capability: Option<String>,
 }
 
@@ -137,7 +137,7 @@ pub(super) struct ExternalToolQuery {
     path = "/v1/external-tools",
     responses((status = 200, description = "Discovered external engines", body = ExternalToolsCapability))
 )]
-pub(super) async fn get_external_tools() -> Json<ExternalToolsCapability> {
+pub(crate) async fn get_external_tools() -> Json<ExternalToolsCapability> {
     Json(external_tools_capability())
 }
 
@@ -152,7 +152,7 @@ pub(super) async fn get_external_tools() -> Json<ExternalToolsCapability> {
         (status = 501, description = "Tool or requested capability is unavailable")
     )
 )]
-pub(super) async fn get_external_tool(
+pub(crate) async fn get_external_tool(
     AxumPath(id): AxumPath<String>,
     Query(query): Query<ExternalToolQuery>,
 ) -> Response {
@@ -183,7 +183,7 @@ pub(super) async fn get_external_tool(
     path = "/v1/external-tools/reload",
     responses((status = 200, description = "Re-probed external engines", body = ExternalToolsCapability))
 )]
-pub(super) async fn post_external_tools_reload() -> Json<ExternalToolsCapability> {
+pub(crate) async fn post_external_tools_reload() -> Json<ExternalToolsCapability> {
     if let Some(registry) = cache().write().await.as_mut() {
         registry.reload().await;
     }

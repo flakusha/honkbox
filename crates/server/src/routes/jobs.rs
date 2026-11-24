@@ -33,7 +33,7 @@ use tokio_stream::{
         (status = 200, description = "In-flight jobs", body = JobList),
     )
 )]
-pub(super) async fn get_jobs() -> Json<JobList> {
+pub(crate) async fn get_jobs() -> Json<JobList> {
     Json(JobList {
         object: "list".to_owned(),
         data: crate::jobs_registry::global().list(),
@@ -71,7 +71,7 @@ pub(super) fn cancel_job_response(id: &str) -> Response {
         (status = 404, description = "Unknown job id"),
     )
 )]
-pub(super) async fn post_job_cancel(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn post_job_cancel(AxumPath(id): AxumPath<String>) -> Response {
     cancel_job_response(&id)
 }
 
@@ -89,7 +89,7 @@ pub(super) async fn post_job_cancel(AxumPath(id): AxumPath<String>) -> Response 
         (status = 404, description = "Unknown job id"),
     )
 )]
-pub(super) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
+pub(crate) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
     cancel_job_response(&id)
 }
 
@@ -127,7 +127,7 @@ pub(super) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
         (status = 200, description = "SSE stream of job events (job_registered / job_cancelled / job_finished / job_progress / job_result; catalogue above)", content_type = "text/event-stream"),
     )
 )]
-pub(super) async fn get_events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub(crate) async fn get_events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let receiver = crate::jobs_registry::global().subscribe();
     let stream = BroadcastStream::new(receiver).filter_map(|item| match item {
         Ok(event) => Some(Ok::<_, Infallible>(job_event_frame(&event))),

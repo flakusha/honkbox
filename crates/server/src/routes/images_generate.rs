@@ -348,7 +348,7 @@ pub(super) fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> Str
         (status = 501, description = "Valid conditioning accepted but not applicable by the sd pipeline (controlnet_unsupported or conditioning_unsupported)", body = OpenAiError)
     )
 )]
-pub(super) async fn post_images_generations(
+pub(crate) async fn post_images_generations(
     State(config): State<AppConfig>,
     headers: HeaderMap,
     Json(req): Json<ImagesGenerationRequest>,

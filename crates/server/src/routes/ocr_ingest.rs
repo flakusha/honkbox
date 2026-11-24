@@ -109,7 +109,7 @@ fn engine_version(backend: &str) -> Option<String> {
         (status = 503, description = "No data dir for the job bundle (`ocr_storage_unavailable`)", body = honkbox_api_types::OpenAiError)
     )
 )]
-pub(super) async fn post_ocr_ingest(
+pub(crate) async fn post_ocr_ingest(
     State(config): State<AppConfig>,
     body: Result<Json<OcrIngestRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {

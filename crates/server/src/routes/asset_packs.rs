@@ -71,7 +71,7 @@ fn valid_url(value: &str) -> bool {
         (status = 502, description = "Source failed or checksum mismatched", body = OpenAiError)
     )
 )]
-pub(super) async fn post_asset_pack_fetch(
+pub(crate) async fn post_asset_pack_fetch(
     State(config): State<AppConfig>,
     Json(req): Json<FetchRequest>,
 ) -> Response {

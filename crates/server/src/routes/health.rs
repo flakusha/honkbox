@@ -17,7 +17,7 @@ use utoipa::OpenApi;
 /// probes that prefer `text/plain` (uptime monitors, `docker --health-cmd`
 /// equivalents).
 #[utoipa::path(get, path = "/health", responses((status = 200, description = "Server is alive", body = Health)))]
-pub(super) async fn health(headers: HeaderMap) -> Response {
+pub(crate) async fn health(headers: HeaderMap) -> Response {
     if prefers_text_plain(&headers) {
         return ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "OK").into_response();
     }
@@ -66,6 +66,7 @@ fn note_media_type(media_type: &str, plain_q: &mut Option<f32>, json_q: &mut Opt
 /// The body stays byte-compatible; clients get one place to follow for the
 /// machine-readable capabilities document, the `OpenAPI` schema, and the
 /// generated HTML API reference.
+#[allow(dead_code)] // retained for the axum handler; salvo serves its own version route
 const DISCOVERY_LINKS: &str = concat!(
     "</v1/openapi.json>; rel=\"service-desc\"; type=\"application/json\", ",
     "</v1/capabilities>; rel=\"service-meta\"; type=\"application/json\", ",
@@ -74,7 +75,8 @@ const DISCOVERY_LINKS: &str = concat!(
 
 /// Binary name + version.
 #[utoipa::path(get, path = "/api/version", responses((status = 200, description = "Binary name and version", body = Version)))]
-pub(super) async fn get_version() -> Response {
+#[allow(dead_code)] // axum fixture; salvo serves /api/version from salvo_version.rs
+pub(crate) async fn get_version() -> Response {
     (
         [(header::LINK, DISCOVERY_LINKS)],
         Json(Version {
@@ -87,7 +89,7 @@ pub(super) async fn get_version() -> Response {
 
 /// `OpenAPI` 3.1 document as JSON.
 #[utoipa::path(get, path = "/v1/openapi.json", responses((status = 200, description = "OpenAPI document")))]
-pub(super) async fn openapi_json() -> impl IntoResponse {
+pub(crate) async fn openapi_json() -> impl IntoResponse {
     Json(super::ApiDoc::openapi())
 }
 
@@ -98,7 +100,7 @@ pub(super) async fn openapi_json() -> impl IntoResponse {
     path = "/metrics",
     responses((status = 200, description = "Prometheus text exposition", content_type = "text/plain"))
 )]
-pub(super) async fn metrics_endpoint() -> Response {
+pub(crate) async fn metrics_endpoint() -> Response {
     // The download metric families live in `downloads.rs` (its own
     // AtomicU64 grids); their exposition fragment is appended here, and the
     // residency ledger's fixed-kind admission grids append after those.
