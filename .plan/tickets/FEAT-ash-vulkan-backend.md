@@ -1,6 +1,6 @@
 # FEAT: Pure-Vulkan (`ash`) inference backend
 
-Status: in progress (first slice landed in this worktree, uncommitted 2026-11-22)
+Status: in progress (kernel/checkpoint wave committed 2026-11-24; end-to-end generate pending)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: ash-vulkan lane
@@ -925,3 +925,9 @@ original SD1.5 checkpoints plus one downloaded SD1.5 checkpoint and the
 provided SDXL sample all report `ready=true, missing=0`; SDXL reports
 `family: sdxl` with `label_emb_in: 2816`, `context_dim: 2048`, and both
 CLIP towers ready. Script: `.tmp/scripts/validate-ash-checkpoints.sh`.
+
+## Landed — 2026-11-24 (worktree, uncommitted)
+
+Real-checkpoint readiness: `ClipTensors` now loads `final_layer_norm` plus every `self_attn`/`mlp` bias; a new `run_with_bias` threads them through `TransformerBlock`, `FeedForward`, `FusedQkv` and `CrossAttention` via row-broadcast on the existing elementwise kernel; `ClipPooling` selects the first EOS row and applies gamma/beta; `TextConditioner` exposes `condition_pooled` and uses loaded biases in both paths. Vulkan OOM/device-lost/timeouts now map to named `VkError` variants. All weights still come from the caller — no fixtures or fake images. End-to-end `generate` (UNet prediction + VAE decode) remains unimplemented and still fails loudly.
+
+Evidence: `cargo test --locked -p honkbox-ash-backend --features ash-compute` → 111 passed, 0 failed (GPU kernels exercised); clippy `--all-targets -- -D warnings` clean. `experimental-ash-sd` full test gate still running; result appended in intercom `FIXED-ash-vulkan-kernels-2026-11-24.md`. Remaining: real-checkpoint end-to-end render + opt-in parity, then promotion from `experimental-ash-sd`.
