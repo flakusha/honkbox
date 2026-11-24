@@ -49,6 +49,7 @@ mod raster;
 mod routes;
 #[allow(dead_code)]
 #[path = "../src/salvo_middleware.rs"]
+mod salvo_middleware;
 #[allow(dead_code)]
 #[path = "../src/salvo_app.rs"]
 mod salvo_app;
@@ -58,7 +59,6 @@ mod salvo_version;
 #[allow(dead_code)]
 #[path = "../src/salvo_routes/mod.rs"]
 mod salvo_routes;
-mod salvo_middleware;
 #[allow(dead_code)]
 #[path = "../src/salvo_support.rs"]
 mod salvo_support;
