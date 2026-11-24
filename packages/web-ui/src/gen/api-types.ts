@@ -3000,3 +3000,47 @@ export type ComfyUiHistory = {
    */
   progress: ComfyUiProgress;
 };
+export type GenerationRecord = {
+  /**
+   * Bundle ULID directory name (`<data_dir>/jobs/<id>`).
+   */
+  id: string;
+  /**
+   * Prompt actually used for this bundle.
+   */
+  prompt: string;
+  /**
+   * RNG seed actually used.
+   */
+  seed: bigint;
+  /**
+   * Registry slug of the checkpoint actually used.
+   */
+  model_slug: string;
+  /**
+   * Verified weights digest; absent when the source published none.
+   */
+  model_sha256: string | null;
+  /**
+   * Vendored engine identity; absent for in-process backends.
+   */
+  engine_version: string | null;
+  /**
+   * Canonical input hash from the bundle sidecar.
+   */
+  inputs_sha256: string;
+};
+export type GenerationRecordList = {
+  /**
+   * Always `"list"`.
+   */
+  object: string;
+  /**
+   * Records in this page, newest bundle first.
+   */
+  data: Array<GenerationRecord>;
+  /**
+   * Whether more records follow this page.
+   */
+  has_more: boolean;
+};

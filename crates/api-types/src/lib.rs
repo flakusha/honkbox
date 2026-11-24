@@ -2438,6 +2438,40 @@ pub struct JobList {
     pub data: Vec<JobInfo>,
 }
 
+/// One finished generation bundle, read from its on-disk sidecar.
+/// `id` is the bundle ULID directory name, not the live `job_<ulid>`
+/// registry id: finished jobs leave no live registry entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct GenerationRecord {
+    /// Bundle ULID directory name (`<data_dir>/jobs/<id>`).
+    pub id: String,
+    /// Prompt actually used for this bundle.
+    pub prompt: String,
+    /// RNG seed actually used.
+    pub seed: u64,
+    /// Registry slug of the checkpoint actually used.
+    pub model_slug: String,
+    /// Verified weights digest; absent when the source published none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_sha256: Option<String>,
+    /// Vendored engine identity; absent for in-process backends.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    /// Canonical input hash from the bundle sidecar.
+    pub inputs_sha256: String,
+}
+
+/// `GET /v1/jobs/records` page of persisted generation records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct GenerationRecordList {
+    /// Always `"list"`.
+    pub object: String,
+    /// Records in this page, newest bundle first.
+    pub data: Vec<GenerationRecord>,
+    /// Whether more records follow this page.
+    pub has_more: bool,
+}
+
 /// `POST /v1/jobs/{id}/cancel` response (NEW-3). `cancelled` is `true`
 /// when a cancel was requested for a found id — the cooperative-stop token
 /// was marked — and is never `false` for a found id; an unknown id
@@ -3123,6 +3157,8 @@ mod tests {
             ComfyUiArtifact::decl(&config),
             ComfyUiProgress::decl(&config),
             ComfyUiHistory::decl(&config),
+            GenerationRecord::decl(&config),
+            GenerationRecordList::decl(&config),
         ] {
             out.push_str(&exported(decl));
             out.push('\n');

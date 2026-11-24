@@ -1,6 +1,6 @@
 # TASK: Read-only generation record/history API
 
-Status: proposed
+Status: done (2026-11-24)
 Priority: P2
 Epic: epic-full-ai-cycle
 Owner: unassigned
@@ -14,8 +14,7 @@ Resources: per-test temp data dir.
 
 ## Change
 
-- Resolve the job bundle manifest rather than scraping `request.json` in the
-  client; return a typed DTO with additive fields.
+- Read the bundle `final_00.json` sidecar rather than scraping `request.json` in the client; image bundles carry no `manifest.json`, so the content route cannot resolve them. Return a typed DTO with additive fields.
 - Keep scope bounded to a single job plus a paged list; loop-lore owns boards
   and collections.
 

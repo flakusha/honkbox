@@ -42,15 +42,15 @@ use self::apps::{
     get_comfyui_status, get_comfyui_view, post_app_start, post_app_stop,
 };
 
-#[allow(unused_imports)] // main.rs is the only caller; #[path] test harnesses omit it
-pub(crate) use self::external_tools::init_external_tools;
+#[allow(unused_imports)] // main.rs constructs the manager for install_manager
+pub(crate) use self::apps::Manager as ManagedAppManager;
 #[allow(unused_imports)] // main.rs installs the managed app manager at startup
 pub(crate) use self::apps::install_manager;
 #[cfg(test)]
 #[allow(dead_code, unused_imports)]
-pub(crate) use self::apps::{set_manager_for_tests, AppState};
-#[allow(unused_imports)] // main.rs constructs the manager for install_manager
-pub(crate) use self::apps::Manager as ManagedAppManager;
+pub(crate) use self::apps::{AppState, set_manager_for_tests};
+#[allow(unused_imports)] // main.rs is the only caller; #[path] test harnesses omit it
+pub(crate) use self::external_tools::init_external_tools;
 #[cfg(test)] // the fn itself is test-gated; the plain bin build must not see this
 #[allow(unused_imports)] // the capabilities contract test is the only caller
 pub(crate) use self::external_tools::set_registry_for_tests;
@@ -120,6 +120,14 @@ mod blender_exec;
 
 #[path = "routes/job_content.rs"]
 pub(super) mod job_content;
+
+#[path = "routes/job_records.rs"]
+mod job_records;
+
+#[allow(unused_imports)] // used by .route() and the OpenApi derive's generated types
+use self::job_records::{
+    __path_get_job_record, __path_get_job_records, get_job_record, get_job_records,
+};
 
 #[path = "routes/texture_postprocess.rs"]
 mod texture_postprocess;
@@ -447,6 +455,8 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/shader-validate", post(post_shader_validate))
         .route("/v1/jobs/{id}/bundle.zip", get(get_job_bundle))
         .route("/v1/jobs/{id}/content/{name}", get(get_job_content))
+        .route("/v1/jobs/records", get(get_job_records))
+        .route("/v1/jobs/records/{id}", get(get_job_record))
         .route("/v1/events", get(get_events))
         .route("/running", get(get_running))
         .route("/api/models/unload", post(post_unload_all))

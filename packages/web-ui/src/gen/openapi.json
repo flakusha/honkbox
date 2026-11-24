@@ -1838,6 +1838,89 @@
         }
       }
     },
+    "/v1/jobs/records": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/jobs/records`: bounded, read-only page over finished bundles.",
+        "operationId": "get_job_records",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1..100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Records to skip from newest",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of generation records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRecordList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Limit outside 1..100"
+          },
+          "500": {
+            "description": "Storage failure"
+          }
+        }
+      }
+    },
+    "/v1/jobs/records/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/jobs/records/{id}`: one finished generation bundle by ULID.",
+        "operationId": "get_job_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Bundle ULID directory name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One generation record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ULID"
+          },
+          "404": {
+            "description": "No finished bundle with that id"
+          }
+        }
+      }
+    },
     "/v1/jobs/{id}": {
       "delete": {
         "tags": [],
@@ -4851,6 +4934,81 @@
           "parameters": {
             "type": "object",
             "description": "JSON Schema of the arguments object. Arbitrary JSON: it is forwarded\nto the schema→grammar converter verbatim."
+          }
+        }
+      },
+      "GenerationRecord": {
+        "type": "object",
+        "description": "One finished generation bundle, read from its on-disk sidecar.\n`id` is the bundle ULID directory name, not the live `job_<ulid>`\nregistry id: finished jobs leave no live registry entry.",
+        "required": [
+          "id",
+          "prompt",
+          "seed",
+          "model_slug",
+          "inputs_sha256"
+        ],
+        "properties": {
+          "engine_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Vendored engine identity; absent for in-process backends."
+          },
+          "id": {
+            "type": "string",
+            "description": "Bundle ULID directory name (`<data_dir>/jobs/<id>`)."
+          },
+          "inputs_sha256": {
+            "type": "string",
+            "description": "Canonical input hash from the bundle sidecar."
+          },
+          "model_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Verified weights digest; absent when the source published none."
+          },
+          "model_slug": {
+            "type": "string",
+            "description": "Registry slug of the checkpoint actually used."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Prompt actually used for this bundle."
+          },
+          "seed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "RNG seed actually used.",
+            "minimum": 0
+          }
+        }
+      },
+      "GenerationRecordList": {
+        "type": "object",
+        "description": "`GET /v1/jobs/records` page of persisted generation records.",
+        "required": [
+          "object",
+          "data",
+          "has_more"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationRecord"
+            },
+            "description": "Records in this page, newest bundle first."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether more records follow this page."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `\"list\"`."
           }
         }
       },
