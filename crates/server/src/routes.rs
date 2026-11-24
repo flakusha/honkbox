@@ -38,8 +38,9 @@ pub(super) mod apps;
 use self::apps::{
     __path_get_app, __path_get_apps, __path_get_comfyui_history, __path_get_comfyui_queue,
     __path_get_comfyui_status, __path_get_comfyui_view, __path_post_app_start,
-    __path_post_app_stop, get_app, get_apps, get_comfyui_history, get_comfyui_queue,
-    get_comfyui_status, get_comfyui_view, post_app_start, post_app_stop,
+    __path_post_app_stop, __path_post_comfyui_start, get_app, get_apps, get_comfyui_history,
+    get_comfyui_queue, get_comfyui_status, get_comfyui_view, post_app_start, post_app_stop,
+    post_comfyui_start,
 };
 
 #[allow(unused_imports)] // main.rs constructs the manager for install_manager
@@ -428,6 +429,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/apps/{id}", get(get_app))
         .route("/v1/apps/{id}/start", post(post_app_start))
         .route("/v1/apps/{id}/stop", post(post_app_stop))
+        .route("/comfyui/start", post(post_comfyui_start))
         .route("/comfyui/status", get(get_comfyui_status))
         .route("/comfyui/queue", get(get_comfyui_queue))
         .route("/comfyui/history/{id}", get(get_comfyui_history))

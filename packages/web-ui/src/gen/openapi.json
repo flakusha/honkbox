@@ -141,6 +141,31 @@
         }
       }
     },
+    "/comfyui/start": {
+      "post": {
+        "tags": [],
+        "summary": "Calling `/comfyui` starts ComfyUI, llama-swap style: convenience alias for\n`POST /v1/apps/comfyui/start`. Same branches, same DTO, `/comfyui` voice.",
+        "operationId": "post_comfyui_start",
+        "responses": {
+          "200": {
+            "description": "Start accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedApp"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "App already running"
+          },
+          "501": {
+            "description": "App not enabled or unsupported platform"
+          }
+        }
+      }
+    },
     "/comfyui/status": {
       "get": {
         "tags": [],

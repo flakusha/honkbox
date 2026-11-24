@@ -7,7 +7,11 @@
 
 // `#[path]` includes pull in whole source modules; untested items and
 // salvo's generated `#[handler]` futures are dead/async-free in this binary.
-#![allow(dead_code, clippy::unused_async_trait_impl, clippy::redundant_closure_for_method_calls)]
+#![allow(
+    dead_code,
+    clippy::unused_async_trait_impl,
+    clippy::redundant_closure_for_method_calls
+)]
 
 #[allow(dead_code)]
 #[path = "../src/admission.rs"]
@@ -48,20 +52,20 @@ mod raster;
 #[path = "../src/routes.rs"]
 mod routes;
 #[allow(dead_code)]
-#[path = "../src/salvo_middleware.rs"]
-mod salvo_middleware;
-#[allow(dead_code)]
 #[path = "../src/salvo_app.rs"]
 mod salvo_app;
 #[allow(dead_code)]
-#[path = "../src/salvo_version.rs"]
-mod salvo_version;
+#[path = "../src/salvo_middleware.rs"]
+mod salvo_middleware;
 #[allow(dead_code)]
 #[path = "../src/salvo_routes/mod.rs"]
 mod salvo_routes;
 #[allow(dead_code)]
 #[path = "../src/salvo_support.rs"]
 mod salvo_support;
+#[allow(dead_code)]
+#[path = "../src/salvo_version.rs"]
+mod salvo_version;
 #[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
@@ -94,6 +98,7 @@ fn config(key_env: &str) -> Arc<AppConfig> {
         auth: AuthConfig {
             mode: AuthMode::Bearer,
             api_key_env: key_env.to_owned(),
+            jwt: crate::config::JwtConfig::default(),
         },
         dev: false,
         web_dist_dir: "web-dist".into(),
@@ -257,7 +262,10 @@ async fn compression_floor_small_plain_large_compressed() {
     let large = server.request(accept("/v1/big")).await;
     assert_eq!(large.status, StatusCode::OK);
     assert_eq!(
-        large.headers.get(CONTENT_ENCODING).and_then(|v| v.to_str().ok()),
+        large
+            .headers
+            .get(CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok()),
         Some("gzip")
     );
     set_env_var(key_env, None);
@@ -280,7 +288,10 @@ async fn sse_response_has_no_content_encoding() {
         .await;
     assert_eq!(response.status, StatusCode::OK);
     assert_eq!(
-        response.headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
+        response
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
         Some("text/event-stream")
     );
     assert!(!response.headers.contains_key(CONTENT_ENCODING));
@@ -323,6 +334,34 @@ async fn assembled_salvo_router_serves_cutover_surface() {
         .await;
     assert_eq!(queue.status, StatusCode::OK);
     assert_eq!(queue.json::<Value>().unwrap()["queued"], 0);
+
+    server.shutdown().await;
+    set_env_var(key_env, None);
+}
+
+/// The salvo front serves the `/comfyui/start` alias with the same hoops:
+/// bearer gate, then the honest 501 when no manager is installed.
+#[tokio::test]
+async fn salvo_comfyui_start_alias_matches_axum_branches() {
+    let key_env = "HONKBOX_SALVO_COMFYUI_START_KEY";
+    set_env_var(key_env, Some("comfyui-start-key"));
+    let cfg = config(key_env);
+    let server = TestServer::start(salvo_app::router(&cfg)).await;
+
+    let denied = server
+        .request(TestServer::client().post(server.url("/comfyui/start")))
+        .await;
+    assert_eq!(denied.status, StatusCode::UNAUTHORIZED);
+
+    let down = server
+        .request(
+            TestServer::client()
+                .post(server.url("/comfyui/start"))
+                .bearer_auth("comfyui-start-key"),
+        )
+        .await;
+    assert_eq!(down.status, StatusCode::NOT_IMPLEMENTED);
+    assert!(down.text().contains("comfyui unavailable"));
 
     server.shutdown().await;
     set_env_var(key_env, None);

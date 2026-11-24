@@ -109,6 +109,7 @@ pub struct EmbeddedUi;
         get_app,
         post_app_start,
         post_app_stop,
+        post_comfyui_start,
         get_comfyui_status,
         get_comfyui_queue,
         get_comfyui_history,

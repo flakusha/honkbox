@@ -14,6 +14,7 @@ pub fn router() -> Router {
         .push(Router::with_path("/v1/apps/{id}").get(get_app))
         .push(Router::with_path("/v1/apps/{id}/start").post(post_app_start))
         .push(Router::with_path("/v1/apps/{id}/stop").post(post_app_stop))
+        .push(Router::with_path("/comfyui/start").post(post_comfyui_start))
         .push(Router::with_path("/comfyui/status").get(get_comfyui_status))
         .push(Router::with_path("/comfyui/queue").get(get_comfyui_queue))
         .push(Router::with_path("/comfyui/history/{id}").get(get_comfyui_history))
@@ -27,8 +28,7 @@ pub fn fallback() -> impl Handler + Clone + 'static {
     async fn ui_fallback(req: &mut Request, depot: &mut Depot, res: &mut Response) {
         // axum 0.8 exports this URI as `axum::http::Uri` (formerly `extract::Uri`).
         let uri: axum::http::Uri = req.uri().clone();
-        let result =
-            crate::routes::fallback(State(crate::salvo_support::config(depot)), uri).await;
+        let result = crate::routes::fallback(State(crate::salvo_support::config(depot)), uri).await;
         crate::salvo_support::respond(res, result).await;
     }
 
@@ -66,6 +66,12 @@ async fn post_app_stop(req: &mut Request, _depot: &mut Depot, res: &mut Response
         Err(error) => return res.render(error),
     };
     let result = apps::post_app_stop(req.headers().clone(), AxumPath(id)).await;
+    crate::salvo_support::respond(res, result).await;
+}
+
+#[salvo::handler]
+async fn post_comfyui_start(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
+    let result = apps::post_comfyui_start(req.headers().clone()).await;
     crate::salvo_support::respond(res, result).await;
 }
 

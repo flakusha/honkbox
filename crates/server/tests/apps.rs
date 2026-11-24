@@ -474,6 +474,75 @@ async fn admin_routes_are_bearer_gated_and_comfyui_stays_honest_when_down() {
 }
 
 #[tokio::test]
+async fn comfyui_start_alias_matches_the_managed_start_branches() {
+    const KEY_ENV: &str = "HONKBOX_TEST_APPS_KEY";
+    let _slot_serial = SLOT_LOCK.lock().await;
+    set_env_var(KEY_ENV, Some("test-apps-key"));
+    let manager = Arc::new(
+        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188")
+            .unwrap(),
+    );
+    set_manager_for_tests(Some(Arc::clone(&manager)));
+    let router = app(test_app_config());
+
+    // Same bearer gate as the canonical route: no key, no start.
+    let denied = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/comfyui/start")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+    // Disabled app: alias and canonical agree on the honest 501.
+    for uri in ["/comfyui/start", "/v1/apps/comfyui/start"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Authorization", "Bearer test-apps-key")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{uri}");
+    }
+
+    // No manager: the alias speaks /comfyui voice, the canonical speaks apps voice.
+    set_manager_for_tests(None);
+    for (uri, voice) in [
+        ("/comfyui/start", "comfyui unavailable"),
+        ("/v1/apps/comfyui/start", "managed apps unavailable"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("Authorization", "Bearer test-apps-key")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED, "{uri}");
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains(voice), "{uri}");
+    }
+
+    set_env_var(KEY_ENV, None);
+}
+
+#[tokio::test]
 async fn disabled_app_start_is_a_named_501_even_with_bearer() {
     let manager = Arc::new(
         ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188")

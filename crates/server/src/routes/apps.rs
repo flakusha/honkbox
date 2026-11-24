@@ -1,5 +1,5 @@
-//! Admin routes for declared CLI apps plus the authenticated, allowlisted
-//! `ComfyUI` read surface (`/comfyui/*`).
+//! Admin routes for declared CLI apps plus the authenticated `ComfyUI`
+//! surface (`/comfyui/*`: typed reads and the managed-start alias).
 //!
 //! No raw `ComfyUI` wire proxy exists here: `POST /prompt`, node-graph bodies,
 //! `/ws`, `/interrupt` and `/queue` writes are deliberately absent. The typed
@@ -173,17 +173,39 @@ pub(crate) async fn get_app(AxumPath(id): AxumPath<String>) -> Response {
     )
 )]
 pub(crate) async fn post_app_start(headers: HeaderMap, AxumPath(id): AxumPath<String>) -> Response {
-    if let Some(forbidden) = require_admin(&headers) {
+    start_managed_app(&headers, &id, "managed apps").await
+}
+
+/// Calling `/comfyui` starts ComfyUI, llama-swap style: convenience alias for
+/// `POST /v1/apps/comfyui/start`. Same branches, same DTO, `/comfyui` voice.
+#[utoipa::path(
+    post,
+    path = "/comfyui/start",
+    responses(
+        (status = 200, description = "Start accepted", body = ManagedApp),
+        (status = 409, description = "App already running"),
+        (status = 501, description = "App not enabled or unsupported platform")
+    )
+)]
+pub(crate) async fn post_comfyui_start(headers: HeaderMap) -> Response {
+    start_managed_app(&headers, "comfyui", "comfyui").await
+}
+
+/// Shared start core: admin scope, then manager start, then status DTO.
+/// `what` names the surface in the honest-501 voice (`managed apps` on the
+/// admin route, `comfyui` on the alias).
+async fn start_managed_app(headers: &HeaderMap, id: &str, what: &str) -> Response {
+    if let Some(forbidden) = require_admin(headers) {
         return forbidden;
     }
     let Some(manager) = manager() else {
-        return named_501("managed apps", "no manager installed");
+        return named_501(what, "no manager installed");
     };
-    if let Err(error) = manager.start(&id).await {
+    if let Err(error) = manager.start(id).await {
         return app_error(error);
     }
-    manager.status(&id).map_or_else(
-        || named_501("managed apps", "status lost after start"),
+    manager.status(id).map_or_else(
+        || named_501(what, "status lost after start"),
         |status| Json(app_dto(status)).into_response(),
     )
 }
