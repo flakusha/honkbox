@@ -67,6 +67,7 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 - [epic-binary-formats.md](epics/epic-binary-formats.md)
 - [epic-trust-safety.md](epics/epic-trust-safety.md)
 - [epic-authn-authz.md](epics/epic-authn-authz.md)
+- [epic-salvo-migration.md](epics/epic-salvo-migration.md)
 
 ## Research promotion map
 
@@ -123,6 +124,7 @@ Most `.tmp/research/` docs have a plan home below or were triaged as no new honk
 | `harness-giwt-vcs-integration-2026-11-20.md` | `TASK-capabilities-golden-fixture`; giwt adoption intentionally not adopted |
 | `media-transport-federation-2026-11-20.md` | `TASK-exr-format-support` |
 | `ash-vulkan-backend-licensing-extensibility-2026-11-22.md` | `TASK-ash-backend-promote` |
+| `salvo-migration-and-support-2026-11-24.md` | `epic-salvo-migration` + `TASK-salvo-migration-spike` |
 
 | `video-to-audio-modalities-2026-11-24.md` | `FEAT-comfy-video-audio-templates.md`, `epic-comfyui-managed-runtime` |
 | `comfyui-custom-nodes-integration-2026-11-24.md` | `TASK-comfy-custom-node-capability-gate.md`, `epic-comfyui-managed-runtime` |
