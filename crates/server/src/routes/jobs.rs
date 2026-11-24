@@ -5,12 +5,12 @@
 //! scans that file for `.route()` calls. Only handlers and their helpers live
 //! here.
 
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use axum::{
     Json,
-    extract::Path as AxumPath,
-    http::StatusCode,
+    extract::{Path as AxumPath, Query},
+    http::{HeaderMap, StatusCode},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -116,10 +116,16 @@ pub(crate) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
 /// requested at that point; on `job_finished` it is `true` for a
 /// token-marked job, which for a non-interruptible job still ran to
 /// completion), plus the progress/result fields above when applicable.
-/// Frames are live-only: a subscriber that falls more
-/// than 256 events behind gets an `events_dropped` frame naming the skipped
-/// count (honest gap marker, never silent skipping), and (re)connecting
-/// replays nothing — `GET /v1/jobs` is the current-state snapshot.
+/// Every frame also carries `id:` with the event monotonic `seq`, so an
+/// `EventSource` client resumes automatically via `Last-Event-ID`.
+/// Connections without a cursor are live-only. A reconnect cursor —
+/// `?since=<seq>` (wins when both are present) or the `Last-Event-ID`
+/// header — replays only the events after it, oldest first, ahead of the
+/// live stream. A cursor older than the retained 256-event window, or a
+/// live subscriber that falls more than 256 events behind, gets one
+/// `events_dropped` frame naming the skipped count (honest gap marker,
+/// never silent skipping) instead of the missed events. `GET /v1/jobs`
+/// stays the current-state snapshot for clients with no cursor.
 #[utoipa::path(
     get,
     path = "/v1/events",
@@ -127,30 +133,79 @@ pub(crate) async fn delete_job(AxumPath(id): AxumPath<String>) -> Response {
         (status = 200, description = "SSE stream of job events (job_registered / job_cancelled / job_finished / job_progress / job_result; catalogue above)", content_type = "text/event-stream"),
     )
 )]
-pub(crate) async fn get_events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let receiver = crate::jobs_registry::global().subscribe();
-    let stream = BroadcastStream::new(receiver).filter_map(|item| match item {
-        Ok(event) => Some(Ok::<_, Infallible>(job_event_frame(&event))),
+pub(crate) async fn get_events(
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let registry = crate::jobs_registry::global();
+    // Reconnect cursor: an explicit `?since=` wins, else the SSE-standard
+    // `Last-Event-ID` (auto-sent by `EventSource` when frames carry `id:`).
+    // An unparseable cursor resumes live-only — a stale client never 400s.
+    let cursor: Option<u64> = params
+        .get("since")
+        .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            headers
+                .get("last-event-id")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse().ok())
+        });
+    // Subscribe BEFORE replaying: events admitted between a replay snapshot
+    // and the subscription would otherwise be lost (neither replayed nor
+    // live). The overlap is de-duplicated by seq below for exact-once
+    // delivery across the seam.
+    let receiver = registry.subscribe();
+    let mut replayed_through: Option<u64> = None;
+    let mut prefix: Vec<Event> = Vec::new();
+    if let Some(cursor) = cursor {
+        match registry.replay_since(cursor) {
+            Ok(missed) => {
+                replayed_through = missed.last().map(|event| event.seq).or(Some(cursor));
+                prefix.extend(missed.iter().map(job_event_frame));
+            }
+            Err(skipped) => {
+                replayed_through = Some(cursor);
+                prefix.push(events_dropped_frame(skipped));
+            }
+        }
+    }
+    // Replay first, then live: only the events after the cursor. A cursor
+    // older than the retained window collapses to one gap marker.
+    let live = BroadcastStream::new(receiver).filter_map(move |item| match item {
+        Ok(event) => {
+            if replayed_through.is_some_and(|max| event.seq <= max) {
+                return None;
+            }
+            Some(Ok::<_, Infallible>(job_event_frame(&event)))
+        }
         // This consumer fell behind: surface the gap instead of quietly
         // skipping the missed events. (A closed channel has no error
         // variant here — the stream simply ends, and the registry's sender
         // never closes anyway.)
-        Err(BroadcastStreamRecvError::Lagged(skipped)) => {
-            let frame = Event::default().event("events_dropped").data(format!(
-                "{{\"event\":\"events_dropped\",\"skipped\":{skipped}}}"
-            ));
-            Some(Ok(frame))
-        }
+        Err(BroadcastStreamRecvError::Lagged(skipped)) => Some(Ok(events_dropped_frame(skipped))),
     });
+    let stream = tokio_stream::iter(prefix.into_iter().map(Ok::<_, Infallible>)).chain(live);
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// One SSE frame for a registry lifecycle event: the `event:` line mirrors
-/// the JSON `event` field, so JSON-only consumers can ignore the envelope.
+/// the JSON `event` field, so JSON-only consumers can ignore the envelope;
+/// the `id:` line carries the monotonic `seq`, so `EventSource` clients
+/// resume with `Last-Event-ID` on reconnect.
 pub(super) fn job_event_frame(event: &JobEvent) -> Event {
     Event::default()
         .event(event.event.label())
+        .id(event.seq.to_string())
         .data(serde_json::to_string(&event).unwrap_or_default())
+}
+
+/// Honest gap marker: the cursor predates the retained window (or the live
+/// subscriber fell behind), so the missed events are named by count instead
+/// of silently skipped.
+fn events_dropped_frame(skipped: u64) -> Event {
+    Event::default().event("events_dropped").data(format!(
+        "{{\"event\":\"events_dropped\",\"skipped\":{skipped}}}"
+    ))
 }
 
 #[cfg(test)]

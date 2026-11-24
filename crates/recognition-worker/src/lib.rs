@@ -1,4 +1,4 @@
-//! Sync recognition pipelines (barcode/QR decode, optional ocrs/rten OCR).
+//! Sync recognition pipelines (barcode/QR decode, optional ocrs/rten OCR, optional gated face detection).
 //!
 //! CPU-only, tokio-free, std (+ `serde` for the wire DTOs). `barcode` (default)
 //! pulls in `rxing` for QR/1D/2D decode; the non-default `ocr-ocrs` feature
@@ -18,6 +18,11 @@ mod ocr;
 #[cfg(feature = "ocr-ocrs")]
 pub use ocr::{OCRS_BACKEND_ID, OCRS_VERSION, OcrRecognition, RTEN_VERSION};
 
+#[cfg(feature = "face")]
+mod face;
+#[cfg(feature = "face")]
+pub use face::{FACE_BACKEND_ID, FACE_ORT_VERSION, FaceDetection};
+
 /// `true` when THIS build compiles the ocrs/rten OCR backend (`ocr-ocrs`
 /// feature). The capability block and the route both key on the backend's
 /// runtime `serves(Ocr)`; this probe names the compiled surface only.
@@ -29,6 +34,12 @@ pub const OCR_COMPILED: bool = cfg!(feature = "ocr-ocrs");
 /// the binary (`VAD_COMPILED` pattern).
 pub const BARCODE_COMPILED: bool = cfg!(feature = "barcode");
 
+/// `true` when THIS build compiles the gated face detector (`face` feature).
+/// The capability block and the route key on the backend runtime
+/// `serves(Face)` plus the operator opt-in; this probe names the compiled
+/// surface only.
+pub const FACE_COMPILED: bool = cfg!(feature = "face");
+
 /// Which recognition work a request asks for. The vocabulary is closed:
 /// kinds without a compiled backend answer the named 501
 /// (`recognition_kind_unsupported`) rather than pretending.
@@ -39,11 +50,15 @@ pub enum RecKind {
     /// Document/scene OCR (text, regions, confidence). Served only by a
     /// build with the `ocr-ocrs` feature AND user-downloaded weights.
     Ocr,
+    /// Face/person detection (bbox + landmarks + confidence, no text).
+    /// Gated policy surface: served only by a build with the `face` feature
+    /// AND loaded weights AND operator opt-in with a consent assertion.
+    Face,
 }
 
 impl RecKind {
     /// Every kind in the wire vocabulary, in stable order.
-    pub const ALL: &'static [RecKind] = &[RecKind::Barcode, RecKind::Ocr];
+    pub const ALL: &'static [RecKind] = &[RecKind::Barcode, RecKind::Ocr, RecKind::Face];
 
     /// Stable wire name (matches the `api-types` `RecKind` serde spelling).
     #[must_use]
@@ -51,6 +66,7 @@ impl RecKind {
         match self {
             RecKind::Barcode => "barcode",
             RecKind::Ocr => "ocr",
+            RecKind::Face => "face",
         }
     }
 }
@@ -89,6 +105,10 @@ pub struct RecRegion {
     /// Engine confidence in `0.0..=1.0`; `None` when the engine does not
     /// produce one (rxing does not).
     pub confidence: Option<f32>,
+    /// Face landmarks as `[x, y]` source-image points (5-point SCRFD order).
+    /// `None` for every non-face kind — additive, barcode/OCR output is
+    /// byte-identical.
+    pub landmarks: Option<Vec<[f32; 2]>>,
 }
 
 /// One page of recognition output. Barcode decode yields exactly one page.
@@ -211,7 +231,8 @@ impl OcrCacheKey {
 /// Sync recognition pipeline.
 ///
 /// Backend ids: `"stub-recognition"` | `"rxing"` (with the `barcode`
-/// feature) | `"ocrs-rten"` (with the `ocr-ocrs` feature).
+/// feature) | `"ocrs-rten"` (with the `ocr-ocrs` feature) | `"scrfd-ort"` (with
+/// the `face` feature).
 pub trait RecognitionPipeline: Send + Sync {
     /// Stable backend id.
     fn backend_id(&self) -> &'static str;
@@ -294,6 +315,7 @@ impl RecognitionPipeline for StubRecognition {
                     bbox: [0.0, 0.0, 1.0, 1.0],
                     text: STUB_BARCODE_TEXT.to_owned(),
                     confidence: Some(1.0),
+                    landmarks: None,
                 }],
             }],
         })
@@ -358,13 +380,18 @@ mod tests {
     /// still lists Barcode (a kind is wire surface, not availability).
     #[test]
     fn vocabulary_and_probe_stay_stable() {
-        assert_eq!(RecKind::ALL, &[RecKind::Barcode, RecKind::Ocr]);
+        assert_eq!(
+            RecKind::ALL,
+            &[RecKind::Barcode, RecKind::Ocr, RecKind::Face]
+        );
         assert_eq!(RecKind::Barcode.as_str(), "barcode");
         assert_eq!(RecKind::Ocr.as_str(), "ocr");
+        assert_eq!(RecKind::Face.as_str(), "face");
         assert_eq!(BARCODE_COMPILED, cfg!(feature = "barcode"));
         assert_eq!(StubRecognition.kinds(), &[RecKind::Barcode]);
         assert!(!StubRecognition.serves(RecKind::Barcode));
         assert_eq!(OCR_COMPILED, cfg!(feature = "ocr-ocrs"));
+        assert_eq!(FACE_COMPILED, cfg!(feature = "face"));
     }
 
     /// The ingest cache key covers exactly the ticket's six inputs and

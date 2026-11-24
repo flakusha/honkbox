@@ -26,6 +26,24 @@ pub(super) fn recognition_501_message(detail: &str) -> String {
     format!("{detail}; see GET /v1/capabilities recognition")
 }
 
+/// Operator runtime opt-in for face detection (policy gate 3): the cargo
+/// face feature and loaded weights are the build/backend gates, this env
+/// switch is the operator half. Default-off: unset means disabled.
+fn face_opted_in() -> bool {
+    matches!(
+        std::env::var("HONKBOX_FACE_ENABLED").as_deref(),
+        Ok("1" | "true")
+    )
+}
+
+/// Face liveness: the compiled backend serves Face AND the operator opted in
+/// AND a data dir exists (local-only retention, policy gate 2).
+/// Capabilities and the route 403 key on this one predicate: face true
+/// only when the route would actually serve.
+pub(super) fn face_serving(config: &AppConfig) -> bool {
+    config.recognition.serves(WorkerRecKind::Face) && face_opted_in() && config.data_dir.is_some()
+}
+
 fn not_served(detail: &str, code: &'static str) -> Response {
     openai_error_response(
         StatusCode::NOT_IMPLEMENTED,
@@ -78,18 +96,26 @@ pub(crate) async fn post_recognize(
     let kind = match req.kind {
         RecKind::Barcode => WorkerRecKind::Barcode,
         RecKind::Ocr => WorkerRecKind::Ocr,
+        RecKind::Face => WorkerRecKind::Face,
     };
     // Honesty gate FIRST: a kind this build cannot serve is a 501 even when
     // the payload is also broken — the kind is the primary selector, and the
     // 501 message is what a capability-driven client is built to handle.
     let kind_backend = config.recognition.backend_id_for(kind);
     if !config.recognition.serves(kind) {
+        // Face has its own named 501 so a capability-driven client keys on
+        // the gate, not on the generic kind code.
+        let code = if kind == WorkerRecKind::Face {
+            "face_unsupported"
+        } else {
+            "recognition_kind_unsupported"
+        };
         return not_served(
             &format!(
                 "recognition kind {:?} is not served by this build (backend {kind_backend:?})",
                 kind.as_str()
             ),
-            "recognition_kind_unsupported",
+            code,
         );
     }
     if let Some(engine) = &req.engine
@@ -101,6 +127,26 @@ pub(crate) async fn post_recognize(
             ),
             "recognition_engine_unsupported",
         );
+    }
+    // Face gates (policy record face-detection-policy-decision-2026-11-20):
+    // the consent denial lands before any bytes are decoded; the operator
+    // opt-in + local-only gate follows. Both are 403s — the kind exists in
+    // the vocabulary, this deployment refuses it.
+    if kind == WorkerRecKind::Face {
+        if req.consent != Some(true) {
+            return openai_error_response(
+                StatusCode::FORBIDDEN,
+                "face detection requires an explicit per-subject consent assertion (consent: true); see GET /v1/capabilities recognition".to_owned(),
+                Some("face_consent_required"),
+            );
+        }
+        if !face_serving(&config) {
+            return openai_error_response(
+                StatusCode::FORBIDDEN,
+                "face detection is not enabled for this server (face build, HONKBOX_FACE_ENABLED=1, and a data dir are all required); see GET /v1/capabilities recognition".to_owned(),
+                Some("face_disabled"),
+            );
+        }
     }
     // The route owns input resolution: worker backends only ever see
     // decoded container bytes, never paths or URLs.
@@ -164,6 +210,7 @@ pub(crate) async fn post_recognize(
                         bbox: region.bbox,
                         text: region.text,
                         confidence: region.confidence,
+                        landmarks: region.landmarks,
                     })
                     .collect(),
             })

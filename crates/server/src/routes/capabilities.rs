@@ -112,6 +112,12 @@ fn formats_capability(config: &super::AppConfig) -> Formats {
     }
 }
 
+/// Env-key arm liveness, read at request time like the middleware does: an
+/// unset/empty key env var means only the JWT arm can admit (fail-closed).
+fn env_key_usable(config: &super::AppConfig) -> bool {
+    std::env::var(&config.auth.api_key_env).is_ok_and(|key| !key.is_empty())
+}
+
 /// Build the capability document (see [`get_capabilities`]). `pub(crate)`
 /// so the contract tests can assert on the exact structure the route
 /// serves.
@@ -146,9 +152,16 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
     let controlnet_available =
         controlnet_models > 0 && config.sd.backend_id() == honkbox_sd_core::SD_CPP_BACKEND_ID;
     let ledger = honkbox_residency::global().admission_info();
+    // Derived at request time: the JWT arm counts when `[auth] jwt_*`
+    // configures material, the env-key arm counts while its env var holds a
+    // value — so rotation/unset flips `both` to `jwt` with no restart.
     let auth_mode = match config.auth.mode {
         super::AuthMode::None => "none",
-        super::AuthMode::Bearer => "bearer",
+        super::AuthMode::Bearer => match (env_key_usable(config), config.auth.jwt.enabled()) {
+            (true, true) => "both",
+            (false, true) => "jwt",
+            _ => "bearer",
+        },
     };
     Capabilities {
         api_version: honkbox_api_types::API_VERSION.to_owned(),
@@ -248,6 +261,11 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
                 .iter()
                 .map(|op| op.label().to_owned())
                 .collect(),
+            // Sidecar liveness, read at request time like the other
+            // availability flags: loop-lore `resolveMattingProvider`
+            // reads this as its first choice (local providers are the
+            // fallback when `false`).
+            matting_available: super::image_ops_exec::matting_sidecar_url().is_some(),
         }),
         // Tool-choice fidelity (TASK-llm-tool-choice-contract): derived
         // from the `ToolChoiceSpec` vocabulary consts — the same type the
@@ -261,6 +279,9 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
         recognition: Some(RecognitionFeature {
             barcode: config.recognition.serves(WorkerRecKind::Barcode),
             ocr: config.recognition.serves(WorkerRecKind::Ocr),
+            // Live only when every face gate passes (compiled + weights +
+            // opt-in + data dir) — the same predicate the route 403s on.
+            face: super::recognition::face_serving(config),
         }),
         external_tools: Some(super::external_tools::external_tools_capability()),
         // Additive probe so clients can check storage before using artifact

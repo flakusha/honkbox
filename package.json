@@ -17,7 +17,7 @@
     "build:vendor": "bun scripts/build-vendor.ts",
     "build:server": "cargo build --locked -p honkbox-server",
     "build:rs": "cargo build --workspace --locked",
-    "build:release": "cargo build --release --locked -p honkbox-server",
+    "build:release": "cargo build --release --locked -p honkbox-server --features release",
     "install:local": "bun scripts/install.ts",
     "uninstall:local": "bun scripts/uninstall.ts",
     "hooks:install": "git config core.hooksPath .githooks",

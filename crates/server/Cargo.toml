@@ -36,6 +36,8 @@ honkbox-recognition-worker = { path = "../recognition-worker" }
 honkbox-external-tools = { path = "../external-tools" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
+# JWT bearer arm (auth middleware): HS256 + RS256/JWKS verification.
+jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }
 tokio-util = { workspace = true }
 sha2 = { workspace = true }
@@ -109,6 +111,7 @@ barcode = ["honkbox-recognition-worker/barcode"]
 # (`qwen3_asr`, eSpeak-free). Non-default — the vendored engine is a heavy
 # CMake build; `--stt-backend audio-cpp` without this feature is a loud
 # named error at the CLI seam (backends.rs), never a silent fallback.
+# Prefer the `release` set below over naming this feature directly.
 audio-cpp = [
     "honkbox-audio-worker/audio-cpp",
     "honkbox-audio-worker/audio-cpp-qwen3-asr",
@@ -118,9 +121,17 @@ audio-cpp = [
 # clears license/advisory review. Forwarding this one switch makes the
 # worker's `VAD_COMPILED` — and therefore `capabilities.features.vad` —
 # derive from the build, never a hand-written flag. With it off, streaming
-# STT still runs on fixed bounded windows.
+# STT still runs on fixed bounded windows. Prefer the `release` set below.
 audio-vad = ["honkbox-audio-worker/vad"]
 # ocrs/rten Latin OCR (TASK-ocr-ocrs-backend): non-default, pure-Rust CPU.
 # Weights are user-discovered from `ocr:` roots; honkbox bundles none.
+# Prefer the `release` set below over naming this feature directly.
 ocr-ocrs = ["honkbox-recognition-worker/ocr-ocrs"]
+# loop-lore 1.0.0 release set: every non-default capability flag on
+# (`ocr-ocrs` -> `recognition.ocr`, `audio-vad` -> `features.vad`,
+# `audio-cpp` -> `features.audio_cpp`; `llm-vision`, `vulkan`, `barcode`
+# ride the defaults). Kept OUT of `default`: audio-cpp is a heavy CMake
+# build, so dev builds stay fast. ONE release command:
+# `bun run install:local` (build:release carries `--features release`).
+release = ["ocr-ocrs", "audio-vad", "audio-cpp"]
 default = ["vulkan", "llm-vision", "barcode"]

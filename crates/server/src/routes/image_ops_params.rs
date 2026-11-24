@@ -64,7 +64,7 @@ pub(super) fn validate_image_op_params(
                 ));
             }
         }
-        ImageOpCommand::Grayscale | ImageOpCommand::Format => {}
+        ImageOpCommand::Grayscale | ImageOpCommand::Format | ImageOpCommand::Matting => {}
     }
     Ok(())
 }

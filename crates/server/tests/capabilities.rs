@@ -672,6 +672,7 @@ async fn auth_mode_reflects_config() {
     config.auth = AuthConfig {
         mode: AuthMode::Bearer,
         api_key_env: "HONKBOX_CAPABILITIES_TEST_KEY".to_owned(),
+        jwt: crate::config::JwtConfig::default(),
     };
     // Unique env var name: no other test in this binary reads it.
     routes::set_env_var("HONKBOX_CAPABILITIES_TEST_KEY", Some("caps-test-key-value"));

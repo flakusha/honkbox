@@ -768,13 +768,14 @@ export type TranscriptionVerbose = {
    */
   segments: Array<TranscriptSegment>;
 };
-export type ImageOpKind = "resize" | "crop" | "rotate" | "grayscale" | "format";
+export type ImageOpKind = "resize" | "crop" | "rotate" | "grayscale" | "format" | "matting";
 export type ImageOpCommand =
   | { "resize": ImageOpResize; }
   | { "crop": ImageOpCrop; }
   | { "rotate": ImageOpRotate; }
   | "grayscale"
-  | "format";
+  | "format"
+  | "matting";
 export type ImageOpResize = {
   /**
    * Target width in pixels, `[1, 8192]`.
@@ -904,6 +905,13 @@ export type ImageOpsCapability = {
    * Supported op wire names (the `ImageOpCommand` tag vocabulary).
    */
   ops: Array<string>;
+  /**
+   * Subject-matting sidecar liveness (`POST /v1/image-ops` `"matting"`):
+   * `true` only while `HONKBOX_MATTING_URL` names a reachable sidecar.
+   * loop-lore `resolveMattingProvider` reads this as its first choice
+   * (local providers are the fallback when `false`/absent).
+   */
+  matting_available: boolean;
 };
 export type SpeechRequest = {
   /**
@@ -1478,6 +1486,12 @@ export type JobEventType =
   | "job_result";
 export type JobEvent = {
   /**
+   * Monotonic per-process sequence number, stamped once at central emit.
+   * Reconnect cursors (`?since=`, `Last-Event-ID`) replay events with a
+   * greater `seq`; it also rides as the SSE `id:` line.
+   */
+  seq: bigint;
+  /**
    * Lifecycle transition (also carried as the SSE `event:` line so
    * JSON-only consumers do not need the envelope).
    */
@@ -2045,9 +2059,10 @@ export type CompressionRange = {
 };
 export type AuthCapabilities = {
   /**
-   * `"none"` (loopback-only operation) or `"bearer"` (key required on
-   * every route except the probes). The key VALUE is never in this
-   * document.
+   * `"none"` (loopback-only operation), `"bearer"` (env-key required on
+   * every route except the probes), `"jwt"` (JWT only — the key env
+   * var is unset), or `"both"` (either arm admits). Derived at request
+   * time. The key VALUE is never in this document.
    */
   mode: string;
 };
@@ -2153,7 +2168,7 @@ export type ExternalToolsCapability = {
    */
   tools: Array<ExternalTool>;
 };
-export type RecKind = "barcode" | "ocr";
+export type RecKind = "barcode" | "ocr" | "face";
 export type RecognitionFeature = {
   /**
    * Barcode/QR decode is compiled and served by `POST /v1/recognize`.
@@ -2166,6 +2181,13 @@ export type RecognitionFeature = {
    * see `OcrEngineMeta`.
    */
   ocr: boolean;
+  /**
+   * Face/person detection is live: compiled (`face` feature), weights
+   * loaded, operator opt-in set, and a data dir present (local-only).
+   * `true` only when every gate passes — the same predicate the route
+   * 501/403s on, so the document cannot drift from the binary.
+   */
+  face: boolean;
 };
 export type RecognizeRequest = {
   /**
@@ -2194,6 +2216,14 @@ export type RecognizeRequest = {
    * named 501 naming the engine.
    */
   engine?: string | null;
+  /**
+   * Per-subject consent assertion, REQUIRED for Face (policy gate 1):
+   * the operator application collected consent out of band and asserts
+   * it here. honkbox never infers consent: None or false on a face
+   * request answers the named 403 before any bytes are decoded. Ignored
+   * by barcode/OCR.
+   */
+  consent?: boolean | null;
 };
 export type RecognitionRegion = {
   /**
@@ -2210,6 +2240,12 @@ export type RecognitionRegion = {
    * Engine confidence in `0.0..=1.0`, absent when unknown.
    */
   confidence?: number | null;
+  /**
+   * Face landmarks as `[x, y]` source-image points (5-point SCRFD order),
+   * present only on face detections. Additive: barcode/OCR regions leave
+   * it absent and older clients ignore it.
+   */
+  landmarks?: Array<[number, number]> | null;
 };
 export type RecognitionPage = {
   /**

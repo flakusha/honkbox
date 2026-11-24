@@ -1035,7 +1035,7 @@ async fn capabilities_list_supported_ops() {
     let (_, _, doc) = send_get(app_with(None), "/v1/capabilities").await;
     assert_eq!(
         doc["image_ops"]["ops"],
-        json!(["resize", "crop", "rotate", "grayscale", "format"]),
+        json!(["resize", "crop", "rotate", "grayscale", "format", "matting"]),
         "{doc}"
     );
 }
@@ -1217,4 +1217,83 @@ fn hex(digest: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+/// A real `width`×`height` opaque-white JPEG via the in-tree encoder (the
+/// non-PNG admitted input the matting gate rejects).
+fn jpeg_data_uri(width: u32, height: u32) -> String {
+    let bytes = honkbox_sd_core::encode_image(
+        honkbox_sd_core::GeneratedImage {
+            width,
+            height,
+            rgba: vec![255; (width * height * 4) as usize],
+        },
+        honkbox_sd_core::OutputFormat::Jpeg,
+    )
+    .expect("jpeg encodes");
+    format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// Matting is PNG-in: a JPEG input is a named 400
+/// (`invalid_image_op_matting_input`), never a silent coercion — and no job
+/// is admitted (pre-admission rejection, like the other input gates).
+#[tokio::test]
+async fn matting_with_non_png_input_is_named_400() {
+    let app = app_with(None);
+    let (status, _, body) = image_ops(
+        app,
+        json!({
+            "command": "matting",
+            "inputs": [{"data_uri": jpeg_data_uri(4, 4)}],
+            "request_id": "matting-non-png-input",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_image_op_matting_input");
+}
+
+/// Matting is PNG-out: any other output container is a named 400
+/// (`invalid_image_op_matting_output`), never a silent re-encode of the
+/// cutout. Fires in request validation — no sidecar is contacted.
+#[tokio::test]
+async fn matting_with_non_png_output_is_named_400() {
+    let app = app_with(None);
+    let (status, _, body) = image_ops(
+        app,
+        json!({
+            "command": "matting",
+            "inputs": one_input(4, 4),
+            "request_id": "matting-non-png-output",
+            "output_format": "jpeg",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_image_op_matting_output");
+}
+
+/// Sidecar unconfigured: PNG-in matting is an honest 501
+/// (`matting_unavailable`), and the capabilities flag agrees
+/// (`image_ops.matting_available == false`). `HONKBOX_MATTING_URL` is unset
+/// in test environments and is never set here — no network.
+#[tokio::test]
+async fn matting_without_sidecar_is_501_matching_capabilities() {
+    let app = app_with(None);
+    let (status, _, body) = image_ops(
+        app.clone(),
+        json!({
+            "command": "matting",
+            "inputs": one_input(4, 4),
+            "request_id": "matting-no-sidecar",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert_eq!(body["error"]["code"], "matting_unavailable");
+    let (_, _, doc) = send_get(app, "/v1/capabilities").await;
+    assert_eq!(doc["image_ops"]["matting_available"], false, "{doc}");
 }

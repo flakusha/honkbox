@@ -363,3 +363,43 @@ async fn unserved_kind_is_named_501_matching_capabilities() {
     // backend exists yet — any `true` would be a half seam).
     assert!(!ocr_flag);
 }
+
+/// Face honesty: no server build wires a face backend yet (worker
+/// `FaceDetection` exists but the router does not construct it), so the
+/// request is the named 501 `face_unsupported` on every build — and the
+/// capabilities flag mirrors the same `serves()` gate, so a client can
+/// trust either direction (mirrors the OCR 501 agreement test above).
+/// When the wiring follow-up lands, this test must grow face-build
+/// consent/serve cases.
+#[tokio::test]
+async fn face_kind_without_wired_backend_is_named_501_matching_capabilities() {
+    let app = app_with();
+    let (status, body) = post_json(
+        &app,
+        "/v1/recognize",
+        json!({"kind": "face", "image": "data:image/png;base64,aGk="}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "body: {body}");
+    assert_eq!(error_code(&body), "face_unsupported");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("face")),
+        "501 must name the kind: {body}"
+    );
+    // The capabilities document agrees with the route's gate.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("infallible");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let caps: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(caps["recognition"]["face"], false, "face flag: {caps}");
+}

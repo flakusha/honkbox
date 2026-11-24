@@ -154,6 +154,7 @@ impl RecognitionPipeline for OcrRecognition {
                     text: word.to_string(),
                     // ocrs 0.14 does not expose a recognition score.
                     confidence: None,
+                    landmarks: None,
                 });
             }
         }

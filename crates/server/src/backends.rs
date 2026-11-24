@@ -242,6 +242,8 @@ impl honkbox_recognition_worker::RecognitionPipeline for RecognitionRouter {
                 .as_ref()
                 .map_or(self.id, |backend| backend.backend_id_for(kind)),
             RecKind::Ocr => self.ocr.backend_id_for(kind),
+            // No server-side face backend yet (worker `FaceDetection` exists but the router does not construct it — weight discovery + construction is an open follow-up); the router names itself so the 501 names the missing kind, not a wrong engine.
+            RecKind::Face => self.id,
         }
     }
 
@@ -258,6 +260,8 @@ impl honkbox_recognition_worker::RecognitionPipeline for RecognitionRouter {
                 self.barcode.as_ref().is_some_and(|b| b.serves(kind))
             }
             honkbox_recognition_worker::RecKind::Ocr => self.ocr.serves(kind),
+            // Unserved until the router constructs the worker backend (open follow-up: feature + weight discovery + construction).
+            honkbox_recognition_worker::RecKind::Face => false,
         }
     }
 
@@ -278,6 +282,11 @@ impl honkbox_recognition_worker::RecognitionPipeline for RecognitionRouter {
                 |b| b.recognize(req),
             ),
             RecKind::Ocr => self.ocr.recognize(req),
+            // No constructed face backend yet — honest 501 (open follow-up: wire worker `FaceDetection` here).
+            RecKind::Face => Err(RecError::Unsupported {
+                kind: req.kind,
+                backend: self.id,
+            }),
         }
     }
 

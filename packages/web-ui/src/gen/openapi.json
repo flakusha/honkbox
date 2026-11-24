@@ -1274,7 +1274,7 @@
       "get": {
         "tags": [],
         "summary": "`GET /v1/events`: the registry-wide job lifecycle feed as a\nServer-Sent-Events stream (observability only — it registers no job and\ntouches no GPU slot). Every in-flight GPU job of every kind emits:",
-        "description": "- `event: job_registered` — the job entered the registry (route\n  admitted the request; it may still be waiting in the admission\n  queue);\n- `event: job_cancelled` — a cancel was REQUESTED for the job (POST\n  `.../cancel` or DELETE `/v1/jobs/{id}`); not a completion event;\n- `event: job_finished` — the job left the registry (its request ended,\n  any outcome);\n- `event: job_progress` — a work update: `step`, `total_steps`, and\n  `pct` (percent, 0..=100; omitted when the total is 0);\n- `event: job_result` — an artifact was produced: `artifact_id`,\n  `sha256`, `size_bytes`. A job may emit several; not a completion\n  signal.\n\nEach frame's JSON `data` mirrors the SSE `event` line in its `event`\nfield (`JobEvent`): `id`, `kind`, `model` (when known),\n`started_at_ms`, `interruptible`, and `cancelled` (= a cancel had been\nrequested at that point; on `job_finished` it is `true` for a\ntoken-marked job, which for a non-interruptible job still ran to\ncompletion), plus the progress/result fields above when applicable.\nFrames are live-only: a subscriber that falls more\nthan 256 events behind gets an `events_dropped` frame naming the skipped\ncount (honest gap marker, never silent skipping), and (re)connecting\nreplays nothing — `GET /v1/jobs` is the current-state snapshot.",
+        "description": "- `event: job_registered` — the job entered the registry (route\n  admitted the request; it may still be waiting in the admission\n  queue);\n- `event: job_cancelled` — a cancel was REQUESTED for the job (POST\n  `.../cancel` or DELETE `/v1/jobs/{id}`); not a completion event;\n- `event: job_finished` — the job left the registry (its request ended,\n  any outcome);\n- `event: job_progress` — a work update: `step`, `total_steps`, and\n  `pct` (percent, 0..=100; omitted when the total is 0);\n- `event: job_result` — an artifact was produced: `artifact_id`,\n  `sha256`, `size_bytes`. A job may emit several; not a completion\n  signal.\n\nEach frame's JSON `data` mirrors the SSE `event` line in its `event`\nfield (`JobEvent`): `id`, `kind`, `model` (when known),\n`started_at_ms`, `interruptible`, and `cancelled` (= a cancel had been\nrequested at that point; on `job_finished` it is `true` for a\ntoken-marked job, which for a non-interruptible job still ran to\ncompletion), plus the progress/result fields above when applicable.\nEvery frame also carries `id:` with the event monotonic `seq`, so an\n`EventSource` client resumes automatically via `Last-Event-ID`.\nConnections without a cursor are live-only. A reconnect cursor —\n`?since=<seq>` (wins when both are present) or the `Last-Event-ID`\nheader — replays only the events after it, oldest first, ahead of the\nlive stream. A cursor older than the retained 256-event window, or a\nlive subscriber that falls more than 256 events behind, gets one\n`events_dropped` frame naming the skipped count (honest gap marker,\nnever silent skipping) instead of the missed events. `GET /v1/jobs`\nstays the current-state snapshot for clients with no cursor.",
         "operationId": "get_events",
         "responses": {
           "200": {
@@ -1503,7 +1503,7 @@
     "/v1/image-ops": {
       "post": {
         "tags": [],
-        "summary": "`POST /v1/image-ops` (epic-editor-integration): one bounded CPU op over\n`1..=8` inputs — resize/crop/rotate/grayscale/format — deterministic by\nconstruction (Lanczos3, fixed encoders), with `request_id`-keyed\nidempotency (same key + same canonical command replays the first job's\nresponse byte-identically, no double execution; same key + different\ncommand is a named 400). The job is registry-visible while live (kind\n`image_ops`, cancel honored BETWEEN inputs), its lifecycle streams on\n`GET /v1/events`, and the result bundle lands under\n`<data_dir>/jobs/{bundle}/` via the existing jobs path (sidecar: command\nhash, input/output hashes, tool version, attempts, outcome). Inputs are\ndata URIs or this server's own bundle artifacts only — no paths, no\n`file://`, no remote URLs (nothing is fetched, so there is no SSRF\nsurface). Unsupported-in-principle ops do not exist in the vocabulary:\nthe op set is exactly what the in-process `image` crate covers\n(TASK-cheap-ops-spike Tier 0), so there is no 501 path today — unknown\nop tags are a 400 from parsing, and the capabilities advertisement lists\nthe supported vocabulary.",
+        "summary": "`POST /v1/image-ops` (epic-editor-integration): one bounded CPU op over\n`1..=8` inputs — resize/crop/rotate/grayscale/format/matting — deterministic by\nconstruction (Lanczos3, fixed encoders), with `request_id`-keyed\nidempotency (same key + same canonical command replays the first job's\nresponse byte-identically, no double execution; same key + different\ncommand is a named 400). The job is registry-visible while live (kind\n`image_ops`, cancel honored BETWEEN inputs), its lifecycle streams on\n`GET /v1/events`, and the result bundle lands under\n`<data_dir>/jobs/{bundle}/` via the existing jobs path (sidecar: command\nhash, input/output hashes, tool version, attempts, outcome). Inputs are\ndata URIs or this server's own bundle artifacts only — no paths, no\n`file://`, no remote URLs (nothing is fetched, so there is no SSRF\nsurface). The Tier 0 ops are exactly what the in-process image crate\ncovers (TASK-cheap-ops-spike), so they have no 501 path — unknown\nop tags are a 400 from parsing. Matting is the one sidecar op:\nPNG-in/PNG-out through `HONKBOX_MATTING_URL`, an honest 501\n(`matting_unavailable`) while unconfigured. The capabilities\nadvertisement lists the vocabulary plus the sidecar liveness flag.",
         "operationId": "post_image_ops",
         "requestBody": {
           "content": {
@@ -1558,6 +1558,16 @@
           },
           "500": {
             "description": "Decode/transform/encode failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Matting sidecar unconfigured (matting_unavailable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1628,6 +1638,16 @@
           },
           "500": {
             "description": "Generation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Image/lora inputs accepted but not applicable by the sd pipeline (conditioning_unsupported)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1707,7 +1727,7 @@
             }
           },
           "501": {
-            "description": "Valid controlnet params accepted but not applicable by the sd pipeline (controlnet_unsupported)",
+            "description": "Valid conditioning accepted but not applicable by the sd pipeline (controlnet_unsupported or conditioning_unsupported)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2944,7 +2964,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "description": "`\"none\"` (loopback-only operation) or `\"bearer\"` (key required on\nevery route except the probes). The key VALUE is never in this\ndocument."
+            "description": "`\"none\"` (loopback-only operation), `\"bearer\"` (env-key required on\nevery route except the probes), `\"jwt\"` (JWT only — the key env\nvar is unset), or `\"both\"` (either arm admits). Derived at request\ntime. The key VALUE is never in this document."
           }
         }
       },
@@ -5178,9 +5198,16 @@
             "enum": [
               "format"
             ]
+          },
+          {
+            "type": "string",
+            "description": "Subject matting via the rembg-class HTTP sidecar: PNG-in/PNG-out\nRGBA cutout (no params; bare `\"matting\"` string like the other\nno-param ops).",
+            "enum": [
+              "matting"
+            ]
           }
         ],
-        "description": "One image-op command: the op tag plus exactly that op's params.\nParam ops are externally tagged single-key objects —\n`{\"resize\": {\"width\": 512, \"height\": 512}}` — while the no-param ops\n(`grayscale`, `format`) are bare strings (`\"grayscale\"`), their one and\nonly wire form. The params structs carry `deny_unknown_fields`, so\nunknown keys inside a params object are a 400; an unknown op tag or the\nwrong shape (e.g. `{\"format\": {}}`) is a 400 from parsing itself."
+        "description": "One image-op command: the op tag plus exactly that op's params.\nParam ops are externally tagged single-key objects —\n`{\"resize\": {\"width\": 512, \"height\": 512}}` — while the no-param ops\n(`grayscale`, `format`, `matting`) are bare strings (`\"grayscale\"`), their one and\nonly wire form. The params structs carry `deny_unknown_fields`, so\nunknown keys inside a params object are a 400; an unknown op tag or the\nwrong shape (e.g. `{\"format\": {}}`) is a 400 from parsing itself."
       },
       "ImageOpCrop": {
         "type": "object",
@@ -5258,7 +5285,8 @@
           "crop",
           "rotate",
           "grayscale",
-          "format"
+          "format",
+          "matting"
         ]
       },
       "ImageOpOutput": {
@@ -5424,6 +5452,10 @@
           "ops"
         ],
         "properties": {
+          "matting_available": {
+            "type": "boolean",
+            "description": "Subject-matting sidecar liveness (`POST /v1/image-ops` `\"matting\"`):\n`true` only while `HONKBOX_MATTING_URL` names a reachable sidecar.\nloop-lore `resolveMattingProvider` reads this as its first choice\n(local providers are the fallback when `false`/absent)."
+          },
           "ops": {
             "type": "array",
             "items": {
@@ -5747,7 +5779,7 @@
       },
       "JobEvent": {
         "type": "object",
-        "description": "One job lifecycle event streamed by `GET /v1/events`. The registry is a\nliveness view, so events are transitional: no history is replayed on\n(re)connect — a fresh stream only sees jobs registered after it opened.",
+        "description": "One job lifecycle event streamed by `GET /v1/events`. The registry is a\nliveness view, so events are transitional — but every event carries a\nmonotonic `seq`, and reconnecting with `?since=` / `Last-Event-ID`\nreplays the events after the client cursor (`GET /v1/jobs` stays the\ncurrent-state snapshot for clients with no cursor).",
         "required": [
           "event",
           "id",
@@ -5838,6 +5870,12 @@
             ],
             "format": "double",
             "description": "Percent complete, `0..=100` (`job_progress` only; `None` when\n`total_steps` is 0, i.e. no percentage can be computed)."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic per-process sequence number, stamped once at central emit.\nReconnect cursors (`?since=`, `Last-Event-ID`) replay events with a\ngreater `seq`; it also rides as the SSE `id:` line.",
+            "minimum": 0
           },
           "sha256": {
             "type": [
@@ -7403,7 +7441,8 @@
         "description": "Recognition surface kind (`POST /v1/recognize`, recognition tickets).\nSnake-case wire names are the worker crate's `RecKind::as_str` spellings.",
         "enum": [
           "barcode",
-          "ocr"
+          "ocr",
+          "face"
         ]
       },
       "RecognitionEngineMeta": {
@@ -7436,12 +7475,17 @@
         "description": "Recognition capability (`Capabilities::recognition`): probe-driven flags\nper kind — a `true` here is the same compile probe the route's 501/200\nbehavior keys on, so the document cannot drift from the binary.",
         "required": [
           "barcode",
-          "ocr"
+          "ocr",
+          "face"
         ],
         "properties": {
           "barcode": {
             "type": "boolean",
             "description": "Barcode/QR decode is compiled and served by `POST /v1/recognize`."
+          },
+          "face": {
+            "type": "boolean",
+            "description": "Face/person detection is live: compiled (`face` feature), weights\nloaded, operator opt-in set, and a data dir present (local-only).\n`true` only when every gate passes — the same predicate the route\n501/403s on, so the document cannot drift from the binary."
           },
           "ocr": {
             "type": "boolean",
@@ -7494,6 +7538,20 @@
             "format": "float",
             "description": "Engine confidence in `0.0..=1.0`, absent when unknown."
           },
+          "landmarks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "float"
+              }
+            },
+            "description": "Face landmarks as `[x, y]` source-image points (5-point SCRFD order),\npresent only on face detections. Additive: barcode/OCR regions leave\nit absent and older clients ignore it."
+          },
           "text": {
             "type": "string",
             "description": "Recognized text for this region (barcode: the full payload)."
@@ -7508,6 +7566,13 @@
           "image"
         ],
         "properties": {
+          "consent": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Per-subject consent assertion, REQUIRED for Face (policy gate 1):\nthe operator application collected consent out of band and asserts\nit here. honkbox never infers consent: None or false on a face\nrequest answers the named 403 before any bytes are decoded. Ignored\nby barcode/OCR."
+          },
           "engine": {
             "type": [
               "string",

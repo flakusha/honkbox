@@ -11,7 +11,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use honkbox_api_types::{ImageOpRequest, ImageOpResponse, OpenAiError};
+use honkbox_api_types::{ImageOpCommand, ImageOpRequest, ImageOpResponse, OpenAiError};
 use sha2::{Digest as _, Sha256};
 
 use super::image_ops_dedup::{IMAGE_OP_DEDUP, ImageOpReservation};
@@ -75,13 +75,27 @@ pub(super) fn validate_image_op_request(
     };
     let jpeg_quality = parse_output_compression(req.output_compression.as_ref())
         .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?;
+    // Matting is PNG-in/PNG-out (RGBA cutout): any other output container
+    // is a named 400, never a silent re-encode of the cutout.
+    if matches!(req.command, ImageOpCommand::Matting)
+        && !matches!(format, honkbox_sd_core::OutputFormat::Png)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "matting output must be png (the RGBA cutout); got {} — rejected, not converted",
+                format.name()
+            ),
+            Some("invalid_image_op_matting_output"),
+        ));
+    }
     validate_image_op_params(&req.command)
         .map_err(|(message, code)| (StatusCode::BAD_REQUEST, message, Some(code)))?;
     Ok((format, jpeg_quality))
 }
 
 /// `POST /v1/image-ops` (epic-editor-integration): one bounded CPU op over
-/// `1..=8` inputs — resize/crop/rotate/grayscale/format — deterministic by
+/// `1..=8` inputs — resize/crop/rotate/grayscale/format/matting — deterministic by
 /// construction (Lanczos3, fixed encoders), with `request_id`-keyed
 /// idempotency (same key + same canonical command replays the first job's
 /// response byte-identically, no double execution; same key + different
@@ -92,11 +106,12 @@ pub(super) fn validate_image_op_request(
 /// hash, input/output hashes, tool version, attempts, outcome). Inputs are
 /// data URIs or this server's own bundle artifacts only — no paths, no
 /// `file://`, no remote URLs (nothing is fetched, so there is no SSRF
-/// surface). Unsupported-in-principle ops do not exist in the vocabulary:
-/// the op set is exactly what the in-process `image` crate covers
-/// (TASK-cheap-ops-spike Tier 0), so there is no 501 path today — unknown
-/// op tags are a 400 from parsing, and the capabilities advertisement lists
-/// the supported vocabulary.
+/// surface). The Tier 0 ops are exactly what the in-process image crate
+/// covers (TASK-cheap-ops-spike), so they have no 501 path — unknown
+/// op tags are a 400 from parsing. Matting is the one sidecar op:
+/// PNG-in/PNG-out through `HONKBOX_MATTING_URL`, an honest 501
+/// (`matting_unavailable`) while unconfigured. The capabilities
+/// advertisement lists the vocabulary plus the sidecar liveness flag.
 #[utoipa::path(
     post,
     path = "/v1/image-ops",
@@ -106,6 +121,7 @@ pub(super) fn validate_image_op_request(
         (status = 400, description = "Unknown field, unknown op, out-of-range params, oversized batch, bad input container/data URI/ artifact, unknown output_format or output_compression, or request_id conflict", body = OpenAiError),
         (status = 409, description = "Job cancelled before completion (between inputs)", body = OpenAiError),
         (status = 429, description = "CPU admission busy (ledger)", body = OpenAiError),
+        (status = 501, description = "Matting sidecar unconfigured (matting_unavailable)", body = OpenAiError),
         (status = 500, description = "Decode/transform/encode failed", body = OpenAiError)
     )
 )]

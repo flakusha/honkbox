@@ -28,6 +28,7 @@ formats.limits.output_compression.max
 formats.limits.output_compression.min
 formats.read
 formats.write
+image_ops.matting_available
 image_ops.ops
 licenses.rows
 mesh.enabled
@@ -46,6 +47,7 @@ queue.kinds
 queue.queue_wait_secs
 queue.retry_after_secs
 recognition.barcode
+recognition.face
 recognition.ocr
 scopes.enabled
 scopes.scopes

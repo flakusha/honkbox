@@ -364,6 +364,7 @@ fn test_app_config() -> AppConfig {
         auth: AuthConfig {
             mode: AuthMode::Bearer,
             api_key_env: "HONKBOX_TEST_APPS_KEY".to_owned(),
+            jwt: crate::config::JwtConfig::default(),
         },
         dev: false,
         web_dist_dir: "web-dist".into(),

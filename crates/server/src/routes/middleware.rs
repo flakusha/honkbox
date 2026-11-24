@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
 use axum::{
     Json,
@@ -7,6 +7,8 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+
+use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 
 use super::AppConfig;
 use super::runtime_config;
@@ -74,7 +76,55 @@ pub(crate) async fn require_bearer(
     if ok {
         return next.run(req).await;
     }
+    // JWT arm (additive): off unless `[auth] jwt_*` configures material, so
+    // the env-key path above runs byte-for-byte when JWT is unconfigured.
+    // Fail-closed: missing material, bad signature, expired token, or a
+    // wrong iss/aud all fall through to the 401 below — never trusted.
+    match jwt_verdict(provided, &cfg.auth.jwt, req.method(), req.uri().path()).await {
+        JwtVerdict::Pass => return next.run(req).await,
+        JwtVerdict::Forbidden(scope) => return insufficient_scope_response(scope),
+        JwtVerdict::Reject => {}
+    }
     unauthorized_response()
+}
+
+/// JWT arm outcome: `Pass` runs the request, `Forbidden` answers the named
+/// 403, `Reject` falls through to the 401 (arm off or token untrusted).
+#[derive(Debug, PartialEq, Eq)]
+enum JwtVerdict {
+    Pass,
+    Forbidden(&'static str),
+    Reject,
+}
+
+/// JWT bearer attempt (see [`verify_jwt`]). `None` token or unconfigured
+/// material is `Reject`, not an error — the env-key path already ran.
+async fn jwt_verdict(
+    provided: Option<&str>,
+    jwt: &crate::config::JwtConfig,
+    method: &axum::http::Method,
+    path: &str,
+) -> JwtVerdict {
+    if !jwt.enabled() {
+        return JwtVerdict::Reject;
+    }
+    let claims = match provided {
+        Some(token) => match verify_jwt(token, jwt).await {
+            Some(claims) => claims,
+            None => return JwtVerdict::Reject,
+        },
+        None => return JwtVerdict::Reject,
+    };
+    let required = required_scope(method, path);
+    if !jwt_scope_grants(&claims, required) {
+        return JwtVerdict::Forbidden(required);
+    }
+    // Minting a signed content URL hands back a READ credential (same rule
+    // as the scoped env-key path above).
+    if mints_read_credential(method, path) && !jwt_scope_grants(&claims, "read") {
+        return JwtVerdict::Forbidden("read");
+    }
+    JwtVerdict::Pass
 }
 
 /// Keyless routes: the liveness/metrics probes, GET only (so a scraper
@@ -236,6 +286,174 @@ pub(crate) fn unauthorized_response() -> Response {
     (StatusCode::UNAUTHORIZED, Json(body)).into_response()
 }
 
+/// JWT claims the bearer arm enforces. `exp` is required by [`Validation`].
+/// (missing/expired = reject); `iss`/`aud` pin to the configured expectations
+/// when set. Scopes ride the `scope` (space-delimited, `OAuth2` convention)
+/// and/or `scp` (string or array) claims; a token carrying neither is
+/// unconstrained (like the legacy key), a token carrying either must name
+/// the route family's required scope or the arm answers the named 403.
+#[derive(Debug, serde::Deserialize)]
+struct JwtClaims {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    scp: Option<serde_json::Value>,
+}
+
+/// Verify a bearer token against `[auth] jwt_*`: signature + expiry +
+/// issuer + audience. `Some(claims)` on full pass, `None` on ANY failure
+/// (missing material, bad signature, expired token, wrong iss/aud,
+/// unreachable JWKS) — fail-closed; the caller answers 401. The token VALUE
+/// is never logged, never in metrics, never echoed. HS256 re-reads its
+/// secret per request and JWKS refreshes through a TTL cache, so rotation
+/// needs no restart either way.
+async fn verify_jwt(token: &str, jwt: &crate::config::JwtConfig) -> Option<JwtClaims> {
+    let validation = jwt_validation(jwt);
+    if let Some(claims) = verify_hs256(token, jwt, &validation) {
+        return Some(claims);
+    }
+    verify_rs256(token, jwt, &validation).await
+}
+
+/// Shared claim rules: expiry required, `iss`/`aud` pinned when configured,
+/// drift leeway from `[auth] jwt_clock_skew_secs`.
+fn jwt_validation(jwt: &crate::config::JwtConfig) -> Validation {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = jwt.clock_skew_secs;
+    if let Some(issuer) = jwt.issuer.as_deref() {
+        validation.set_issuer(&[issuer]);
+    }
+    if let Some(audience) = jwt.audience.as_deref() {
+        validation.set_audience(&[audience]);
+    }
+    validation
+}
+
+/// HS256 attempt: secret re-read per request (rotation without a restart);
+/// missing/empty secret is a quiet miss so the JWKS arm still runs.
+fn verify_hs256(
+    token: &str,
+    jwt: &crate::config::JwtConfig,
+    validation: &Validation,
+) -> Option<JwtClaims> {
+    let name = jwt.secret_env.as_deref()?;
+    let secret = env_var(name).filter(|s| !s.is_empty())?;
+    let key = DecodingKey::from_secret(secret.as_bytes());
+    jsonwebtoken::decode::<JwtClaims>(token, &key, validation)
+        .ok()
+        .map(|data| data.claims)
+}
+
+/// RS256 attempt: `kid`-selected key from the TTL-cached JWKS.
+async fn verify_rs256(
+    token: &str,
+    jwt: &crate::config::JwtConfig,
+    hs: &Validation,
+) -> Option<JwtClaims> {
+    let url = jwt.jwks_url.as_deref()?;
+    let kid = jsonwebtoken::decode_header(token).ok()?.kid?;
+    let mut rs = hs.clone();
+    rs.algorithms = vec![Algorithm::RS256];
+    let key = jwks_key(url, &kid).await?;
+    jsonwebtoken::decode::<JwtClaims>(token, &key, &rs)
+        .ok()
+        .map(|data| data.claims)
+}
+
+/// Scope check for a verified token: every `scope`/`scp` entry is granted;
+/// an empty grant set means the token states no restriction (allow).
+fn jwt_scope_grants(claims: &JwtClaims, required: &str) -> bool {
+    let mut granted: Vec<&str> = Vec::new();
+    if let Some(scope) = claims.scope.as_deref() {
+        granted.extend(scope.split_whitespace());
+    }
+    match &claims.scp {
+        Some(serde_json::Value::String(s)) => granted.extend(s.split_whitespace()),
+        Some(serde_json::Value::Array(items)) => {
+            granted.extend(items.iter().filter_map(|v| v.as_str()));
+        }
+        _ => {}
+    }
+    granted.is_empty() || granted.contains(&required)
+}
+
+/// JWKS key cache: `kid` → decoding key, pinned to the URL it came from.
+/// Stale entries and `kid` misses trigger one refresh before giving up, so
+/// rotation lands without a restart; a failed refresh is fail-closed
+/// (reject) rather than served stale.
+#[derive(Default)]
+struct JwksCache {
+    url: Option<String>,
+    fetched_at: Option<Instant>,
+    keys: HashMap<String, DecodingKey>,
+}
+
+/// JWKS entries outlive this long before a request forces a refresh.
+const JWKS_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+static JWKS: std::sync::OnceLock<tokio::sync::RwLock<JwksCache>> = std::sync::OnceLock::new();
+
+/// `kid`-selected RS256 key from the issuer JWKS, TTL-cached. `None` on any
+/// fetch/parse/miss failure — fail-closed upstream.
+async fn jwks_key(url: &str, kid: &str) -> Option<DecodingKey> {
+    let slot = JWKS.get_or_init(|| tokio::sync::RwLock::new(JwksCache::default()));
+    {
+        let cache = slot.read().await;
+        let fresh = cache.fetched_at.is_some_and(|at| at.elapsed() < JWKS_TTL);
+        if cache.url.as_deref() == Some(url)
+            && fresh
+            && let Some(key) = cache.keys.get(kid)
+        {
+            return Some(key.clone());
+        }
+    }
+    let fresh = fetch_jwks(url).await?;
+    let mut cache = slot.write().await;
+    cache.url = Some(url.to_owned());
+    cache.fetched_at = Some(Instant::now());
+    cache.keys = fresh;
+    cache.keys.get(kid).cloned()
+}
+
+/// Fetch + parse an issuer JWKS document, keeping RSA keys only.
+async fn fetch_jwks(url: &str) -> Option<HashMap<String, DecodingKey>> {
+    let doc: JwksDocument = reqwest::get(url).await.ok()?.json().await.ok()?;
+    let mut keys = HashMap::new();
+    for key in doc.keys {
+        if key.kty.as_deref() != Some("RSA") {
+            continue;
+        }
+        let (Some(kid), Some(n), Some(e)) = (key.kid, key.n, key.e) else {
+            continue;
+        };
+        if let Ok(key) = DecodingKey::from_rsa_components(&n, &e) {
+            keys.insert(kid, key);
+        }
+    }
+    Some(keys)
+}
+
+/// JWKS document shape: only the RSA fields the arm needs.
+#[derive(Debug, serde::Deserialize)]
+struct JwksDocument {
+    #[serde(default)]
+    keys: Vec<JwkEntry>,
+}
+
+/// One JWK: `kid`-addressed RSA components (all optional — incomplete
+/// entries are skipped, never trusted).
+#[derive(Debug, serde::Deserialize)]
+struct JwkEntry {
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    kty: Option<String>,
+    #[serde(default)]
+    n: Option<String>,
+    #[serde(default)]
+    e: Option<String>,
+}
+
 /// Per-request metrics: one route/code counter + one duration observation
 /// (see `metrics`); no per-request allocation. Every 429 without an
 /// explicit `Retry-After` (the GPU-slot busy contract, shared by the native
@@ -289,5 +507,157 @@ mod tests {
         assert!(mints_read_credential(&Method::POST, "/v1/content-urls"));
         assert!(!mints_read_credential(&Method::GET, "/v1/content-urls"));
         assert!(!mints_read_credential(&Method::POST, "/v1/jobs"));
+    }
+    /// HS256 helper: config pinning `secret_env` to a per-test env NAME
+    /// (parallel-safe: `ENV_OVERRIDES` is keyed by name) plus optional
+    /// `iss`/`aud` pins.
+    fn hs_config(
+        name: &str,
+        issuer: Option<&str>,
+        audience: Option<&str>,
+    ) -> crate::config::JwtConfig {
+        crate::config::JwtConfig {
+            secret_env: Some(name.to_owned()),
+            jwks_url: None,
+            issuer: issuer.map(str::to_owned),
+            audience: audience.map(str::to_owned),
+            clock_skew_secs: 60,
+        }
+    }
+
+    fn epoch_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs()
+    }
+
+    /// Mint an HS256 token with `jsonwebtoken::encode` (already a server
+    /// dependency — no new dev-deps). Claims ride a JSON value because
+    /// `JwtClaims` is decode-only.
+    fn mint_hs256(secret: &str, claims: &serde_json::Value) -> String {
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("mint")
+    }
+
+    #[test]
+    fn hs256_valid_token_passes() {
+        let name = "HONKBOX_TEST_JWT_MW_VALID";
+        set_env_var(name, Some("topsekrit"));
+        let jwt = hs_config(name, Some("honkbox"), Some("api"));
+        let token = mint_hs256(
+            "topsekrit",
+            &serde_json::json!({"iss": "honkbox", "aud": "api", "exp": epoch_now() + 3600}),
+        );
+        assert!(verify_hs256(&token, &jwt, &jwt_validation(&jwt)).is_some());
+        set_env_var(name, None);
+    }
+
+    #[test]
+    fn hs256_bad_signature_expired_wrong_aud_and_missing_secret_reject() {
+        let name = "HONKBOX_TEST_JWT_MW_REJECT";
+        set_env_var(name, Some("topsekrit"));
+        let jwt = hs_config(name, Some("honkbox"), Some("api"));
+        let validation = jwt_validation(&jwt);
+        let good = mint_hs256(
+            "topsekrit",
+            &serde_json::json!({"iss": "honkbox", "aud": "api", "exp": epoch_now() + 3600}),
+        );
+        // Bad signature: same shape, wrong key.
+        let forged = mint_hs256(
+            "wrongkey",
+            &serde_json::json!({"iss": "honkbox", "aud": "api", "exp": epoch_now() + 3600}),
+        );
+        assert!(verify_hs256(&forged, &jwt, &validation).is_none());
+        // Tampered body: flip the last signature char.
+        let mut tampered = good.clone();
+        let last = tampered.pop().expect("token");
+        tampered.push(if last == 'A' { 'B' } else { 'A' });
+        assert!(verify_hs256(&tampered, &jwt, &validation).is_none());
+        // Expired beyond leeway.
+        let stale = mint_hs256(
+            "topsekrit",
+            &serde_json::json!({"iss": "honkbox", "aud": "api", "exp": epoch_now() - 3600}),
+        );
+        assert!(verify_hs256(&stale, &jwt, &validation).is_none());
+        // Wrong audience.
+        let alien = mint_hs256(
+            "topsekrit",
+            &serde_json::json!({"iss": "honkbox", "aud": "someone-else", "exp": epoch_now() + 3600}),
+        );
+        assert!(verify_hs256(&alien, &jwt, &validation).is_none());
+        // Garbage is not a token.
+        assert!(verify_hs256("not.a.token", &jwt, &validation).is_none());
+        // Missing secret material is a quiet miss (the RS256 arm runs next).
+        set_env_var(name, None);
+        assert!(verify_hs256(&good, &jwt, &validation).is_none());
+    }
+
+    #[test]
+    fn jwt_validation_pins_issuer_audience_and_leeway() {
+        let jwt = hs_config("HONKBOX_TEST_JWT_MW_UNUSED", Some("honkbox"), Some("api"));
+        let validation = jwt_validation(&jwt);
+        assert_eq!(validation.leeway, 60);
+        assert!(
+            validation
+                .iss
+                .as_ref()
+                .is_some_and(|iss| iss.contains("honkbox"))
+        );
+        assert!(
+            validation
+                .aud
+                .as_ref()
+                .is_some_and(|aud| aud.contains("api"))
+        );
+        let open = crate::config::JwtConfig::default();
+        let validation = jwt_validation(&open);
+        assert!(validation.iss.is_none(), "unset issuer is unchecked");
+        assert!(validation.aud.is_none(), "unset audience is unchecked");
+    }
+
+    #[test]
+    fn jwt_scope_grants_covers_scope_and_scp_forms() {
+        let claims = |body: serde_json::Value| -> JwtClaims {
+            serde_json::from_value(body).expect("claims decode")
+        };
+        // No restriction stated: allow (the legacy-key path).
+        assert!(jwt_scope_grants(&claims(serde_json::json!({})), "read"));
+        assert!(jwt_scope_grants(
+            &claims(serde_json::json!({"scope": ""})),
+            "read"
+        ));
+        // `scope` is space-delimited (OAuth2 convention).
+        let scoped = claims(serde_json::json!({"scope": "read write"}));
+        assert!(jwt_scope_grants(&scoped, "read"));
+        assert!(jwt_scope_grants(&scoped, "write"));
+        assert!(!jwt_scope_grants(&scoped, "admin"));
+        // `scp` as a space-delimited string.
+        let scp_str = claims(serde_json::json!({"scp": "read write"}));
+        assert!(jwt_scope_grants(&scp_str, "write"));
+        assert!(!jwt_scope_grants(&scp_str, "admin"));
+        // `scp` as an array; non-strings are ignored, never granted.
+        let scp_arr = claims(serde_json::json!({"scp": ["read", 42, "write"]}));
+        assert!(jwt_scope_grants(&scp_arr, "read"));
+        assert!(!jwt_scope_grants(&scp_arr, "admin"));
+        // A token carrying either claim names the required family or fails.
+        let both = claims(serde_json::json!({"scope": "read", "scp": ["write"]}));
+        assert!(jwt_scope_grants(&both, "write"));
+        assert!(!jwt_scope_grants(&both, "admin"));
+    }
+
+    #[test]
+    fn jwt_arm_enabled_only_with_material() {
+        assert!(!crate::config::JwtConfig::default().enabled());
+        assert!(hs_config("HONKBOX_TEST_JWT_MW_ENABLE", None, None).enabled());
+        let jwks_only = crate::config::JwtConfig {
+            jwks_url: Some("https://issuer.example.com/.well-known/jwks.json".to_owned()),
+            ..crate::config::JwtConfig::default()
+        };
+        assert!(jwks_only.enabled());
     }
 }

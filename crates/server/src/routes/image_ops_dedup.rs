@@ -133,6 +133,7 @@ pub(super) fn op_label(command: &ImageOpCommand) -> &'static str {
         ImageOpCommand::Rotate(_) => "rotate",
         ImageOpCommand::Grayscale => "grayscale",
         ImageOpCommand::Format => "format",
+        ImageOpCommand::Matting => "matting",
     }
 }
 

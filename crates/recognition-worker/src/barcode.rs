@@ -107,6 +107,7 @@ impl RecognitionPipeline for BarcodeRecognition {
                         // rxing exposes no decode confidence; honesty over
                         // noise.
                         confidence: None,
+                        landmarks: None,
                     }],
                 }]
             }

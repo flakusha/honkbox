@@ -5,18 +5,17 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use salvo::oapi::ToSchema as SalvoToSchema;
 use utoipa::ToSchema;
 
 /// Liveness probe response.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct Health {
     /// Always `"ok"` while the server is alive.
     pub status: String,
 }
 
 /// Binary name + version response.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct Version {
     /// Binary name, always `"honkbox"`.
     pub name: String,
@@ -58,7 +57,7 @@ pub const API_VERSION: &str = "v1";
 /// the wire contract.
 // No `Eq`: `nsfw` carries an `f64` threshold, and `Eq` is not derivable
 // for a struct containing one.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct Capabilities {
     /// Wire-contract version (`"v1"`); see the version policy above.
     pub api_version: String,
@@ -141,7 +140,7 @@ pub struct Capabilities {
 /// Machine-readable model/asset license surface (`Capabilities::licenses`):
 /// one summary row per curated license record. Additive optional field per
 /// the API version policy above.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct LicenseCapability {
     /// One summary row per curated license record.
     pub rows: Vec<LicenseSummaryRow>,
@@ -149,7 +148,7 @@ pub struct LicenseCapability {
 
 /// One curated license record published on `GET /v1/capabilities`. Nullable
 /// source facts stay absent on the wire, never fabricated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct LicenseSummaryRow {
     /// Curated license id (SPDX-style where one exists).
     pub license: String,
@@ -177,7 +176,7 @@ pub struct LicenseSummaryRow {
 /// Local storage surface (`Capabilities::storage`): whether the server has
 /// a data dir, i.e. can persist artifacts for `X-Honkbox-Delivery: artifact`.
 /// A `false` here means artifact mode is unavailable, not merely degraded.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct StorageCapability {
     /// A data dir is configured and writable.
     pub data_dir_present: bool,
@@ -186,7 +185,7 @@ pub struct StorageCapability {
 /// Compile-time audio.cpp surface (`Capabilities::features.audio_cpp`).
 /// Family lists come from the audio-worker crate's own features, so the
 /// document cannot advertise a family this binary cannot load.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct AudioCppCapabilities {
     /// The audio.cpp engine is compiled into this binary.
     pub built: bool,
@@ -197,7 +196,7 @@ pub struct AudioCppCapabilities {
 }
 
 /// Server identity (`Capabilities::server`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ServerInfo {
     /// Binary name, always `"honkbox"` (mirrors `GET /api/version`).
     pub name: String,
@@ -209,7 +208,7 @@ pub struct ServerInfo {
 /// Feature flags (`Capabilities::features`). Every `true` here is backed by
 /// a working route (contract-tested); `video` stays `false` until a real
 /// video job class lands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 #[allow(clippy::struct_excessive_bools)] // the wire contract IS a flag map (llama-swap shape)
 pub struct FeatureFlags {
     /// Vision chat (mtmd/mmproj image parts).
@@ -265,7 +264,7 @@ pub struct FeatureFlags {
 }
 
 /// Vision chat capability (`FeatureFlags::vision`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct VisionFeature {
     /// `true` when THIS build compiles the mtmd path (`llm-vision`). A
     /// text-only build reports `false`; scan-derived entries then never
@@ -282,7 +281,7 @@ pub struct VisionFeature {
 }
 
 /// `ControlNet` capability (`FeatureFlags::controlnet`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ControlNetFeature {
     /// `true` only when the configured SD pipeline applies control images
     /// (the sd-cpp backend) AND the catalog holds at least one
@@ -296,7 +295,7 @@ pub struct ControlNetFeature {
 
 /// Image container support (`Capabilities::formats`), derived from the
 /// compiled encoders/validators — a missing decoder never appears.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct Formats {
     /// Containers the server validates on ingest (image edits' `image`/
     /// `mask` and `ControlNet` `control_image` are PNG magic-sniffed).
@@ -309,7 +308,7 @@ pub struct Formats {
 }
 
 /// One writable container (`Formats::write`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct OutputFormatCapability {
     /// `output_format` wire value (`png` | `jpeg` | `webp`).
     pub format: String,
@@ -320,7 +319,7 @@ pub struct OutputFormatCapability {
 
 /// Size/quality limits (`Formats::limits`), read from the validation code
 /// that enforces them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct FormatLimits {
     /// `output_compression` accepted range (JPEG quality, rejected not
     /// clamped outside it).
@@ -331,7 +330,7 @@ pub struct FormatLimits {
 }
 
 /// Inclusive integer range (`FormatLimits::output_compression`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct CompressionRange {
     /// Smallest accepted value (inclusive).
     pub min: u32,
@@ -342,17 +341,18 @@ pub struct CompressionRange {
 }
 
 /// Auth mode (`Capabilities::auth`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct AuthCapabilities {
-    /// `"none"` (loopback-only operation) or `"bearer"` (key required on
-    /// every route except the probes). The key VALUE is never in this
-    /// document.
+    /// `"none"` (loopback-only operation), `"bearer"` (env-key required on
+    /// every route except the probes), `"jwt"` (JWT only — the key env
+    /// var is unset), or `"both"` (either arm admits). Derived at request
+    /// time. The key VALUE is never in this document.
     pub mode: String,
 }
 
 /// Resource-ledger admission knobs (`Capabilities::queue`), read live from
 /// the ledger + admission config — the same values the 429 contract uses.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct QueueCapabilities {
     /// Shared GPU slots the ledger admits against.
     pub gpu_slots: u32,
@@ -368,7 +368,7 @@ pub struct QueueCapabilities {
 }
 
 /// Per-kind admission queue row (`QueueCapabilities::kinds`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct QueueKindCapacity {
     /// Fixed kind label (`sd`, `llm`, `ocr`, `embed`, `rag`, `comfy`,
     /// `blender`, `3d`, `training`) — never user data.
@@ -386,7 +386,7 @@ pub struct QueueKindCapacity {
 }
 
 /// Chat role.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ChatRole {
     /// Human / caller turn.
@@ -402,7 +402,7 @@ pub enum ChatRole {
 /// One tool call as it appears on an assistant message (`REQ-3`).
 /// `arguments` is a JSON-encoded **string**, exactly as `OpenAI` clients
 /// exchange it.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ToolCall {
     /// Call id (unique per response on replies; echoed by `role: "tool"`
     /// messages as `tool_call_id`).
@@ -416,7 +416,7 @@ pub struct ToolCall {
 }
 
 /// Flavor of a tool call. Only `OpenAI` function calls are supported.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCallType {
     /// A named function call.
@@ -425,7 +425,7 @@ pub enum ToolCallType {
 }
 
 /// Function invocation payload of a [`ToolCall`].
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct FunctionCall {
     /// Tool name.
     pub name: String,
@@ -439,7 +439,7 @@ pub struct FunctionCall {
 /// text, `image_url` parts are flagged for the explicit vision refusal.
 /// Requests naming any other `type` are a deserialization 400 naming the
 /// offending type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     /// Plain text.
@@ -459,7 +459,7 @@ pub enum ContentPart {
 }
 
 /// `image_url` part payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImageUrl {
     /// Data URI or http(s) URL.
     pub url: String,
@@ -478,7 +478,7 @@ pub struct ImageUrl {
 /// the weights, or an operator override) accepts the images; without one
 /// the chat routes reject the request explicitly (400), never a silent
 /// drop.
-#[derive(Debug, Clone, Default, PartialEq, Eq, SalvoToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatContent {
     /// Flattened text of the message (`None` = absent/`null`).
     pub text: Option<String>,
@@ -494,7 +494,7 @@ pub struct ChatContent {
 /// One `image_url` part as received (vision chat): the raw `url` string
 /// plus the byte offset it occupied in the flattened message text — the
 /// splice point for the media marker the worker tokenizes.
-#[derive(Debug, Clone, PartialEq, Eq, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatImageRef {
     /// `image_url.url` verbatim (a `data:` URI, or whatever else the
     /// request carried).
@@ -605,7 +605,7 @@ impl<'de> Deserialize<'de> for ChatContent {
 }
 
 /// One chat message.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatMessage {
     /// Who said it.
     pub role: ChatRole,
@@ -784,7 +784,7 @@ mod chat_content_tests {
 }
 
 /// One `OpenAI` tool definition (`REQ-3`).
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatTool {
     /// Always `"function"`.
     #[serde(rename = "type")]
@@ -794,7 +794,7 @@ pub struct ChatTool {
 }
 
 /// Flavor of a tool definition. Only `OpenAI` function tools are supported.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolType {
     /// A named function tool.
@@ -803,7 +803,7 @@ pub enum ToolType {
 }
 
 /// Callable function description (`tools[].function`).
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct FunctionDefinition {
     /// Tool name.
     pub name: String,
@@ -822,7 +822,7 @@ pub struct FunctionDefinition {
 /// offered; the model decides) — no rejection. The clamp is disclosed, not
 /// silent: [`Capabilities::tools`] publishes the exact honored/clamped
 /// vocabulary machine-readably before the client sends.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[serde(untagged)]
 pub enum ToolChoiceSpec {
     /// `"auto"`, `"none"`, `"required"`, or `"any"`.
@@ -835,7 +835,7 @@ pub enum ToolChoiceSpec {
 }
 
 /// Named function payload of [`ToolChoiceSpec::Named`].
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct NamedFunction {
     /// Tool name to steer the model towards.
     pub name: String,
@@ -871,7 +871,7 @@ impl ToolChoiceSpec {
 /// changes generation); `tool_choice_clamped` lists the standard `OpenAI`
 /// modes and is NOT exhaustive: this is an untagged string field, so any
 /// other unrecognized value is accepted and behaves as `"auto"` too.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ToolCallingCapability {
     /// `tool_choice` string modes honored verbatim
     /// ([`ToolChoiceSpec::HONORED_MODES`]).
@@ -915,7 +915,7 @@ impl ToolCallingCapability {
 /// **enforced**: the schema (or a generic any-JSON grammar for
 /// `json_object`) is converted to GBNF and wired into the sampler chain, so
 /// the model cannot emit a non-conforming string.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ResponseFormat {
     /// Format discriminator.
     #[serde(rename = "type")]
@@ -926,7 +926,7 @@ pub struct ResponseFormat {
 }
 
 /// Supported `response_format` types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseFormatType {
     /// Plain text (unconstrained).
@@ -938,7 +938,7 @@ pub enum ResponseFormatType {
 }
 
 /// Schema payload of `response_format: {"type":"json_schema"}`.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct JsonSchemaSpec {
     /// Schema name (`OpenAI` requires one; only echoed, never enforced).
     #[serde(default)]
@@ -958,7 +958,7 @@ pub struct JsonSchemaSpec {
 }
 
 /// Chat completion request.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatRequest {
     /// Model id (informational; the backend is chosen by the server).
     pub model: String,
@@ -983,7 +983,7 @@ pub struct ChatRequest {
 }
 
 /// Chat completion response.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatResponse {
     /// Which backend produced this.
     pub backend_id: String,
@@ -1024,7 +1024,7 @@ pub struct ChatResponse {
 ///   `dry_multiplier`/`dry_base`/`dry_allowed_length`,
 ///   `dynatemp_range`/`dynatemp_exponent`. All are supported by the
 ///   llama-cpp-4 binding; each is applied only when present.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct OpenAiChatRequest {
     /// Model id: an operator alias or registry slug (`GET /v1/models`).
     /// Required on this route — an omitted/empty model is a 400 naming the
@@ -1120,7 +1120,7 @@ pub struct OpenAiChatRequest {
 }
 
 /// Why generation stopped (`choices[].finish_reason`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// Natural end of generation.
@@ -1133,7 +1133,7 @@ pub enum FinishReason {
 }
 
 /// Token accounting (`usage`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiUsage {
     /// Prompt tokens after tokenization (real count on the llama.cpp path;
     /// the stub reports 0).
@@ -1145,7 +1145,7 @@ pub struct OpenAiUsage {
 }
 
 /// One non-streaming choice (`choices[]`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiChoice {
     /// Always 0 (single choice).
     pub index: u8,
@@ -1156,7 +1156,7 @@ pub struct OpenAiChoice {
 }
 
 /// Non-streaming response (`object: "chat.completion"`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiChatCompletion {
     /// `chatcmpl-<ulid>`.
     pub id: String,
@@ -1176,7 +1176,7 @@ pub struct OpenAiChatCompletion {
 /// One streamed delta (`choices[].delta` of a chunk). All fields optional:
 /// the first frame carries `role`, token frames carry `content`, tool-call
 /// frames carry `tool_calls` (`REQ-3`), the final frame carries none.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiDelta {
     /// Assistant role marker, first frame only.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1196,7 +1196,7 @@ pub struct OpenAiDelta {
 /// `OpenAI` fragment shape: the first fragment of a call carries
 /// `id`/`type` and a `function` object with `name` + empty `arguments`;
 /// continuation fragments carry only `index` and `function.arguments`.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct DeltaToolCall {
     /// Fragment position within the turn's tool calls.
     pub index: u32,
@@ -1213,7 +1213,7 @@ pub struct DeltaToolCall {
 }
 
 /// Function payload of [`DeltaToolCall`] (streamed incrementally).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct DeltaFunction {
     /// Function name, first fragment only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1224,7 +1224,7 @@ pub struct DeltaFunction {
 }
 
 /// One streamed chunk choice (`choices[]` of a chunk).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiChunkChoice {
     /// Always 0 (single choice).
     pub index: u8,
@@ -1236,7 +1236,7 @@ pub struct OpenAiChunkChoice {
 
 /// Streaming chunk (`object: "chat.completion.chunk"`). `usage` rides only
 /// on the final frame.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiChunk {
     /// `chatcmpl-<ulid>`, shared by every frame of one completion.
     pub id: String,
@@ -1254,7 +1254,7 @@ pub struct OpenAiChunk {
 }
 
 /// `OpenAI` error envelope detail (`error`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiErrorDetail {
     /// Human-readable cause.
     pub message: String,
@@ -1270,7 +1270,7 @@ pub struct OpenAiErrorDetail {
 
 /// OpenAI-shaped error body (`{"error":{…}}`) for
 /// `/v1/chat/completions`.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct OpenAiError {
     /// The error detail.
     pub error: OpenAiErrorDetail,
@@ -1298,7 +1298,7 @@ impl OpenAiError {
 
 /// `POST /v1/embeddings` request (REQ-4). `model` is required (`OpenAI`
 /// contract): an omitted model is a deserialization 400.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct EmbeddingsRequest {
     /// Model id: an operator alias or registry slug whose
     /// `capabilities.embeddings` is true (`REQ-2` override honored).
@@ -1309,7 +1309,7 @@ pub struct EmbeddingsRequest {
 }
 
 /// The `input` field: a bare string or an array of strings.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[serde(untagged)]
 pub enum EmbeddingsInput {
     /// A single input (one `data` entry, `index` 0).
@@ -1330,7 +1330,7 @@ impl EmbeddingsInput {
 }
 
 /// One embedding vector (`data[]`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct EmbeddingsData {
     /// Always `"embedding"`.
     pub object: String,
@@ -1341,7 +1341,7 @@ pub struct EmbeddingsData {
 }
 
 /// Token accounting for an embeddings call (no completion side).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct EmbeddingsUsage {
     /// Input token count (real tokenizer on the llama.cpp path;
     /// deterministic word count on the stub).
@@ -1351,7 +1351,7 @@ pub struct EmbeddingsUsage {
 }
 
 /// Embeddings response (`object: "list"`), one `data` entry per input.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct EmbeddingsResponse {
     /// Always `"list"`.
     pub object: String,
@@ -1404,7 +1404,7 @@ pub struct EmbeddingsResponse {
 /// pre-recipe fixed recipe exactly (euler, discrete, CFG 7.0, 20 steps).
 /// The applied recipe name — and which fields a recipe actually supplied —
 /// land verbatim in the job bundle sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesGenerationRequest {
     /// Model id (alias or registry slug) from the SD catalog; omitted →
     /// the startup-configured SD pipeline (`--sd-model`, stub default).
@@ -1513,7 +1513,7 @@ pub struct ImagesGenerationRequest {
 }
 
 /// One per-request `LoRA` adapter on [`ImagesGenerationRequest::loras`].
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesLora {
     /// Catalog slug or alias of a `lora`-kind entry (e.g.
     /// `comfy:loras/detail.safetensors`); unknown names are a 400.
@@ -1529,7 +1529,7 @@ pub struct ImagesLora {
 /// latent is interpolated up to the target, and a second pass re-denoises at
 /// `denoise`. `target` wins over `scale`. The final edge stays under the
 /// same 2048 px cap as plain generation; violations are a 400.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct ImagesHiresFix {
     /// Upscale factor over the requested `size`; accepted range
     /// `[1.0, 4.0]`, default 2.0.
@@ -1545,7 +1545,7 @@ pub struct ImagesHiresFix {
 }
 
 /// One generated image in the `POST /v1/images/generations` response.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ImageB64 {
     /// The generated image bytes (in the requested `output_format`),
     /// base64-encoded (`response_format: "b64_json"`).
@@ -1555,7 +1555,7 @@ pub struct ImageB64 {
 /// One generated image delivered as a content-addressed artifact instead
 /// of inline base64 (`X-Honkbox-Delivery: artifact`). Additive DTO: inline
 /// responses never carry this field.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ImageArtifact {
     /// Artifact id (content sha256 hex), the `{id}` of
     /// `GET /v1/artifacts/{id}/bytes`.
@@ -1572,7 +1572,7 @@ pub struct ImageArtifact {
 /// `data` entry per requested image (`n`). In artifact delivery mode
 /// (`X-Honkbox-Delivery: artifact`) `data` stays empty and `artifacts`
 /// carries the images instead.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ImagesGenerationResponse {
     /// Creation time, Unix seconds.
     pub created: u64,
@@ -1596,7 +1596,7 @@ pub struct ImagesGenerationResponse {
 /// Wire names are the serde names; [`ImageOpKind::ALL`] is the authoritative
 /// order for the `GET /v1/capabilities` advertisement. Anything outside this
 /// set is a 400 naming the accepted values — the vocabulary is closed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOpKind {
     /// Resize to an explicit `WxH` (Lanczos3, see [`ImageOpResize`]).
@@ -1610,17 +1610,22 @@ pub enum ImageOpKind {
     /// Container conversion only — pixels untouched, `output_format`
     /// decides the encoding (no params).
     Format,
+    /// Subject matting via the rembg-class HTTP sidecar (no params):
+    /// PNG-in/PNG-out RGBA cutout. Non-PNG input is a named 400; an
+    /// unconfigured sidecar is an honest 501.
+    Matting,
 }
 
 impl ImageOpKind {
     /// Every supported op, in advertisement order (`GET /v1/capabilities`
     /// `image_ops.ops` lists exactly these).
-    pub const ALL: [ImageOpKind; 5] = [
+    pub const ALL: [ImageOpKind; 6] = [
         ImageOpKind::Resize,
         ImageOpKind::Crop,
         ImageOpKind::Rotate,
         ImageOpKind::Grayscale,
         ImageOpKind::Format,
+        ImageOpKind::Matting,
     ];
 
     /// Wire label (the serde name; also the bundle sidecar `op` value).
@@ -1632,6 +1637,7 @@ impl ImageOpKind {
             ImageOpKind::Rotate => "rotate",
             ImageOpKind::Grayscale => "grayscale",
             ImageOpKind::Format => "format",
+            ImageOpKind::Matting => "matting",
         }
     }
 }
@@ -1639,7 +1645,7 @@ impl ImageOpKind {
 /// `resize` params. Both edges are required (no implicit aspect preservation
 /// guess); accepted range `[1, 8192]` per edge with `width * height <=`
 /// `16_777_216` px — outside it is a named 400, never a clamp.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpResize {
     /// Target width in pixels, `[1, 8192]`.
@@ -1651,7 +1657,7 @@ pub struct ImageOpResize {
 /// `crop` params. All four values are required; the rect must satisfy
 /// `x + width <= input_width` and `y + height <= input_height` (out-of-bounds
 /// crops are a named 400, never clamped to the image edge).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpCrop {
     /// Left edge of the crop rect, px from x=0.
@@ -1667,7 +1673,7 @@ pub struct ImageOpCrop {
 /// `rotate` params. Only lossless multiples of a quarter turn are accepted
 /// (`90`, `180`, `270`); arbitrary angles would need resampling — rejected
 /// with a 400 naming the accepted values, never approximated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpRotate {
     /// Rotation in degrees; accepted values are `90`, `180`, `270`
@@ -1678,11 +1684,11 @@ pub struct ImageOpRotate {
 /// One image-op command: the op tag plus exactly that op's params.
 /// Param ops are externally tagged single-key objects —
 /// `{"resize": {"width": 512, "height": 512}}` — while the no-param ops
-/// (`grayscale`, `format`) are bare strings (`"grayscale"`), their one and
+/// (`grayscale`, `format`, `matting`) are bare strings (`"grayscale"`), their one and
 /// only wire form. The params structs carry `deny_unknown_fields`, so
 /// unknown keys inside a params object are a 400; an unknown op tag or the
 /// wrong shape (e.g. `{"format": {}}`) is a 400 from parsing itself.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOpCommand {
     /// Resize to `width`x`height` (Lanczos3 resample — the single fixed
@@ -1696,12 +1702,16 @@ pub enum ImageOpCommand {
     Grayscale,
     /// Re-encode only (container conversion via `output_format`).
     Format,
+    /// Subject matting via the rembg-class HTTP sidecar: PNG-in/PNG-out
+    /// RGBA cutout (no params; bare `"matting"` string like the other
+    /// no-param ops).
+    Matting,
 }
 
 /// One input image for `POST /v1/image-ops`: a data URI or a prior job
 /// bundle's artifact — never a filesystem path, `file://` URL, or remote
 /// URL (there is no fetch, so no SSRF surface by construction).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOpInput {
     /// `data:image/png;base64,…` — only `image/png`, `image/jpeg`,
@@ -1716,7 +1726,7 @@ pub enum ImageOpInput {
 /// this server (under `<data_dir>/jobs/{bundle}/`). The bundle id is the
 /// `ImageOpResponse.bundle` ULID; the index is the zero-based position in
 /// that response's `outputs`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpArtifact {
     /// Bundle id (ULID string, exactly as a prior response reported it).
@@ -1734,7 +1744,7 @@ pub struct ImageOpArtifact {
 /// canonical command replays the first job's response (same job id, same
 /// bundle, no double execution); the same `request_id` with a DIFFERENT
 /// command is a named 400 conflict.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpRequest {
     /// The op plus its params (see [`ImageOpCommand`]).
@@ -1763,7 +1773,7 @@ pub struct ImageOpRequest {
 }
 
 /// One produced image in the `POST /v1/image-ops` response.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct ImageOpOutput {
     /// The produced image bytes (in the requested `output_format`),
     /// base64-encoded.
@@ -1777,7 +1787,7 @@ pub struct ImageOpOutput {
 /// `POST /v1/image-ops` response: one output per input, in order, plus the
 /// job/bundle ids a client needs to poll, cancel, or reference artifacts in
 /// follow-up ops.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct ImageOpResponse {
     /// Completion time, Unix seconds.
     pub created: u64,
@@ -1802,15 +1812,21 @@ pub struct ImageOpResponse {
 /// vocabulary of `POST /v1/image-ops`. Present whenever the ops route is
 /// compiled into this server (always today); `None` means the route is not
 /// mounted and clients must not call it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ImageOpsCapability {
     /// Supported op wire names (the `ImageOpCommand` tag vocabulary).
     pub ops: Vec<String>,
+    /// Subject-matting sidecar liveness (`POST /v1/image-ops` `"matting"`):
+    /// `true` only while `HONKBOX_MATTING_URL` names a reachable sidecar.
+    /// loop-lore `resolveMattingProvider` reads this as its first choice
+    /// (local providers are the fallback when `false`/absent).
+    #[serde(default)]
+    pub matting_available: bool,
 }
 
 /// `POST /v1/audio/transcriptions` plain shape (`response_format` absent
 /// or `"json"`; REQ-9).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct TranscriptionText {
     /// The transcript text.
     pub text: String,
@@ -1820,7 +1836,7 @@ pub struct TranscriptionText {
 /// (`response_format = "verbose_json"`; REQ-9): the transcript plus the
 /// STT worker's timestamped segments (millisecond integers, honkbox
 /// segment shape).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct TranscriptionVerbose {
     /// The transcript text.
     pub text: String,
@@ -1862,7 +1878,7 @@ pub struct TranscriptionStreamEvent {
 /// matching the `OpenAI` pcm semantics — no container, no header), `flac`
 /// (lossless FLAC), or `opus` (Ogg-encapsulated gapless Opus); anything
 /// else is an explicit 400.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct SpeechRequest {
     /// Model id (alias or registry slug); omitted → server default TTS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1882,7 +1898,7 @@ pub struct SpeechRequest {
 /// One TTS voice entry of `GET /v1/audio/voices` (`data[]`). Entries describe
 /// the loaded backend only: Kokoro serves its documented static set, while
 /// backends without a voice-enumeration surface contribute no entries.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct Voice {
     /// Voice id to pass as `/v1/audio/speech` `voice` (e.g. `af_heart` for
     /// Kokoro).
@@ -1901,7 +1917,7 @@ pub struct Voice {
 /// documented Kokoro set (the backend cannot enumerate voices at runtime);
 /// other backends, including `stub-tts`, return an empty `data` rather than
 /// advertising another backend's ids. The `object: "list"` envelope is stable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct VoiceList {
     /// Always `"list"`.
     pub object: String,
@@ -1911,7 +1927,7 @@ pub struct VoiceList {
 }
 
 /// One transcript segment.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct TranscriptSegment {
     /// Segment start, milliseconds from the audio start.
     pub start_ms: u32,
@@ -1922,7 +1938,7 @@ pub struct TranscriptSegment {
 }
 
 /// Transcription result.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct Transcript {
     /// Which backend produced this.
     pub backend_id: String,
@@ -1935,7 +1951,7 @@ pub struct Transcript {
 }
 
 /// Speech synthesis request.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct SynthesizeRequest {
     /// Model id (informational; the backend is chosen by the server).
     pub model: String,
@@ -1957,7 +1973,7 @@ pub struct SynthesizeRequest {
 
 /// Model modality as discovered on disk (`GET /v1/models` entries). Mirrors
 /// the registry's on-disk kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelKind {
     /// Language-model weights (LLM root).
@@ -1981,7 +1997,7 @@ pub enum ModelKind {
 }
 
 /// GGUF header summary (`GET /v1/models` entry `metadata`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct GgufMetadata {
     /// GGUF spec version.
     pub version: u32,
@@ -1994,7 +2010,7 @@ pub struct GgufMetadata {
 }
 
 /// Safetensors header summary (`GET /v1/models` entry `metadata`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct SafetensorsMetadata {
     /// Tensor entries in the JSON header (`__metadata__` excluded).
     pub tensor_count: u64,
@@ -2012,7 +2028,7 @@ pub fn is_known_base_model(tag: &str) -> bool {
 }
 
 /// Optional on-disk header metadata, tagged by container format.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 #[serde(tag = "format", rename_all = "snake_case")]
 pub enum ModelMetadata {
     /// `.gguf`: llama.cpp container header.
@@ -2031,7 +2047,7 @@ pub enum ModelMetadata {
 // The five-bool shape is the wire contract (llama-swap's nested capabilities
 // map); a state machine would change what clients parse, not improve it.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ModelCapabilities {
     /// Chat-template conversation turns (an LLM pipeline can serve it).
     pub chat: bool,
@@ -2068,7 +2084,7 @@ impl ModelCapabilities {
 
 /// Input/output modality sets for one catalog entry. Additive to the legacy
 /// flat `modalities` list so existing loop-lore consumers keep working.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ModelModalities {
     /// Accepted input content kinds (`text`, `image`, `audio`).
     pub input: Vec<String>,
@@ -2095,7 +2111,7 @@ impl ModelModalities {
 /// `slug`). The loop-lore flat fields (`owned_by`, `context_length`,
 /// `max_output`, `thinking`, `tool_calling`, `modalities`) mirror the nested
 /// `capabilities` object so both consumer shapes work.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ModelCatalogEntry {
     /// Operator alias when configured, else the registry slug.
     pub id: String,
@@ -2134,7 +2150,7 @@ pub struct ModelCatalogEntry {
 }
 
 /// Model catalog: OpenAI-style list envelope (`GET /v1/models`).
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct ModelCatalog {
     /// Always `"list"` (OpenAI-compatible envelope).
     pub object: String,
@@ -2147,7 +2163,7 @@ pub struct ModelCatalog {
 /// resident entry was evicted, `"not_loaded"` for an idempotent no-op (a
 /// 200, never a 404 - the caller treats any 200 as an unconditional
 /// continue-case).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct UnloadResult {
     /// `true` when a resident entry was evicted.
     pub unloaded: bool,
@@ -2160,7 +2176,7 @@ pub struct UnloadResult {
 /// Explicit model deletion result (`DELETE /v1/models/{slug}`). Deletion
 /// is **permanent**: the weight file(s) are removed from disk and the
 /// catalog entry is dropped; recovery means downloading again.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ModelDeleteResult {
     /// Always `true` on the 200 path.
     pub deleted: bool,
@@ -2172,7 +2188,7 @@ pub struct ModelDeleteResult {
 
 /// Bulk unload result (`POST /api/models/unload`): every non-pinned
 /// resident was evicted; pinned residents are skipped, never refused here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct UnloadAllResult {
     /// Number of resident entries evicted.
     pub unloaded: u32,
@@ -2182,7 +2198,7 @@ pub struct UnloadAllResult {
 
 /// One resident entry of the swap manager (`GET /v1/memory`, `GET
 /// /running`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ResidentModel {
     /// Owning registry slug.
     pub slug: String,
@@ -2213,7 +2229,7 @@ pub struct ResidentModel {
 }
 
 /// Configured warm-pipeline capacity (`GET /v1/memory`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct MemoryCapacity {
     /// LRU warm-set capacity (`[swap] llm_max_loaded`).
     pub llm_max_loaded: u32,
@@ -2222,7 +2238,7 @@ pub struct MemoryCapacity {
 }
 
 /// GPU slot readout (`GET /v1/memory`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct MemoryGpu {
     /// Another job currently holds the single inference slot.
     pub slot_busy: bool,
@@ -2230,7 +2246,7 @@ pub struct MemoryGpu {
 
 /// Residency readout (`GET /v1/memory`): exactly the models the swap
 /// manager considers resident, plus configured capacity and GPU state.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct MemoryInfo {
     /// Resident entries, sorted by slug.
     pub resident: Vec<ResidentModel>,
@@ -2250,7 +2266,7 @@ pub struct MemoryInfo {
 /// `running` and this entry's `model` key are load-bearing: loop-lore's
 /// `readRunningModels` reads only `running[].model` and classifies any
 /// other envelope as malformed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct RunningModel {
     /// Owning registry slug (llama-swap reports its model id here).
     pub model: String,
@@ -2264,7 +2280,7 @@ pub struct RunningModel {
 }
 
 /// llama-swap-compatible warm-set envelope (`GET /running`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct RunningList {
     /// Resident entries.
     pub running: Vec<RunningModel>,
@@ -2275,7 +2291,7 @@ pub struct RunningList {
 /// download metrics). The on-disk `ModelKind` set is wider (`lora`,
 /// `embedding`, `vae` come from `ComfyUI` category dirs); downloads only
 /// target the four root modalities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadKind {
     /// Language-model weights (`<data_dir>/models/llm`).
@@ -2290,7 +2306,7 @@ pub enum DownloadKind {
 }
 
 /// Download lifecycle state (`GET /v1/downloads` polling).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadStatus {
     /// Accepted, waiting for a concurrency slot (max 2).
@@ -2309,7 +2325,7 @@ pub enum DownloadStatus {
 }
 
 /// Start one managed download (`POST /v1/downloads`).
-#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 pub struct DownloadRequest {
     /// `HuggingFace` repo id (`owner/name`); together with `file` it derives
     /// the source URL `https://huggingface.co/{repo}/resolve/main/{file}`
@@ -2329,7 +2345,7 @@ pub struct DownloadRequest {
 }
 
 /// 202 acceptance body (`POST /v1/downloads`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct DownloadAccepted {
     /// Download id (`dl_<ulid>`); poll/cancel with it.
     pub id: String,
@@ -2340,7 +2356,7 @@ pub struct DownloadAccepted {
 }
 
 /// One managed download's progress (`GET /v1/downloads[/id]`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct DownloadState {
     /// Download id (`dl_<ulid>`).
     pub id: String,
@@ -2370,7 +2386,7 @@ pub struct DownloadState {
 }
 
 /// Download list envelope (`GET /v1/downloads`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct DownloadList {
     /// Known downloads, sorted by id.
     pub downloads: Vec<DownloadState>,
@@ -2380,7 +2396,7 @@ pub struct DownloadList {
 /// and the live `GET /v1/jobs` snapshot. The five fields are the selection
 /// metadata a consumer needs when a frame was dropped: identity, producer
 /// name/kind, emission order and the single preferred artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct JobArtifactRef {
     /// Content-addressed artifact id (same value as `JobEvent::artifact_id`).
     pub artifact_id: String,
@@ -2400,7 +2416,7 @@ pub struct JobArtifactRef {
 /// One in-flight GPU job of `GET /v1/jobs` (NEW-3). Entries appear when a
 /// GPU route admits a request and vanish when the request ends — this is a
 /// liveness view, not history.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct JobInfo {
     /// Registry id (`job_<ulid>`); pass to `POST /v1/jobs/{id}/cancel`.
     /// Also stamped as the `X-Job-Id` response header of the owning request
@@ -2431,7 +2447,7 @@ pub struct JobInfo {
 
 /// `GET /v1/jobs` response: OpenAI-style list envelope over in-flight GPU
 /// jobs, oldest first.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct JobList {
     /// Always `"list"`.
     pub object: String,
@@ -2480,7 +2496,7 @@ pub struct GenerationRecordList {
 /// actually stop early is a SEPARATE fact: `interruptible` is reported per
 /// job by [`JobInfo`] (`GET /v1/jobs`) and by the `job_cancelled`
 /// [`JobEvent`] (`GET /v1/events`), not by this response.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct JobCancelResult {
     /// `true` = a cancel was requested and the token was marked (every
     /// found id); `false` is never returned here — an unknown id is a 404.
@@ -2491,7 +2507,7 @@ pub struct JobCancelResult {
 
 /// Which lifecycle transition a [`JobEvent`] carries (`GET /v1/events`
 /// SSE frames; the wire labels double as the SSE `event:` line).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub enum JobEventType {
     /// The job entered the registry (route admitted the request).
     #[serde(rename = "job_registered")]
@@ -2530,10 +2546,17 @@ impl JobEventType {
 }
 
 /// One job lifecycle event streamed by `GET /v1/events`. The registry is a
-/// liveness view, so events are transitional: no history is replayed on
-/// (re)connect — a fresh stream only sees jobs registered after it opened.
-#[derive(Debug, Clone, Serialize, TS, ToSchema, SalvoToSchema)]
+/// liveness view, so events are transitional — but every event carries a
+/// monotonic `seq`, and reconnecting with `?since=` / `Last-Event-ID`
+/// replays the events after the client cursor (`GET /v1/jobs` stays the
+/// current-state snapshot for clients with no cursor).
+#[derive(Debug, Clone, Serialize, TS, ToSchema)]
 pub struct JobEvent {
+    /// Monotonic per-process sequence number, stamped once at central emit.
+    /// Reconnect cursors (`?since=`, `Last-Event-ID`) replay events with a
+    /// greater `seq`; it also rides as the SSE `id:` line.
+    #[serde(default)]
+    pub seq: u64,
     /// Lifecycle transition (also carried as the SSE `event:` line so
     /// JSON-only consumers do not need the envelope).
     pub event: JobEventType,
@@ -2601,7 +2624,7 @@ pub struct JobEvent {
 /// The route admits the job asynchronously: it answers `202` with the
 /// registry id, and the lifecycle runs through `GET /v1/jobs` and
 /// `GET /v1/events` like every other job class.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobRequest {
     /// The mesh the job works on.
@@ -2621,7 +2644,7 @@ pub struct BlenderJobRequest {
 
 /// The mesh a Blender job works on. The mesh is read from the artifact
 /// store by id — the route never accepts a filesystem path.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobInput {
     /// The stored artifact id: the 64-hex sha256 of the content.
@@ -2634,7 +2657,7 @@ pub struct BlenderJobInput {
 }
 
 /// The mesh formats a Blender job can read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlenderMeshFormat {
     /// Binary glTF.
@@ -2646,7 +2669,7 @@ pub enum BlenderMeshFormat {
 }
 
 /// Job-wide parameters.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobParams {
     /// The seed recorded in the manifest. The recipe is deterministic, so
@@ -2665,7 +2688,7 @@ pub struct BlenderJobParams {
 
 /// The engine contract a Blender job expects. Both fields are checked
 /// against the installed engine before the process starts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderEngine {
     /// The Blender version the caller expects (e.g. `"4.5.15"`).
@@ -2683,7 +2706,7 @@ pub struct BlenderEngine {
 }
 
 /// The output limits a Blender job expects.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderOutput {
     /// The output format the caller expects (currently `"glb"`).
@@ -2694,7 +2717,7 @@ pub struct BlenderOutput {
 
 /// One stage of a Blender job, in execution order. The vocabulary is
 /// closed: the recipe knows exactly these stages.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum BlenderStage {
     /// Smart UV project.
@@ -2742,7 +2765,7 @@ pub enum BlenderStage {
 }
 
 /// The maps a bake can produce.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlenderBakeMap {
     /// The diffuse colour map.
@@ -2754,7 +2777,7 @@ pub enum BlenderBakeMap {
 }
 
 /// 202 acceptance body (`POST /v1/jobs/blender`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct BlenderJobAccepted {
     /// Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the
     /// `X-Job-Id` header and the cancel route while the job is live.
@@ -2772,7 +2795,7 @@ pub struct BlenderJobAccepted {
 /// bundle's `manifest.json` carries. The writer is
 /// `routes/blender_exec.rs::manifest_record`, and a unit test there pins
 /// this DTO to it — the file on disk and this contract cannot drift apart.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobCompletion {
     /// The manifest schema version (currently `1`).
@@ -2795,7 +2818,7 @@ pub struct BlenderJobCompletion {
 
 /// The echoed job inside a [`BlenderJobCompletion`]: what ran, without any
 /// filesystem path.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobCompletionJob {
     /// The mesh the job consumed.
@@ -2809,7 +2832,7 @@ pub struct BlenderJobCompletionJob {
 }
 
 /// The mesh a [`BlenderJobCompletion`] records as consumed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobCompletionInput {
     /// The artifact-store id of the mesh (its sha256).
@@ -2819,7 +2842,7 @@ pub struct BlenderJobCompletionInput {
 }
 
 /// One produced artifact in a [`BlenderJobCompletion`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobCompletionArtifact {
     /// The bundle file name (never a staging path).
@@ -2837,7 +2860,7 @@ pub struct BlenderJobCompletionArtifact {
 }
 
 /// One progress event a [`BlenderJobCompletion`] records.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlenderJobCompletionProgress {
     /// The stage the event belongs to.
@@ -2849,7 +2872,7 @@ pub struct BlenderJobCompletionProgress {
 /// Fit-pill verdict for a curated catalog entry against the configured
 /// `[models] vram_budget_bytes`. Estimates are advisory heuristics (per-kind
 /// overhead factors over weight bytes), never a measurement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Pill {
     /// Estimated VRAM fits the budget (`est <= budget`).
@@ -2863,7 +2886,7 @@ pub enum Pill {
 
 /// Local scan presence for one curated catalog entry (`GET /v1/catalog`);
 /// absent when no scanned root holds a matching file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct CatalogLocal {
     /// Matched catalog slug (`llm:…` / `comfy:…` / `stt:…` / `tts:…`).
     pub slug: String,
@@ -2881,7 +2904,7 @@ pub struct CatalogLocal {
 /// One curated catalog offering (`GET /v1/catalog`). The manifest is a
 /// checked-in JSON list — review-by-PR is the signature; entries carry a
 /// `verified_date` and rot without it (12 months ⇒ drop at release).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct CatalogEntry {
     /// Stable manifest id (e.g. `llama-3.2-1b-q4`); NOT a catalog slug.
     pub id: String,
@@ -2907,7 +2930,7 @@ pub struct CatalogEntry {
 }
 
 /// Curated catalog envelope (`GET /v1/catalog`), OpenAI-style list shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct CatalogList {
     /// Always `"list"` (OpenAI-compatible envelope).
     pub object: String,
@@ -2917,7 +2940,7 @@ pub struct CatalogList {
 
 /// One received chunk record in an artifact upload manifest
 /// (`POST /v1/artifacts` chunked mode).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ArtifactChunk {
     /// 0-based chunk index within the upload.
     pub index: u32,
@@ -2929,7 +2952,7 @@ pub struct ArtifactChunk {
 
 /// Completed artifact descriptor: `id` is the content sha256 hex digest and
 /// doubles as the `{id}` of `GET /v1/artifacts/{id}/bytes`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ArtifactInfo {
     /// Content sha256 (lowercase hex) — the artifact id.
     pub id: String,
@@ -2947,7 +2970,7 @@ pub struct ArtifactInfo {
 /// Upload manifest returned on every chunked `POST /v1/artifacts` request:
 /// the registry of received chunks plus the completed artifact descriptor
 /// once the final chunk lands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ArtifactManifest {
     /// Server-assigned upload session id (`X-Upload-Id` on resume).
     pub upload_id: String,
@@ -3630,7 +3653,7 @@ mod content_parts_properties {
 
 /// Recognition surface kind (`POST /v1/recognize`, recognition tickets).
 /// Snake-case wire names are the worker crate's `RecKind::as_str` spellings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RecKind {
     /// Barcode/QR decode (symbology + payload + corner-derived bbox).
@@ -3638,11 +3661,17 @@ pub enum RecKind {
     /// Document/scene OCR, served by the in-process `ocrs`/`rten` backend
     /// when weights are present; otherwise a named 501.
     Ocr,
+    /// Face/person detection (bbox + landmarks + confidence, no text).
+    /// Gated policy surface: served only when the build compiles the
+    /// non-default `face` feature, weights are loaded, the operator opted
+    /// in, and the request carries a consent assertion; otherwise a named
+    /// 501/403, never a silent fallback.
+    Face,
 }
 
 /// One externally discovered engine (TASK-external-tool-registry). Every
 /// field is derived from the startup/reload probe; nothing is user-supplied.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ExternalTool {
     /// Stable lowercase tool id (`"blender"` / `"comfyui"`).
     pub id: String,
@@ -3663,7 +3692,7 @@ pub struct ExternalTool {
 
 /// Externally discovered engines reported by `GET /v1/external-tools` and
 /// the top-level capabilities document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ExternalToolsCapability {
     /// Every known tool, in the registry's stable order, available or not.
     pub tools: Vec<ExternalTool>,
@@ -3672,7 +3701,7 @@ pub struct ExternalToolsCapability {
 /// Recognition capability (`Capabilities::recognition`): probe-driven flags
 /// per kind — a `true` here is the same compile probe the route's 501/200
 /// behavior keys on, so the document cannot drift from the binary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct RecognitionFeature {
     /// Barcode/QR decode is compiled and served by `POST /v1/recognize`.
     pub barcode: bool,
@@ -3681,6 +3710,11 @@ pub struct RecognitionFeature {
     /// absence, never a half seam. The `ocrs` backend emits no confidence;
     /// see `OcrEngineMeta`.
     pub ocr: bool,
+    /// Face/person detection is live: compiled (`face` feature), weights
+    /// loaded, operator opt-in set, and a data dir present (local-only).
+    /// `true` only when every gate passes — the same predicate the route
+    /// 501/403s on, so the document cannot drift from the binary.
+    pub face: bool,
 }
 
 /// One recognition request over one image (`POST /v1/recognize`).
@@ -3688,7 +3722,7 @@ pub struct RecognitionFeature {
 /// Stage 1 is synchronous: barcode-class latency is sub-millisecond.
 /// Document ingest is the job-based `POST /v1/ocr/ingest`; this request
 /// shape is its already-compatible single-image prefix.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RecognizeRequest {
     /// Which recognition work to run.
@@ -3710,11 +3744,18 @@ pub struct RecognizeRequest {
     /// named 501 naming the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// Per-subject consent assertion, REQUIRED for Face (policy gate 1):
+    /// the operator application collected consent out of band and asserts
+    /// it here. honkbox never infers consent: None or false on a face
+    /// request answers the named 403 before any bytes are decoded. Ignored
+    /// by barcode/OCR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<bool>,
 }
 
 /// One located region: axis-aligned pixel bbox + text. `confidence` is
 /// absent when the engine produces none (rxing does not).
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RecognitionRegion {
     /// Pixel bbox `[x_min, y_min, x_max, y_max]` in source-image
     /// coordinates; meaningful only when the engine's `bbox_support` is
@@ -3725,10 +3766,15 @@ pub struct RecognitionRegion {
     /// Engine confidence in `0.0..=1.0`, absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    /// Face landmarks as `[x, y]` source-image points (5-point SCRFD order),
+    /// present only on face detections. Additive: barcode/OCR regions leave
+    /// it absent and older clients ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landmarks: Option<Vec<[f32; 2]>>,
 }
 
 /// One page of recognition output; barcode decode yields exactly one.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RecognitionPage {
     /// Full recognized text.
     pub text: String,
@@ -3738,7 +3784,7 @@ pub struct RecognitionPage {
 }
 
 /// Which engine produced a result, and what its output honestly contains.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RecognitionEngineMeta {
     /// Stable backend id (`"rxing"`, `"stub-recognition"`, …).
     pub id: String,
@@ -3753,7 +3799,7 @@ pub struct RecognitionEngineMeta {
 
 /// Recognition result. `pages: []` is the honest "processed, found
 /// nothing" answer — never an error for a valid image.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RecognizeResult {
     /// The kind that was served.
     pub kind: RecKind,
@@ -3773,7 +3819,7 @@ pub struct RecognizeResult {
 /// - `layout_regions` / `full_page`: need rasterization. PDF inputs answer
 ///   the named 501 `ocr_pdf_raster_unavailable` — this pure-Rust build has
 ///   no MIT/Apache PDF rasterizer. Image inputs run `ocrs` in-process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrIngestMode {
     /// Extract the existing PDF text layer; no rendering and no OCR.
@@ -3813,7 +3859,7 @@ impl OcrIngestMode {
 /// SSRF or host-path surface. The decoded bytes are capped by the server;
 /// `dpi` is bounded and recorded in the cache key even when the current
 /// backend does not need it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OcrIngestRequest {
     /// Path-free input: `data:application/pdf;base64,…` or an image data URI.
@@ -3831,7 +3877,7 @@ pub struct OcrIngestRequest {
 
 /// One OCR region. A PDF text layer has no boxes, so `bbox` is optional;
 /// `confidence` is absent because `ocrs` 0.14 emits no score (never guessed).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 pub struct OcrRegion {
     /// `[x_min, y_min, x_max, y_max]` in page pixels, or `None` when the
     /// source has no geometry (PDF text layer).
@@ -3845,7 +3891,7 @@ pub struct OcrRegion {
 }
 
 /// One processed page of an OCR ingest result.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 pub struct OcrPage {
     /// Zero-based page index in source order.
     pub index: u32,
@@ -3857,7 +3903,7 @@ pub struct OcrPage {
 
 /// The engine that produced an [`OcrResult`], with an honest account of
 /// what its output contains.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct OcrEngineMeta {
     /// Stable backend id (`"ocrs-rten"` when OCR weights are loaded).
     pub id: String,
@@ -3874,7 +3920,7 @@ pub struct OcrEngineMeta {
 /// Result of one OCR ingest job, also stored in the job bundle as
 /// `ocr_result.json`. Replaying an unchanged request sets `cache_hit` and
 /// consumes no admission lease.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 pub struct OcrResult {
     /// Producing engine and the honesty flags for its output.
     pub engine: OcrEngineMeta,
@@ -3892,7 +3938,7 @@ pub struct OcrResult {
 
 /// `202` acceptance body (`POST /v1/ocr/ingest`). The job id is also sent
 /// as `X-Job-Id`, so it can be cancelled through `POST /v1/jobs/{id}/cancel`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct OcrJobAccepted {
     /// Registry id of the accepted job.
     pub job_id: String,
@@ -3903,7 +3949,7 @@ pub struct OcrJobAccepted {
 /// Texture post-processing capability (`Capabilities::texture_postprocess`):
 /// whether the server can run texture conversion passes, and the tool
 /// versions it found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct TexturePostprocessCapability {
     /// `true` when the texture post-processing tools are present and
     /// usable.
@@ -3917,7 +3963,7 @@ pub struct TexturePostprocessCapability {
 /// NSFW classification capability (`Capabilities::nsfw`): the policy in
 /// effect, the classifier model version, and the score threshold above
 /// which content is flagged.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct NsfwCapability {
     /// `true` when NSFW classification is available in this build.
     pub available: bool,
@@ -3931,7 +3977,7 @@ pub struct NsfwCapability {
 
 /// External mesh capability (`Capabilities::mesh`): the external mesh
 /// generators/upstreams this server knows about.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct MeshExternalCapability {
     /// `true` when the external mesh surface is enabled.
     pub enabled: bool,
@@ -3949,7 +3995,7 @@ pub struct MeshExternalCapability {
 
 /// Signed-URL capability (`Capabilities::signed_urls`): whether artifact
 /// URLs can be signed, and how long a signature stays valid.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct SignedUrlCapability {
     /// `true` when signed URLs are enabled.
     pub enabled: bool,
@@ -3959,7 +4005,7 @@ pub struct SignedUrlCapability {
 
 /// Scope capability (`Capabilities::scopes`): whether scoped credentials
 /// are enabled, and which scopes the server recognizes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ScopeCapability {
     /// `true` when scoped credentials are enabled.
     pub enabled: bool,
@@ -3968,7 +4014,7 @@ pub struct ScopeCapability {
 }
 
 /// One NSFW annotation attached to a job's output (`JobEvent::annotations`).
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct NsfwAnnotation {
     /// Classifier score for the annotated content (higher is more likely
     /// NSFW).
@@ -3980,7 +4026,7 @@ pub struct NsfwAnnotation {
 }
 
 /// One queued job (ledger ticket) in a [`QueueSnapshot`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct QueueJob {
     /// Public job id, when the ticket has one; absent for queued ledger
     /// tickets that have not been admitted yet.
@@ -3999,7 +4045,7 @@ pub struct QueueJob {
 
 /// Queue snapshot: the currently queued tickets plus the aggregate queue
 /// depth and GPU slot count.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct QueueSnapshot {
     /// Queued tickets, in queue order.
     pub jobs: Vec<QueueJob>,
@@ -4012,7 +4058,7 @@ pub struct QueueSnapshot {
 }
 
 /// Rerank request: a query scored against a set of texts or documents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct RerankRequest {
     /// The query the candidates are scored against.
     pub query: String,
@@ -4029,7 +4075,7 @@ pub struct RerankRequest {
 }
 
 /// One reranked candidate.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RerankItem {
     /// Index of the candidate in the request's input order.
     pub index: usize,
@@ -4042,7 +4088,7 @@ pub struct RerankItem {
 
 /// Rerank result: the scored candidates plus the model that produced
 /// them.
-#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct RerankResult {
     /// Scored candidates, most relevant first.
     pub results: Vec<RerankItem>,
@@ -4056,7 +4102,7 @@ pub struct RerankResult {
 /// before any subprocess starts. The route admits the job asynchronously and
 /// answers `202` with a job id; lifecycle is polled at
 /// `GET /v1/fizgig/jobs/{id}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FizgigTrainRequest {
     /// Fizgig family id (for example `sdxl`); must be allowlisted.
@@ -4083,7 +4129,7 @@ pub struct FizgigTrainRequest {
 }
 
 /// Acknowledgement for an admitted Fizgig training job.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct FizgigTrainAccepted {
     /// Id used by the status and cancel routes.
     pub job_id: String,
@@ -4092,7 +4138,7 @@ pub struct FizgigTrainAccepted {
 }
 
 /// Live status of one Fizgig training job.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct FizgigTrainStatus {
     /// The job id from [`FizgigTrainAccepted`].
     pub job_id: String,
@@ -4111,7 +4157,7 @@ pub struct FizgigTrainStatus {
 /// One operator-declared managed CLI app's live state (`GET /v1/apps`).
 /// Every field is derived from config plus the manager's observed process
 /// state; no path or binary from an HTTP request can appear here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ManagedApp {
     /// Stable app id (`llama_server` / `comfyui`).
     pub id: String,
@@ -4133,7 +4179,7 @@ pub struct ManagedApp {
 }
 
 /// Declared managed apps and their live state (`GET /v1/apps`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ManagedAppList {
     /// All declared apps, including disabled ones (reported as `stopped`).
     pub apps: Vec<ManagedApp>,
@@ -4141,7 +4187,7 @@ pub struct ManagedAppList {
 
 /// Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a
 /// live probe: a ready managed process, or a verified detached upstream.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiStatus {
     /// Whether a live probe proved the typed `/comfyui` surface can serve now.
     /// A detached upstream is reported `false` (unverified) even when the
@@ -4165,7 +4211,7 @@ pub struct ComfyUiStatus {
 
 /// Typed queue summary read from `ComfyUI`'s internal `/queue` (`GET
 /// /comfyui/queue`). No node graph is ever returned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiQueue {
     /// Number of currently executing prompts.
     pub running: usize,
@@ -4177,7 +4223,7 @@ pub struct ComfyUiQueue {
 /// the validated query parameters accepted by `GET /comfyui/view`, so a client
 /// can fetch bytes without inventing an upstream path. No raw node graph is
 /// ever returned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiArtifact {
     /// Upstream node id that produced the artifact.
     pub node: String,
@@ -4192,7 +4238,7 @@ pub struct ComfyUiArtifact {
 
 /// Progress extracted from `ComfyUI`'s internal history response. No raw
 /// workflow JSON crosses the bearer boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiProgress {
     /// Last executing node, when the history record names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4206,7 +4252,7 @@ pub struct ComfyUiProgress {
 }
 
 /// Typed history summary for a prompt id (`GET /comfyui/history/{id}`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema, SalvoToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiHistory {
     /// The validated prompt id from the path.
     pub prompt_id: String,

@@ -120,6 +120,7 @@ fn bearer_auth() -> AuthConfig {
     AuthConfig {
         mode: AuthMode::Bearer,
         api_key_env: KEY_ENV.to_owned(),
+        jwt: crate::config::JwtConfig::default(),
     }
 }
 
@@ -215,6 +216,7 @@ async fn env_rotation_applies_without_rebuild() {
     let app = bearer_app(AuthConfig {
         mode: AuthMode::Bearer,
         api_key_env: ROTATION_ENV.to_owned(),
+        jwt: crate::config::JwtConfig::default(),
     });
     let (status, _) = get(app.clone(), "/v1/models", Some("Bearer key-one")).await;
     assert_eq!(status, StatusCode::OK);
@@ -240,6 +242,7 @@ async fn empty_bearer_header_value_is_rejected() {
     let app = bearer_app(AuthConfig {
         mode: AuthMode::Bearer,
         api_key_env: EMPTY_ENV.to_owned(),
+        jwt: crate::config::JwtConfig::default(),
     });
     for header in ["Bearer ", "Bearer", "Bearer   "] {
         let (status, _) = get(app.clone(), "/v1/models", Some(header)).await;

@@ -5,13 +5,14 @@ use std::time::Instant;
 
 use axum::http::StatusCode;
 use base64::Engine as _;
-use honkbox_api_types::{ImageOpOutput, ImageOpRequest, ImageOpResponse};
+use honkbox_api_types::{ImageOpCommand, ImageOpOutput, ImageOpRequest, ImageOpResponse};
 
 use super::AppConfig;
 use super::chat_prep::admit_then_register;
 use super::image_ops_dedup::{ImageOpSettled, op_label, sha256_hex};
 use super::image_ops_exec::{
-    ImageOpWork, ImageOpWorkError, admit_op_inputs, image_op_pre_admission_join_failure,
+    AdmittedOpInput, ImageOpUnitOutput, ImageOpWork, ImageOpWorkError, admit_op_inputs,
+    check_matting_inputs, image_op_pre_admission_join_failure, matting_sidecar_url,
     run_image_op_units, settled_without_job,
 };
 
@@ -55,6 +56,73 @@ pub(super) fn settle_image_op_work(
     }
 }
 
+/// Run the `matting` op through the rembg-class HTTP sidecar: POST each
+/// admitted PNG and expect the RGBA cutout PNG back. Fails fast on the
+/// first bad input; a non-PNG sidecar reply is a 500 (the contract is
+/// PNG-in/PNG-out, never coerced).
+async fn run_matting_sidecar(
+    url: &str,
+    admitted: &[AdmittedOpInput],
+    token: &tokio_util::sync::CancellationToken,
+) -> Result<ImageOpWork, ImageOpWorkError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| ImageOpWorkError::Failed(format!("matting sidecar client failed: {e}")))?;
+    let mut outputs = Vec::with_capacity(admitted.len());
+    let mut records = Vec::with_capacity(admitted.len());
+    for (i, input) in admitted.iter().enumerate() {
+        // Cooperative cancel honored BETWEEN inputs, like the CPU path.
+        if token.is_cancelled() {
+            return Err(ImageOpWorkError::Cancelled { completed: i });
+        }
+        let reply = client
+            .post(url)
+            .header("content-type", "image/png")
+            .body(input.raw.clone())
+            .send()
+            .await
+            .map_err(|e| {
+                ImageOpWorkError::Failed(format!("matting sidecar request failed: {e}"))
+            })?;
+        if !reply.status().is_success() {
+            return Err(ImageOpWorkError::Failed(format!(
+                "matting sidecar answered {}",
+                reply.status()
+            )));
+        }
+        let bytes = reply
+            .bytes()
+            .await
+            .map_err(|e| ImageOpWorkError::Failed(format!("matting sidecar read failed: {e}")))?
+            .to_vec();
+        // The cutout contract is PNG: sniff, never trust the reply blindly.
+        match crate::formats::sniff(&bytes) {
+            Some(row) if row.name == "png" => {}
+            Some(row) => {
+                return Err(ImageOpWorkError::Failed(format!(
+                    "matting sidecar returned {} bytes, not PNG",
+                    row.name
+                )));
+            }
+            None => {
+                return Err(ImageOpWorkError::Failed(
+                    "matting sidecar returned unrecognizable bytes".to_owned(),
+                ));
+            }
+        }
+        records.push(crate::jobs::OpsInputRecord {
+            source: input.source.clone(),
+            sha256: input.sha256.clone(),
+        });
+        outputs.push(ImageOpUnitOutput {
+            sha256: sha256_hex(&bytes),
+            bytes,
+        });
+    }
+    Ok((outputs, records))
+}
+
 /// Execute one image-op command: register the job, acquire CPU admission,
 /// run the units on the blocking pool (cancel checked between inputs),
 /// write the bundle (best-effort, like generation), and build the response.
@@ -86,6 +154,30 @@ pub(super) async fn execute_image_op(
                 ));
             }
         };
+    // Matting pre-admission: PNG-only input is a named 400 and an
+    // unconfigured sidecar is an honest 501 — both with NO job, like the
+    // other pre-admission rejections above.
+    let matting_url = if matches!(req.command, ImageOpCommand::Matting) {
+        if let Err(err) = check_matting_inputs(&admitted) {
+            return settled_without_job(err);
+        }
+        match matting_sidecar_url() {
+            Some(url) => Some(url),
+            None => {
+                return ImageOpSettled {
+                    response: Err((
+                        StatusCode::NOT_IMPLEMENTED,
+                        "matting unavailable: no sidecar configured (set HONKBOX_MATTING_URL); see GET /v1/capabilities image_ops"
+                            .to_owned(),
+                        Some("matting_unavailable".to_owned()),
+                    )),
+                    job_id: None,
+                };
+            }
+        }
+    } else {
+        None
+    };
     // Admission (TASK-image-ops-job-route): CPU-only work takes the
     // ledger's CPU-only bucket (`rag`, 0 GPU slots) — the fixed 9-kind
     // vocabulary has no image-ops kind, the same nearest-bucket mapping the
@@ -111,22 +203,57 @@ pub(super) async fn execute_image_op(
     let token = job.token().clone();
     let artifacts = config.artifacts.clone();
     let job_id = job.id().to_owned();
-    let work = tokio::task::spawn_blocking(move || {
-        run_image_op_units(
-            &command,
-            &admitted,
-            format,
-            jpeg_quality,
-            &token,
-            &artifacts,
-            &job_id,
-        )
-    })
-    .await;
-    drop(lease);
-    let (units, input_records) = match settle_image_op_work(job.id(), req.inputs.len(), work) {
-        Ok(pair) => pair,
-        Err(settled) => return *settled,
+    let (units, input_records) = if let Some(url) = matting_url {
+        // Matting bypasses the blocking pool: the sidecar is an async HTTP
+        // call per input (cancel honored BETWEEN inputs, like the CPU path).
+        drop(lease);
+        match run_matting_sidecar(&url, &admitted, &token).await {
+            Ok(pair) => pair,
+            Err(ImageOpWorkError::Cancelled { completed }) => {
+                return ImageOpSettled {
+                    response: Err((
+                        StatusCode::CONFLICT,
+                        format!(
+                            "job {} cancelled before completion ({completed} of {} input(s) processed)",
+                            job.id(),
+                            req.inputs.len()
+                        ),
+                        Some("job_cancelled".to_owned()),
+                    )),
+                    job_id: Some(job.id().to_owned()),
+                };
+            }
+            Err(ImageOpWorkError::Bad { message, code }) => {
+                return ImageOpSettled {
+                    response: Err((StatusCode::BAD_REQUEST, message, Some(code.to_owned()))),
+                    job_id: Some(job.id().to_owned()),
+                };
+            }
+            Err(ImageOpWorkError::Failed(message)) => {
+                return ImageOpSettled {
+                    response: Err((StatusCode::INTERNAL_SERVER_ERROR, message, None)),
+                    job_id: Some(job.id().to_owned()),
+                };
+            }
+        }
+    } else {
+        let work = tokio::task::spawn_blocking(move || {
+            run_image_op_units(
+                &command,
+                &admitted,
+                format,
+                jpeg_quality,
+                &token,
+                &artifacts,
+                &job_id,
+            )
+        })
+        .await;
+        drop(lease);
+        match settle_image_op_work(job.id(), req.inputs.len(), work) {
+            Ok(pair) => pair,
+            Err(settled) => return *settled,
+        }
     };
     // Bundle (best-effort, exactly like generation: a bundle write failure
     // never discards completed work — the response gains a warning).

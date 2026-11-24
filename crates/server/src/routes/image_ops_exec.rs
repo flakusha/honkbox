@@ -73,6 +73,14 @@ pub(super) fn apply_image_op(
         },
         ImageOpCommand::Grayscale => decoded.grayscale(),
         ImageOpCommand::Format => decoded,
+        // Matting never reaches the in-process pipeline: `execute_image_op`
+        // branches to the HTTP sidecar before the blocking pool. Unreachable
+        // by construction; a 500 if it ever drifts.
+        ImageOpCommand::Matting => {
+            return Err(ImageOpWorkError::Failed(
+                "matting runs through the HTTP sidecar, not the in-process pipeline".to_owned(),
+            ));
+        }
     })
 }
 
@@ -118,6 +126,33 @@ pub(super) fn admit_op_input(
         });
     }
     Ok(row)
+}
+
+/// Matting sidecar base URL (`HONKBOX_MATTING_URL`), read at request time
+/// so rotation/unset flips the capability with no restart. `None` means
+/// the `matting` op answers an honest 501.
+pub(super) fn matting_sidecar_url() -> Option<String> {
+    std::env::var("HONKBOX_MATTING_URL")
+        .ok()
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty())
+}
+
+/// Matting is PNG-in/PNG-out: every admitted input must have sniffed as
+/// `png`. Anything else is a named 400 (convert first, never coerced).
+pub(super) fn check_matting_inputs(admitted: &[AdmittedOpInput]) -> Result<(), ImageOpWorkError> {
+    for input in admitted {
+        if input.row.name != "png" {
+            return Err(ImageOpWorkError::Bad {
+                message: format!(
+                    "matting needs PNG input; got {} — re-encode to PNG first",
+                    input.row.name
+                ),
+                code: "invalid_image_op_matting_input",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Run the op units (blocking pool): per input — cancel check, decode,

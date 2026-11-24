@@ -1,5 +1,12 @@
 # Copy to <data_dir>/honkbox.toml (default $XDG_STATE_HOME/honkbox/honkbox.toml).
 # Every table is optional; omitted keys keep their defaults. Env overrides win.
+#
+# loop-lore 1.0.0 build: `bun run install:local` — the release binary ships
+# with every capability flag on (`--features release`: ocr-ocrs + audio-vad
+# + audio-cpp; llm-vision/vulkan/barcode are default-on). Verify with
+# `GET /v1/capabilities` (`features.vision.built`, `features.vad`,
+# `features.audio_cpp.built`, `recognition.ocr`) after
+# `bun run codegen:check` + `bun run audit:gpu-slot`.
 
 # [core]
 # data_dir = "/absolute/path"   # optional; must be absolute
@@ -16,11 +23,15 @@ llm_dirs = ["~/.cache/huggingface"]
 # Legacy singular comfyui_dir still works and is merged BEFORE comfyui_dirs.
 comfyui_dir = "~/git-ai/ai-models/Data/Models"
 # comfyui_dirs = ["~/git-ai/ai-models/Data/Models", "/opt/comfyui/Data/Models"]
+# OCR weights (ocrs `.rten`/`.onnx`, release build only; honkbox bundles
+# none — every entry is scanned, user-downloaded):
+# ocr_dirs = ["~/models/ocr"]
 
 # Extra roots appended to the [models] lists (all roots are scanned):
 # [discovery]
 # llm_dirs = ["/mnt/hf-hub", "/opt/llm-extra"]
 # comfyui_dirs = ["/mnt/comfyui-extra"]
+# ocr_dirs = ["/mnt/ocr-extra"]
 # Env overrides (path-separated): HONKBOX_LLM_DIRS, HONKBOX_COMFYUI_DIR
 # (legacy), HONKBOX_COMFYUI_DIRS, HONKBOX_DISCOVERY_LLM_DIRS,
 # HONKBOX_DISCOVERY_COMFYUI_DIRS.

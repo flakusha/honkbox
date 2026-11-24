@@ -13,6 +13,8 @@ barcode = ["dep:rxing"]
 # MIT OR Apache-2.0, no cmake/foreign build. Non-default — weights are
 # user-downloaded, honkbox bundles none.
 ocr-ocrs = ["dep:ocrs", "dep:rten"]
+# Face/person detection (gated policy surface): non-default, pure-Rust CPU pre/post-processing around an `ort` ONNX session (SCRFD/RetinaFace layouts). Reuses the workspace-pinned `ort` — no new vendor class. Weights are user-downloaded, honkbox bundles none.
+face = ["dep:ort"]
 
 [dependencies]
 # Container decode (PNG/JPEG/WebP — the same workspace image the sd-core
@@ -53,6 +55,8 @@ rxing = { version = "0.9", default-features = false, features = [
 # keep both user-downloaded weight formats loadable.
 ocrs = { version = "0.14", default-features = false, features = ["onnx", "rten"], optional = true }
 rten = { version = "0.28", features = ["rten_format"], optional = true }
+# Face-detector ONNX runtime: the workspace-pinned `ort` shared with the audio VAD (no new vendor class). Non-default `face` feature only.
+ort = { version = "=2.0.0-rc.15", optional = true }
 
 [lints]
 workspace = true

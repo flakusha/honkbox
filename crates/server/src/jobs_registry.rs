@@ -49,10 +49,13 @@
 //! the event is dropped; a subscriber that falls more than
 //! [`EVENT_CHANNEL_CAPACITY`] events behind gets a `Lagged` error (the SSE
 //! route surfaces that as an `events_dropped` frame, never a lie by
-//! omission). The channel carries transitions only — there is no replay of
-//! the current registry on subscribe; `GET /v1/jobs` is the snapshot.
+//! omission). Every emission is also kept in a bounded replay window keyed
+//! by its monotonic `seq`, so a reconnect with `?since=` / `Last-Event-ID`
+//! replays only what it missed; a cursor older than the window collapses to
+//! `events_dropped`. `GET /v1/jobs` stays the snapshot for cursor-less
+//! clients.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -144,9 +147,9 @@ struct JobEntry {
     kind: JobKind,
     model: Option<String>,
     started_at_ms: u64,
-    /// Monotonic per-registry insertion order: `started_at_ms` has
-    /// millisecond resolution and same-ms ties are otherwise decided by
-    /// `HashMap` iteration order (nondeterministic).
+    /// Monotonic order key: the `seq` stamped on this job `job_registered`
+    /// event (`started_at_ms` ties at millisecond resolution; `HashMap`
+    /// iteration order would be nondeterministic).
     seq: u64,
     /// Whether the route honors the token — between work units (multi-image
     /// generations, streaming chat) or by bridging it into an engine-level
@@ -163,6 +166,8 @@ impl JobEntry {
     /// transition and the cancel-requested flag filled in).
     fn to_event(&self, event: JobEventType, cancelled: bool) -> JobEvent {
         JobEvent {
+            // Placeholder: `EventBus::publish` stamps the real `seq`.
+            seq: 0,
             event,
             id: self.id.clone(),
             kind: self.kind.label().to_owned(),
@@ -201,11 +206,66 @@ pub(crate) struct CancelOutcome {
 /// built registry in tests behaves exactly like the global one). The
 /// lifecycle-event broadcaster rides alongside: `register`, `cancel`, and
 /// [`JobGuard::drop`] are the only emitters, all keyed by the registry.
+/// Central event emit: one `AtomicU64` stamps every event `seq`, appends
+/// it to the bounded replay window, and broadcasts it. All emitters
+/// (`register`, `cancel`, `JobGuard::drop`, progress/result/annotations)
+/// route through [`EventBus::publish`] — no call site stamps its own `seq`.
+#[derive(Debug)]
+struct EventBus {
+    sender: broadcast::Sender<JobEvent>,
+    seq: AtomicU64,
+    history: Mutex<VecDeque<JobEvent>>,
+}
+
+impl EventBus {
+    /// Stamp `seq`, retain in the replay window, broadcast fire-and-forget.
+    /// Returns the assigned `seq` so `register` can key entry order on it.
+    fn publish(&self, mut event: JobEvent) -> u64 {
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        event.seq = seq;
+        {
+            let mut history = self
+                .history
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            history.push_back(event.clone());
+            while history.len() > EVENT_CHANNEL_CAPACITY {
+                history.pop_front();
+            }
+        }
+        // No live subscriber is a normal idle state, not an error
+        // (observability never back-pressures GPU work).
+        let _ = self.sender.send(event);
+        seq
+    }
+
+    /// Events after `cursor`, oldest first. `Err(skipped)` when the cursor
+    /// predates the retained window: the caller owes one `events_dropped`
+    /// gap marker naming `skipped` instead of a replay.
+    fn replay_since(&self, cursor: u64) -> Result<Vec<JobEvent>, u64> {
+        let history = self
+            .history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(oldest) = history.front().map(|event| event.seq) else {
+            return Ok(Vec::new());
+        };
+        if cursor < oldest {
+            let latest = history.back().map_or(oldest, |event| event.seq);
+            return Err(latest - cursor);
+        }
+        Ok(history
+            .iter()
+            .filter(|event| event.seq > cursor)
+            .cloned()
+            .collect())
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Registry {
     entries: Arc<Mutex<HashMap<String, JobEntry>>>,
-    events: broadcast::Sender<JobEvent>,
-    seq: AtomicU64,
+    bus: Arc<EventBus>,
 }
 
 impl Default for Registry {
@@ -213,8 +273,11 @@ impl Default for Registry {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             entries: Arc::default(),
-            events,
-            seq: AtomicU64::new(0),
+            bus: Arc::new(EventBus {
+                sender: events,
+                seq: AtomicU64::new(0),
+                history: Mutex::new(VecDeque::new()),
+            }),
         }
     }
 }
@@ -232,29 +295,14 @@ impl Registry {
         let id = format!("job_{}", ulid::Ulid::new());
         let token = CancellationToken::new();
         let started_at_ms = now_ms();
-        let entry = JobEntry {
-            id: id.clone(),
-            token: token.clone(),
-            kind,
-            model: model.clone(),
-            started_at_ms,
-            seq: self.seq.fetch_add(1, Ordering::Relaxed),
-            interruptible,
-            artifacts: Vec::new(),
-        };
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id.clone(), entry);
-        // The bounded job-kind counter (no user data reaches the label).
-        crate::metrics::note_job_started(kind.label());
-        // Fire-and-forget: no live subscriber is a normal idle state, not
-        // an error (observability never back-pressures GPU work).
-        let _ = self.events.send(JobEvent {
+        // Central emit stamps `seq`; the entry keys its oldest-first order
+        // on the registered event `seq` (timestamps tie at ms resolution).
+        let assigned = self.bus.publish(JobEvent {
+            seq: 0,
             event: JobEventType::Registered,
             id: id.clone(),
             kind: kind.label().to_owned(),
-            model,
+            model: model.clone(),
             started_at_ms,
             interruptible,
             cancelled: false,
@@ -270,9 +318,25 @@ impl Registry {
             artifact_primary: None,
             annotations: None,
         });
+        let entry = JobEntry {
+            id: id.clone(),
+            token: token.clone(),
+            kind,
+            model,
+            started_at_ms,
+            seq: assigned,
+            interruptible,
+            artifacts: Vec::new(),
+        };
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id.clone(), entry);
+        // The bounded job-kind counter (no user data reaches the label).
+        crate::metrics::note_job_started(kind.label());
         JobGuard {
             entries: Arc::clone(&self.entries),
-            events: self.events.clone(),
+            bus: Arc::clone(&self.bus),
             id,
             token,
         }
@@ -293,12 +357,11 @@ impl Registry {
         entry.token.cancel();
         let cancelled = entry.token.is_cancelled();
         let interruptible = entry.interruptible;
-        // Fire-and-forget (same contract as `register`); the send touches
-        // only the broadcast channel, never the entries map, so holding the
-        // entries lock here cannot invert any lock order.
-        let _ = self
-            .events
-            .send(entry.to_event(JobEventType::Cancelled, cancelled));
+        // Central emit (same contract as `register`); publish touches
+        // only the bus, never the entries map, so holding the entries lock
+        // here cannot invert any lock order.
+        self.bus
+            .publish(entry.to_event(JobEventType::Cancelled, cancelled));
         Some(CancelOutcome {
             cancelled,
             interruptible,
@@ -327,10 +390,17 @@ impl Registry {
     }
 
     /// Subscribe to job lifecycle events (`GET /v1/events`). Only events
-    /// emitted after the subscription are delivered — there is no replay;
-    /// `list` is the current-state snapshot.
+    /// emitted after the subscription are delivered live; pair with
+    /// [`Registry::replay_since`] for cursor resume on reconnect.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<JobEvent> {
-        self.events.subscribe()
+        self.bus.sender.subscribe()
+    }
+
+    /// Missed events after `cursor` from the retained window, oldest first
+    /// (`GET /v1/events` reconnect replay). `Err(skipped)` when the cursor
+    /// predates the window — the route owes one `events_dropped` frame.
+    pub(crate) fn replay_since(&self, cursor: u64) -> Result<Vec<JobEvent>, u64> {
+        self.bus.replay_since(cursor)
     }
 
     /// Emit an incremental `job_progress` event for a live job. Fire-and-forget
@@ -352,7 +422,7 @@ impl Registry {
         event.pct = (total_steps > 0)
             .then(|| ((f64::from(step) / f64::from(total_steps)) * 100.0).clamp(0.0, 100.0));
         // The entries lock is already released; send only touches the channel.
-        let _ = self.events.send(event);
+        self.bus.publish(event);
     }
 
     /// Emit a `job_result` event for a live job: one produced artifact,
@@ -394,7 +464,7 @@ impl Registry {
         event.artifact_kind = Some(artifact.kind);
         event.artifact_index = Some(artifact.index);
         event.artifact_primary = Some(artifact.primary);
-        let _ = self.events.send(event);
+        self.bus.publish(event);
     }
 
     /// Re-emit a live job's `job_result` frame carrying its NSFW
@@ -412,7 +482,7 @@ impl Registry {
             entry.to_event(JobEventType::Result, false)
         };
         event.annotations = Some(annotations);
-        let _ = self.events.send(event);
+        self.bus.publish(event);
     }
 }
 
@@ -424,7 +494,7 @@ impl Registry {
 #[derive(Debug)]
 pub(crate) struct JobGuard {
     entries: Arc<Mutex<HashMap<String, JobEntry>>>,
-    events: broadcast::Sender<JobEvent>,
+    bus: Arc<EventBus>,
     id: String,
     token: CancellationToken,
 }
@@ -453,9 +523,8 @@ impl Drop for JobGuard {
             // what the work actually did with it is the `interruptible`
             // contract (documented on the event DTO).
             let cancelled = self.token.is_cancelled();
-            let _ = self
-                .events
-                .send(entry.to_event(JobEventType::Finished, cancelled));
+            self.bus
+                .publish(entry.to_event(JobEventType::Finished, cancelled));
         }
     }
 }
@@ -870,5 +939,65 @@ mod tests {
         assert!(json["id"].as_str().is_some());
         assert!(json["started_at_ms"].as_u64().is_some());
         drop(job);
+    }
+    /// Reconnect replay: `replay_since` returns exactly the missed tail,
+    /// oldest-first with monotonic `seq`. Five registrations stamp seq
+    /// 0..=4 on the fresh registry, so a cursor of 1 selects seq 2, 3, 4.
+    #[test]
+    fn replay_since_returns_missed_tail_oldest_first() {
+        let registry = fresh();
+        // Hold the guards: dropping a job emits `job_finished` and would
+        // pollute the replay window under test.
+        let _held = (0..5)
+            .map(|_| registry.register(JobKind::Chat, None, false))
+            .collect::<Vec<_>>();
+        let tail = registry.replay_since(1).expect("cursor inside window");
+        assert_eq!(tail.len(), 3, "seq 2,3,4 follow cursor 1");
+        let seqs = tail.iter().map(|event| event.seq).collect::<Vec<_>>();
+        assert_eq!(seqs, [2, 3, 4], "oldest-first, no gaps");
+        assert!(
+            tail.iter()
+                .all(|event| event.event == JobEventType::Registered),
+            "only registrations were emitted"
+        );
+    }
+
+    #[test]
+    fn replay_since_at_head_is_empty_ok() {
+        let registry = fresh();
+        let _held = registry.register(JobKind::Chat, None, false);
+        assert!(registry.replay_since(0).expect("cursor at head").is_empty());
+        // A cursor past the head is also empty, not an error.
+        assert!(
+            registry
+                .replay_since(10_000)
+                .expect("cursor past head")
+                .is_empty()
+        );
+    }
+
+    /// A cursor predating the retained window is an `Err(skipped)` naming
+    /// the dropped count — the route owes a gap marker, not a replay.
+    /// `EVENT_CHANNEL_CAPACITY + 10` registrations evict seq 0..=9, so
+    /// cursor 0 reports `latest - cursor` (265) as skipped.
+    #[test]
+    fn replay_since_predating_window_reports_skipped() {
+        let registry = fresh();
+        let _held = (0..EVENT_CHANNEL_CAPACITY + 10)
+            .map(|_| registry.register(JobKind::Chat, None, false))
+            .collect::<Vec<_>>();
+        match registry.replay_since(0) {
+            Err(skipped) => assert_eq!(skipped, 265),
+            Ok(_) => panic!("cursor 0 predates the window"),
+        }
+        // The window edge itself still replays: cursor 10 selects seq 11
+        // oldest-first.
+        let edge = registry.replay_since(10).expect("window edge replays");
+        assert_eq!(edge.len(), EVENT_CHANNEL_CAPACITY - 1);
+        assert_eq!(edge[0].seq, 11);
+        assert!(
+            edge.windows(2).all(|pair| pair[0].seq + 1 == pair[1].seq),
+            "monotonic, no gaps"
+        );
     }
 }

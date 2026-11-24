@@ -47,6 +47,11 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 tokio-util = "0.7"
 sha2 = "0.11"
+# JWT bearer arm (crates/server auth): the single audited primitive covering
+# HS256 + RS256/JWKS verification. NOT in Cargo.lock before this (checked) —
+# hand-rolling RSA verify on sha2+base64 would be custom crypto, so this one
+# add is the minimal correct option.
+jsonwebtoken = "9"
 # Supervised external processes (TASK-process-supervisor): rustix is the safe
 # door to the process-group teardown (the workspace forbids `unsafe`), glob
 # collects the run's output artifacts. Both are already in Cargo.lock.

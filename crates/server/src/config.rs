@@ -76,6 +76,12 @@
 //! NAME of a key env var) plus a `scopes` list, de-duplicated by
 //! `api_key_env`. Only NAMES are stored — never secret VALUES.
 //!
+//! JWT bearer arm (additive, `[auth] jwt_*`): `jwt_secret_env` names the env
+//! var holding the HS256 secret and/or `jwt_jwks_url` points at the
+//! issuer JWKS (RS256); `jwt_issuer`/`jwt_audience` pin `iss`/`aud` and
+//! `jwt_clock_skew_secs` bounds `exp`/`nbf` leeway (default 60). Unset pair
+//! keeps the legacy env-key path byte-for-byte.
+//!
 //! `[safety.nsfw]` holds the NSFW gate: `enabled` (default false), `policy`
 //! (`flag|block|off`, default `flag`), `model_version` (default
 //! `stub-nsfw-v1`), `threshold` (0..=1, default 0.8) and `classifier_bin`
@@ -373,6 +379,11 @@ impl AuthMode {
     }
 }
 
+/// Default `[auth] jwt_clock_skew_secs`: 60 s of `exp`/`nbf` leeway for
+/// clock drift between issuer and this server (operator-tightenable; `0`
+/// means exact).
+pub const DEFAULT_JWT_CLOCK_SKEW_SECS: u64 = 60;
+
 /// Resolved auth settings (REQ-7): the `[server] auth` mode plus the NAME
 /// of the env var holding the bearer key (`[auth] api_key_env`). The key
 /// VALUE is never stored here — the route middleware reads it per request
@@ -383,6 +394,8 @@ pub struct AuthConfig {
     pub mode: AuthMode,
     /// `[auth] api_key_env`: env var NAME read at request time.
     pub api_key_env: String,
+    /// `[auth] jwt_*`: the additive JWT bearer arm (off when unconfigured).
+    pub jwt: JwtConfig,
 }
 
 impl Default for AuthConfig {
@@ -390,7 +403,49 @@ impl Default for AuthConfig {
         Self {
             mode: AuthMode::None,
             api_key_env: "HONKBOX_API_KEY".to_owned(),
+            jwt: JwtConfig::default(),
         }
+    }
+}
+
+/// Resolved `[auth] jwt_*` knobs: the additive JWT bearer arm. Everything is
+/// fail-closed at request time — a token is trusted only when the material
+/// is present AND signature + expiry + issuer + audience all verify. When
+/// neither material source is configured the arm is off and the legacy
+/// env-key path runs byte-for-byte as before. Only NAMES/URLs/expectations
+/// are stored here: the HS256 secret is re-read from its env var per
+/// request (rotation without a restart) and JWKS keys refresh through a
+/// TTL cache (rotation via refresh, no restart).
+#[derive(Debug, Clone)]
+pub struct JwtConfig {
+    /// `[auth] jwt_secret_env`: NAME of the env var holding the HS256 secret.
+    pub secret_env: Option<String>,
+    /// `[auth] jwt_jwks_url`: issuer JWKS URL for RS256 (`kid` selection).
+    pub jwks_url: Option<String>,
+    /// `[auth] jwt_issuer`: expected `iss` (unchecked when unset).
+    pub issuer: Option<String>,
+    /// `[auth] jwt_audience`: expected `aud` (unchecked when unset).
+    pub audience: Option<String>,
+    /// `[auth] jwt_clock_skew_secs`: `exp`/`nbf` leeway in seconds.
+    pub clock_skew_secs: u64,
+}
+
+impl Default for JwtConfig {
+    fn default() -> Self {
+        Self {
+            secret_env: None,
+            jwks_url: None,
+            issuer: None,
+            audience: None,
+            clock_skew_secs: DEFAULT_JWT_CLOCK_SKEW_SECS,
+        }
+    }
+}
+
+impl JwtConfig {
+    /// The JWT arm is on when either key-material source is configured.
+    pub fn enabled(&self) -> bool {
+        self.secret_env.is_some() || self.jwks_url.is_some()
     }
 }
 
@@ -1244,12 +1299,18 @@ pub fn residency_config(
 /// defaults; invalid values are config errors. There is deliberately NO env
 /// stage for these: the configured env vars hold VALUES at request time, not
 /// config overrides. Pure (args) so tests stay thread-safe.
+#[allow(clippy::too_many_arguments)] // one settings fn owns every REQ-7 auth knob
 fn auth_settings(
     auth: Option<&str>,
     api_key_env: Option<&str>,
     signed_url_secret_env: Option<&str>,
     signed_url_ttl_secs: Option<u64>,
     scopes: &[FileScope],
+    jwt_secret_env: Option<&str>,
+    jwt_jwks_url: Option<&str>,
+    jwt_issuer: Option<&str>,
+    jwt_audience: Option<&str>,
+    jwt_clock_skew_secs: Option<u64>,
     where_: &str,
 ) -> Result<(AuthConfig, AuthFactsConfig), String> {
     let mode = auth.map_or(Ok(AuthMode::None), |raw| AuthMode::parse(raw, where_))?;
@@ -1265,13 +1326,44 @@ fn auth_settings(
         signed_url_ttl_secs: signed_url_ttl_secs.unwrap_or(DEFAULT_SIGNED_URL_TTL_SECS),
         scopes: parse_scopes(scopes, where_)?,
     };
+    // JWT arm: NAMES/URLs/expectations only — VALUES stay in env/JWKS at
+    // request time. Unset pair = arm off (legacy env-key path unchanged).
+    let jwt = JwtConfig {
+        secret_env: jwt_secret_env
+            .map(|raw| parse_env_name(raw, "[auth] jwt_secret_env", where_))
+            .transpose()?,
+        jwks_url: jwt_jwks_url
+            .map(|raw| parse_http_url(raw, "[auth] jwt_jwks_url", where_))
+            .transpose()?,
+        issuer: jwt_issuer
+            .map(|raw| raw.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        audience: jwt_audience
+            .map(|raw| raw.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        clock_skew_secs: jwt_clock_skew_secs.unwrap_or(DEFAULT_JWT_CLOCK_SKEW_SECS),
+    };
     Ok((
         AuthConfig {
             mode,
             api_key_env: env,
+            jwt,
         },
         facts,
     ))
+}
+
+/// Validate a configured HTTP(S) URL (trimmed, non-empty, `http(s)://`).
+/// Pure.
+fn parse_http_url(raw: &str, key: &str, where_: &str) -> Result<String, String> {
+    let url = raw.trim();
+    if url.starts_with("http://") || url.starts_with("https://") {
+        Ok(url.to_owned())
+    } else {
+        Err(format!(
+            "{where_}: invalid {key} value {raw:?} (expected an http(s) URL)"
+        ))
+    }
 }
 
 /// Final data dir: flag > env > `[core] data_dir` file key > located default
@@ -1357,6 +1449,12 @@ struct FileStages {
     signed_url_ttl_secs: Option<u64>,
     /// `[[auth.scopes]]` raw entries, validated in `load`.
     scopes: Vec<FileScope>,
+    /// `[auth] jwt_*` raw values, validated in `load`.
+    jwt_secret_env: Option<String>,
+    jwt_jwks_url: Option<String>,
+    jwt_issuer: Option<String>,
+    jwt_audience: Option<String>,
+    jwt_clock_skew_secs: Option<u64>,
 }
 
 /// Read + apply the config-file stage: parse `path`'s TOML into the staged
@@ -1441,6 +1539,11 @@ fn stage_config_file(
     out.signed_url_secret_env = file.auth.signed_url_secret_env;
     out.signed_url_ttl_secs = file.auth.signed_url_ttl_secs;
     out.scopes = file.auth.scopes;
+    out.jwt_secret_env = file.auth.jwt_secret_env;
+    out.jwt_jwks_url = file.auth.jwt_jwks_url;
+    out.jwt_issuer = file.auth.jwt_issuer;
+    out.jwt_audience = file.auth.jwt_audience;
+    out.jwt_clock_skew_secs = file.auth.jwt_clock_skew_secs;
     // The bindings + the per-slug cache knobs.
     let (entries, cache) = parse_entries(&file.models.entry)?;
     out.entries = entries;
@@ -1604,6 +1707,11 @@ pub fn load(
         signed_url_secret_env,
         signed_url_ttl_secs,
         scopes,
+        jwt_secret_env,
+        jwt_jwks_url,
+        jwt_issuer,
+        jwt_audience,
+        jwt_clock_skew_secs,
         queue_wait: queue_wait_file,
         ledger: file_ledger,
         artifacts: artifact_cap_file,
@@ -1717,6 +1825,11 @@ pub fn load(
         signed_url_secret_env.as_deref(),
         signed_url_ttl_secs,
         &scopes,
+        jwt_secret_env.as_deref(),
+        jwt_jwks_url.as_deref(),
+        jwt_issuer.as_deref(),
+        jwt_audience.as_deref(),
+        jwt_clock_skew_secs,
         &display,
     )?;
     let server = server_settings(
@@ -2097,6 +2210,16 @@ struct FileAuth {
     signed_url_ttl_secs: Option<u64>,
     #[serde(default)]
     scopes: Vec<FileScope>,
+    #[serde(default)]
+    jwt_secret_env: Option<String>,
+    #[serde(default)]
+    jwt_jwks_url: Option<String>,
+    #[serde(default)]
+    jwt_issuer: Option<String>,
+    #[serde(default)]
+    jwt_audience: Option<String>,
+    #[serde(default)]
+    jwt_clock_skew_secs: Option<u64>,
 }
 
 /// `[safety]` table as written.

@@ -52,6 +52,16 @@ bun run install:local       # vendor sync + web build + release build, then inst
 honkbox serve               # via ~/.local/bin/honkbox
 ```
 
+Release set (loop-lore 1.0.0): `install:local` builds with
+`--features release` (ocr-ocrs + audio-vad + audio-cpp; llm-vision,
+vulkan, and barcode are default-on), so ONE command yields every
+`/v1/capabilities` flag: `features.vision.built`, `features.vad`,
+`features.audio_cpp.built`, and `recognition.ocr`. Dev builds stay lean
+(`cargo build -p honkbox-server` skips the heavy audio.cpp CMake build).
+Verify a release binary with `bun run codegen:check` (capability DTOs
+fresh vs `api-types`) and `bun run audit:gpu-slot` (no test takes the GPU
+slot off the serialization lock).
+
 Layout (XDG-aware):
 
 - `$XDG_DATA_HOME/honkbox/bin/honkbox` (default `~/.local/share/honkbox/bin/honkbox`)
@@ -202,14 +212,14 @@ Copy it to `<data_dir>/honkbox.toml` and edit; every table is optional.
   projector file itself (`mmproj*.gguf`) is listed by the scan but is not
   chat-capable (`capabilities.chat: false`) — it is a component, not a
   model. Undecodable payloads answer 400 `invalid_image_data`.
-  Opt-in: `cargo build --features llm-vision` compiles the mtmd path
-  (feature `llm-vision` → `honkbox-llm-worker/vision`); without it the
-  catalog reports text-only and image parts 400 by name. The gate is a
-  vendor packaging caveat, not a missing capability: llama-cpp-sys-4
-  0.11.0 static builds cannot link the mtmd bitmap loader (its
-  `mtmd-helper.cpp` needs the `vendor-hash` library, which the sys build
-  script does not link); once a `[patch.crates-io]` vendor patch adds the
-  missing link directive, the feature can move into `default`.
+  Default-on: the mtmd path compiles via feature `llm-vision` →
+  `honkbox-llm-worker/vision`, and the `[patch.crates-io]` llama-cpp-sys-4
+  vendor patch (workspace `Cargo.toml`, applied by
+  `bun scripts/vendor-patches.ts sync`) adds the missing `vendor-hash`
+  link directive its `mtmd-helper.cpp` references — so the default build
+  serves image input on models with a sibling mmproj projector.
+  `--no-default-features` builds a text-only server where image parts get
+  the named `vision_unsupported` 400 — never a silently flattened image.
 - Auth (`[server] auth`, REQ-7): with `auth = "bearer"`, every route except
   `GET /health`, `GET /metrics`, and the static web UI requires
   `Authorization: Bearer <key>`; failures return a 401 with an OpenAI-shaped
