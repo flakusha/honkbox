@@ -6,12 +6,64 @@
 //! model data is bundled.
 
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Safetensors header cap, same bound as the catalog probe.
 const MAX_HEADER: u64 = 16 * 1024 * 1024;
+
+/// Map one diffusers-style model-spec key to its original SD 1.5 checkpoint
+/// name. Mirrors the subset of vendored stable-diffusion.cpp
+/// `convert_diffusers_*_to_original_sd1` used by this backend's spec.
+///
+/// ponytail: explicit prefixes, not a generic name-conversion engine; extend
+/// only when a new spec key is added.
+fn sd15_original_key(name: &str) -> Cow<'_, str> {
+    let vae = name.starts_with("decoder.");
+    let mut mapped = if vae {
+        name.strip_prefix("decoder.")
+            .expect("checked prefix")
+            .to_owned()
+    } else {
+        name.to_owned()
+    };
+
+    if !vae {
+        for (from, to) in [
+            ("conv_in.", "input_blocks.0.0."),
+            ("conv_norm_out.", "out.0."),
+            ("conv_out.", "out.2."),
+            ("time_embedding.linear_1.", "time_embed.0."),
+            ("time_embedding.linear_2.", "time_embed.2."),
+            ("down_blocks.0.downsamplers.0.conv.", "input_blocks.3.0.op."),
+            ("up_blocks.1.upsamplers.0.conv.", "output_blocks.5.2.conv."),
+            ("down_blocks.0.resnets.0.", "input_blocks.1.0."),
+            ("down_blocks.0.resnets.1.", "input_blocks.2.0."),
+            ("mid_block.resnets.0.", "middle_block.0."),
+            ("up_blocks.1.resnets.0.", "output_blocks.3.0."),
+            ("up_blocks.1.resnets.1.", "output_blocks.4.0."),
+            ("norm1.", "in_layers.0."),
+            ("conv1.", "in_layers.2."),
+            ("norm2.", "out_layers.0."),
+            ("conv2.", "out_layers.3."),
+        ] {
+            if let Some(pos) = mapped.find(from) {
+                mapped.replace_range(pos..pos + from.len(), to);
+            }
+        }
+    } else if let Some(rest) = mapped.strip_prefix("conv_norm_out.") {
+        mapped = format!("norm_out.{rest}");
+    }
+
+    let prefix = if vae {
+        "first_stage_model.decoder."
+    } else {
+        "model.diffusion_model."
+    };
+    Cow::Owned(format!("{prefix}{mapped}"))
+}
 
 #[derive(Debug, Deserialize)]
 struct HeaderTensor {
@@ -147,16 +199,20 @@ impl CheckpointMap {
         self.tensors.get(name)
     }
 
-    /// Look up a model-spec key in both single-file and spec-local layouts.
+    /// Look up a model-spec key in spec-local and single-file layouts.
     ///
-    /// Specs use bare names (`conv_in.weight`); SD 1.5 single-file checkpoints
-    /// prefix `UNet` tensors with `model.diffusion_model.` and decoder tensors
-    /// with `first_stage_model.decoder.`. Exact matches win, so fixtures and
-    /// split checkpoints keep working.
+    /// Exact matches win. Specs use diffusers names; single-file SD 1.5
+    /// checkpoints use the original names mapped by
+    /// [`sd15_original_key`]. Fixtures with bare keys keep working.
     pub fn get_aliased(&self, name: &str) -> Option<&TensorMeta> {
         if let Some(meta) = self.tensors.get(name) {
             return Some(meta);
         }
+        let alias = sd15_original_key(name);
+        if let Some(meta) = self.tensors.get(alias.as_ref()) {
+            return Some(meta);
+        }
+        // Spec-local fixture layout: spec name with only the family prefix.
         let prefix = if name.starts_with("decoder.") {
             "first_stage_model."
         } else {
@@ -260,6 +316,26 @@ mod tests {
         );
         assert!(map.read_tensor(&path, "missing").is_err());
         std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[test]
+    fn maps_diffusers_spec_names_to_original_checkpoint_names() {
+        assert_eq!(
+            sd15_original_key("conv_in.weight").as_ref(),
+            "model.diffusion_model.input_blocks.0.0.weight"
+        );
+        assert_eq!(
+            sd15_original_key("down_blocks.0.resnets.0.norm1.weight").as_ref(),
+            "model.diffusion_model.input_blocks.1.0.in_layers.0.weight"
+        );
+        assert_eq!(
+            sd15_original_key("up_blocks.1.upsamplers.0.conv.weight").as_ref(),
+            "model.diffusion_model.output_blocks.5.2.conv.weight"
+        );
+        assert_eq!(
+            sd15_original_key("decoder.conv_norm_out.weight").as_ref(),
+            "first_stage_model.decoder.norm_out.weight"
+        );
     }
 
     #[test]

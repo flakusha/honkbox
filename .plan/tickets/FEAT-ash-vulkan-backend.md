@@ -870,3 +870,32 @@ parity work on bias handling, EOS pooling and fused QKV.
 Next real-checkpoint parity needs either an SD 1.5 checkpoint or a separate
 SDXL model spec + dual text tower loader (multi-slice). No more synthetic
 key-mapping work.
+
+## Landed — real SD 1.5 checkpoint validation (2026-11-24, worktree)
+
+The user supplied a local SD 1.5 checkpoint, which exposed three gaps the
+synthetic fixtures hid:
+
+1. Spec keys are diffusers-style; real single-file checkpoints use original
+   names (`conv_in.weight` -> `model.diffusion_model.input_blocks.0.0.weight`,
+   resnet layers `norm1/conv1/...` -> `in_layers.0/in_layers.2/...`,
+   `decoder.conv_norm_out.*` -> `first_stage_model.decoder.norm_out.*`).
+   `CheckpointMap::get_aliased` now converts via a focused SD 1.5 key map
+   (mirrors vendored `name_conversion.cpp`), keeping exact and legacy fixture
+   lookups as fallbacks.
+2. `shape_infer::infer` required `timestep linear2` out-channels to equal
+   `conv_in` out-channels (320). Real SD 1.5 has 1280; corrected the invariant
+   to match `linear1` hidden width.
+3. CLIP transformer layers live under `encoder.layers.*` in real checkpoints;
+   the name helper now inserts `encoder.` for layer keys only.
+
+Five genuine single-file checkpoints now pass `models inspect-ash` with
+`unet_keys ready=true missing=0` and `clip_keys ready=true missing=0
+wrong_shape=0`: local v1-5-pruned-emaonly-fp16, canonical
+v1-5-pruned-emaonly, canonical v1-5-pruned (non-EMA), Realistic Vision V5.1
+fp16-no-EMA, DreamShaper 8 pruned. Web research, licenses and URLs:
+`.tmp/research/sd15-checkpoint-websearch-2026-11-24.md`; raw evidence:
+`.tmp/sd15-checkpoint-test-evidence.md`.
+
+Next: actual sampling parity (bias path, EOS pooling, fused QKV) still needs
+kernel work; header validation is now proven on real weights.

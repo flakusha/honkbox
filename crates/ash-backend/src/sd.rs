@@ -219,7 +219,7 @@ mod tests {
             let dims = if key == "time_embedding.linear_1.weight" {
                 vec![8, 4]
             } else if key == "time_embedding.linear_2.weight" {
-                vec![4, 8]
+                vec![8, 8]
             } else if key.ends_with(".weight") {
                 vec![4, 4, 3, 3]
             } else {

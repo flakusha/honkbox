@@ -152,11 +152,11 @@ pub fn infer(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<UnetShapes
             expected: hidden,
         });
     }
-    if channels != entry.out_c {
+    if channels != hidden {
         return Err(ShapeError::Mismatch {
             key: spec.timestep.linear2.weight.to_owned(),
             actual: channels,
-            expected: entry.out_c,
+            expected: hidden,
         });
     }
     Ok(UnetShapes {
@@ -235,7 +235,7 @@ mod tests {
         if key == "time_embedding.linear_1.weight" {
             vec![8, 4]
         } else if key == "time_embedding.linear_2.weight" {
-            vec![4, 8]
+            vec![8, 8]
         } else if key.ends_with(".weight") {
             vec![4, 4, 3, 3]
         } else {
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(shapes.output_channels, 4);
         assert_eq!(shapes.timestep_dim, 4);
         assert_eq!(shapes.timestep_hidden, 8);
-        assert_eq!(shapes.timestep_channels, 4);
+        assert_eq!(shapes.timestep_channels, 8);
         assert_eq!(shapes.down.expect("down").kernel, 3);
         assert_eq!(shapes.up.expect("up").in_c, 4);
         assert_eq!(shapes.vae_entry.out_c, 4);

@@ -39,7 +39,12 @@ pub const SD15_CLIP: ClipGeometry = ClipGeometry {
 };
 
 fn name(suffix: &str) -> String {
-    format!("{PREFIX}{suffix}")
+    // Single-file SD 1.5 nests transformer layers under `encoder.`.
+    if suffix.starts_with("layers.") {
+        format!("{PREFIX}encoder.{suffix}")
+    } else {
+        format!("{PREFIX}{suffix}")
+    }
 }
 
 /// Required tensor names and shapes for one text tower.
@@ -277,6 +282,18 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn layer_keys_match_single_file_layout() {
+        assert_eq!(
+            name("layers.0.self_attn.q_proj.weight"),
+            "cond_stage_model.transformer.text_model.encoder.layers.0.self_attn.q_proj.weight"
+        );
+        assert_eq!(
+            name("embeddings.token_embedding.weight"),
+            "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight"
+        );
+    }
 
     /// Owns one unique temp file; removal happens on every exit path.
     struct TempFile(PathBuf);
