@@ -18,6 +18,7 @@ mod model_formats;
 mod ora;
 mod raster;
 mod routes;
+mod salvo_version;
 mod svg;
 mod swap;
 mod texture_postprocess;
@@ -63,6 +64,8 @@ enum Command {
     Serve(ServeArgs),
     /// Print the `OpenAPI` document to stdout.
     Openapi,
+    /// Print the spike salvo `OpenAPI` document to stdout.
+    SalvoOpenapi,
     /// Inspect discovered model files.
     Models {
         /// What to do with the model list.
@@ -351,6 +354,11 @@ async fn main() {
                 "{}",
                 serde_json::to_string_pretty(&doc).expect("serialize openapi")
             );
+        }
+        Command::SalvoOpenapi => {
+            let doc = salvo::oapi::OpenApi::new("honkbox", env!("CARGO_PKG_VERSION"))
+                .merge_router(&crate::salvo_version::router());
+            println!("{}", doc.to_pretty_json().expect("serialize salvo openapi"));
         }
         Command::Generate(args) => generate(args, config, data_dir),
         Command::Chat(args) => chat(args, config, data_dir),

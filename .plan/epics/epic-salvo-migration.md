@@ -43,7 +43,7 @@ claimed before it is run.
 
 ## Verification
 
-- `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test health`
+- `CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test salvo_version`
 - `bun run check`
 - `bun run codegen:check`
 

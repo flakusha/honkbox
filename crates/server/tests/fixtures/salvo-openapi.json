@@ -1,0 +1,49 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "honkbox",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/version": {
+      "get": {
+        "summary": "Binary name + version.",
+        "operationId": "honkbox.salvo_version.get_version",
+        "responses": {
+          "200": {
+            "description": "Binary name and version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/honkbox.salvo_version.Version"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "honkbox.salvo_version.Version": {
+        "type": "object",
+        "description": "Binary name + version (spike-local DTO, see module note).",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Binary name, always `\"honkbox\"`."
+          },
+          "version": {
+            "type": "string",
+            "description": "Crate version, from `CARGO_PKG_VERSION`."
+          }
+        }
+      }
+    }
+  }
+}
