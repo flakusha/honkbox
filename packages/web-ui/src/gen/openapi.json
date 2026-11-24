@@ -67,16 +67,15 @@
     },
     "/api/version": {
       "get": {
-        "tags": [],
         "summary": "Binary name + version.",
-        "operationId": "get_version",
+        "operationId": "honkbox.salvo_version.get_version",
         "responses": {
           "200": {
             "description": "Binary name and version",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Version"
+                  "$ref": "#/components/schemas/honkbox.salvo_version.Version"
                 }
               }
             }
@@ -8506,6 +8505,24 @@
           "object": {
             "type": "string",
             "description": "Always `\"list\"`."
+          }
+        }
+      },
+      "honkbox.salvo_version.Version": {
+        "type": "object",
+        "description": "Binary name + version (spike-local DTO, see module note).",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Binary name, always `\"honkbox\"`."
+          },
+          "version": {
+            "type": "string",
+            "description": "Crate version, from `CARGO_PKG_VERSION`."
           }
         }
       }

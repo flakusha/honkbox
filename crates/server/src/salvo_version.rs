@@ -8,6 +8,7 @@ use salvo::http::header::LINK;
 use salvo::http::HeaderValue;
 use salvo::oapi::{endpoint, ToSchema};
 use salvo::prelude::*;
+use salvo::routing::FilterInfo;
 use serde::Serialize;
 
 /// Discovery links from the legacy version probe to the canonical contract.
@@ -42,4 +43,44 @@ pub async fn get_version(res: &mut Response) {
 
 pub fn router() -> Router {
     Router::new().push(Router::with_path("api/version").get(get_version))
+}
+
+/// Paths with a goal in `router()`, from structured filter metadata.
+pub(crate) fn served_paths() -> Vec<String> {
+    fn collect(router: &Router, prefix: &str, out: &mut Vec<String>) {
+        let mut path = prefix.to_owned();
+        for filter in router.filters() {
+            if let FilterInfo::Path(segment) = filter.info() {
+                let segment = segment.trim_matches('/');
+                if !segment.is_empty() {
+                    if !path.is_empty() {
+                        path.push('/');
+                    }
+                    path.push_str(segment);
+                }
+            }
+        }
+        if router.goal.is_some() {
+            out.push(format!("/{path}"));
+        }
+        for child in router.routers() {
+            collect(child, &path, out);
+        }
+    }
+
+    let mut paths = Vec::new();
+    collect(&router(), "", &mut paths);
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn served_paths_come_from_router_filters() {
+        assert_eq!(served_paths(), vec!["/api/version"]);
+    }
 }

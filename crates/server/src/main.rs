@@ -66,6 +66,8 @@ enum Command {
     Openapi,
     /// Print the spike salvo `OpenAPI` document to stdout.
     SalvoOpenapi,
+    /// Print the mixed-cutover envelope: merged document + salvo routes.
+    Codegen,
     /// Inspect discovered model files.
     Models {
         /// What to do with the model list.
@@ -360,6 +362,7 @@ async fn main() {
                 .merge_router(&crate::salvo_version::router());
             println!("{}", doc.to_pretty_json().expect("serialize salvo openapi"));
         }
+        Command::Codegen => codegen(),
         Command::Generate(args) => generate(args, config, data_dir),
         Command::Chat(args) => chat(args, config, data_dir),
         Command::Transcribe(args) => transcribe(args, config, data_dir),
@@ -394,6 +397,24 @@ async fn main() {
     }
 }
 
+/// Print both documents as raw JSON strings plus salvo-served paths. The
+/// script merges them so the original utoipa key order survives regeneration.
+fn codegen() {
+    let utoipa = serde_json::to_string_pretty(&ApiDoc::openapi()).expect("serialize openapi");
+    let salvo = salvo::oapi::OpenApi::new("honkbox", env!("CARGO_PKG_VERSION"))
+        .merge_router(&salvo_version::router());
+    let salvo = salvo.to_pretty_json().expect("serialize salvo openapi");
+
+    let envelope = serde_json::json!({
+        "utoipa": utoipa,
+        "salvo": salvo,
+        "routes": salvo_version::served_paths(),
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&envelope).expect("serialize codegen envelope")
+    );
+}
 /// `serve`: load config (loud exit-1 on error), resolve the data dir, then
 /// install logging, scan, and serve the HTTP API + UI.
 /// Resolve the serve bind address + auth (REQ-7): parse `--host` into an
