@@ -1,0 +1,686 @@
+{
+  "src/apps.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-comfyui-readiness-probe.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-cli-app-manager.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capabilities-golden-fixture.md"
+    }
+  ],
+  "src/artifacts.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/audiocpp.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-stt-provider.md"
+    }
+  ],
+  "src/backends.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-llama-server-client-backend.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-stt-provider.md"
+    }
+  ],
+  "src/blender_addons.py": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-addon-capability-probe.md"
+    }
+  ],
+  "src/blender_addons.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-addon-capability-probe.md"
+    }
+  ],
+  "src/blender_assets.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-asset-preflight.md"
+    }
+  ],
+  "src/config.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-prompt-cache.md"
+    }
+  ],
+  "src/container.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-container-safety.md"
+    }
+  ],
+  "src/db.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-support-doc-truth.md"
+    }
+  ],
+  "src/determinism.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-determinism-contract.md"
+    }
+  ],
+  "src/device.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-device-selection-rank-review.md"
+    }
+  ],
+  "src/downloads.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-download-provider-adapters.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-download-options-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-support-doc-truth.md"
+    }
+  ],
+  "src/fizgig/families/cache.py": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-fizgig-family-model-resolution.md"
+    }
+  ],
+  "src/fizgig/families/train.py": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-cli-probe.md"
+    }
+  ],
+  "src/formats.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-image-output-formats.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-format-registry.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-model-format-validation.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-svg-ora-support.md"
+    }
+  ],
+  "src/gen": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-jobs-snapshot-artifact-ids-and-frame-metadata.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/gen/api-types.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+    }
+  ],
+  "src/gen/openapi.json": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-openapi-embeddings-unlisted.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+    }
+  ],
+  "src/generation/providers/comfyui": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-comfyui-serve-compat-spike.md"
+    }
+  ],
+  "src/image-edit/providers/honkbox-provider.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md"
+    }
+  ],
+  "src/integrations/honkbox/capabilities.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    }
+  ],
+  "src/integrations/honkbox/result-ingest.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/jobs.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-fizgig-artifact-cap-and-gc.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-sd-edit-loras.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-determinism-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-generations-loras.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/jobs_registry.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-admission-contract-tests.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-truthful-reserved-capability-rows.md"
+    }
+  ],
+  "src/lib.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-vulkan-backend.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-image-output-formats.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-sd-edit-loras.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-api-version-policy.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-resampler-quality.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-capabilities.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-cheap-ops-spike.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-controlnet-rendering.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-face-detection-policy.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-gpu-slot-audit-hook.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-tool-choice-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-vision-default.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-sd-base-model-tags.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-support-doc-truth.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-training-reservation-class.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-truthful-reserved-capability-rows.md"
+    }
+  ],
+  "src/llama_server.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llama-server-attach.md"
+    }
+  ],
+  "src/llm_attached.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    }
+  ],
+  "src/main.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-fizgig-artifact-cap-and-gc.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-model-format-validation.md"
+    }
+  ],
+  "src/memory/rerank.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-rerank-endpoint.md"
+    }
+  ],
+  "src/metrics.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-prompt-cache.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-training-reservation-class.md"
+    }
+  ],
+  "src/model_formats.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-model-format-validation.md"
+    }
+  ],
+  "src/nsfw.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capabilities-golden-fixture.md"
+    }
+  ],
+  "src/ora.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-container-safety.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-svg-ora-support.md"
+    }
+  ],
+  "src/playground.ts": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-vision-default.md"
+    }
+  ],
+  "src/raster.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-svg-ora-support.md"
+    }
+  ],
+  "src/routes.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-openapi-embeddings-unlisted.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-sd-edit-loras.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-capabilities.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-controlnet-rendering.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-generations-loras.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-gpu-slot-audit-hook.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-tool-choice-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-process-supervisor.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-svg-ora-support.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-truthful-reserved-capability-rows.md"
+    }
+  ],
+  "src/routes/apps.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capabilities-golden-fixture.md"
+    }
+  ],
+  "src/routes/audio_speech.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    }
+  ],
+  "src/routes/audio_voices.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    }
+  ],
+  "src/routes/blender": [
+    {
+      "kind": "epic",
+      "source": ".plan/epics/epic-blender-assets.md"
+    }
+  ],
+  "src/routes/blender.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    }
+  ],
+  "src/routes/blender_exec.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/routes/blender_stages.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-blender-job-route.md"
+    }
+  ],
+  "src/routes/capabilities.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-probe-honesty.md"
+    }
+  ],
+  "src/routes/chat.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    }
+  ],
+  "src/routes/fizgig.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-admission-contract-tests.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-probe-honesty.md"
+    }
+  ],
+  "src/routes/fizgig_run.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-fizgig-artifact-cap-and-gc.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-fizgig-family-model-resolution.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-admission-contract-tests.md"
+    }
+  ],
+  "src/routes/health.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-external-api-catalog-links.md"
+    }
+  ],
+  "src/routes/image_ops_exec.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-image-output-formats.md"
+    }
+  ],
+  "src/routes/images_edit.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-sd-inpaint-mask-semantics.md"
+    }
+  ],
+  "src/routes/images_generate.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/routes/images_inputs.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md"
+    }
+  ],
+  "src/routes/job_content.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-job-bundle-zip.md"
+    }
+  ],
+  "src/routes/models.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    }
+  ],
+  "src/routes/openai_constraints.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    }
+  ],
+  "src/routes/openai_stream.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    }
+  ],
+  "src/routes/openapi.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-openapi-embeddings-unlisted.md"
+    }
+  ],
+  "src/routes/python_sidecar.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-fizgig-lora-training-jobs.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-fizgig-cli-probe.md"
+    }
+  ],
+  "src/routes/rerank.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    }
+  ],
+  "src/routes/runtime.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    }
+  ],
+  "src/runtime_config.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
+    }
+  ],
+  "src/sdxl.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+    }
+  ],
+  "src/supervisor.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-process-supervisor.md"
+    }
+  ],
+  "src/svg.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-svg-ora-support.md"
+    }
+  ],
+  "src/swap.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-prompt-cache.md"
+    }
+  ],
+  "src/tts.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-tts-provider.md"
+    }
+  ],
+  "src/vad.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-audiocpp-vad-decision.md"
+    }
+  ]
+}
