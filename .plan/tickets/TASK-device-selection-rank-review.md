@@ -1,25 +1,35 @@
 # TASK: Device selection ranking review
 
-Status: proposed
-Priority: P3
-Epic: epic-full-ai-cycle
-Owner: unassigned
-Acceptance: DeviceType ranking decision re-examined with observed evidence; either ranking changes or the decision is documented as correct. deviceUUID stable tie-break evaluated alongside the P1 instance-extensions work.
-Verification: research note + tests
-Links: `.plan/tickets/TASK-device-capacity-gates.md`
-Resources: `crates/ash-backend/src/device.rs`; enumeration-order tie documented at HEAD 5f379b7
+**Status:** Not Started
+**Priority:** low
+**Effort:** Small
+**Epic:** epic-full-ai-cycle
+**Tags:** ash, vulkan, device
+**Caveats:** TOCTOU, security, authorization, parallelism, lock/unlock lifecycle, partial failure, rollback, stale state, data races, idempotency, observability
+**Related:** TASK-device-capacity-gates.md
 
-## Change
+**Summary:**
 
-- Current `DeviceType` ranking lets Virtual outrank Integrated: a VM
-  passthrough of an iGPU beats a bare-metal iGPU. Re-examine this once real
-  backends exist, informed by observed latency/VRAM data rather than device
-  type alone.
-- Evaluate the deviceUUID stable tie-break for identical GPU models
-  (select_device currently resolves ties by enumeration order, documented on
-  `select_device`) alongside the P1 instance-extensions work.
+Re-examine `DeviceType` ranking and the deviceUUID tie-break with observed evidence.
 
-## Acceptance detail
+**Context:**
 
-A decision is recorded citing observed evidence; it either changes the
-ranking (with updated tests) or documents the current ranking as correct.
+Current ranking lets Virtual outrank Integrated, so a VM passthrough of an iGPU beats a bare-metal iGPU. `crates/ash-backend/src/device.rs` is now on master, but the enumeration-order tie still has no observed latency/VRAM evidence.
+
+**Acceptance Criteria:**
+
+- A decision is recorded citing observed evidence: either ranking changes with updated tests, or the current ranking is documented as correct.
+- The deviceUUID stable tie-break is evaluated alongside the P1 instance-extensions work.
+
+**Verification:**
+
+- Research note plus focused device-selection tests.
+
+**Links:**
+
+- `.plan/tickets/TASK-device-capacity-gates.md`
+- `crates/ash-backend/src/device.rs`
+
+**Non-goals:**
+
+- No multi-GPU sharding, new backend trait or new `VkError` variant.

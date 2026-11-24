@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# giwt linked worktrees (never commit nested repos)
+/tree/
+
 # Fetched third-party trees (dynamic checkout + patches, never committed)
 vendor/
 
