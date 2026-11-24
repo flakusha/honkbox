@@ -205,15 +205,18 @@ jobs:
         run: cargo deny check licenses bans advisories
 
   reuse:
-    name: REUSE lint
+    name: REUSE + shader provenance
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
       - name: Install reuse tool
         run: pipx install reuse==6.3.0
-      - name: Lint licensing
-        run: reuse lint
+      - name: Lint licensing + shader provenance
+        run: bun run spdx
 
   notice:
     name: NOTICE

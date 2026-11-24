@@ -994,3 +994,15 @@ changed.
 Verification: `bun run spdx`, `bun run format`, `bun run lint`,
 `bun run typecheck`, `bun run fmt:rs:check` and `bun run hooks:check` green.
 Full `bun run check` / `ci` and promotion remain owner decisions.
+
+## CI enforcement of the provenance gate (2026-11-24, worktree)
+
+- `.github/workflows/ci.yml` `reuse` job now sets up Bun and runs
+  `bun run spdx` instead of bare `reuse lint`. The job is renamed
+  `REUSE + shader provenance`; the gate from the previous slice is now enforced
+  in CI, not just locally.
+- No other `reuse lint` call site exists in workflows or hooks.
+
+Verification: `bun run spdx` green locally; workflow indentation and
+`${{ env.BUN_VERSION }}` reference match sibling jobs. Full `bun run ci` and
+promotion remain owner decisions.
