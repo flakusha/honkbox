@@ -214,6 +214,8 @@ pub fn bundle_record(inputs: &BundleInputs) -> Value {
         "cfg_scale": inputs.cfg_scale,
         "loras": inputs.loras,
         "strength": inputs.strength,
+        "mask_mode": inputs.mask_mode,
+        "mask_sha256": inputs.mask_sha256,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "annotations": inputs.annotations,

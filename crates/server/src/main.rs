@@ -886,6 +886,8 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
             negative_prompt: None,
             loras: Vec::new(),
             strength: None,
+            mask_mode: None,
+            mask_sha256: None,
             recipe: None,
             hires: None,
             annotations: Vec::new(),

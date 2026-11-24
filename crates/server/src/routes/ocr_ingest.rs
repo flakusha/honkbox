@@ -480,6 +480,8 @@ fn commit(
         negative_prompt: None,
         loras: Vec::new(),
         strength: None,
+        mask_mode: None,
+        mask_sha256: None,
         recipe: Some(result.mode.as_str().to_owned()),
         hires: None,
         annotations: Vec::new(),

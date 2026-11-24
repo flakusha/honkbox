@@ -40,6 +40,8 @@ fn fixture() -> BundleInputs {
         negative_prompt: None,
         loras: Vec::new(),
         strength: None,
+        mask_mode: None,
+        mask_sha256: None,
         recipe: None,
         hires: None,
         annotations: Vec::new(),

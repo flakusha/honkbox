@@ -71,6 +71,13 @@ pub struct BundleInputs {
     pub loras: Vec<LoraRecord>,
     /// img2img/inpaint denoise strength actually used; `None` = txt2img.
     pub strength: Option<f32>,
+    /// Mask mode actually used: `Some("inpaint")` when a mask PNG was
+    /// supplied, `Some("replace")` for full-image img2img without one,
+    /// `None` for txt2img. The vendor chooses scope by mask presence; the
+    /// route records the choice explicitly (TASK-sd-inpaint-mask-semantics).
+    pub mask_mode: Option<&'static str>,
+    /// Lowercase sha256 of the staged mask PNG bytes; `None` without a mask.
+    pub mask_sha256: Option<String>,
     /// Named generation recipe actually applied, verbatim from the request
     /// (explicit per-field overrides may have replaced individual recipe
     /// values — the sampler/scheduler/cfg/steps fields above are what ran).
@@ -262,6 +269,8 @@ pub fn write_bundle_into(
         "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
         "loras": inputs.loras,
         "strength": inputs.strength,
+        "mask_mode": inputs.mask_mode,
+        "mask_sha256": inputs.mask_sha256,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "inputs_sha256": inputs_sha256,
@@ -284,6 +293,8 @@ pub fn write_bundle_into(
         "pack_licenses": pack_licenses,
         "loras": inputs.loras,
         "strength": inputs.strength,
+        "mask_mode": inputs.mask_mode,
+        "mask_sha256": inputs.mask_sha256,
         "recipe": inputs.recipe,
         "hires": inputs.hires,
         "annotations": inputs.annotations,
@@ -650,6 +661,8 @@ mod tests {
             negative_prompt: None,
             loras: Vec::new(),
             strength: None,
+            mask_mode: None,
+            mask_sha256: None,
             recipe: None,
             hires: None,
             annotations: Vec::new(),

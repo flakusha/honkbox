@@ -566,6 +566,8 @@ pub(super) async fn post_images_generations(
             negative_prompt: recipe.negative_prompt.clone(),
             loras: lora_records.clone(),
             strength: None,
+            mask_mode: None,
+            mask_sha256: None,
             recipe: recipe.name.map(str::to_owned),
             hires: hires.as_ref().map(|fix| crate::jobs::HiresRecord {
                 upscaler: "latent",

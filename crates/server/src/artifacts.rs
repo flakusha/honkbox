@@ -553,7 +553,7 @@ fn normalize_artifact_id(id: &str) -> Option<String> {
 }
 
 /// sha256 digest → 64-char lowercase hex.
-fn hex_lower(digest: &[u8]) -> String {
+pub(crate) fn hex_lower(digest: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {

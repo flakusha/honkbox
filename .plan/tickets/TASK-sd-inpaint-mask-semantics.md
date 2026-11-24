@@ -20,3 +20,12 @@ Resources: per-test image/mask temp files; no shared vendor context
 
 A generated edit can be replayed from its sidecar without guessing which mask
 mode produced it; no silent vendor default is relied upon.
+
+## Review note (2026-11-24)
+
+Top next in-master item while `feat/ash-vulkan-backend` is cooked: P1, no
+external binary, no DTO/schema drift, no sibling lane claim. Earlier P1/P2
+waves (rerank, job metadata, edits delivery, voices) are all done. Resource
+contract: each test owns a unique temp image/mask file pair with `Drop`
+teardown; no shared vendor context or GPU. See
+`.tmp/research/master-next-items-while-ash-cooks-2026-11-24.md`.

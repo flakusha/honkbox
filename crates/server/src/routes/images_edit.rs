@@ -35,6 +35,7 @@ use super::openai_constraints::openai_error_response;
 use super::{AppConfig, epoch_secs, resolve_model_entry};
 
 use crate::catalog::license_gate::LicenseRefusal;
+use sha2::{Digest as _, Sha256};
 
 /// Output dimensions from a PNG's IHDR (big-endian `u32` at offsets 16/20).
 /// Only called on registry-verified bytes (`require_png_bytes` /
@@ -359,6 +360,27 @@ pub(super) async fn post_images_edits(
         // by the sniff above).
         None => dims.expect("PNG dimensions verified above"),
     };
+    // Mask scope is explicit: a supplied mask selects `inpaint`; no mask means
+    // full-image `replace` (the vendor's flat white mask). Reject a mismatched
+    // mask before admission instead of relying on the engine's implicit resize.
+    let (mask_mode, mask_sha256) = match edit.mask.as_ref() {
+        Some((_, mask_bytes)) => {
+            if png_dimensions(mask_bytes) != Some((width, height)) {
+                return openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("mask dimensions must match {width}x{height}"),
+                    Some("mask_dimensions_mismatch"),
+                );
+            }
+            (
+                Some("inpaint"),
+                Some(crate::artifacts::hex_lower(
+                    &Sha256::digest(mask_bytes.as_ref())[..],
+                )),
+            )
+        }
+        None => (Some("replace"), None),
+    };
     let recipe = match validate_recipe(
         edit.recipe.as_deref(),
         edit.sampler.as_deref(),
@@ -585,6 +607,8 @@ pub(super) async fn post_images_edits(
         negative_prompt: recipe.negative_prompt,
         loras: lora_records,
         strength: Some(strength),
+        mask_mode,
+        mask_sha256,
         recipe: recipe.name.map(str::to_owned),
         hires: None,
         annotations: bundle_annotations,
