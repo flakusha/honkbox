@@ -1,13 +1,34 @@
 # honkbox documentation
 
-Research: `.tmp/research/ReviewedDocs-Organization.md`. No docs site, new
-dependencies, or CI gates are added by this scaffold.
+Plain `.md` in this directory is the canonical published form — no docs site,
+no new dependencies, no CI gates beyond the link check. See
+[`meta/docs-shipping.md`](meta/docs-shipping.md) for the shipping review
+(plain `.md` vs GitHub Pages vs VitePress).
 
 ## Authority
 
 `AGENTS.md` > `.plan/` > `src/` > `docs/`. Current behavior is what `src/` does.
 Anything here that disagrees with `AGENTS.md` or `src/` is wrong or aspirational
 and must be marked as such.
+
+## Contents
+
+| Path | Content |
+| --- | --- |
+| `guide/configuration.md` | Data dir, config file, model roots, env overrides, auth, logs, registry cache |
+| `guide/operations.md` | Jobs, cancellation, SSE events, deployment topology, ComfyUI read surface |
+| `guide/media-capabilities.md` | ControlNet, vision chat (mmproj), audio formats |
+| `guide/migrating.md` | Moving state from sd-rip / `~/.honkbox` layouts |
+| `meta/docs-shipping.md` | Shipping/generation review: plain `.md` vs Pages vs VitePress |
+
+Planned, created when content exists: `spec/` (decisions and contracts),
+`reference/` (CLI/API/config reference — link generated OpenAPI, never copy
+it), `research/` (promoted `.tmp/research/Reviewed*.md` with an owner and
+consumer).
+
+`.plan/` owns task state; `docs/` explains. Cross-link by epic/ticket ID instead
+of duplicating status. Do not copy `packages/web-ui/src/gen/`, `NOTICE`, or
+OpenAPI into prose.
 
 ## API version policy
 
@@ -30,20 +51,6 @@ Clients discover the rule machine-readably: it is embedded in the
 `Capabilities` schema description (`crates/api-types/src/lib.rs`), which
 flows into the served `GET /v1/openapi.json`.
 
-## Planned structure (create directories when content exists)
-
-| Directory | Content |
-| --- | --- |
-| `spec/` | Design decisions and contracts; drift banner required |
-| `guide/` | Operator/developer how-to: data dir, models, CLI, routes |
-| `reference/` | CLI/API/config reference; link generated OpenAPI, never copy it |
-| `research/` | Promoted `.tmp/research/Reviewed*.md` with an owner and consumer |
-| `meta/` | Reviews, ADRs, retrospectives |
-
-`.plan/` owns task state; `docs/` explains. Cross-link by epic/ticket ID instead
-of duplicating status. Do not copy `packages/web-ui/src/gen/`, `NOTICE`, or
-OpenAPI into prose.
-
 ## Current sources
 
 - Repository rules: `AGENTS.md`
@@ -51,10 +58,10 @@ OpenAPI into prose.
 - Canonical design research: `.tmp/research/` (gitignored scratch; promote on
   stability, not on length)
 - Rust API docs: `bun run doc:rs`
+- Generated TS reference: `bun run docs:api` (gated by `bun run docs:api:check`)
 
-## Tooling note
+## Tooling
 
-Vite is already a devDependency for `packages/web-ui`, but it does not provide
-docs routing/theme/search. VitePress is a separate MIT package requiring Node
-22+; adopting it is a deliberate future decision. dprint currently handles TS
-and JSON only — Markdown formatting/link checks are not gated yet.
+`bun run docs:check` (`scripts/docs-links.ts`) verifies every relative link in
+`README.md` + `docs/**/*.md` resolves; it runs inside `bun run check`.
+dprint handles TS and JSON only — Markdown formatting is not gated.
