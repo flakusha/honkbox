@@ -975,3 +975,22 @@ Evidence: `cargo test -p honkbox-ash-backend --features ash-sd --locked` →
 sibling sessions, so clippy ran in isolated `/tmp/cargo-ash-multihead`:
 `--features ash-sd --all-targets -- -D warnings` clean; fmt and diff whitespace
 clean.
+
+## Promotion-readiness sweep (2026-11-24, worktree)
+
+Cheap cross-cutting items from `TASK-ash-backend-promote.md` landed before the
+promotion decision; no shader, kernel, model spec, API or generated snapshot
+changed.
+
+- `bun run spdx` now chains `scripts/check-ash-provenance.ts`. Every
+  `.comp`/`.glsl` under `crates/ash-backend/shaders` must carry a
+  `// Provenance:` line; an empty shader directory also fails. All 13 shaders
+  pass. A scratch fixture without the marker exits 1 and names the file.
+- Dangling `ReviewedAsh-*.md` references are gone from `device.rs` (4) and
+  `TASK-device-capacity-gates.md` (1); they now point at the live design note.
+  `crates/ash-backend/src/lib.rs:5` intentionally keeps the meta-comment that
+  those older refs never existed in this repo.
+
+Verification: `bun run spdx`, `bun run format`, `bun run lint`,
+`bun run typecheck`, `bun run fmt:rs:check` and `bun run hooks:check` green.
+Full `bun run check` / `ci` and promotion remain owner decisions.

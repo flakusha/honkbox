@@ -51,7 +51,7 @@
     "docs:api": "typedoc --entryPoints packages/web-ui/src/gen/api-types.ts --out web-dist/api-docs --tsconfig packages/web-ui/tsconfig.json --readme none --hideGenerator --name \"Honkbox API types\"",
     "docs:api:check": "bun run docs:api && bun scripts/docs-api-check.ts",
     "deny": "cargo deny check licenses bans advisories",
-    "spdx": "reuse lint",
+    "spdx": "reuse lint && bun scripts/check-ash-provenance.ts",
     "notice": "cargo about generate about.hbs -o NOTICE",
     "codegen:check": "cargo test --locked -p honkbox-api-types && bun scripts/codegen-openapi-check.ts && dprint fmt packages/web-ui/src/gen >/dev/null && git diff --exit-code -- packages/web-ui/src/gen/",
     "ci": "bun run check && bun run test && bun run build"

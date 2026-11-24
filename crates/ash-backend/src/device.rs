@@ -2,7 +2,7 @@
 //! queue, with explicit physical-device selection (properties, limits,
 //! device-local VRAM) feeding capacity admission and bounded dispatch.
 //!
-//! P0 groundwork per `.tmp/research/ReviewedAsh-DirectVulkan.md` §6: init,
+//! Design record: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md` §6: init,
 //! selection, and compute-queue acquisition only — no buffers, pools, or
 //! dispatch yet (those arrive with the allocator work, P1+).
 
@@ -12,7 +12,7 @@ use std::ffi::CStr;
 
 /// Preference rank for [`PhysicalDeviceInfo::device_type`]; the derived
 /// `Ord` follows variant order (discrete > integrated > virtual > cpu >
-/// other), implementing ReviewedAsh-FeaturePlan's selection policy.
+/// other), implementing the design note's selection policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DeviceType {
     /// Unknown or driver-reported other (ranked last).
@@ -309,7 +309,7 @@ fn query_features(
     }
 }
 
-/// Selection policy (ReviewedAsh-FeaturePlan §6): prefer discrete over
+/// Selection policy (design note §6): prefer discrete over
 /// integrated over cpu, then more device-local VRAM, then the lower device
 /// id as a deterministic tie-break. Only compute-capable devices qualify —
 /// a device without a compute queue cannot host the future kernels.
@@ -348,7 +348,7 @@ pub struct VulkanDevice {
     /// Family index of [`Self::queue`].
     queue_family: u32,
     /// Version from `vkEnumerateInstanceVersion` (`None`: 1.0-only loader);
-    /// surfaced for the future `doctor` probe (ReviewedAsh-FeaturePlan §2).
+    /// surfaced for the future `doctor` probe (design note §2).
     pub instance_version: Option<u32>,
     /// The selected physical device.
     pub info: PhysicalDeviceInfo,
