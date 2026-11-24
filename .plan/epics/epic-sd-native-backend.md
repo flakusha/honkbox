@@ -18,7 +18,8 @@ mask semantics, and base-model compatibility tags. All work belongs in the
 - `TASK-sd-controlnet-execution.md` — wrap control-net load/has/unload (P0).
 - `TASK-sd-ffi-cancel.md` — wrap `sd_cancel_generation` (P0).
 - `FEAT-sd-edit-loras.md` — thread LoRAs into `/v1/images/edits` (P1).
-- `TASK-sd-inpaint-mask-semantics.md` — mask mode tests + sidecar hash (P1).
+- `TASK-sd-inpaint-mask-semantics.md` — P1, landed 2026-11-24: explicit
+  replace/inpaint mode, mask sha256 in sidecar, mismatched dims rejected.
 - `TASK-sd-base-model-tags.md` — scan-time tags + mismatch warning (P2).
 
 ## Acceptance

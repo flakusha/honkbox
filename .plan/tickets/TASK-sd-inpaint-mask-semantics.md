@@ -1,6 +1,13 @@
 # TASK: Inpaint mask semantics
 
-Status: proposed
+Status: done (2026-11-24)
+- Explicit mode: `Some("inpaint")` with lowercase mask sha256 when a mask is
+  supplied; `Some("replace")` with no hash otherwise. Both recorded in
+  `request.json` and `input.json`; mismatched mask IHDR dims are a 400 before
+  admission (`crates/server/src/routes/images_edit.rs:366-383`).
+- Verified 2026-11-24: `cargo test --locked -p honkbox-server --test edits`
+  184/184 (asserts both modes, hash, dimension rejection); server clippy clean;
+  `cargo fmt --check` shows no diff in `tests/edits.rs`.
 Priority: P1
 Epic: epic-sd-native-backend
 Owner: unassigned

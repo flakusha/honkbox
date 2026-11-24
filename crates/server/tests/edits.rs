@@ -340,6 +340,24 @@ async fn non_png_mask_is_400() {
     assert_eq!(body["error"]["code"], "invalid_mask", "{body}");
 }
 
+/// A mask whose IHDR dims differ from the source is rejected before admission
+/// rather than silently resized by the vendor.
+#[tokio::test]
+async fn mismatched_mask_dimensions_are_400() {
+    let _slot = SLOT_LOCK.lock().await;
+    let (status, body) = edits(
+        app_with(catalog_with(&[sd_entry("comfy:f.safetensors")]), None),
+        &[
+            png_part("image", png_bytes(4, 4)),
+            png_part("mask", png_bytes(8, 4)),
+            part("prompt", "inpaint here"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "mask_dimensions_mismatch", "{body}");
+}
+
 /// `strength` outside `(0, 1]` is a 400 (`invalid_strength`); unparsable
 /// text is the multipart-level 400 naming the field.
 #[tokio::test]
@@ -433,6 +451,8 @@ async fn img2img_without_mask_records_default_strength() {
         serde_json::from_str(&std::fs::read_to_string(dir.path().join("request.json")).unwrap())
             .unwrap();
     assert_eq!(request["strength"], 0.75, "{request}");
+    assert_eq!(request["mask_mode"], "replace", "{request}");
+    assert!(request["mask_sha256"].is_null(), "{request}");
     assert_eq!(request["loras"], json!([]), "{request}");
     std::fs::remove_dir_all(&data_dir).ok();
 }
@@ -444,6 +464,7 @@ async fn inpaint_with_mask_records_explicit_strength() {
     let _slot = SLOT_LOCK.lock().await;
     let data_dir = std::env::temp_dir().join(format!("honkbox-edit-mask-{}", ulid::Ulid::new()));
     std::fs::create_dir_all(&data_dir).unwrap();
+    let mask = png_bytes(4, 4);
     let (status, body) = edits(
         app_with(
             catalog_with(&[sd_entry("comfy:f.safetensors")]),
@@ -451,7 +472,7 @@ async fn inpaint_with_mask_records_explicit_strength() {
         ),
         &[
             png_part("image", png_bytes(4, 4)),
-            png_part("mask", png_bytes(4, 4)),
+            png_part("mask", mask.clone()),
             part("prompt", "inpaint here"),
             part("strength", "0.42"),
         ],
@@ -467,6 +488,12 @@ async fn inpaint_with_mask_records_explicit_strength() {
     // tolerance, not equality.
     assert!(
         (request["strength"].as_f64().unwrap() - 0.42).abs() < 1e-6,
+        "{request}"
+    );
+    assert_eq!(request["mask_mode"], "inpaint", "{request}");
+    assert_eq!(
+        request["mask_sha256"],
+        artifacts::hex_lower(&<sha2::Sha256 as sha2::Digest>::digest(&mask)),
         "{request}"
     );
     std::fs::remove_dir_all(&data_dir).ok();
