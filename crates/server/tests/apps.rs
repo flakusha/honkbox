@@ -157,7 +157,12 @@ fn llama_config(binary: &Path, port: u16) -> ManagedAppsConfig {
     cfg
 }
 
-fn comfy_config(launch: ManagedAppLaunch, root: &Path, script: Option<&Path>, port: u16) -> ManagedAppsConfig {
+fn comfy_config(
+    launch: ManagedAppLaunch,
+    root: &Path,
+    script: Option<&Path>,
+    port: u16,
+) -> ManagedAppsConfig {
     let mut cfg = ManagedAppsConfig::default();
     cfg.comfyui.enabled = true;
     cfg.comfyui.launch = launch;
@@ -171,7 +176,10 @@ fn comfy_config(launch: ManagedAppLaunch, root: &Path, script: Option<&Path>, po
 async fn wait_for(manager: &ManagedAppManager, id: &str, state: routes::AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if manager.status(id).is_some_and(|status| status.state == state) {
+        if manager
+            .status(id)
+            .is_some_and(|status| status.state == state)
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -205,8 +213,12 @@ async fn llama_version_probe_argv_and_group_teardown() {
     let port = free_port();
     health_server(port, 0, "/health");
     let manager = Arc::new(
-        ManagedAppManager::new(llama_config(&binary, port), Some(dir.clone()), "http://127.0.0.1:8188")
-            .unwrap(),
+        ManagedAppManager::new(
+            llama_config(&binary, port),
+            Some(dir.clone()),
+            "http://127.0.0.1:8188",
+        )
+        .unwrap(),
     );
     manager.start("llama_server").await.unwrap();
     wait_for(&manager, "llama_server", routes::AppState::Ready).await;
@@ -214,14 +226,33 @@ async fn llama_version_probe_argv_and_group_teardown() {
     assert_eq!(status.version.as_deref(), Some("9.9.9"));
     assert!(status.endpoint.is_some());
     let captured = std::fs::read_to_string(&argv).unwrap();
-    for flag in ["--model", "--host", "--port", "--api-key", "--cors-origins", "localhost", "--no-webui"] {
+    for flag in [
+        "--model",
+        "--host",
+        "--port",
+        "--api-key",
+        "--cors-origins",
+        "localhost",
+        "--no-webui",
+    ] {
         assert!(captured.contains(flag), "missing {flag} in {captured}");
     }
-    assert!(!captured.contains("--tools") && !captured.contains("--agent") && !captured.contains("--mcp"));
-    let helper = std::fs::read_to_string(&helper_pid).unwrap().trim().parse::<u32>().unwrap();
+    assert!(
+        !captured.contains("--tools")
+            && !captured.contains("--agent")
+            && !captured.contains("--mcp")
+    );
+    let helper = std::fs::read_to_string(&helper_pid)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
     assert!(alive(helper));
     manager.stop("llama_server").await.unwrap();
-    assert_eq!(manager.status("llama_server").unwrap().state, routes::AppState::Stopped);
+    assert_eq!(
+        manager.status("llama_server").unwrap().state,
+        routes::AppState::Stopped
+    );
     assert!(!manager.ready("llama_server"));
     assert!(gone_within(helper), "helper survived group teardown");
     manager.shutdown().await;
@@ -241,12 +272,21 @@ async fn crashed_app_is_failed_with_stderr_tail_and_no_endpoint() {
     set_mode(&binary);
     let port = free_port();
     let manager = Arc::new(
-        ManagedAppManager::new(llama_config(&binary, port), Some(dir), "http://127.0.0.1:8188").unwrap(),
+        ManagedAppManager::new(
+            llama_config(&binary, port),
+            Some(dir),
+            "http://127.0.0.1:8188",
+        )
+        .unwrap(),
     );
     manager.start("llama_server").await.unwrap();
     wait_for(&manager, "llama_server", routes::AppState::Failed).await;
     let status = manager.status("llama_server").unwrap();
-    assert!(status.error.is_some_and(|error| error.contains("crash-marker")));
+    assert!(
+        status
+            .error
+            .is_some_and(|error| error.contains("crash-marker"))
+    );
     assert!(status.endpoint.is_none());
     assert!(!manager.ready("llama_server"));
     let _ = argv;
@@ -265,7 +305,11 @@ async fn comfyui_installation_and_script_modes_use_allowlisted_argv() {
         let venv = root.join(".venv/bin");
         std::fs::create_dir_all(&venv).unwrap();
         std::fs::write(root.join("main.py"), "# fixture\n").unwrap();
-        std::fs::write(root.join("comfyui_version.py"), "__version__ = \"0.46.0\"\n").unwrap();
+        std::fs::write(
+            root.join("comfyui_version.py"),
+            "__version__ = \"0.46.0\"\n",
+        )
+        .unwrap();
         let python = venv.join("python");
         let argv = dir.join("argv");
         std::fs::write(
@@ -287,7 +331,12 @@ async fn comfyui_installation_and_script_modes_use_allowlisted_argv() {
         // ComfyUI registers /queue, not /health: a probe of /health gets 404.
         health_server(port, 1, "/queue"); // one 503 then 200: countdown restarts
         let manager = Arc::new(
-            ManagedAppManager::new(comfy_config(launch, &root, script.as_deref(), port), Some(dir), "http://127.0.0.1:8188").unwrap(),
+            ManagedAppManager::new(
+                comfy_config(launch, &root, script.as_deref(), port),
+                Some(dir),
+                "http://127.0.0.1:8188",
+            )
+            .unwrap(),
         );
         manager.start("comfyui").await.unwrap();
         wait_for(&manager, "comfyui", routes::AppState::Ready).await;
@@ -312,7 +361,10 @@ async fn comfyui_installation_and_script_modes_use_allowlisted_argv() {
 fn test_app_config() -> AppConfig {
     AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
-        auth: AuthConfig { mode: AuthMode::Bearer, api_key_env: "HONKBOX_TEST_APPS_KEY".to_owned() },
+        auth: AuthConfig {
+            mode: AuthMode::Bearer,
+            api_key_env: "HONKBOX_TEST_APPS_KEY".to_owned(),
+        },
         dev: false,
         web_dist_dir: "web-dist".into(),
         catalog: Arc::new(RwLock::new(Arc::new(honkbox_api_types::ModelCatalog {
@@ -320,10 +372,15 @@ fn test_app_config() -> AppConfig {
             data: Vec::new(),
         }))),
         roots: honkbox_registry::ModelRoots {
-            llm_dirs: Vec::new(), comfyui_dirs: Vec::new(), stt_dirs: Vec::new(),
-            tts_dirs: Vec::new(), ocr_dirs: Vec::new(),
+            llm_dirs: Vec::new(),
+            comfyui_dirs: Vec::new(),
+            stt_dirs: Vec::new(),
+            tts_dirs: Vec::new(),
+            ocr_dirs: Vec::new(),
         },
-        llm_model: None, stt_model: None, tts_model: None,
+        llm_model: None,
+        stt_model: None,
+        tts_model: None,
         llm: Arc::new(honkbox_llm_worker::StubLlm::default()),
         stt: Arc::new(honkbox_audio_worker::StubStt),
         tts: Arc::new(honkbox_audio_worker::StubTts),
@@ -333,7 +390,10 @@ fn test_app_config() -> AppConfig {
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: Duration::from_hours(24),
         data_dir: None,
-        artifacts: Arc::new(artifacts::Registry::new(None, config::DEFAULT_ARTIFACT_MAX_BYTES)),
+        artifacts: Arc::new(artifacts::Registry::new(
+            None,
+            config::DEFAULT_ARTIFACT_MAX_BYTES,
+        )),
         vram_budget: None,
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).unwrap()),
@@ -346,34 +406,63 @@ async fn admin_routes_are_bearer_gated_and_comfyui_stays_honest_when_down() {
     let _slot_serial = SLOT_LOCK.lock().await;
     set_env_var(KEY_ENV, Some("test-apps-key"));
     let manager = Arc::new(
-        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap(),
+        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188")
+            .unwrap(),
     );
     set_manager_for_tests(Some(Arc::clone(&manager)));
     let router = app(test_app_config());
-    let get_apps = router.clone().oneshot(
-        Request::builder().uri("/v1/apps").body(axum::body::Body::empty()).unwrap(),
-    ).await.unwrap();
+    let get_apps = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/apps")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(get_apps.status(), StatusCode::UNAUTHORIZED);
 
     let auth = "Bearer test-apps-key";
-    let start = router.clone().oneshot(
-        Request::builder().method("POST").uri("/v1/apps/comfyui/start")
-            .header("Authorization", auth).body(axum::body::Body::empty()).unwrap(),
-    ).await.unwrap();
+    let start = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/apps/comfyui/start")
+                .header("Authorization", auth)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(start.status(), StatusCode::NOT_IMPLEMENTED);
 
-    let status = router.clone().oneshot(
-        Request::builder().uri("/comfyui/status")
-            .header("Authorization", auth).body(axum::body::Body::empty()).unwrap(),
-    ).await.unwrap();
+    let status = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/comfyui/status")
+                .header("Authorization", auth)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(status.status(), StatusCode::NOT_IMPLEMENTED);
     let body = to_bytes(status.into_body(), 4096).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("comfyui unavailable"));
 
-    let list = router.oneshot(
-        Request::builder().uri("/v1/apps")
-            .header("Authorization", auth).body(axum::body::Body::empty()).unwrap(),
-    ).await.unwrap();
+    let list = router
+        .oneshot(
+            Request::builder()
+                .uri("/v1/apps")
+                .header("Authorization", auth)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(list.status(), StatusCode::OK);
     let body = to_bytes(list.into_body(), 4096).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -386,7 +475,8 @@ async fn admin_routes_are_bearer_gated_and_comfyui_stays_honest_when_down() {
 #[tokio::test]
 async fn disabled_app_start_is_a_named_501_even_with_bearer() {
     let manager = Arc::new(
-        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap(),
+        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188")
+            .unwrap(),
     );
     let error = manager.start("comfyui").await.unwrap_err();
     assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
@@ -458,7 +548,8 @@ async fn detached_comfyui_status_never_claims_live_availability() {
     );
     set_registry_for_tests(Some(registry)).await;
     let manager = Arc::new(
-        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap(),
+        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188")
+            .unwrap(),
     );
     set_manager_for_tests(Some(Arc::clone(&manager)));
     let router = app(test_app_config());
@@ -498,9 +589,8 @@ async fn configured_but_stopped_comfyui_app_is_named_501() {
         ..Default::default()
     };
     let cfg = config::managed_apps_config(file).unwrap();
-    let manager = Arc::new(
-        ManagedAppManager::new(cfg, Some(dir), "http://127.0.0.1:8188").unwrap(),
-    );
+    let manager =
+        Arc::new(ManagedAppManager::new(cfg, Some(dir), "http://127.0.0.1:8188").unwrap());
     set_manager_for_tests(Some(manager));
     let router = app(test_app_config());
     assert_comfyui_501(&router).await;

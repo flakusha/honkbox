@@ -34,7 +34,8 @@ fn slot() -> &'static Mutex<Option<Arc<Manager>>> {
 }
 
 fn lock(slot: &'static Mutex<Option<Arc<Manager>>>) -> MutexGuard<'static, Option<Arc<Manager>>> {
-    slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Install the process-wide manager (called once at serve startup).
@@ -82,7 +83,11 @@ fn app_dto(status: AppStatus) -> ManagedApp {
 }
 
 fn named_501(what: &str, reason: &str) -> Response {
-    (StatusCode::NOT_IMPLEMENTED, format!("{what} unavailable: {reason}")).into_response()
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        format!("{what} unavailable: {reason}"),
+    )
+        .into_response()
 }
 
 /// Admin scope check, layered on top of the router's bearer gate. Scoped keys
@@ -99,19 +104,29 @@ fn require_admin(headers: &HeaderMap) -> Option<Response> {
     let presented = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer ")))
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
         .map(str::trim);
     let allowed = scopes.iter().any(|(name, granted)| {
         granted.iter().any(|scope| scope == "admin")
-            && std::env::var(name).ok().filter(|key| !key.is_empty()).is_some_and(|key| {
-                presented.is_some_and(|value| super::middleware::constant_time_eq(
-                    value.as_bytes(),
-                    key.as_bytes(),
-                ))
-            })
+            && std::env::var(name)
+                .ok()
+                .filter(|key| !key.is_empty())
+                .is_some_and(|key| {
+                    presented.is_some_and(|value| {
+                        super::middleware::constant_time_eq(value.as_bytes(), key.as_bytes())
+                    })
+                })
     });
     (!allowed).then(|| {
-        (StatusCode::FORBIDDEN, "Missing required scope: admin".to_owned()).into_response()
+        (
+            StatusCode::FORBIDDEN,
+            "Missing required scope: admin".to_owned(),
+        )
+            .into_response()
     })
 }
 
@@ -123,7 +138,9 @@ fn require_admin(headers: &HeaderMap) -> Option<Response> {
 )]
 pub(super) async fn get_apps() -> Json<ManagedAppList> {
     let apps = manager().map_or_else(Vec::new, |manager| manager.list());
-    Json(ManagedAppList { apps: apps.into_iter().map(app_dto).collect() })
+    Json(ManagedAppList {
+        apps: apps.into_iter().map(app_dto).collect(),
+    })
 }
 
 /// One declared app's live state.
@@ -245,7 +262,11 @@ fn upstream_unreachable() -> Response {
 }
 
 fn upstream_reloading() -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, "comfyui upstream reloading").into_response()
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "comfyui upstream reloading",
+    )
+        .into_response()
 }
 
 fn upstream_error() -> Response {
@@ -288,8 +309,14 @@ pub(super) async fn get_comfyui_queue() -> Response {
     };
     match read_json(&manager, "/queue").await {
         Ok(value) => Json(ComfyUiQueue {
-            running: value.get("queue_running").and_then(|v| v.as_array()).map_or(0, Vec::len),
-            pending: value.get("queue_pending").and_then(|v| v.as_array()).map_or(0, Vec::len),
+            running: value
+                .get("queue_running")
+                .and_then(|v| v.as_array())
+                .map_or(0, Vec::len),
+            pending: value
+                .get("queue_pending")
+                .and_then(|v| v.as_array())
+                .map_or(0, Vec::len),
         })
         .into_response(),
         Err(response) => response,
@@ -410,7 +437,11 @@ fn history_artifacts(entry: &serde_json::Value) -> Vec<ComfyUiArtifact> {
 /// Best-effort progress from history status messages; absent upstream means
 /// all fields stay unset (never fabricated).
 fn history_progress(entry: &serde_json::Value) -> ComfyUiProgress {
-    let mut progress = ComfyUiProgress { node: None, completed: None, total: None };
+    let mut progress = ComfyUiProgress {
+        node: None,
+        completed: None,
+        total: None,
+    };
     let Some(messages) = entry
         .get("status")
         .and_then(|s| s.get("messages"))
@@ -419,7 +450,10 @@ fn history_progress(entry: &serde_json::Value) -> ComfyUiProgress {
         return progress;
     };
     for message in messages {
-        let event = message.get(0).and_then(serde_json::Value::as_str).unwrap_or_default();
+        let event = message
+            .get(0)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         let Some(data) = message.get(1) else {
             continue;
         };
@@ -434,8 +468,10 @@ fn history_progress(entry: &serde_json::Value) -> ComfyUiProgress {
                 .and_then(|value| usize::try_from(value).ok());
         }
         if matches!(event, "progress" | "executing") && progress.node.is_none() {
-            progress.node =
-                data.get("node").and_then(serde_json::Value::as_str).map(str::to_owned);
+            progress.node = data
+                .get("node")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
         }
     }
     progress
@@ -471,7 +507,10 @@ pub(super) async fn get_comfyui_view(Query(query): Query<ViewQuery>) -> Response
     let subfolder = query.subfolder.as_deref().unwrap_or_default();
     if !safe_component(&query.filename)
         || (!subfolder.is_empty() && !safe_component(subfolder))
-        || query.kind.as_deref().is_some_and(|kind| !matches!(kind, "output" | "input" | "temp"))
+        || query
+            .kind
+            .as_deref()
+            .is_some_and(|kind| !matches!(kind, "output" | "input" | "temp"))
     {
         return (StatusCode::BAD_REQUEST, "invalid view parameters").into_response();
     }
@@ -520,7 +559,9 @@ fn safe_component(value: &str) -> bool {
         && value.len() <= 255
         && !value.starts_with('.')
         && !value.chars().any(|ch| matches!(ch, '/' | '\\' | '\0'))
-        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
 }
 
 /// Read a bounded JSON body from the validated loopback upstream.
@@ -542,7 +583,8 @@ async fn read_json(manager: &Arc<Manager>, path: &str) -> Result<serde_json::Val
     if bytes.len() > 1024 * 1024 {
         return Err((StatusCode::BAD_GATEWAY, "comfyui reply too large").into_response());
     }
-    serde_json::from_slice(&bytes).map_err(|_| (StatusCode::BAD_GATEWAY, "invalid comfyui reply").into_response())
+    serde_json::from_slice(&bytes)
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "invalid comfyui reply").into_response())
 }
 
 #[cfg(test)]

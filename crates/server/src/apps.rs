@@ -82,7 +82,10 @@ pub struct AppError {
 
 impl AppError {
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self { status, message: message.into() }
+        Self {
+            status,
+            message: message.into(),
+        }
     }
 }
 
@@ -137,7 +140,9 @@ struct Entry {
 }
 
 fn entry_lock(entry: &Arc<Mutex<Entry>>) -> MutexGuard<'_, Entry> {
-    entry.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    entry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Owns every declared app. `entries` is immutable after construction; each
@@ -183,12 +188,20 @@ impl Manager {
                 })),
             );
         }
-        Ok(Self { entries, shutdown: CancellationToken::new(), client, data_dir, comfyui_url })
+        Ok(Self {
+            entries,
+            shutdown: CancellationToken::new(),
+            client,
+            data_dir,
+            comfyui_url,
+        })
     }
 
     /// Whether an app was declared and enabled by the operator.
     pub fn configured(&self, id: &str) -> bool {
-        self.entries.get(id).is_some_and(|entry| entry_lock(entry).config.enabled)
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry_lock(entry).config.enabled)
     }
 
     /// Shared bounded HTTP client for the typed `ComfyUI` read surface.
@@ -203,7 +216,9 @@ impl Manager {
 
     /// Only a `ready` app contributes an endpoint to the capability surface.
     pub fn ready(&self, id: &str) -> bool {
-        self.entries.get(id).is_some_and(|entry| entry_lock(entry).state == AppState::Ready)
+        self.entries
+            .get(id)
+            .is_some_and(|entry| entry_lock(entry).state == AppState::Ready)
     }
 
     /// Snapshot of one declared app, or `None` for an unknown id.
@@ -223,14 +238,18 @@ impl Manager {
 
     /// All declared apps, in stable id order (disabled ones included).
     pub fn list(&self) -> Vec<AppStatus> {
-        self.entries.keys().filter_map(|id| self.status(id)).collect()
+        self.entries
+            .keys()
+            .filter_map(|id| self.status(id))
+            .collect()
     }
 
     /// Start one app. The caller must have admin scope; the path is config-only.
     pub async fn start(self: &Arc<Self>, id: &str) -> Result<(), AppError> {
-        let entry = self.entries.get(id).ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, format!("unknown app {id}"))
-        })?;
+        let entry = self
+            .entries
+            .get(id)
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, format!("unknown app {id}")))?;
         {
             let state = entry_lock(entry);
             if !state.config.enabled {
@@ -303,8 +322,15 @@ impl Manager {
             let health = resolved.health.clone();
             let supervisor_entry = Arc::clone(entry);
             tokio::spawn(supervise(
-                Arc::clone(self), supervisor_entry, child, group, lease, token,
-                health, timeout, log,
+                Arc::clone(self),
+                supervisor_entry,
+                child,
+                group,
+                lease,
+                token,
+                health,
+                timeout,
+                log,
             ));
             Ok(())
         }
@@ -313,9 +339,10 @@ impl Manager {
     /// Stop one app: cancel its token, kill the whole group, release the lease.
     /// Idempotent on an already stopped/failed app.
     pub async fn stop(&self, id: &str) -> Result<(), AppError> {
-        let entry = self.entries.get(id).ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, format!("unknown app {id}"))
-        })?;
+        let entry = self
+            .entries
+            .get(id)
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, format!("unknown app {id}")))?;
         {
             let mut state = entry_lock(entry);
             match state.state {
@@ -333,7 +360,10 @@ impl Manager {
             token.cancel();
         }
         for _ in 0..200 {
-            if matches!(entry_lock(entry).state, AppState::Stopped | AppState::Failed) {
+            if matches!(
+                entry_lock(entry).state,
+                AppState::Stopped | AppState::Failed
+            ) {
                 return Ok(());
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -354,7 +384,11 @@ impl Manager {
             }
         }
         for _ in 0..200 {
-            if self.list().iter().all(|app| matches!(app.state, AppState::Stopped | AppState::Failed)) {
+            if self
+                .list()
+                .iter()
+                .all(|app| matches!(app.state, AppState::Stopped | AppState::Failed))
+            {
                 return;
             }
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -384,12 +418,18 @@ static PATH_OVERRIDE: Mutex<Option<std::ffi::OsString>> = Mutex::new(None);
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn set_path_for_tests(path: Option<std::ffi::OsString>) {
-    *PATH_OVERRIDE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+    *PATH_OVERRIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = path;
 }
 
 fn path_env() -> Option<std::ffi::OsString> {
     #[cfg(test)]
-    if let Some(path) = PATH_OVERRIDE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+    if let Some(path) = PATH_OVERRIDE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    {
         return Some(path);
     }
     std::env::var_os("PATH")
@@ -398,7 +438,8 @@ fn path_env() -> Option<std::ffi::OsString> {
 /// Resolve an operator-supplied program: absolute paths and bare PATH names.
 fn resolve_program(name: &Path) -> Result<PathBuf, String> {
     if name.components().count() > 1 {
-        return std::fs::canonicalize(name).map_err(|err| format!("binary {}: {err}", name.display()));
+        return std::fs::canonicalize(name)
+            .map_err(|err| format!("binary {}: {err}", name.display()));
     }
     let path = path_env().unwrap_or_default();
     for dir in std::env::split_paths(&path) {
@@ -450,9 +491,15 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
     } else {
         let listener = TcpListener::bind((config.host.as_str(), 0))
             .map_err(|err| format!("ephemeral port for {}: {err}", entry.id))?;
-        listener.local_addr().map_err(|err| format!("ephemeral port: {err}"))?.port()
+        listener
+            .local_addr()
+            .map_err(|err| format!("ephemeral port: {err}"))?
+            .port()
     };
-    let model = config.model.as_ref().map(|path| path.to_string_lossy().into_owned());
+    let model = config
+        .model
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
     let mut version_file = None;
     if is_llama && config.launch == ManagedAppLaunch::Path && model.is_none() {
         return Err("apps.llama_server.model is required".to_owned());
@@ -469,7 +516,10 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
             });
             (
                 resolve_program(&name)?,
-                data_dir.map_or_else(|| std::env::current_dir().unwrap_or_default(), Path::to_path_buf),
+                data_dir.map_or_else(
+                    || std::env::current_dir().unwrap_or_default(),
+                    Path::to_path_buf,
+                ),
                 Vec::new(),
             )
         }
@@ -478,7 +528,10 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
                 return Err("apps.llama_server supports only launch = \"path\"".to_owned());
             }
             let root = std::fs::canonicalize(
-                config.installation.as_ref().ok_or("apps.comfyui.installation is required")?,
+                config
+                    .installation
+                    .as_ref()
+                    .ok_or("apps.comfyui.installation is required")?,
             )
             .map_err(|err| format!("installation: {err}"))?;
             version_file = Some(root.join("comfyui_version.py"));
@@ -492,7 +545,10 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
                         .into_owned(),
                 ]
             } else {
-                let script = config.script.as_ref().ok_or("apps.comfyui.script is required")?;
+                let script = config
+                    .script
+                    .as_ref()
+                    .ok_or("apps.comfyui.script is required")?;
                 let path = std::fs::canonicalize(script)
                     .or_else(|_| std::fs::canonicalize(root.join(script)))
                     .map_err(|err| format!("script: {err}"))?;
@@ -517,9 +573,15 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
                 let _ = std::fs::remove_file(&socket);
                 let path = socket.to_string_lossy().into_owned();
                 args.extend([
-                    "--model".into(), model.unwrap_or_default(), "--host".into(), path.clone(),
-                    "--api-key".into(), generated_key(), "--cors-origins".into(),
-                    "localhost".into(), "--no-webui".into(),
+                    "--model".into(),
+                    model.unwrap_or_default(),
+                    "--host".into(),
+                    path.clone(),
+                    "--api-key".into(),
+                    generated_key(),
+                    "--cors-origins".into(),
+                    "localhost".into(),
+                    "--no-webui".into(),
                 ]);
                 (Health::Unix(socket), format!("unix:{path}"))
             }
@@ -530,9 +592,17 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
             }
         } else {
             args.extend([
-                "--model".into(), model.unwrap_or_default(), "--host".into(), config.host.clone(),
-                "--port".into(), port.to_string(), "--api-key".into(), generated_key(),
-                "--cors-origins".into(), "localhost".into(), "--no-webui".into(),
+                "--model".into(),
+                model.unwrap_or_default(),
+                "--host".into(),
+                config.host.clone(),
+                "--port".into(),
+                port.to_string(),
+                "--api-key".into(),
+                generated_key(),
+                "--cors-origins".into(),
+                "localhost".into(),
+                "--no-webui".into(),
             ]);
             let url = format!("http://{}:{}", config.host, port);
             (Health::Tcp(url.clone(), "/health"), url)
@@ -541,13 +611,23 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
         // ComfyUI has no unix-socket mode: force loopback TCP. No tools/agent
         // flags exist here, and no node graph comes from an HTTP request.
         args.extend([
-            "--listen".into(), config.host.clone(), "--port".into(), port.to_string(),
+            "--listen".into(),
+            config.host.clone(),
+            "--port".into(),
+            port.to_string(),
             "--disable-auto-launch".into(),
         ]);
         let url = format!("http://{}:{}", config.host, port);
         (Health::Tcp(url.clone(), "/queue"), url)
     };
-    Ok(Resolved { program, args, cwd, health, endpoint, version_file })
+    Ok(Resolved {
+        program,
+        args,
+        cwd,
+        health,
+        endpoint,
+        version_file,
+    })
 }
 
 /// Version probe at start. Failure is non-fatal: status simply has no version.
@@ -557,13 +637,19 @@ async fn probe_version(program: &Path, version_file: Option<&Path>) -> Option<St
         return text.lines().find_map(|line| {
             let (key, value) = line.trim().split_once('=')?;
             (key.trim() == "__version__").then(|| {
-                value.trim().trim_matches(|c| c == '\'' || c == '"').to_owned()
+                value
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_owned()
             })
         });
     }
     let binary = program.to_path_buf();
     let output = tokio::task::spawn_blocking(move || {
-        Command::new(&binary).arg("--version").stdin(Stdio::null()).output()
+        Command::new(&binary)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
     })
     .await
     .ok()?
@@ -581,7 +667,9 @@ fn drain_stderr(mut pipe: impl Read, sink: &Arc<Mutex<String>>) {
         match pipe.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(read) => {
-                let mut tail = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut tail = sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 tail.push_str(&String::from_utf8_lossy(&buf[..read]));
                 if tail.len() > STDERR_TAIL_BYTES {
                     let from = tail.len() - STDERR_TAIL_BYTES;
@@ -653,7 +741,10 @@ async fn supervise(
     let _ = rustix::process::kill_process_group(group, Signal::KILL);
     let _ = tokio::task::spawn_blocking(move || child.wait()).await;
     drop(lease);
-    let tail = log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let tail = log
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     let mut state = entry_lock(&entry);
     // No endpoint, pid or token outlives a dead app.
     state.endpoint = None;
@@ -711,7 +802,9 @@ fn unix_health(path: &Path) -> Result<bool, String> {
         .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .map_err(|err| format!("socket write: {err}"))?;
     let mut reply = String::new();
-    stream.read_to_string(&mut reply).map_err(|err| format!("socket read: {err}"))?;
+    stream
+        .read_to_string(&mut reply)
+        .map_err(|err| format!("socket read: {err}"))?;
     Ok(reply.starts_with("HTTP/1.1 200") || reply.starts_with("HTTP/1.0 200"))
 }
 
@@ -721,7 +814,8 @@ mod manager_tests {
 
     #[test]
     fn all_apps_start_off_and_are_listed() {
-        let manager = Manager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap();
+        let manager =
+            Manager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap();
         let list = manager.list();
         assert_eq!(list.len(), 2);
         assert!(list.iter().all(|app| app.state == AppState::Stopped));
@@ -731,12 +825,22 @@ mod manager_tests {
     #[test]
     fn non_loopback_upstream_is_rejected() {
         assert!(Manager::new(ManagedAppsConfig::default(), None, "http://0.0.0.0:8188").is_err());
-        assert!(Manager::new(ManagedAppsConfig::default(), None, "http://user:pw@127.0.0.1:8188").is_err());
+        assert!(
+            Manager::new(
+                ManagedAppsConfig::default(),
+                None,
+                "http://user:pw@127.0.0.1:8188"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn disabled_app_start_is_named_501() {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         let manager = Arc::new(
             Manager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap(),
         );
