@@ -899,3 +899,29 @@ fp16-no-EMA, DreamShaper 8 pruned. Web research, licenses and URLs:
 
 Next: actual sampling parity (bias path, EOS pooling, fused QKV) still needs
 kernel work; header validation is now proven on real weights.
+
+## SDXL validation + crate README (2026-11-24, worktree)
+
+- New `sdxl.rs` validates the diffusion/VAE header from the real SDXL sample
+  (entry conv, time embed, `label_emb` [1280,2816], attn2 context 2048, VAE
+  decoder) and reports readiness for both text towers: CLIP-L
+  (`conditioner.embedders.0.transformer.text_model.*`, 197 keys) and OpenCLIP
+  bigG (`conditioner.embedders.1.model.*`, 391 keys). Header-only: no sampling.
+- `checkpoint_family` now recognises the real CLIP-G marker;
+  `models inspect-ash` prints SDXL shapes + readiness instead of "unsupported".
+- New integration tests cover SDXL readiness, missing CLIP-G, and an SD1.5
+  regression with real original key layout. Existing fixture helpers now use
+  unique names + RAII cleanup (parallel-safety audit finding).
+- New `crates/ash-backend/README.md` documents status, layout, validation
+  commands, and upstream licences/attributions (MIT/Apache/BSD; ComfyUI
+  API-only; weights external; shader provenance rule). Root README untouched.
+
+Verification (all green): `cargo fmt --all -- --check`; clippy
+`-D warnings` on ash-backend (all four ash features) and honkbox-server
+(`experimental-ash-sd`); `cargo test -p honkbox-ash-backend --features
+experimental-ash-sd` (122 passed) and `-p honkbox-ash-backend --features
+ash-compute` (106 passed). Real weights via `models inspect-ash`: four
+original SD1.5 checkpoints plus one downloaded SD1.5 checkpoint and the
+provided SDXL sample all report `ready=true, missing=0`; SDXL reports
+`family: sdxl` with `label_emb_in: 2816`, `context_dim: 2048`, and both
+CLIP towers ready. Script: `.tmp/scripts/validate-ash-checkpoints.sh`.
