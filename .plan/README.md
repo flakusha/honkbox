@@ -124,6 +124,10 @@ Most `.tmp/research/` docs have a plan home below or were triaged as no new honk
 | `media-transport-federation-2026-11-20.md` | `TASK-exr-format-support` |
 | `ash-vulkan-backend-licensing-extensibility-2026-11-22.md` | `TASK-ash-backend-promote` |
 
+| `video-to-audio-modalities-2026-11-24.md` | `FEAT-comfy-video-audio-templates.md`, `epic-comfyui-managed-runtime` |
+| `comfyui-custom-nodes-integration-2026-11-24.md` | `TASK-comfy-custom-node-capability-gate.md`, `epic-comfyui-managed-runtime` |
+| `video-audio-reuse-and-download-options-2026-11-24.md` | `FEAT-video-source-audio-reuse.md`, `TASK-download-options-contract.md`, `FEAT-download-provider-adapters.md` |
+
 ## Support expansion order (2026-11-17)
 
 P0: flag/doc truth, capabilities API + contract test, native ControlNet and

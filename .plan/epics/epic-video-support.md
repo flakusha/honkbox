@@ -21,6 +21,9 @@ until the spike is green.
 - `FEAT-video-i2v-frames.md` — PNG frame sequence + sidecar, no mux (P2).
 - `FEAT-video-mux.md` — WebP/WebM flags + libwebm wiring (P3).
 
+- `FEAT-comfy-video-audio-templates.md` — proposed external ComfyUI adapter for V2A/TV2A; no native video engine.
+- `FEAT-video-source-audio-reuse.md` — proposed mix/context reuse of engine-provided audio, with provenance.
+
 ## Acceptance
 
 No route or DTO exists until the spike lands; a video job never shares the

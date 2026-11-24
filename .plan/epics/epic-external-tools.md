@@ -30,6 +30,9 @@ args, enforce timeout and CPU/RAM limits, kill on cancel, collect artifacts.
 - `TASK-training-reservation-class.md` — dedicated training GPU class so
   capability rows never reserve a hidden route.
 
+- `TASK-download-options-contract.md` — provider-neutral download option vocabulary; no new fetch behavior.
+- `FEAT-download-provider-adapters.md` — staged HF / llama.cpp / ComfyUI-node adapters over the contract.
+
 ## Acceptance
 
 All external engines report capabilities through one DTO; no engine is linked

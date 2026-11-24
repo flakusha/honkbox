@@ -28,7 +28,7 @@ node-graph proxy. Workflow submission remains the separate
 - Landed 2026-11-24: typed history/status honesty and the operator setup
   contract (`TASK-comfyui-typed-surface-honesty.md`,
   `TASK-comfyui-operator-lifecycle.md`).
-- Open: the workflow pipeline.
+- Open: the workflow pipeline, video-audio templates and custom-node gating.
 
 ## Tickets
 
@@ -40,6 +40,9 @@ node-graph proxy. Workflow submission remains the separate
   model dirs, honest version.
 - `FEAT-comfyui-workflow-pipeline.md` — proposed; depends on this runtime but
   adds no raw wire proxy (already tracked in `epic-full-ai-cycle`).
+
+- `FEAT-comfy-video-audio-templates.md` — proposed; MMAudio V2A then ControlFoley TV2A through the pipeline.
+- `TASK-comfy-custom-node-capability-gate.md` — proposed; required `class_type` gating and operator-owned node policy.
 
 ## Acceptance
 
