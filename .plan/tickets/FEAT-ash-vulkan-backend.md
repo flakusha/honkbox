@@ -1006,3 +1006,31 @@ Full `bun run check` / `ci` and promotion remain owner decisions.
 Verification: `bun run spdx` green locally; workflow indentation and
 `${{ env.BUN_VERSION }}` reference match sibling jobs. Full `bun run ci` and
 promotion remain owner decisions.
+
+## Cheap promotion-gate gaps (2026-11-24, worktree)
+
+Cheapest remaining items from `TASK-ash-backend-promote.md` landed. No shader,
+kernel, model spec, API/DTO or generated snapshot changed.
+
+- `scripts/check-ash-lint-tables.ts` compares `[workspace.lints]` with the ash
+  crate's local copy, allowing only the documented `unsafe_code` flip. Wired as
+  `bun run audit:ash-lints` into `bun run check` and CI's `ash` job.
+- `bun run test:ash:parity` runs the opt-in `ash_parity` test; the pre-push hook
+  calls it for ash changes. It skips cleanly without `HONKBOX_ASH_PARITY_MODEL`
+  and runs structural/same-seed checks when a local checkpoint is supplied.
+- `models inspect-ash` now prints a headless device + op-readiness report
+  (graceful `vulkan: unavailable: ...` when no device) and `--all-missing`
+  replaces the three-key preview. `SD_OPS` is public so the report tracks the
+  real kernel inventory instead of a second hand-maintained list.
+
+Verification: `bun run audit:ash-lints` passes; a scratch manifest drift fixture
+exits 1 and names the missing lint; `bun run format`, `bun run lint`,
+`bun run typecheck`, `bun run hooks:check` and `cargo fmt --all -- --check` pass.
+`cargo check --locked -p honkbox-server --features ash-sd` → 0 errors, 4 vendor
+warnings (136 crates, 1134 s in isolated `/tmp/cargo-ash-multihead`).
+Clippy clean for `honkbox-ash-backend --all-targets` and `honkbox-server`
+(feature `ash-sd`, `-D warnings`); `bun run test:ash:parity` → 1 passed with
+no local checkpoint configured (skip path, as designed).
+`cargo run --locked -p honkbox-server --features ash-sd -- models inspect-ash
+--help` lists `--all-missing`. Full `bun run ci` and promotion remain owner
+decisions.

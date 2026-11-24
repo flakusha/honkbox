@@ -340,6 +340,8 @@ jobs:
         run: cargo test --locked -p honkbox-ash-backend --features ash-compute
       - name: Test (ash-sd)
         run: cargo test --locked -p honkbox-ash-backend --features ash-sd
+      - name: Audit ash lint tables
+        run: bun run audit:ash-lints
 
   build:
     name: Build release (${{ matrix.os }})

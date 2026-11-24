@@ -288,11 +288,14 @@ enum ModelsAction {
         #[arg(long)]
         json: bool,
     },
-    /// Infer `ash-sd` stage widths from a checkpoint's tensor metadata.
+    /// Inspect an `ash-sd` checkpoint, its stage widths and device readiness.
     #[cfg(feature = "ash-sd")]
     InspectAsh {
         /// Registry slug of the safetensors checkpoint.
         slug: String,
+        /// Print every missing tensor instead of the first three.
+        #[arg(long)]
+        all_missing: bool,
     },
 }
 
@@ -376,7 +379,9 @@ async fn main() {
         Command::Models { action } => match action {
             ModelsAction::Show { json } => models_show(config, data_dir, json),
             #[cfg(feature = "ash-sd")]
-            ModelsAction::InspectAsh { slug } => models_inspect_ash(config, data_dir, &slug),
+            ModelsAction::InspectAsh { slug, all_missing } => {
+                models_inspect_ash(config, data_dir, &slug, all_missing);
+            }
         },
     }
 }
@@ -758,10 +763,15 @@ fn models_show(config: Option<PathBuf>, data_dir: Option<PathBuf>, json: bool) {
     }
 }
 
-/// `models inspect-ash`: validate a checkpoint against the declared spec and
-/// print the inferred stage widths. No GPU slot is reserved.
+/// `models inspect-ash`: validate a checkpoint, print inferred stage widths and
+/// a graceful device/capability report. No GPU slot is reserved.
 #[cfg(feature = "ash-sd")]
-fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: &str) {
+fn models_inspect_ash(
+    config: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
+    slug: &str,
+    all_missing: bool,
+) {
     let loaded = or_exit(config::load(config, data_dir));
     for warning in &loaded.warnings {
         eprintln!("warn: {warning}");
@@ -782,6 +792,7 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
     if family == honkbox_ash_backend::checkpoint_family::CheckpointFamily::Sdxl {
         let (shapes, keys) = or_exit(honkbox_ash_backend::sdxl::inspect_sdxl_checkpoint(&path));
         println!("family: sdxl");
+        print_ash_capabilities();
         println!("latent_channels: {}", shapes.latent_channels);
         println!("entry_kernel: {}", shapes.entry_kernel);
         println!(
@@ -804,12 +815,13 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
             keys.clip_ready,
             keys.clip_missing.len()
         );
-        print_missing("unet", &keys.unet_missing);
-        print_missing("clip", &keys.clip_missing);
+        print_missing("unet", &keys.unet_missing, all_missing);
+        print_missing("clip", &keys.clip_missing, all_missing);
         return;
     }
     let shapes = or_exit(honkbox_ash_backend::sd::inspect_checkpoint(&path));
     println!("family: {}", family.label());
+    print_ash_capabilities();
     println!("latent_channels: {}", shapes.latent_channels);
     println!("entry_kernel: {}", shapes.entry_kernel);
     println!("down: {:?}", shapes.down);
@@ -828,7 +840,7 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
         unet.is_ready(),
         unet.missing.len()
     );
-    print_missing("unet", &unet.missing);
+    print_missing("unet", &unet.missing, all_missing);
     let clip = honkbox_ash_backend::clip_checkpoint::audit(
         &map,
         honkbox_ash_backend::clip_checkpoint::SD15_CLIP,
@@ -839,13 +851,40 @@ fn models_inspect_ash(config: Option<PathBuf>, data_dir: Option<PathBuf>, slug: 
         clip.missing.len(),
         clip.wrong_shape.len()
     );
-    print_missing("clip", &clip.missing);
+    print_missing("clip", &clip.missing, all_missing);
 }
 
-/// Print the first three missing keys, or nothing when the inventory is complete.
-fn print_missing(label: &str, missing: &[impl AsRef<str>]) {
-    for key in missing.iter().take(3) {
+/// Print missing keys, or nothing when the inventory is complete.
+/// Limits to the first three unless `all` is set.
+fn print_missing(label: &str, missing: &[impl AsRef<str>], all: bool) {
+    let shown = if all {
+        missing
+    } else {
+        &missing[..missing.len().min(3)]
+    };
+    for key in shown {
         println!("{label}_missing: {}", key.as_ref());
+    }
+}
+
+/// Probe the selected Vulkan device and report op/capability readiness.
+/// A missing device is a diagnostic line, not a CLI failure.
+#[cfg(feature = "ash-sd")]
+fn print_ash_capabilities() {
+    use honkbox_ash_backend::device::VulkanDevice;
+
+    match VulkanDevice::headless() {
+        Ok(device) => {
+            let info = &device.info;
+            let ops = honkbox_ash_backend::sd::SD_OPS;
+            let ready = ops
+                .iter()
+                .filter(|op| info.admit(&(*op).requirements()).is_ok())
+                .count();
+            println!("device: {}", info.name);
+            println!("ops: ready={ready} total={}", ops.len());
+        }
+        Err(err) => println!("vulkan: unavailable: {err}"),
     }
 }
 /// `bytes` as B/KB/MB/GB with one decimal (bare bytes stay integral; integer math, no float).

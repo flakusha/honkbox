@@ -46,7 +46,7 @@ pub struct AshSdPipeline {
 }
 
 /// Passes the first checkpoints will use. Grows with the kernel inventory.
-const SD_OPS: &[Op] = &[
+pub const SD_OPS: &[Op] = &[
     Op::ElementwiseAdd,
     Op::MatMul,
     Op::Softmax,

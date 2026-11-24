@@ -54,6 +54,17 @@ if [ -n "$(changed 'crates/ash-backend/**')" ]; then
   fi
 fi
 
+# --- ash parity: env-gated, a no-op without a local checkpoint --------------
+if [ -n "$(changed 'crates/ash-backend/**')" ]; then
+  echo "Running ash parity (skips without HONKBOX_ASH_PARITY_MODEL)..."
+  if bun run test:ash:parity; then
+    echo "PASS: test:ash:parity"
+  else
+    echo "FAIL: test:ash:parity — run 'bun run test:ash:parity'"
+    failures=$((failures + 1))
+  fi
+fi
+
 # --- codegen drift: builds server (minutes) — only when relevant -----------
 if [ -n "$(changed 'packages/web-ui/src/gen/**' 'crates/api-types/**' \
                 'crates/server/src/**' 'scripts/codegen-openapi-check.ts')" ]; then
