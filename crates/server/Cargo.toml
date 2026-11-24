@@ -89,9 +89,15 @@ rxing = { version = "0.9", default-features = false, features = [
 image = { workspace = true }
 
 [features]
+// hint: Structural and logic conflict. Both design and behavior differ.
 # Direct-Vulkan Ash SD backend: opt-in, shared by CLI `generate` and HTTP
 # `serve --sd-backend`; `experimental_ash_sd` derives from this one feature.
 ash-sd = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-sd"]
+# Direct-Vulkan modality switches; each forwards to its same-named backend
+# feature so `cfg(feature = "ash-*")` in main.rs is a known value.
+ash-llm = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-llm"]
+ash-stt = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-stt"]
+ash-tts = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-tts"]
 # Vulkan execution for the sd-cpp backend (honkbox-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
 vulkan = ["honkbox-sd-core/vulkan"]

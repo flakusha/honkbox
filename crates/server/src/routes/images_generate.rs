@@ -70,6 +70,59 @@ fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
     }))
 }
 
+/// Stream a file into SHA-256 with a fixed buffer; never load a whole asset.
+fn file_sha256(path: &std::path::Path) -> Option<String> {
+    use sha2::Digest as _;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buf).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+    Some(crate::artifacts::hex_lower(hasher.finalize().as_slice()))
+}
+
+/// Digest the caller-supplied CLIP tokenizer assets for ash cache identity.
+///
+/// ponytail: env-var assets only; no new serve-side config knob. `none` is a
+/// stable marker, never a fabricated digest. Upgrade to config-owned paths
+/// when ash gains a serve-side tokenizer setting.
+fn ash_tokenizer_digest() -> String {
+    let Some(dir) = std::env::var_os("HONKBOX_ASH_CLIP_VOCAB_DIR") else {
+        return "none".to_owned();
+    };
+    let dir = std::path::Path::new(&dir);
+    ["vocab.json", "merges.txt"]
+        .iter()
+        .map(|name| file_sha256(&dir.join(name)).unwrap_or_else(|| "none".to_owned()))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Cache identity for one inline generation. Digests are appended as opaque
+/// strings: a refreshed model sidecar or tokenizer asset must miss the old key.
+fn generation_cache_key(
+    backend_id: &str,
+    configured_model: &str,
+    catalog: &honkbox_api_types::ModelCatalog,
+    req: &ImagesGenerationRequest,
+    model_digest: &str,
+    tokenizer_digest: &str,
+) -> String {
+    format!(
+        "{}:{}:{}:{}:{}:{}",
+        backend_id,
+        configured_model,
+        canonical_hash(&serde_json::to_value(catalog).unwrap_or(serde_json::Value::Null)),
+        canonical_hash(&serde_json::to_value(req).unwrap_or(serde_json::Value::Null)),
+        model_digest,
+        tokenizer_digest,
+    )
+}
 /// Refuse conditioning the direct-Vulkan backend cannot actually apply.
 ///
 /// `sd-cpp` honors `LoRAs`, hires-fix and img2img/inpaint inputs; the stub and
@@ -453,6 +506,23 @@ pub(crate) async fn post_images_generations(
         return response;
     }
     let catalog = config.catalog_snapshot();
+    // Provenance digests travel with the cache key: a refresh of either the
+    // verified checkpoint sidecar or the caller-supplied ash tokenizer assets
+    // must never replay a response rendered with different inputs.
+    let model_hint = req
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .or(config.sd_model.as_deref())
+        .unwrap_or("");
+    let model_sha256 = resolve_sd_model(model_hint, &catalog)
+        .and_then(|slug| resolve_model_entry(slug, &catalog))
+        .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
+    let model_digest = model_sha256.as_deref().unwrap_or("none");
+    let tokenizer_digest = (config.sd.backend_id() == "ash-sd")
+        .then(ash_tokenizer_digest)
+        .unwrap_or_else(|| "none".to_owned());
     // Canonical hash of the validated request under the serving catalog; a
     // cache hit replays the first response before admission, so identical
     // inline work consumes no slot. The catalog hash keeps a refresh (new
@@ -460,12 +530,13 @@ pub(crate) async fn post_images_generations(
     // and model identity travel with the instance-scoped key as well.
     let cache = matches!(delivery, DeliveryMode::Inline).then(|| scoped_generation_cache(&config));
     let cache_key = cache.as_ref().map(|_| {
-        format!(
-            "{}:{}:{}:{}",
+        generation_cache_key(
             config.sd.backend_id(),
             config.sd_model.as_deref().unwrap_or(""),
-            canonical_hash(&serde_json::to_value(&*catalog).unwrap_or(serde_json::Value::Null)),
-            canonical_hash(&serde_json::to_value(&req).unwrap_or(serde_json::Value::Null)),
+            &catalog,
+            &req,
+            model_digest,
+            &tokenizer_digest,
         )
     });
     if let (Some(cache), Some(key)) = (cache.as_ref(), cache_key.as_deref())
@@ -559,12 +630,8 @@ pub(crate) async fn post_images_generations(
     let mut bundle: Option<String> = None;
     let backend_id = pipeline.backend_id();
     // Provenance (TASK-determinism-contract): the verified digest sidecar
-    // exists only when the model arrived as a checksum-verified download;
-    // locally-placed or unverified weights stay null — never a fabricated
-    // hash. The vendored engine identity maps from the backend id (None
-    // for the stub, which has no separate engine).
-    let model_sha256 = resolve_model_entry(&slug, &catalog)
-        .and_then(|entry| crate::downloads::artifact_sha256(std::path::Path::new(&entry.path)));
+    // was resolved before cache lookup, so key and sidecar agree; locally
+    // placed or unverified weights stay null, never a fabricated hash.
     let engine_version = honkbox_sd_core::engine_version_for(backend_id);
     // The token is the cross-image cancel state; the engine-stop flag is
     // fresh per image (created inside the loop). Reusing one flag would
@@ -825,4 +892,48 @@ pub(crate) async fn post_images_generations(
         cache.cache.put(key.to_owned(), value);
     }
     with_job_id(Json(response).into_response(), job.id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_sha256_tracks_content_with_a_bounded_buffer() {
+        let dir = std::env::temp_dir().join(format!(
+            "honkbox-cache-digest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let a = dir.join("a.json");
+        let b = dir.join("b.json");
+        std::fs::write(&a, b"vocab-a").expect("write a");
+        std::fs::write(&b, b"vocab-b").expect("write b");
+        let digest_a = file_sha256(&a).expect("digest a");
+        let digest_b = file_sha256(&b).expect("digest b");
+        assert_eq!(digest_a.len(), 64);
+        assert_ne!(digest_a, digest_b);
+        assert!(file_sha256(&dir.join("missing")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn cache_key_separates_model_and_tokenizer_digests() {
+        let catalog = honkbox_api_types::ModelCatalog {
+            object: "list".to_owned(),
+            data: Vec::new(),
+        };
+        let req: ImagesGenerationRequest =
+            serde_json::from_value(serde_json::json!({ "prompt": "x" })).expect("request");
+        let base = generation_cache_key("ash-sd", "sd15", &catalog, &req, "model-a", "tokenizer-a");
+        let different_model =
+            generation_cache_key("ash-sd", "sd15", &catalog, &req, "model-b", "tokenizer-a");
+        let different_tokenizer =
+            generation_cache_key("ash-sd", "sd15", &catalog, &req, "model-a", "tokenizer-b");
+        assert_ne!(base, different_model);
+        assert_ne!(base, different_tokenizer);
+    }
 }

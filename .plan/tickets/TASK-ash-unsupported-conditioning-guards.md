@@ -76,3 +76,9 @@ the commands; this filing pass runs none.
 Implementing LoRA, hires, img2img/inpaint or ControlNet; changing recipe or
 sampler semantics; adding HTTP Ash selection; advertising family availability;
 returning a fake or silently uncontrolled image.
+
+// hint: Structural and logic conflict. Both design and behavior differ.
+
+## Verification evidence (2026-11-24)
+
+`reject_unhonored_conditioning` (`crates/server/src/routes/images_generate.rs:79-104`) returns `conditioning_unsupported` for `ash-sd` on `hires_fix`, `loras` and image inputs. The generate route calls it before cache/admission (`images_generate.rs:368`); the edits route calls it with `image_inputs=true` (`images_edit.rs:342`). `crates/server/tests/images.rs::ash_backend_refuses_unhonored_conditioning` covers hires/loras and `crates/server/tests/edits.rs::ash_backend_refuses_image_inputs` covers image/mask. ControlNet keeps its own guard. `ImagesGenerationRequest` has no `init_image`/`mask_image` fields: those inputs belong to `/v1/images/edits`, where they are already guarded.

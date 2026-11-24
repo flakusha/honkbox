@@ -220,6 +220,7 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             jobs: true,
             events: true,
             vad: VAD_COMPILED,
+// hint: Logic and cosmetic changes overlap. Resolve logic first, then reformat.
             experimental_ash_sd: ASH_SD_COMPILED,
             // Blender engine jobs (`POST /v1/jobs/blender`): `true` only
             // when a Blender engine is installed and probed — the route
