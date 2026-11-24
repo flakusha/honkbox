@@ -105,7 +105,10 @@ const _: () = {
     assert_send_sync::<AshTtsPipeline>();
 };
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(feature = "experimental-ash-stt", feature = "experimental-ash-tts")
+))]
 mod tests {
     use crate::VkError;
     use crate::device::VulkanDevice;
