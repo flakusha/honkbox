@@ -75,6 +75,14 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 - Rust via `rust-toolchain.toml` (rustup-managed); standard builds MUST pass `--locked` (build, test, run, clippy) — Cargo.lock is the dep contract, unlocked builds risk silent drift.
 - **Cargo target dir**: builds use the default cargo target dir — no `CARGO_TARGET_DIR` override. Any non-default target dir requires explicit permission first; `.tmp/` is never an acceptable target dir (multi-GB builds bloat worktree scratch shared with sibling lanes).
 - **Effective file budget** (opt-in, mirroring `../loop-lore`): 250 code lines default / 300 ceiling; blank and comment-only lines are free, `// size-allow: N` in the first 512 chars overrides, generated + test files exempt. `bun run size` reports, `bun run size:strict` fails. `bun run lint:padding` enforces a blank line after every multiline TS statement (`--fix` / path arguments supported); neither is in `bun run check` yet because existing files exceed both budgets.
+
+## Build environment (operator-mandated 2026-11-24)
+
+- **llvm22 only**: `export PATH=/usr/lib/llvm/22/bin:$PATH` and
+ `export LIBCLANG_PATH=/usr/lib/llvm/22/lib/libclang.so` in every shell
+ before any cargo command (`/tmp/cargo` is the shell-default target dir;
+ `--locked`, default target dir, and the `.tmp/` build ban are already
+ mandated in the bullets above).
 - Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
 - Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
 
