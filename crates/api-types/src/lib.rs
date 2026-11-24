@@ -231,9 +231,8 @@ pub struct FeatureFlags {
     pub events: bool,
     /// Silero VAD in the audio worker (compile feature `vad`).
     pub vad: bool,
-    /// Direct-Vulkan SD 1.5 backend (compile feature `ash-sd`): selectable
-    /// via `--sd-backend ash-sd`. The field name stays `experimental_ash_sd`
-    /// for wire compatibility; it does not mean generation is stubbed.
+    /// Experimental ash SD backend (compile feature
+    /// `experimental-ash-sd`); empty until that backend's first code lands.
     pub experimental_ash_sd: bool,
     /// Typed Blender asset jobs (`POST /v1/jobs/blender`). `true` only when
     /// a Blender engine is installed and probed: the route answers a named

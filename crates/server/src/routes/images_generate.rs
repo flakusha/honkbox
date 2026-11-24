@@ -72,10 +72,10 @@ fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
 
 /// Refuse conditioning the direct-Vulkan backend cannot actually apply.
 ///
-/// `sd-cpp` honors LoRAs, hires-fix and img2img/inpaint inputs; the stub and
+/// `sd-cpp` honors `LoRAs`, hires-fix and img2img/inpaint inputs; the stub and
 /// injected test pipelines may implement their own semantics. Only `ash-sd`
 /// is known to ignore these fields today, so it alone answers 501 instead of
-/// rendering without what was requested. ControlNet has its own guard.
+/// rendering without what was requested. `ControlNet` has its own guard.
 pub(super) fn reject_unhonored_conditioning(
     backend_id: &str,
     loras: bool,

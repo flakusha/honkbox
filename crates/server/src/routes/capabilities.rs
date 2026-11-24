@@ -196,7 +196,7 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             jobs: true,
             events: true,
             vad: VAD_COMPILED,
-            experimental_ash_sd: cfg!(feature = "ash-sd"),
+            experimental_ash_sd: cfg!(feature = "experimental-ash-sd"),
             // Blender engine jobs (`POST /v1/jobs/blender`): `true` only
             // when a Blender engine is installed and probed — the route
             // answers a named 501 otherwise, so the flag never promises

@@ -32,7 +32,6 @@ ulid = { workspace = true }
 honkbox-llm-worker = { path = "../llm-worker" }
 honkbox-audio-worker = { path = "../audio-worker" }
 honkbox-recognition-worker = { path = "../recognition-worker" }
-honkbox-ash-backend = { path = "../ash-backend", optional = true }
 honkbox-external-tools = { path = "../external-tools" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 base64 = "0.22"
@@ -84,20 +83,9 @@ rxing = { version = "0.9", default-features = false, features = [
 image = { workspace = true }
 
 [features]
-# Experimental direct-Vulkan SD backend (`--sd-backend ash-sd` /
-# `--backend ash-sd`): forwards to the ash-backend seam. The pipeline admits
-# request/device/checkpoint then returns a named sampling error; no fake image.
-ash-sd = ["honkbox-ash-backend/ash-sd"]
-# Experimental direct-Vulkan LLM backend (`--llm-backend ash-llm`): forwards
-# to the ash-backend seam. Device creation failure at construction time is a
-# loud named error (backends.rs), never a silent stub fallback.
-ash-llm = ["honkbox-ash-backend/ash-llm"]
-# Experimental direct-Vulkan STT/TTS backends (`--stt-backend ash-stt`,
-# `--tts-backend ash-tts`): forwards to the ash-backend seams. Device
-# creation failure at construction time is a loud named error
-# (backends.rs), never a silent stub fallback.
-ash-stt = ["honkbox-ash-backend/ash-stt"]
-ash-tts = ["honkbox-ash-backend/ash-tts"]
+# Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
+# Empty until the first experimental code lands, then forwards to sd-core/ash-backend.
+experimental-ash-sd = []
 # Vulkan execution for the sd-cpp backend (honkbox-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.
 vulkan = ["honkbox-sd-core/vulkan"]

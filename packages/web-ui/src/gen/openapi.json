@@ -4599,7 +4599,7 @@
           },
           "experimental_ash_sd": {
             "type": "boolean",
-            "description": "Direct-Vulkan SD 1.5 backend (compile feature `ash-sd`): selectable\nvia `--sd-backend ash-sd`. The field name stays `experimental_ash_sd`\nfor wire compatibility; it does not mean generation is stubbed."
+            "description": "Experimental ash SD backend (compile feature\n`experimental-ash-sd`); empty until that backend's first code lands."
           },
           "fizgig": {
             "type": "boolean",

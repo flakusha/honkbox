@@ -2437,11 +2437,7 @@ name = "honkbox-ash-backend"
 version = "0.1.0"
 dependencies = [
  "ash",
- "honkbox-audio-worker",
- "honkbox-llm-worker",
  "honkbox-sd-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2519,7 +2515,6 @@ dependencies = [
  "glob",
  "home",
  "honkbox-api-types",
- "honkbox-ash-backend",
  "honkbox-audio-worker",
  "honkbox-external-tools",
  "honkbox-llm-worker",
