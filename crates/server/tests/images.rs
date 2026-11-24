@@ -101,8 +101,30 @@ fn catalog_with(entries: &[ModelCatalogEntry]) -> ModelCatalog {
     }
 }
 
+/// `ash-sd`-tagged double: deterministic stub pixels, but reports the backend
+/// ID whose unsupported conditioning is expected to be refused.
+struct AshLikeSd;
+
+impl honkbox_sd_core::SdPipeline for AshLikeSd {
+    fn generate(
+        &self,
+        req: &honkbox_sd_core::Txt2ImgRequest,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        honkbox_sd_core::SdPipeline::generate(&honkbox_sd_core::StubPipeline, req, cancel)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "ash-sd"
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)] // mirrors the other test helpers' owned-argument style
-fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
+fn app_with_sd(
+    catalog: ModelCatalog,
+    data_dir: Option<std::path::PathBuf>,
+    sd: Arc<dyn honkbox_sd_core::SdPipeline>,
+) -> Router {
     app(AppConfig {
         recognition: Arc::new(honkbox_recognition_worker::StubRecognition),
         auth: AuthConfig::default(),
@@ -123,7 +145,7 @@ fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Rout
         llm: Arc::new(StubLlm::default()),
         stt: Arc::new(StubStt),
         tts: Arc::new(StubTts),
-        sd: Arc::new(honkbox_sd_core::StubPipeline),
+        sd,
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
         swap_max_ttl: std::time::Duration::from_hours(24),
@@ -136,6 +158,10 @@ fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Rout
         model_entries: Vec::new(),
         downloads: Arc::new(downloads::DownloadManager::new(None).expect("download manager")),
     })
+}
+
+fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
+    app_with_sd(catalog, data_dir, Arc::new(honkbox_sd_core::StubPipeline))
 }
 
 /// `POST /v1/images/generations`; returns (status, parsed JSON body).
@@ -756,6 +782,41 @@ async fn hires_fix_rejections_are_400() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{hires_fix}: {body}");
         assert_eq!(body["error"]["code"], code, "{hires_fix}: {body}");
     }
+}
+
+/// A backend that cannot apply hires/LoRA refuses them explicitly instead of
+/// rendering an unconditioned image; plain requests still render.
+#[tokio::test]
+async fn ash_backend_refuses_unhonored_conditioning() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with_sd(
+        catalog_with(&[sd_entry("comfy:f.safetensors")]),
+        None,
+        Arc::new(AshLikeSd),
+    );
+    let cases = [
+        (
+            json!({"prompt": "hi", "size": "8x8", "hires_fix": {"scale": 2.0}}),
+            "hires_fix",
+        ),
+        (
+            json!({"prompt": "hi", "size": "8x8", "loras": [{"slug": "loras:x.safetensors", "strength": 0.5}]}),
+            "loras",
+        ),
+    ];
+    for (request, field) in cases {
+        let (status, body) = images(app.clone(), request.clone()).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{request}: {body}");
+        assert_eq!(body["error"]["code"], "conditioning_unsupported", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(field)),
+            "{body}"
+        );
+    }
+    let (status, _) = images(app, json!({"prompt": "hi", "size": "8x8"})).await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 /// An accepted hires-fix pass renders and lands in the bundle sidecar with

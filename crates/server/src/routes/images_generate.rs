@@ -70,6 +70,38 @@ fn scoped_generation_cache(config: &AppConfig) -> Arc<ScopedGenerationCache> {
     }))
 }
 
+/// Refuse conditioning the direct-Vulkan backend cannot actually apply.
+///
+/// `sd-cpp` honors LoRAs, hires-fix and img2img/inpaint inputs; the stub and
+/// injected test pipelines may implement their own semantics. Only `ash-sd`
+/// is known to ignore these fields today, so it alone answers 501 instead of
+/// rendering without what was requested. ControlNet has its own guard.
+pub(super) fn reject_unhonored_conditioning(
+    backend_id: &str,
+    loras: bool,
+    hires: bool,
+    image_inputs: bool,
+) -> Option<Response> {
+    if backend_id != "ash-sd" {
+        return None;
+    }
+    let field = if hires {
+        "hires_fix"
+    } else if loras {
+        "loras"
+    } else if image_inputs {
+        "init_image/mask_image"
+    } else {
+        return None;
+    };
+    Some(super::openai_error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        format!(
+            "{field} is accepted and validated but not applied: the configured {backend_id:?} pipeline ignores it — the request is refused rather than rendered without it"
+        ),
+        Some("conditioning_unsupported"),
+    ))
+}
 /// Write one HTTP generation's job bundle (best-effort: a bundle-write
 /// failure never fails an otherwise successful generation).
 pub(super) fn write_generation_bundle(
@@ -313,7 +345,7 @@ pub(super) fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> Str
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
         (status = 500, description = "Generation failed", body = OpenAiError),
-        (status = 501, description = "Valid controlnet params accepted but not applicable by the sd pipeline (controlnet_unsupported)", body = OpenAiError)
+        (status = 501, description = "Valid conditioning accepted but not applicable by the sd pipeline (controlnet_unsupported or conditioning_unsupported)", body = OpenAiError)
     )
 )]
 pub(super) async fn post_images_generations(
@@ -333,6 +365,14 @@ pub(super) async fn post_images_generations(
                 return super::openai_error_response(StatusCode::BAD_REQUEST, message, Some(code));
             }
         };
+    if let Some(response) = reject_unhonored_conditioning(
+        config.sd.backend_id(),
+        req.loras.as_ref().is_some_and(|loras| !loras.is_empty()),
+        req.hires_fix.is_some(),
+        false,
+    ) {
+        return response;
+    }
     let catalog = config.catalog_snapshot();
     // Canonical hash of the validated request under the serving catalog; a
     // cache hit replays the first response before admission, so identical

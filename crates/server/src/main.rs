@@ -856,6 +856,7 @@ fn models_inspect_ash(
 
 /// Print missing keys, or nothing when the inventory is complete.
 /// Limits to the first three unless `all` is set.
+#[cfg(feature = "ash-sd")]
 fn print_missing(label: &str, missing: &[impl AsRef<str>], all: bool) {
     let shown = if all {
         missing

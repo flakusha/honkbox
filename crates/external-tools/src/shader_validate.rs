@@ -4,11 +4,12 @@
 //! (default `godot` on `PATH`). It is never linked or vendored. The probe
 //! proves the binary answers a version request; the validate call hands it one
 //! staged shader file and reads diagnostics from stdout. Godot-family binaries
-//! are invoked with `--headless --quit` so a validation never opens a desktop
-//! window or waits for an editor loop:
+//! get a throwaway headless project plus a one-shot `GDScript` that actually
+//! compiles the shader through `RenderingServer`; a bare positional shader path
+//! only prints the engine banner and never validates anything.
 //!
 //! - empty stdout or `OK` lines ⇒ the shader compiles;
-//! - one line per failure, `path:line: message` ⇒ the named shader and line.
+//! - `path:line: message` or Godot's `SHADER ERROR` + `E <n>->` ⇒ named issue.
 //!
 //! A nonzero exit WITH diagnostics is a shader verdict (compilers do this);
 //! a silent nonzero exit is a tool failure. No shader text is
@@ -78,30 +79,20 @@ pub fn status(binary: &Path, timeout: Duration) -> Status {
 /// The argument is a path this crate's caller staged; no network and no
 /// engine project state is involved. A missing or failing binary comes back as
 /// [`Unavailable`], so the HTTP layer can answer a named 501/500 instead of a
-/// silent skip.
+/// silent skip. Godot gets a throwaway project: its bare positional argument
+/// only prints the engine banner and never compiles the shader.
 pub fn validate(
     binary: &Path,
     shader: &Path,
     timeout: Duration,
 ) -> Result<ShaderReport, Unavailable> {
+    if is_godot(binary) {
+        return validate_godot(binary, shader, timeout);
+    }
     let path = shader
         .to_str()
         .ok_or_else(|| Unavailable::ProbeFailed("staged shader path is not UTF-8".to_owned()))?;
-    // Godot's bare positional argument opens a project/window on the desktop.
-    // Prepend the headless + quit flags for every Godot-family binary; keep the
-    // raw single-argument contract for other operator-supplied validators.
-    let godot = binary
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "godot" || name.starts_with("godot-"));
-    let args: Vec<&str> = if godot {
-        vec!["--headless", "--quit", path]
-    } else {
-        vec![path]
-    };
-    let output = run_tool_output(binary, &args, timeout)?;
-    // A compiler reports failures on either stream and exits nonzero; the
-    // verdict comes from its diagnostics, not from the exit code alone.
+    let output = run_tool_output(binary, &[path], timeout)?;
     let diagnostics = if output.stdout.trim().is_empty() {
         output.stderr.as_str()
     } else {
@@ -117,6 +108,103 @@ pub fn validate(
         return Err(Unavailable::ProbeFailed(output.status));
     }
     Ok(ShaderReport { issues })
+}
+
+fn is_godot(binary: &Path) -> bool {
+    binary
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "godot" || name.starts_with("godot-"))
+}
+
+/// Godot only compiles a shader when a rendering server is told to set its
+/// code. Stage a minimal project + one-shot script, run it headless, and remove
+/// the project on every path. The staged shader's own name is reported to the
+/// caller; Godot's diagnostics name the engine's shader slot instead.
+fn validate_godot(
+    binary: &Path,
+    shader: &Path,
+    timeout: Duration,
+) -> Result<ShaderReport, Unavailable> {
+    const PROJECT: &str = "config_version=5\n\n[application]\nconfig/name=\"ShaderProbe\"\n";
+    const SCRIPT: &str = "extends SceneTree\n\nfunc _init():\n\tvar source = load(\"res://shader.gdshader\")\n\tvar shader = RenderingServer.shader_create()\n\tRenderingServer.shader_set_code(shader, source.code)\n\tRenderingServer.free_rid(shader)\n\tquit()\n";
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    let project = std::env::temp_dir().join(format!(
+        "honkbox-godot-shader-{}-{stamp}",
+        std::process::id()
+    ));
+    let result = (|| {
+        std::fs::create_dir_all(&project)
+            .map_err(|err| Unavailable::ProbeFailed(format!("stage godot project: {err}")))?;
+        std::fs::copy(shader, project.join("shader.gdshader"))
+            .map_err(|err| Unavailable::ProbeFailed(format!("stage godot shader: {err}")))?;
+        std::fs::write(project.join("project.godot"), PROJECT)
+            .map_err(|err| Unavailable::ProbeFailed(format!("stage godot config: {err}")))?;
+        std::fs::write(project.join("validate.gd"), SCRIPT)
+            .map_err(|err| Unavailable::ProbeFailed(format!("stage godot script: {err}")))?;
+        let project_dir = project.to_str().ok_or_else(|| {
+            Unavailable::ProbeFailed("godot project path is not UTF-8".to_owned())
+        })?;
+        let script = project.join("validate.gd");
+        let script_path = script
+            .to_str()
+            .ok_or_else(|| Unavailable::ProbeFailed("godot script path is not UTF-8".to_owned()))?;
+        let output = run_tool_output(
+            binary,
+            &["--headless", "--path", project_dir, "--script", script_path],
+            timeout,
+        )?;
+        let diagnostics = if output.stdout.trim().is_empty() {
+            output.stderr.as_str()
+        } else {
+            output.stdout.as_str()
+        };
+        let file = shader
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("shader.gdshader");
+        let issues = godot_issues(diagnostics, file);
+        if issues.is_empty() && !output.success && diagnostics.trim().is_empty() {
+            return Err(Unavailable::ProbeFailed(output.status));
+        }
+        Ok(ShaderReport { issues })
+    })();
+    let _ = std::fs::remove_dir_all(&project);
+    result
+}
+
+/// Godot prints an `E   <line>->` marker before each `SHADER ERROR:` message.
+fn godot_issues(diagnostics: &str, file: &str) -> Vec<ShaderIssue> {
+    let mut issues = Vec::new();
+    let mut pending_line = None;
+    for line in diagnostics.lines() {
+        let line = line.trim();
+        if let Some((before, _)) = line.split_once("->")
+            && let Some(number) = before.strip_prefix('E')
+            && let Ok(parsed) = number.trim().parse::<u32>()
+        {
+            pending_line = Some(parsed);
+        }
+        if let Some(message) = line.strip_prefix("SHADER ERROR:") {
+            issues.push(ShaderIssue {
+                file: file.to_owned(),
+                line: pending_line,
+                message: message.trim().to_owned(),
+            });
+            pending_line = None;
+        }
+    }
+    if issues.is_empty() && diagnostics.contains("Shader compilation failed") {
+        issues.push(ShaderIssue {
+            file: file.to_owned(),
+            line: pending_line,
+            message: "Shader compilation failed".to_owned(),
+        });
+    }
+    issues
 }
 
 /// Parse `path:line: message`; a line without those separators is still a
@@ -251,7 +339,7 @@ mod tests {
         let args_log = dir.join("args");
         let bin = dir.join("godot");
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\necho OK\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\ntest -f \"$3/project.godot\" || exit 9\ntest -f \"$3/shader.gdshader\" || exit 8\ntest -f \"$5\" || exit 7\necho OK\n",
             args_log.display()
         );
         std::fs::write(&bin, script).expect("fake godot");
@@ -266,10 +354,27 @@ mod tests {
         let args = std::fs::read_to_string(&args_log).expect("args log");
         let lines: Vec<_> = args.lines().collect();
         assert_eq!(lines.first(), Some(&"--headless"));
-        assert_eq!(lines.get(1), Some(&"--quit"));
+        assert_eq!(lines.get(1), Some(&"--path"));
+        assert!(
+            lines
+                .get(2)
+                .is_some_and(|path| path.contains("honkbox-godot-shader-")),
+            "{lines:?}"
+        );
+        assert_eq!(lines.get(3), Some(&"--script"));
+    }
+
+    #[test]
+    fn godot_diagnostics_name_the_shader_and_line() {
+        let diagnostics = "--Main Shader--\nE   5-> }\nSHADER ERROR: Expected a ';'.\n";
+        let issues = godot_issues(diagnostics, "hero.gdshader");
         assert_eq!(
-            lines.get(2),
-            Some(shader.to_str().expect("utf-8 path")).as_ref()
+            issues,
+            vec![ShaderIssue {
+                file: "hero.gdshader".to_owned(),
+                line: Some(5),
+                message: "Expected a ';'.".to_owned(),
+            }]
         );
     }
 }

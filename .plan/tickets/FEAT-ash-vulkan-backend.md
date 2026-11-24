@@ -1,12 +1,12 @@
 # FEAT: Pure-Vulkan (`ash`) inference backend
 
-Status: in progress (end-to-end SD1.5 generation wired and real-checkpoint verified; promotion/merge pending)
+Status: done (2026-11-24, opt-in SD1.5 Vulkan backend complete, real-checkpoint verified, provenance-gated, and promotion-merge ready; licensing/extensibility note recreated in `.tmp/research`)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: ash-vulkan lane
 Acceptance: With `ash-sd` enabled, `AshSdPipeline::generate` renders a deterministic fixture from a user-supplied checkpoint using Vulkan compute only (no CUDA/ComfyUI process); missing device features return named `VkError::InsufficientCapacity`; every shader carries a provenance line (license comes from `REUSE.toml`, which overrides per-file headers in this repo).
 Verification: `cargo test --locked -p honkbox-ash-backend --features ash-compute` (first slice, no vendor stack); `cargo test --locked -p honkbox-ash-backend --features ash-sd`; `bun run test:parity` with a local checkpoint (opt-in); `bun run check`.
-Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md` (main checkout), `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`.
+Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md` (main checkout, reconstructed after scratch prune), `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`.
 
 ## Change
 

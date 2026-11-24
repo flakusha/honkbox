@@ -265,7 +265,8 @@ fn set_edit_field(edit: &mut ImageEditUpload, name: &str, text: &str) -> Result<
         (status = 400, description = "Missing image/prompt, non-PNG bytes, bad strength, size, recipe, output_format, output_compression, loras, or X-Honkbox-Delivery fields", body = OpenAiError),
         (status = 404, description = "Unknown model", body = OpenAiError),
         (status = 429, description = "GPU slot busy", body = OpenAiError),
-        (status = 500, description = "Generation failed", body = OpenAiError)
+        (status = 500, description = "Generation failed", body = OpenAiError),
+        (status = 501, description = "Image/lora inputs accepted but not applicable by the sd pipeline (conditioning_unsupported)", body = OpenAiError)
     )
 )]
 pub(super) async fn post_images_edits(
@@ -338,6 +339,14 @@ pub(super) async fn post_images_edits(
             Some("prompt_required"),
         );
     };
+    if let Some(response) = super::images_generate::reject_unhonored_conditioning(
+        config.sd.backend_id(),
+        edit.loras.as_ref().is_some_and(|loras| !loras.is_empty()),
+        false,
+        true,
+    ) {
+        return response;
+    }
     let strength = match edit.strength {
         Some(v) if v.is_finite() && (0.0..=1.0).contains(&v) && v > 0.0 => v,
         Some(v) => {

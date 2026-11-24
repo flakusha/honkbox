@@ -1,11 +1,11 @@
 # TASK: Headless shader-compile check hook
 
-Status: in progress (2026-11-20, hook + 501 path landed; Godot-family call now uses `--headless --quit` so tests never open a desktop window; real Godot compile verdict still unverified)
+Status: done (2026-11-24, Godot family now gets a throwaway headless project plus `RenderingServer.shader_set_code`; real Godot 4.7.2 emitted `SHADER ERROR` + `E <line>` for an invalid shader and stayed clean for a valid one)
 Priority: P3
 Epic: epic-game-engine-export
 Owner: unassigned
 Acceptance: `.gdshader` text validates by compile before it ships in a bundle; failures name the shader + line.
-Verification: external `godot --headless` fixture run; `bun run test:server`
+Verification: 8 `honkbox-external-tools` shader_validate tests pass, including a headless-args fixture that asserts the staged project and script exist; real Godot 4.7.2 probe verified invalid/valid verdicts without opening a window; `bun run test:server` green in the ash worktree.
 Links: `.tmp/research/shaders-materials-uiux-asset-pipeline-2026-11-20.md` §1, `TASK-engine-bundle-verification.md`
 Resources: per-test tmp dirs; no Godot project state in honkbox
 

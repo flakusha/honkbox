@@ -105,12 +105,28 @@ fn catalog_with(entries: &[ModelCatalogEntry]) -> ModelCatalog {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)] // mirrors the other test helpers' owned-argument style
+/// `ash-sd`-tagged double: deterministic stub pixels, but reports the backend
+/// ID whose unsupported image inputs must be refused.
+struct AshLikeSd;
+
+impl honkbox_sd_core::SdPipeline for AshLikeSd {
+    fn generate(
+        &self,
+        req: &honkbox_sd_core::Txt2ImgRequest,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        honkbox_sd_core::SdPipeline::generate(&honkbox_sd_core::StubPipeline, req, cancel)
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "ash-sd"
+    }
+}
 fn app_with(catalog: ModelCatalog, data_dir: Option<std::path::PathBuf>) -> Router {
     app_with_sd(catalog, data_dir, Arc::new(honkbox_sd_core::StubPipeline))
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value)] // mirrors the other test helpers' owned-argument style
 fn app_with_sd(
     catalog: ModelCatalog,
     data_dir: Option<std::path::PathBuf>,
@@ -299,6 +315,35 @@ async fn missing_prompt_is_400() {
     assert_eq!(body["error"]["code"], "prompt_required", "{body}");
 }
 
+/// A backend without img2img/inpaint must refuse the edit instead of quietly
+/// generating a plain txt2img image from the source prompt.
+#[tokio::test]
+async fn ash_backend_refuses_image_inputs() {
+    let _slot = SLOT_LOCK.lock().await;
+    let app = app_with_sd(
+        catalog_with(&[sd_entry("comfy:f.safetensors")]),
+        None,
+        Arc::new(AshLikeSd),
+    );
+    for parts in [
+        vec![png_part("image", png_bytes(4, 4)), part("prompt", "redo")],
+        vec![
+            png_part("image", png_bytes(4, 4)),
+            png_part("mask", png_bytes(4, 4)),
+            part("prompt", "inpaint"),
+        ],
+    ] {
+        let (status, body) = edits(app.clone(), &parts).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+        assert_eq!(body["error"]["code"], "conditioning_unsupported", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("init_image/mask_image")),
+            "{body}"
+        );
+    }
+}
 /// Non-PNG `image` bytes (magic sniff) are a 400 — the declared content
 /// type is not trusted.
 #[tokio::test]
