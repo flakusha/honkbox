@@ -1,6 +1,6 @@
 # TASK: Bridge shared DTO schemas for salvo
 
-Status: proposed
+Status: done (2026-11-24)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
@@ -30,3 +30,15 @@ are read-only outputs; no ports, no DB, no GPU.
 ## Non-goals
 
 Changing wire schemas, adding a new codegen pipeline, or migrating routes/tests.
+
+## Verification record (2026-11-24)
+
+165 DTO derives now carry `utoipa::ToSchema`, `ts_rs::TS`, and aliased
+`salvo::oapi::ToSchema`; two request-side helper types (`ChatContent`,
+`ChatImageRef`) gained the salvo derive only because they are field types of
+derived DTOs. `cargo check --locked -p honkbox-api-types` PASS;
+`cargo test --locked -p honkbox-api-types` PASS (16/16);
+`bun run codegen:check` PASS with 61 mounted routes and no generated-file drift.
+Schema-note: utoipa's three `#[schema(...)]` field attributes remain utoipa-only;
+salvo derives its own schema for those fields, so the two OpenAPI documents may
+differ there while the wire/TS contract is unchanged.

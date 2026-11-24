@@ -21,7 +21,7 @@ evidence. The migration touches four coupled seams: ~53 mounted routes with
 - `TASK-salvo-migration-spike.md` — done 2026-11-24, P1: one `salvo::oapi` route,
   one port-0 listener test with `Drop` teardown, one generated salvo OpenAPI
   artifact, and a recorded before/after `bun run check` cost comparison.
-- `TASK-salvo-dto-schema-bridge.md` — proposed, P1: coexist
+- `TASK-salvo-dto-schema-bridge.md` — done 2026-11-24, P1: coexist
   `utoipa::ToSchema` and `salvo::oapi::ToSchema` on shared DTOs without hand
   edits to generated files.
 - `TASK-salvo-route-and-test-cutover.md` — proposed, P1: cut ~53 route
