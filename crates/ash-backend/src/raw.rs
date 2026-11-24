@@ -517,6 +517,8 @@ pub fn destroy_fence(device: &Device, fence: vk::Fence) {
     unsafe { device.destroy_fence(fence, None) };
 }
 
+const FENCE_WAIT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
+
 /// Submit `command` on `queue` and block until its fence signals.
 pub fn submit_and_wait(
     device: &Device,
@@ -530,9 +532,15 @@ pub fn submit_and_wait(
     unsafe { device.queue_submit(queue, &submits, fence) }
         .map_err(|res| VkError::device("vkQueueSubmit", res))?;
     // SAFETY: `fence` belongs to this queue submission; `wait_all = true`
-    // with a single fence is exact, and the timeout only bounds the wait.
-    unsafe { device.wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX) }
-        .map_err(|res| VkError::device("vkWaitForFences", res))
+    // with a single fence is exact, and the finite timeout bounds the wait.
+    // 30 s: long enough for a heavy dispatch, short enough to surface a hang.
+    unsafe { device.wait_for_fences(std::slice::from_ref(&fence), true, FENCE_WAIT_TIMEOUT_NS) }
+        .map_err(|res| match res {
+            vk::Result::TIMEOUT => VkError::Timeout {
+                op: "vkWaitForFences",
+            },
+            other => VkError::device("vkWaitForFences", other),
+        })
 }
 
 // --- Capability discovery (queries only; no device objects created). --------

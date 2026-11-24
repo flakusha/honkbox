@@ -759,6 +759,9 @@ pub(crate) mod tests {
             Err(
                 e @ (VkError::Instance(_)
                 | VkError::Device(_)
+                | VkError::OutOfMemory { .. }
+                | VkError::DeviceLost { .. }
+                | VkError::Timeout { .. }
                 | VkError::InsufficientCapacity { .. }),
             ) => {
                 panic!("vulkan api failed during headless smoke: {e:?}")

@@ -109,6 +109,21 @@ pub enum VkError {
     Instance(String),
     /// Logical-device failure (`vkCreateDevice`, queue retrieval).
     Device(String),
+    /// Host or device memory exhausted (`ERROR_OUT_OF_*_MEMORY`).
+    OutOfMemory {
+        /// Vulkan operation that exhausted memory.
+        op: &'static str,
+    },
+    /// The logical device was lost (`ERROR_DEVICE_LOST`).
+    DeviceLost {
+        /// Vulkan operation that observed the loss.
+        op: &'static str,
+    },
+    /// A device operation exceeded its deadline (`TIMEOUT`).
+    Timeout {
+        /// Vulkan operation that timed out.
+        op: &'static str,
+    },
     /// A required device feature or limit is absent or too small.
     InsufficientCapacity {
         /// Capability name (`storageBuffer8BitAccess`, `subgroupSize`, ...).
@@ -133,7 +148,12 @@ impl VkError {
 
     /// Wrap an ash [`ash::vk::Result`] from a device-level `op`.
     pub(crate) fn device(op: &'static str, res: ash::vk::Result) -> Self {
-        Self::Device(format!("{op} failed: {res:?}"))
+        match res {
+            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY
+            | ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => Self::OutOfMemory { op },
+            ash::vk::Result::ERROR_DEVICE_LOST => Self::DeviceLost { op },
+            other => Self::Device(format!("{op} failed: {other:?}")),
+        }
     }
 }
 
@@ -144,6 +164,18 @@ impl std::fmt::Display for VkError {
             Self::Loader(e) => write!(f, "vulkan loader failed to load: {e}"),
             Self::Instance(e) => write!(f, "vulkan instance error: {e}"),
             Self::Device(e) => write!(f, "vulkan device error: {e}"),
+            Self::OutOfMemory { op } => write!(
+                f,
+                "vulkan out of memory during {op}; reduce model/batch size or free device memory"
+            ),
+            Self::DeviceLost { op } => write!(
+                f,
+                "vulkan device lost during {op}; recreate the device and retry the operation"
+            ),
+            Self::Timeout { op } => write!(
+                f,
+                "vulkan {op} timed out; the device may be hung, check for a stuck submission"
+            ),
             Self::InsufficientCapacity {
                 capability,
                 required,
@@ -258,3 +290,55 @@ pub mod unet_traversal;
 pub mod unet_upsample;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;
+
+#[cfg(all(test, feature = "ash-compute"))]
+mod tests {
+    use super::VkError;
+    use ash::vk;
+
+    #[test]
+    fn device_errors_are_classified_and_displayed() {
+        for res in [
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+        ] {
+            assert_eq!(
+                VkError::device("vkQueueSubmit", res),
+                VkError::OutOfMemory {
+                    op: "vkQueueSubmit"
+                }
+            );
+        }
+        assert_eq!(
+            VkError::device("vkQueueSubmit", vk::Result::ERROR_DEVICE_LOST),
+            VkError::DeviceLost {
+                op: "vkQueueSubmit"
+            }
+        );
+        assert_eq!(
+            VkError::device("vkQueueSubmit", vk::Result::ERROR_UNKNOWN),
+            VkError::Device("vkQueueSubmit failed: ERROR_UNKNOWN".to_owned())
+        );
+        assert_eq!(
+            VkError::OutOfMemory {
+                op: "vkQueueSubmit"
+            }
+            .to_string(),
+            "vulkan out of memory during vkQueueSubmit; reduce model/batch size or free device memory"
+        );
+        assert_eq!(
+            VkError::DeviceLost {
+                op: "vkQueueSubmit"
+            }
+            .to_string(),
+            "vulkan device lost during vkQueueSubmit; recreate the device and retry the operation"
+        );
+        assert_eq!(
+            VkError::Timeout {
+                op: "vkWaitForFences"
+            }
+            .to_string(),
+            "vulkan vkWaitForFences timed out; the device may be hung, check for a stuck submission"
+        );
+    }
+}
