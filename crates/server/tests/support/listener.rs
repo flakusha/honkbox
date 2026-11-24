@@ -10,12 +10,12 @@
 // Included via #[path] by multiple test binaries; each uses a different subset.
 #![allow(dead_code)]
 
-use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
+use salvo::Server;
 use salvo::conn::Listener as _;
 use salvo::conn::tcp::TcpListener;
 use salvo::server::ServerHandle;
-use salvo::Server;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::task::JoinHandle;

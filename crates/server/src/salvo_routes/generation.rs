@@ -2,12 +2,11 @@
 //! in the axum-style modules; this module only adapts request parts and
 //! renders the existing `IntoResponse` results byte-for-byte.
 
-use axum::extract::{Query as AxumQuery, State};
-use axum::body::Bytes;
 use axum::Json;
+use axum::body::Bytes;
+use axum::extract::{Query as AxumQuery, State};
 use honkbox_api_types::{
-    BlenderJobRequest, ImageOpRequest, ImagesGenerationRequest, RecognizeRequest,
-    SynthesizeRequest,
+    BlenderJobRequest, ImageOpRequest, ImagesGenerationRequest, RecognizeRequest, SynthesizeRequest,
 };
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
@@ -65,13 +64,9 @@ async fn post_transcribe(req: &mut Request, depot: &mut Depot, res: &mut Respons
         Ok(body) => body,
         Err(error) => return bad_request(res, error).await,
     };
-    let result = audio_upload::post_transcribe(
-        State(config(depot)),
-        query,
-        req.headers().clone(),
-        body,
-    )
-    .await;
+    let result =
+        audio_upload::post_transcribe(State(config(depot)), query, req.headers().clone(), body)
+            .await;
     respond(res, result).await;
 }
 
@@ -109,7 +104,11 @@ async fn post_embeddings(req: &mut Request, depot: &mut Depot, res: &mut Respons
         Ok(body) => body,
         Err(error) => return bad_request(res, error).await,
     };
-    respond(res, embeddings::post_embeddings(State(config(depot)), body).await).await;
+    respond(
+        res,
+        embeddings::post_embeddings(State(config(depot)), body).await,
+    )
+    .await;
 }
 
 #[salvo::handler]
@@ -118,7 +117,11 @@ async fn post_image_ops(req: &mut Request, depot: &mut Depot, res: &mut Response
         Ok(body) => Ok(body),
         Err(error) => return bad_request(res, error).await,
     };
-    respond(res, image_ops_route::post_image_ops(State(config(depot)), body).await).await;
+    respond(
+        res,
+        image_ops_route::post_image_ops(State(config(depot)), body).await,
+    )
+    .await;
 }
 
 #[salvo::handler]
@@ -127,12 +130,9 @@ async fn post_images_generations(req: &mut Request, depot: &mut Depot, res: &mut
         Ok(body) => body,
         Err(error) => return bad_request(res, error).await,
     };
-    let result = images_generate::post_images_generations(
-        State(config(depot)),
-        req.headers().clone(),
-        body,
-    )
-    .await;
+    let result =
+        images_generate::post_images_generations(State(config(depot)), req.headers().clone(), body)
+            .await;
     respond(res, result).await;
 }
 
@@ -142,7 +142,11 @@ async fn post_blender_job(req: &mut Request, depot: &mut Depot, res: &mut Respon
         Ok(body) => Ok(body),
         Err(error) => return bad_request(res, error).await,
     };
-    respond(res, blender::post_blender_job(State(config(depot)), body).await).await;
+    respond(
+        res,
+        blender::post_blender_job(State(config(depot)), body).await,
+    )
+    .await;
 }
 
 #[salvo::handler]
@@ -173,5 +177,9 @@ async fn post_recognize(req: &mut Request, depot: &mut Depot, res: &mut Response
         Ok(body) => Ok(body),
         Err(error) => return bad_request(res, error).await,
     };
-    respond(res, recognition::post_recognize(State(config(depot)), body).await).await;
+    respond(
+        res,
+        recognition::post_recognize(State(config(depot)), body).await,
+    )
+    .await;
 }

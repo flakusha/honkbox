@@ -3,8 +3,8 @@
 //! calls the existing axum handler unchanged and renders its response through
 //! the `salvo_support` bridge.
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use honkbox_api_types::DownloadRequest;
 use salvo::prelude::{Depot, Request, Response, Router, StatusError};
 

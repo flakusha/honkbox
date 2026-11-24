@@ -122,7 +122,11 @@ async fn mesh_reroute_endpoint(req: &mut Request, depot: &mut Depot, res: &mut R
             let code = err.code().to_owned();
             let result = (
                 status,
-                axum::Json(OpenAiError::new(status.as_u16(), err.to_string(), Some(code))),
+                axum::Json(OpenAiError::new(
+                    status.as_u16(),
+                    err.to_string(),
+                    Some(code),
+                )),
             )
                 .into_response();
             respond(res, result).await;

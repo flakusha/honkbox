@@ -24,9 +24,9 @@ mod salvo_app;
 mod salvo_middleware;
 #[allow(dead_code)] // route batch modules land with their endpoints
 mod salvo_routes;
-mod salvo_version;
 #[allow(dead_code)] // helpers land with the salvo route batches
 mod salvo_support;
+mod salvo_version;
 mod svg;
 use salvo::conn::Listener as _;
 mod swap;

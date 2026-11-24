@@ -18,13 +18,13 @@ use salvo::http::{Mime, StatusCode, header};
 use salvo::prelude::*;
 
 use crate::routes::AppConfig;
+use crate::routes::COMPRESSION_MIN_BYTES;
 use crate::routes::middleware::{
     constant_time_eq, env_var, insufficient_scope_response, is_probe_exempt,
     is_signed_content_request, mints_read_credential, required_scope, scoped_key_verdict,
     unauthorized_response,
 };
 use crate::routes::runtime_config;
-use crate::routes::COMPRESSION_MIN_BYTES;
 
 /// Hoops wrapping API routes, in axum's outside-in layer order.
 ///

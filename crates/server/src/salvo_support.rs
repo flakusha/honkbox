@@ -31,9 +31,8 @@ pub async fn respond<R: IntoResponse>(res: &mut Response, result: R) {
         .await
         .expect("handler body is in-memory during the cutover");
 
-    res.status_code = Some(
-        StatusCode::from_u16(status.as_u16()).expect("axum status maps to salvo"),
-    );
+    res.status_code =
+        Some(StatusCode::from_u16(status.as_u16()).expect("axum status maps to salvo"));
     res.headers.clear();
     for (name, value) in headers {
         if let Some(name) = name {
@@ -61,6 +60,7 @@ pub fn path<T>(req: &Request, name: &str) -> Result<T, StatusError>
 where
     for<'de> T: salvo::serde::Deserialize<'de>,
 {
-    req.param::<T>(name)
-        .ok_or_else(|| StatusError::bad_request().detail(format!("missing path parameter `{name}`")))
+    req.param::<T>(name).ok_or_else(|| {
+        StatusError::bad_request().detail(format!("missing path parameter `{name}`"))
+    })
 }

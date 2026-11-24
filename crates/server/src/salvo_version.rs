@@ -4,9 +4,9 @@
 //! `Version` is local because shared DTOs derive utoipa/ts-rs only; adding
 //! `salvo::oapi::ToSchema` there is TASK-salvo-dto-schema-bridge.
 
-use salvo::http::header::LINK;
 use salvo::http::HeaderValue;
-use salvo::oapi::{endpoint, ToSchema};
+use salvo::http::header::LINK;
+use salvo::oapi::{ToSchema, endpoint};
 use salvo::prelude::*;
 use salvo::routing::FilterInfo;
 use serde::Serialize;

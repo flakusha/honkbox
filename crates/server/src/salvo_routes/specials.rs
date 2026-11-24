@@ -22,9 +22,8 @@ use crate::salvo_support::{config, path, query, respond};
 fn stream_response(res: &mut Response, response: AxumResponse) {
     let status = response.status();
     let headers = response.headers().clone();
-    res.status_code = Some(
-        SalvoStatusCode::from_u16(status.as_u16()).expect("axum status maps to salvo"),
-    );
+    res.status_code =
+        Some(SalvoStatusCode::from_u16(status.as_u16()).expect("axum status maps to salvo"));
     res.headers.clear();
     for (name, value) in headers {
         if let Some(name) = name {
@@ -84,7 +83,11 @@ async fn job_cancel(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         Ok(id) => id,
         Err(err) => return bad_request(res, err.to_string()).await,
     };
-    respond(res, crate::routes::jobs::post_job_cancel(axum::extract::Path(id)).await).await;
+    respond(
+        res,
+        crate::routes::jobs::post_job_cancel(axum::extract::Path(id)).await,
+    )
+    .await;
 }
 
 #[salvo::handler]
@@ -93,12 +96,26 @@ async fn job_delete(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
         Ok(id) => id,
         Err(err) => return bad_request(res, err.to_string()).await,
     };
-    respond(res, crate::routes::jobs::delete_job(axum::extract::Path(id)).await).await;
+    respond(
+        res,
+        crate::routes::jobs::delete_job(axum::extract::Path(id)).await,
+    )
+    .await;
 }
 
 #[salvo::handler]
-async fn events(_req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-    stream_response(res, crate::routes::jobs::get_events().await.into_response());
+async fn events(req: &mut Request, _depot: &mut Depot, res: &mut Response) {
+    // T4 cursor: forward `?since=` / `Last-Event-ID` so the salvo front keeps
+    // the reconnect-replay contract of the axum handler (unparseable cursors
+    // resume live-only, same as axum).
+    let params = query(req).unwrap_or_default();
+    let headers = req.headers().clone();
+    stream_response(
+        res,
+        crate::routes::jobs::get_events(axum::extract::Query(params), headers)
+            .await
+            .into_response(),
+    );
 }
 
 #[salvo::handler]
