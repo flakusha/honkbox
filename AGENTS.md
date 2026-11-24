@@ -72,7 +72,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 ## Runtime/Tooling Preferences
 
 - **Bun ≥1.4.4 only** for JS (no Node/npm/yarn); `bun install --frozen-lockfile` in CI.
-- Rust via `rust-toolchain.toml` (rustup-managed); all cargo invocations use `--locked`.
+- Rust via `rust-toolchain.toml` (rustup-managed); standard builds MUST pass `--locked` (build, test, run, clippy) — Cargo.lock is the dep contract, unlocked builds risk silent drift.
 - **Cargo target dir**: never point `CARGO_TARGET_DIR` at `.tmp/` — multi-GB target dirs bloat worktree scratch, which sibling lanes share. Use the default `/tmp/cargo` (recreated on demand) or a per-lane `/tmp/cargo-<lane>`; if `/tmp` is pressured, coordinate in `.tmp/intercom/` before falling back anywhere else.
 - **Effective file budget** (opt-in, mirroring `../loop-lore`): 250 code lines default / 300 ceiling; blank and comment-only lines are free, `// size-allow: N` in the first 512 chars overrides, generated + test files exempt. `bun run size` reports, `bun run size:strict` fails. `bun run lint:padding` enforces a blank line after every multiline TS statement (`--fix` / path arguments supported); neither is in `bun run check` yet because existing files exceed both budgets.
 - Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
