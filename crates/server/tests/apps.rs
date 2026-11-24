@@ -112,20 +112,31 @@ fn set_mode(path: &Path) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// Counted loopback health responder: 503 for the first `loading` calls, 200
-/// afterwards. No real app or GPU is involved.
-fn health_server(port: u16, loading: usize) {
+/// Counted loopback responder serving ONE route; other paths are 404. The
+/// first `loading` requests to that route are 503, later ones 200. No real app
+/// or GPU is involved.
+fn health_server(port: u16, loading: usize, ready_path: &str) {
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    let prefix = format!("GET {ready_path} ");
     std::thread::spawn(move || {
         let seen = AtomicUsize::new(0);
         for stream in listener.incoming().flatten() {
             let mut stream = stream;
             let mut buf = [0_u8; 256];
-            let _ = stream.read(&mut buf);
+            let read = stream.read(&mut buf).unwrap_or(0);
+            let served = String::from_utf8_lossy(&buf[..read]).starts_with(&prefix);
             let count = seen.fetch_add(1, Ordering::Relaxed);
-            let body = if count < loading { "503" } else { "200" };
-            let status = if count < loading { "503 Service Unavailable" } else { "200 OK" };
-            let reply = format!("HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{body}");
+            let (status, body) = if !served {
+                ("404 Not Found", "404")
+            } else if count < loading {
+                ("503 Service Unavailable", "503")
+            } else {
+                ("200 OK", "200")
+            };
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
             let _ = stream.write_all(reply.as_bytes());
         }
     });
@@ -192,7 +203,7 @@ async fn llama_version_probe_argv_and_group_teardown() {
     let helper_pid = dir.join("helper.pid");
     fake_binary(&binary, &argv, Some(&helper_pid));
     let port = free_port();
-    health_server(port, 0);
+    health_server(port, 0, "/health");
     let manager = Arc::new(
         ManagedAppManager::new(llama_config(&binary, port), Some(dir.clone()), "http://127.0.0.1:8188")
             .unwrap(),
@@ -254,12 +265,13 @@ async fn comfyui_installation_and_script_modes_use_allowlisted_argv() {
         let venv = root.join(".venv/bin");
         std::fs::create_dir_all(&venv).unwrap();
         std::fs::write(root.join("main.py"), "# fixture\n").unwrap();
+        std::fs::write(root.join("comfyui_version.py"), "__version__ = \"0.46.0\"\n").unwrap();
         let python = venv.join("python");
         let argv = dir.join("argv");
         std::fs::write(
             &python,
             format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'ComfyUI 1.2.3'; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nwhile :; do sleep 1; done\n",
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Python 3.12.0'; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nwhile :; do sleep 1; done\n",
                 argv.display()
             ),
         )
@@ -272,12 +284,15 @@ async fn comfyui_installation_and_script_modes_use_allowlisted_argv() {
             path
         });
         let port = free_port();
-        health_server(port, 1); // one 503 then 200: progress restarts countdown
+        // ComfyUI registers /queue, not /health: a probe of /health gets 404.
+        health_server(port, 1, "/queue"); // one 503 then 200: countdown restarts
         let manager = Arc::new(
             ManagedAppManager::new(comfy_config(launch, &root, script.as_deref(), port), Some(dir), "http://127.0.0.1:8188").unwrap(),
         );
         manager.start("comfyui").await.unwrap();
         wait_for(&manager, "comfyui", routes::AppState::Ready).await;
+        let status = manager.status("comfyui").unwrap();
+        assert_eq!(status.version.as_deref(), Some("0.46.0"));
         let captured = std::fs::read_to_string(&argv).unwrap();
         assert!(captured.contains("--listen"), "{captured}");
         assert!(captured.contains("--port"), "{captured}");
@@ -422,6 +437,47 @@ async fn external_tools_row_without_manager_never_claims_comfyui() {
     set_manager_for_tests(None);
     let router = app(test_app_config());
     assert_comfyui_501(&router).await;
+    set_registry_for_tests(None).await;
+    set_env_var(KEY_ENV, None);
+}
+
+#[tokio::test]
+async fn detached_comfyui_status_never_claims_live_availability() {
+    const KEY_ENV: &str = "HONKBOX_TEST_APPS_KEY";
+    let _slot_serial = SLOT_LOCK.lock().await;
+    set_env_var(KEY_ENV, Some("test-apps-key"));
+    let registry = ToolsRegistry::from_statuses(
+        ToolsConfig::default(),
+        vec![ToolStatus {
+            id: ToolId::ComfyUi,
+            version: Some("1.0.0".to_owned()),
+            capabilities: Vec::new(),
+            devices: Vec::new(),
+            unavailable: None,
+        }],
+    );
+    set_registry_for_tests(Some(registry)).await;
+    let manager = Arc::new(
+        ManagedAppManager::new(ManagedAppsConfig::default(), None, "http://127.0.0.1:8188").unwrap(),
+    );
+    set_manager_for_tests(Some(Arc::clone(&manager)));
+    let router = app(test_app_config());
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/comfyui/status")
+                .header("Authorization", "Bearer test-apps-key")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["available"], false);
+    assert_eq!(json["state"], "detached-unverified");
+    set_manager_for_tests(None);
     set_registry_for_tests(None).await;
     set_env_var(KEY_ENV, None);
 }

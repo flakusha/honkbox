@@ -249,7 +249,9 @@ and an sd.cpp autostart on `9010` collide. Router mode stays an explicit
 non-goal — a second GPU/VRAM scheduler next to honkbox's swap ledger and
 residency lease is two schedulers for one device.
 
-`/comfyui/*` is a bearer-gated typed read surface (`status`/`queue`/`history`/`view`), not a raw ComfyUI wire proxy; no raw node-graph submission.
+`/comfyui/*` is a bearer-gated typed read surface (`status`/`queue`/`history`/`view`), not a raw ComfyUI wire proxy; no raw node-graph submission. History returns typed artifact refs that `/view` can fetch; progress is best-effort and absent when upstream history has none.
+
+Managed ComfyUI runs an operator-owned checkout: `.venv/bin/python main.py` (`installation`) or a fixed launcher (`script`), or a `path` binary. honkbox does not run `uv sync`, install ComfyUI, bump revisions or auto-restart it. The recorded pair (2026-11-20) is fork `85037383c2f7f982a85b71f19601a43d28f53016` on upstream `995456d0188ffb51032c28f41527cfa82d87d8a9`; bump both together, deliberately. Point `[models].comfyui_dir` at the same model store instead of duplicating weights. Readiness probes `/queue`; detached mode reports `available: false` because a startup probe cannot prove a live upstream.
 
 ## Migrating from sd-rip
 

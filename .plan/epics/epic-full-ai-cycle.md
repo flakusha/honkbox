@@ -48,6 +48,10 @@ provider routing (`.tmp/research/ReviewedFullCycle-LoopLore-Acceleration.md`).
   `TASK-operability-surfaces.md` — content-recall and DX gaps from
   `content-experience-gaps-2026-11-20.md` and `organic-growth-2026-11-20.md`.
 
+- `epic-comfyui-managed-runtime.md` — build-order item 5 now sits on the landed
+  managed app + typed `/comfyui/*` reads; readiness/history honesty are filed
+  there before the workflow pipeline grows a write surface.
+
 ## Non-goals
 
 Engine SDKs/MCP inside honkbox; Blender embedded in-process; byte-identical

@@ -7,7 +7,7 @@
 //! upstream is validated loopback-only. A ComfyUI-shaped compatibility subset
 //! cannot satisfy honkbox's auth and validation rules (see the serve-compat
 //! spike), so the wire surface is not exposed.
-// size-allow: 400
+// size-allow: 540
 
 use std::sync::OnceLock;
 
@@ -19,7 +19,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{
-    ComfyUiHistory, ComfyUiProgress, ComfyUiQueue, ComfyUiStatus, ManagedApp, ManagedAppList,
+    ComfyUiArtifact, ComfyUiHistory, ComfyUiProgress, ComfyUiQueue, ComfyUiStatus, ManagedApp,
+    ManagedAppList,
 };
 use serde::Deserialize;
 
@@ -197,16 +198,25 @@ pub(super) async fn post_app_stop(headers: HeaderMap, AxumPath(id): AxumPath<Str
     )
 }
 
-/// Probe truth: managed readiness when a managed app is declared, otherwise
-/// the cached external-tools row. No second truth source is invented.
-fn comfy_probe() -> Option<(String, String, Vec<String>, Option<String>)> {
+/// Probe truth: managed readiness when declared, otherwise the cached
+/// external-tools row. A detached row proves only startup reachability, so it
+/// is reported `detached-unverified` and never claims live availability.
+type ComfyProbe = (String, String, Vec<String>, Option<String>, bool);
+
+fn comfy_probe() -> Option<ComfyProbe> {
     let manager = comfy_upstream()?;
     if manager.configured("comfyui") {
         if !manager.ready("comfyui") {
             return None;
         }
         let status = manager.status("comfyui")?;
-        return Some(("managed".to_owned(), "ready".to_owned(), vec!["workflow".to_owned()], status.version));
+        return Some((
+            "managed".to_owned(),
+            "ready".to_owned(),
+            vec!["workflow".to_owned()],
+            status.version,
+            true,
+        ));
     }
     let row = super::external_tools::external_tools_capability()
         .tools
@@ -215,11 +225,31 @@ fn comfy_probe() -> Option<(String, String, Vec<String>, Option<String>)> {
     if !row.available {
         return None;
     }
-    Some(("external-tools".to_owned(), "detached".to_owned(), row.capabilities, row.version))
+    Some((
+        "external-tools".to_owned(),
+        "detached-unverified".to_owned(),
+        row.capabilities,
+        row.version,
+        false,
+    ))
 }
 
 fn comfy_unavailable() -> Response {
     named_501("comfyui", "no probed ready app")
+}
+
+/// A live upstream failed: distinguish dead/reloading from a bad reply without
+/// forwarding paths or error chains.
+fn upstream_unreachable() -> Response {
+    (StatusCode::BAD_GATEWAY, "comfyui upstream unreachable").into_response()
+}
+
+fn upstream_reloading() -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, "comfyui upstream reloading").into_response()
+}
+
+fn upstream_error() -> Response {
+    (StatusCode::BAD_GATEWAY, "comfyui upstream error").into_response()
 }
 
 /// Honest `ComfyUI` readiness, derived from the probe that proved it.
@@ -229,11 +259,11 @@ fn comfy_unavailable() -> Response {
     responses((status = 200, description = "ComfyUI readiness", body = ComfyUiStatus))
 )]
 pub(super) async fn get_comfyui_status() -> Response {
-    let Some((source, state, capabilities, version)) = comfy_probe() else {
+    let Some((source, state, capabilities, version, available)) = comfy_probe() else {
         return comfy_unavailable();
     };
     Json(ComfyUiStatus {
-        available: true,
+        available,
         state,
         source,
         version,
@@ -292,36 +322,130 @@ pub(super) async fn get_comfyui_history(AxumPath(id): AxumPath<String>) -> Respo
     let Some(entry) = value.get(&id) else {
         return (StatusCode::NOT_FOUND, format!("unknown prompt {id}")).into_response();
     };
-    let status_obj = entry.get("status");
-    let completed = status_obj
-        .and_then(|value| value.get("completed"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    let status = status_obj
-        .and_then(|value| value.get("status_str"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| matches!(*value, "success" | "error"))
-        .map_or_else(
-            || if completed { "completed".to_owned() } else { "queued".to_owned() },
-            str::to_owned,
-        );
-    let outputs = entry
-        .get("outputs")
-        .and_then(|value| value.as_object())
-        .map(|object| object.keys().cloned().collect())
-        .unwrap_or_default();
     Json(ComfyUiHistory {
         prompt_id: id,
-        status,
-        outputs,
-        progress: ComfyUiProgress { node: None, completed: None, total: None },
+        status: history_status(entry),
+        outputs: history_artifacts(entry),
+        progress: history_progress(entry),
     })
     .into_response()
+}
+
+/// Map `ComfyUI`'s history status into the documented wire vocabulary.
+fn history_status(entry: &serde_json::Value) -> String {
+    let status = entry.get("status");
+    if let Some(value) = status
+        .and_then(|s| s.get("status_str"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| matches!(*value, "success" | "error"))
+    {
+        return value.to_owned();
+    }
+    if status
+        .and_then(|s| s.get("completed"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return "completed".to_owned();
+    }
+    let running = status
+        .and_then(|s| s.get("messages"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|messages| {
+            messages
+                .iter()
+                .filter_map(|m| m.get(0).and_then(serde_json::Value::as_str))
+                .any(|event| matches!(event, "executing" | "execution_start"))
+        });
+    if running {
+        "running".to_owned()
+    } else {
+        "queued".to_owned()
+    }
+}
+
+/// Extract view-ready artifact refs; drop anything that fails the same checks
+/// `/view` applies. No raw path or unknown output type crosses the boundary.
+fn history_artifacts(entry: &serde_json::Value) -> Vec<ComfyUiArtifact> {
+    let Some(outputs) = entry.get("outputs").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let mut artifacts = Vec::new();
+    for (node, output) in outputs {
+        for key in ["images", "gifs"] {
+            let Some(items) = output.get(key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for item in items {
+                let Some(filename) = item.get("filename").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let subfolder = item
+                    .get("subfolder")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let kind = item
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("output");
+                if !safe_component(filename)
+                    || (!subfolder.is_empty() && !safe_component(subfolder))
+                    || !matches!(kind, "output" | "input" | "temp")
+                {
+                    continue;
+                }
+                artifacts.push(ComfyUiArtifact {
+                    node: node.clone(),
+                    filename: filename.to_owned(),
+                    subfolder: subfolder.to_owned(),
+                    kind: kind.to_owned(),
+                });
+            }
+        }
+    }
+    artifacts
+}
+
+/// Best-effort progress from history status messages; absent upstream means
+/// all fields stay unset (never fabricated).
+fn history_progress(entry: &serde_json::Value) -> ComfyUiProgress {
+    let mut progress = ComfyUiProgress { node: None, completed: None, total: None };
+    let Some(messages) = entry
+        .get("status")
+        .and_then(|s| s.get("messages"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return progress;
+    };
+    for message in messages {
+        let event = message.get(0).and_then(serde_json::Value::as_str).unwrap_or_default();
+        let Some(data) = message.get(1) else {
+            continue;
+        };
+        if event == "progress" {
+            progress.completed = data
+                .get("value")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+            progress.total = data
+                .get("max")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok());
+        }
+        if matches!(event, "progress" | "executing") && progress.node.is_none() {
+            progress.node =
+                data.get("node").and_then(serde_json::Value::as_str).map(str::to_owned);
+        }
+    }
+    progress
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ViewQuery {
     filename: String,
+    #[serde(default)]
+    subfolder: Option<String>,
     #[serde(default)]
     kind: Option<String>,
 }
@@ -334,6 +458,7 @@ pub(super) struct ViewQuery {
     path = "/comfyui/view",
     params(
         ("filename" = String, Query, description = "Single safe filename"),
+        ("subfolder" = Option<String>, Query, description = "Safe subfolder component"),
         ("kind" = Option<String>, Query, description = "output, input or temp")
     ),
     responses(
@@ -343,7 +468,9 @@ pub(super) struct ViewQuery {
     )
 )]
 pub(super) async fn get_comfyui_view(Query(query): Query<ViewQuery>) -> Response {
+    let subfolder = query.subfolder.as_deref().unwrap_or_default();
     if !safe_component(&query.filename)
+        || (!subfolder.is_empty() && !safe_component(subfolder))
         || query.kind.as_deref().is_some_and(|kind| !matches!(kind, "output" | "input" | "temp"))
     {
         return (StatusCode::BAD_REQUEST, "invalid view parameters").into_response();
@@ -357,23 +484,34 @@ pub(super) async fn get_comfyui_view(Query(query): Query<ViewQuery>) -> Response
     {
         let mut pairs = url.query_pairs_mut();
         pairs.append_pair("filename", &query.filename);
+        if !subfolder.is_empty() {
+            pairs.append_pair("subfolder", subfolder);
+        }
         if let Some(kind) = &query.kind {
             pairs.append_pair("type", kind);
         }
     }
     let Ok(response) = manager.client().get(url).send().await else {
-        return comfy_unavailable();
+        return upstream_unreachable();
     };
-    if response.status() != StatusCode::OK {
-        return (StatusCode::NOT_FOUND, "comfyui output not found").into_response();
+    match response.status() {
+        StatusCode::OK => {}
+        StatusCode::NOT_FOUND => {
+            return (StatusCode::NOT_FOUND, "comfyui output not found").into_response();
+        }
+        StatusCode::SERVICE_UNAVAILABLE => return upstream_reloading(),
+        _ => return upstream_error(),
     }
-    match response.bytes().await {
-        Ok(bytes) if bytes.len() <= 16 * 1024 * 1024 => Response::builder()
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| comfy_unavailable()),
-        _ => (StatusCode::BAD_GATEWAY, "comfyui output too large").into_response(),
+    let Ok(bytes) = response.bytes().await else {
+        return upstream_unreachable();
+    };
+    if bytes.len() > 16 * 1024 * 1024 {
+        return (StatusCode::BAD_GATEWAY, "comfyui output too large").into_response();
     }
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| comfy_unavailable())
 }
 
 /// Single path component, no traversal, bounded length (never a raw path).
@@ -394,11 +532,13 @@ async fn read_json(manager: &Arc<Manager>, path: &str) -> Result<serde_json::Val
         .get(url)
         .send()
         .await
-        .map_err(|_| comfy_unavailable())?;
-    if response.status() != StatusCode::OK {
-        return Err(comfy_unavailable());
+        .map_err(|_| upstream_unreachable())?;
+    match response.status() {
+        StatusCode::OK => {}
+        StatusCode::SERVICE_UNAVAILABLE => return Err(upstream_reloading()),
+        _ => return Err(upstream_error()),
     }
-    let bytes = response.bytes().await.map_err(|_| comfy_unavailable())?;
+    let bytes = response.bytes().await.map_err(|_| upstream_unreachable())?;
     if bytes.len() > 1024 * 1024 {
         return Err((StatusCode::BAD_GATEWAY, "comfyui reply too large").into_response());
     }
@@ -408,6 +548,51 @@ async fn read_json(manager: &Arc<Manager>, path: &str) -> Result<serde_json::Val
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn history_outputs_are_view_ready_artifacts() {
+        let entry = json!({
+            "outputs": {
+                "9": { "images": [
+                    { "filename": "ComfyUI_00001_.png", "subfolder": "tiles", "type": "output" }
+                ] },
+                "7": { "images": [
+                    { "filename": "../evil.png", "subfolder": "", "type": "output" }
+                ] }
+            }
+        });
+        let artifacts = history_artifacts(&entry);
+        assert_eq!(artifacts.len(), 1, "traversal filenames must be dropped");
+        assert_eq!(artifacts[0].node, "9");
+        assert_eq!(artifacts[0].filename, "ComfyUI_00001_.png");
+        assert_eq!(artifacts[0].subfolder, "tiles");
+        assert_eq!(artifacts[0].kind, "output");
+    }
+
+    #[test]
+    fn history_status_and_progress_follow_upstream_messages() {
+        let entry = json!({
+            "status": {
+                "status_str": "success",
+                "completed": true,
+                "messages": [["progress", { "node": "3", "value": 4, "max": 10 }]]
+            }
+        });
+        assert_eq!(history_status(&entry), "success");
+        let progress = history_progress(&entry);
+        assert_eq!(progress.node.as_deref(), Some("3"));
+        assert_eq!(progress.completed, Some(4));
+        assert_eq!(progress.total, Some(10));
+
+        let queued = json!({ "status": { "completed": false, "messages": [] } });
+        assert_eq!(history_status(&queued), "queued");
+        let running = json!({
+            "status": { "completed": false, "messages": [["executing", { "node": "3" }]] }
+        });
+        assert_eq!(history_status(&running), "running");
+        assert_eq!(history_progress(&queued).node, None);
+    }
 
     #[test]
     fn prompt_ids_and_view_names_are_allowlisted() {

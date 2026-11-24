@@ -98,11 +98,13 @@ pub struct AppStatus {
     pub error: Option<String>,
 }
 
-/// Where readiness is probed. A unix socket needs a hand-rolled GET: the
-/// workspace's reqwest has no `unix-socket` feature and no new dep is allowed.
+/// Where readiness is probed. Each app has its own route: llama-server serves
+/// `/health`, `ComfyUI` does not (it registers `/queue`). A unix socket needs a
+/// hand-rolled GET: the workspace's reqwest has no `unix-socket` feature and
+/// no new dep is allowed.
 #[derive(Debug, Clone)]
 enum Health {
-    Tcp(String),
+    Tcp(String, &'static str),
     Unix(PathBuf),
 }
 
@@ -115,6 +117,9 @@ struct Resolved {
     cwd: PathBuf,
     health: Health,
     endpoint: String,
+    /// `ComfyUI`'s pinned version file, when the launch mode uses an operator
+    /// checkout. The venv python's `--version` would report Python, not SD.
+    version_file: Option<PathBuf>,
 }
 
 /// Mutable per-app record. The `Child` itself lives in the supervisor task so
@@ -250,7 +255,7 @@ impl Manager {
         {
             let resolved = resolve(entry, self.data_dir.as_deref())
                 .map_err(|err| AppError::new(StatusCode::BAD_REQUEST, err))?;
-            let version = probe_version(&resolved.program).await;
+            let version = probe_version(&resolved.program, resolved.version_file.as_deref()).await;
             recheck(&resolved.program)
                 .map_err(|err| AppError::new(StatusCode::BAD_REQUEST, err))?;
             let kind = entry_lock(entry).config.resource_kind;
@@ -448,6 +453,7 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
         listener.local_addr().map_err(|err| format!("ephemeral port: {err}"))?.port()
     };
     let model = config.model.as_ref().map(|path| path.to_string_lossy().into_owned());
+    let mut version_file = None;
     if is_llama && config.launch == ManagedAppLaunch::Path && model.is_none() {
         return Err("apps.llama_server.model is required".to_owned());
     }
@@ -475,6 +481,7 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
                 config.installation.as_ref().ok_or("apps.comfyui.installation is required")?,
             )
             .map_err(|err| format!("installation: {err}"))?;
+            version_file = Some(root.join("comfyui_version.py"));
             let python = std::fs::canonicalize(root.join(".venv/bin/python"))
                 .map_err(|err| format!("installation venv python: {err}"))?;
             let args = if config.launch == ManagedAppLaunch::Installation {
@@ -528,7 +535,7 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
                 "--cors-origins".into(), "localhost".into(), "--no-webui".into(),
             ]);
             let url = format!("http://{}:{}", config.host, port);
-            (Health::Tcp(url.clone()), url)
+            (Health::Tcp(url.clone(), "/health"), url)
         }
     } else {
         // ComfyUI has no unix-socket mode: force loopback TCP. No tools/agent
@@ -538,13 +545,22 @@ fn resolve(entry: &Arc<Mutex<Entry>>, data_dir: Option<&Path>) -> Result<Resolve
             "--disable-auto-launch".into(),
         ]);
         let url = format!("http://{}:{}", config.host, port);
-        (Health::Tcp(url.clone()), url)
+        (Health::Tcp(url.clone(), "/queue"), url)
     };
-    Ok(Resolved { program, args, cwd, health, endpoint })
+    Ok(Resolved { program, args, cwd, health, endpoint, version_file })
 }
 
 /// Version probe at start. Failure is non-fatal: status simply has no version.
-async fn probe_version(program: &Path) -> Option<String> {
+async fn probe_version(program: &Path, version_file: Option<&Path>) -> Option<String> {
+    if let Some(path) = version_file {
+        let text = std::fs::read_to_string(path).ok()?;
+        return text.lines().find_map(|line| {
+            let (key, value) = line.trim().split_once('=')?;
+            (key.trim() == "__version__").then(|| {
+                value.trim().trim_matches(|c| c == '\'' || c == '"').to_owned()
+            })
+        });
+    }
     let binary = program.to_path_buf();
     let output = tokio::task::spawn_blocking(move || {
         Command::new(&binary).arg("--version").stdin(Stdio::null()).output()
@@ -660,12 +676,12 @@ async fn supervise(
     }
 }
 
-/// Poll `/health`: 200 means ready, 503 means still loading.
+/// Poll the app's readiness route: 200 means ready, 503 means still loading.
 async fn health_ok(target: &Health, client: &Client) -> Result<bool, String> {
     match target {
-        Health::Tcp(url) => {
+        Health::Tcp(url, path) => {
             let response = client
-                .get(format!("{url}/health"))
+                .get(format!("{url}{path}"))
                 .send()
                 .await
                 .map_err(|err| format!("health: {err}"))?;

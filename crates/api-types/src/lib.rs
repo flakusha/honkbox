@@ -3111,6 +3111,7 @@ mod tests {
             ManagedAppList::decl(&config),
             ComfyUiStatus::decl(&config),
             ComfyUiQueue::decl(&config),
+            ComfyUiArtifact::decl(&config),
             ComfyUiProgress::decl(&config),
             ComfyUiHistory::decl(&config),
         ] {
@@ -4093,13 +4094,16 @@ pub struct ManagedAppList {
 }
 
 /// Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a
-/// passing probe and a live process for a managed app.
+/// live probe: a ready managed process, or a verified detached upstream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
 pub struct ComfyUiStatus {
-    /// Whether the typed `/comfyui` surface can serve right now.
+    /// Whether a live probe proved the typed `/comfyui` surface can serve now.
+    /// A detached upstream is reported `false` (unverified) even when the
+    /// startup external-tools row says it was reachable once.
     pub available: bool,
-    /// Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or
-    /// `detached` when no managed app is declared.
+    /// Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`),
+    /// `detached` for a verified detached upstream, or `detached-unverified`
+    /// when only the cached startup probe exists.
     pub state: String,
     /// Truth source: `managed` (health probe at start) or `external-tools`
     /// (the startup registry probe).
@@ -4123,6 +4127,23 @@ pub struct ComfyUiQueue {
     pub pending: usize,
 }
 
+/// One typed output artifact from a `ComfyUI` history record. Its fields are
+/// the validated query parameters accepted by `GET /comfyui/view`, so a client
+/// can fetch bytes without inventing an upstream path. No raw node graph is
+/// ever returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct ComfyUiArtifact {
+    /// Upstream node id that produced the artifact.
+    pub node: String,
+    /// Single safe filename accepted by `/comfyui/view`.
+    pub filename: String,
+    /// Safe subfolder component; empty means the default output directory.
+    #[serde(default)]
+    pub subfolder: String,
+    /// Output category: `output`, `input` or `temp` (`type` on the wire view).
+    pub kind: String,
+}
+
 /// Progress extracted from `ComfyUI`'s internal history response. No raw
 /// workflow JSON crosses the bearer boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
@@ -4143,10 +4164,12 @@ pub struct ComfyUiProgress {
 pub struct ComfyUiHistory {
     /// The validated prompt id from the path.
     pub prompt_id: String,
-    /// `queued`, `running` or `completed` (from history status).
+    /// `queued`, `running`, `completed`, `success` or `error` (from history).
     pub status: String,
-    /// Output node ids present in the history record.
-    pub outputs: Vec<String>,
-    /// Best-effort progress, absent when the record carries none.
+    /// Typed artifact refs that `/comfyui/view` can fetch. Empty when the
+    /// upstream record has no recognized image/gif output.
+    pub outputs: Vec<ComfyUiArtifact>,
+    /// Best-effort progress from history status messages, absent when the
+    /// upstream record carries none (normal for a finished prompt).
     pub progress: ComfyUiProgress,
 }

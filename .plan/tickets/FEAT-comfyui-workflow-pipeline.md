@@ -6,8 +6,12 @@ Epic: epic-full-ai-cycle
 Owner: unassigned
 Acceptance: submit/cancel/events/artifacts for pinned API-format workflow templates through an external ComfyUI server.
 Verification: `bun run test:server`, `bun run codegen:check`, `bun run check`
-Links: `.tmp/research/ReviewedFullCycle-ComfyUI-Pipelines.md`
+Links: `.tmp/research/ReviewedFullCycle-ComfyUI-Pipelines.md`,
+`comfyui-serve-compat-spike-2026-11-20.md`, `epic-comfyui-managed-runtime.md`
 Resources: per-test prompt IDs and temp output dirs; no shared ComfyUI queue state
+Prerequisite: honkbox's managed ComfyUI app and the four typed `/comfyui/*`
+reads are landed; this ticket adds the template write surface above them, not
+a raw ComfyUI wire proxy.
 
 ## Change
 

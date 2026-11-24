@@ -34,3 +34,13 @@ api_key_env = "HONKBOX_API_KEY"   # NAME of the env var holding the bearer key
 
 # [tools]
 # llama_server_url = "http://127.0.0.1:8080"   # for --llm-backend attached
+
+# [apps.comfyui]
+# # Off by default. Start explicitly: POST /v1/apps/comfyui/start (admin scope).
+# enabled = true
+# launch = "installation"      # "path" | "installation" | "script"
+# installation = "/opt/comfyui" # operator-owned checkout with .venv/bin/python
+# # script = "scripts/start_local.py" # only with launch = "script"
+# host = "127.0.0.1"           # loopback only; ComfyUI has no unix-socket mode
+# port = 8188                  # omit for an OS-assigned port
+# health_timeout_secs = 120    # floor 15 s; readiness probes /queue

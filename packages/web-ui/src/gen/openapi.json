@@ -177,6 +177,15 @@
             }
           },
           {
+            "name": "subfolder",
+            "in": "query",
+            "description": "Safe subfolder component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "kind",
             "in": "query",
             "description": "output, input or temp",
@@ -3829,6 +3838,33 @@
           }
         }
       },
+      "ComfyUiArtifact": {
+        "type": "object",
+        "description": "One typed output artifact from a `ComfyUI` history record. Its fields are\nthe validated query parameters accepted by `GET /comfyui/view`, so a client\ncan fetch bytes without inventing an upstream path. No raw node graph is\never returned.",
+        "required": [
+          "node",
+          "filename",
+          "kind"
+        ],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "Single safe filename accepted by `/comfyui/view`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Output category: `output`, `input` or `temp` (`type` on the wire view)."
+          },
+          "node": {
+            "type": "string",
+            "description": "Upstream node id that produced the artifact."
+          },
+          "subfolder": {
+            "type": "string",
+            "description": "Safe subfolder component; empty means the default output directory."
+          }
+        }
+      },
       "ComfyUiHistory": {
         "type": "object",
         "description": "Typed history summary for a prompt id (`GET /comfyui/history/{id}`).",
@@ -3842,13 +3878,13 @@
           "outputs": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ComfyUiArtifact"
             },
-            "description": "Output node ids present in the history record."
+            "description": "Typed artifact refs that `/comfyui/view` can fetch. Empty when the\nupstream record has no recognized image/gif output."
           },
           "progress": {
             "$ref": "#/components/schemas/ComfyUiProgress",
-            "description": "Best-effort progress, absent when the record carries none."
+            "description": "Best-effort progress from history status messages, absent when the\nupstream record carries none (normal for a finished prompt)."
           },
           "prompt_id": {
             "type": "string",
@@ -3856,7 +3892,7 @@
           },
           "status": {
             "type": "string",
-            "description": "`queued`, `running` or `completed` (from history status)."
+            "description": "`queued`, `running`, `completed`, `success` or `error` (from history)."
           }
         }
       },
@@ -3911,7 +3947,7 @@
       },
       "ComfyUiStatus": {
         "type": "object",
-        "description": "Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a\npassing probe and a live process for a managed app.",
+        "description": "Honest `ComfyUI` reachability (`GET /comfyui/status`). `true` requires a\nlive probe: a ready managed process, or a verified detached upstream.",
         "required": [
           "available",
           "state",
@@ -3922,7 +3958,7 @@
         "properties": {
           "available": {
             "type": "boolean",
-            "description": "Whether the typed `/comfyui` surface can serve right now."
+            "description": "Whether a live probe proved the typed `/comfyui` surface can serve now.\nA detached upstream is reported `false` (unverified) even when the\nstartup external-tools row says it was reachable once."
           },
           "capabilities": {
             "type": "array",
@@ -3941,7 +3977,7 @@
           },
           "state": {
             "type": "string",
-            "description": "Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or\n`detached` when no managed app is declared."
+            "description": "Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`),\n`detached` for a verified detached upstream, or `detached-unverified`\nwhen only the cached startup probe exists."
           },
           "version": {
             "type": [

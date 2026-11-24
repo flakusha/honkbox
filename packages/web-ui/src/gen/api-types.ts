@@ -2904,12 +2904,15 @@ export type ManagedAppList = {
 };
 export type ComfyUiStatus = {
   /**
-   * Whether the typed `/comfyui` surface can serve right now.
+   * Whether a live probe proved the typed `/comfyui` surface can serve now.
+   * A detached upstream is reported `false` (unverified) even when the
+   * startup external-tools row says it was reachable once.
    */
   available: boolean;
   /**
-   * Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`) or
-   * `detached` when no managed app is declared.
+   * Managed state (`stopped`/`starting`/`ready`/`failed`/`stopping`),
+   * `detached` for a verified detached upstream, or `detached-unverified`
+   * when only the cached startup probe exists.
    */
   state: string;
   /**
@@ -2940,6 +2943,24 @@ export type ComfyUiQueue = {
    */
   pending: number;
 };
+export type ComfyUiArtifact = {
+  /**
+   * Upstream node id that produced the artifact.
+   */
+  node: string;
+  /**
+   * Single safe filename accepted by `/comfyui/view`.
+   */
+  filename: string;
+  /**
+   * Safe subfolder component; empty means the default output directory.
+   */
+  subfolder: string;
+  /**
+   * Output category: `output`, `input` or `temp` (`type` on the wire view).
+   */
+  kind: string;
+};
 export type ComfyUiProgress = {
   /**
    * Last executing node, when the history record names one.
@@ -2960,15 +2981,17 @@ export type ComfyUiHistory = {
    */
   prompt_id: string;
   /**
-   * `queued`, `running` or `completed` (from history status).
+   * `queued`, `running`, `completed`, `success` or `error` (from history).
    */
   status: string;
   /**
-   * Output node ids present in the history record.
+   * Typed artifact refs that `/comfyui/view` can fetch. Empty when the
+   * upstream record has no recognized image/gif output.
    */
-  outputs: Array<string>;
+  outputs: Array<ComfyUiArtifact>;
   /**
-   * Best-effort progress, absent when the record carries none.
+   * Best-effort progress from history status messages, absent when the
+   * upstream record carries none (normal for a finished prompt).
    */
   progress: ComfyUiProgress;
 };

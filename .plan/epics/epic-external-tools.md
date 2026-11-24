@@ -19,7 +19,8 @@ args, enforce timeout and CPU/RAM limits, kill on cancel, collect artifacts.
 - `TASK-process-supervisor.md` — lifecycle, limits, cancel, artifact dir.
 - `TASK-llama-server-attach.md` — attach a user-installed `llama-server`
   (landed; six-tool capability contract green).
-- `FEAT-cli-app-manager.md` — managed start/stop lifecycle (proposed).
+- `FEAT-cli-app-manager.md` — managed start/stop lifecycle (landed 2026-11-22).
+  ComfyUI follow-ups are tracked in `epic-comfyui-managed-runtime.md`.
 - `FEAT-llama-server-client-backend.md` — consume the attached server through
   the LLM seam (landed; also tracked in `epic-llm-expansion`).
 - `TASK-multi-gpu-device-axis.md` — device ids and affinity on ledger slots,
