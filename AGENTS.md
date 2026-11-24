@@ -78,11 +78,12 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 
 ## Build environment (operator-mandated 2026-11-24)
 
-- **llvm22 only**: `export PATH=/usr/lib/llvm/22/bin:$PATH` and
- `export LIBCLANG_PATH=/usr/lib/llvm/22/lib/libclang.so` in every shell
- before any cargo command (`/tmp/cargo` is the shell-default target dir;
- `--locked`, default target dir, and the `.tmp/` build ban are already
- mandated in the bullets above).
+- **LLVM: latest compatible, never pinned**: put the newest installed LLVM
+ with working clang + libclang first on `PATH` and export its `libclang.so`
+ as `LIBCLANG_PATH` in every shell before any cargo command (no hardcoded
+ version pin; verify with `clang --version`). `/tmp/cargo` is the
+ shell-default target dir; `--locked`, default target dir, and the `.tmp/`
+ build ban are already mandated in the bullets above.
 - Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
 - Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
 
