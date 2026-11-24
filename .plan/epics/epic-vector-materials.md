@@ -3,8 +3,8 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedCreative-SVG.md`,
-`ReviewedCreative-TexturesMaterials.md`
+Research: `.tmp/research/texture-creation-workflows.md`,
+`.tmp/research/shaders-materials-uiux-asset-pipeline-2026-11-20.md`
 
 ## Scope
 

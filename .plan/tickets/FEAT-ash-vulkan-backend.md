@@ -1,12 +1,12 @@
 # FEAT: Pure-Vulkan (`ash`) inference backend
 
-Status: done (2026-11-24, opt-in SD1.5 Vulkan backend complete, real-checkpoint verified, provenance-gated, and promotion-merge ready; licensing/extensibility note recreated in `.tmp/research`)
+Status: in progress (2026-11-25 audit; crate path landed, master server promotion open)
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: ash-vulkan lane
 Acceptance: With `ash-sd` enabled, `AshSdPipeline::generate` renders a deterministic fixture from a user-supplied checkpoint using Vulkan compute only (no CUDA/ComfyUI process); missing device features return named `VkError::InsufficientCapacity`; every shader carries a provenance line (license comes from `REUSE.toml`, which overrides per-file headers in this repo).
 Verification: `cargo test --locked -p honkbox-ash-backend --features ash-compute` (first slice, no vendor stack); `cargo test --locked -p honkbox-ash-backend --features ash-sd`; `bun run test:parity` with a local checkpoint (opt-in); `bun run check`.
-Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md` (main checkout, reconstructed after scratch prune), `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`.
+Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md`, `.tmp/research/ash-promotion-refresh-2026-11-25.md`, `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`, `TASK-ash-backend-promote.md`.
 
 ## Change
 
@@ -19,8 +19,9 @@ Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md` 
   file carries a provenance line (original vs derived, upstream path + pinned
   rev). License stays in `REUSE.toml` — this repo has no per-file SPDX headers.
   No runtime shader compiler.
-- Wire `server/ash-sd` in `main.rs` constructor only; keep
-  `SdCppPipeline` as default. `stubs.rs` LLM/STT/TTS remain separate follow-ups.
+- Keep the Ash crate opt-in; master CLI/HTTP feature forwarding, shared
+  constructor and capability truth are owned by `TASK-ash-backend-promote.md`.
+  `stubs.rs` LLM/STT/TTS remain separate follow-ups.
 
 ## Non-goals
 
@@ -155,7 +156,6 @@ reference within 1e-5; clippy `-D warnings` clean; fmt clean.
 
 Next: GroupNorm for UNet conv blocks, then VAE decode slice.
 
-
 ## Landed — slice 11 (2026-11-22, worktree)
 
 `GroupNorm::run(values, gamma, beta, shape, eps)` normalizes each `(batch,
@@ -189,8 +189,8 @@ Next: scheduler/sampling slice, then wire into `generate`.
 ## Landed — slice 13 (2026-11-22, worktree)
 
 `DdimStep::run` adds the DDIM eta=0 update on the shared Vulkan compute
-scaffold: `x_{t-1} = sqrt(a_prev) * (x_t - sqrt(1-a_t) * eps) / sqrt(a_t)
-+ sqrt(1-a_prev) * eps`. `DdimAlphas::from_cumprod` derives the four
+scaffold: `x_{t-1} = sqrt(a_prev) \* (x_t - sqrt(1-a_t) \* eps) / sqrt(a_t)
+sqrt(1-a_prev) \* eps`. `DdimAlphas::from_cumprod` derives the four
 coefficients from consecutive cumulative alphas and rejects out-of-range or
 non-finite input. `seeded_uniform_noise` derives a deterministic latent from a
 seed and index using sd-core's `splitmix64` (no second hash copy). `Op` gains a
@@ -255,7 +255,7 @@ optional `honkbox-audio-worker` path dep) — `AshSttPipeline` implements
 `SttPipeline` and `AshTtsPipeline` implements `TtsPipeline`. Semantics:
 placeholder on the direct-Vulkan path, NOT a deterministic emulator —
 `transcribe` returns `SttError::Model(...)` and `synthesize` returns
-`TtsError::Model(...)`, both "direct-Vulkan <modality> seam is not
+`TtsError::Model(...)`, both "direct-Vulkan &lt;modality&gt; seam is not
 implemented yet ... no output is faked"; no transcript text or PCM16
 samples are ever produced. Backend ids `ash-stt` / `ash-tts`; the Send+Sync
 const assertions stay. The module also builds under plain
@@ -269,7 +269,7 @@ cfg arms in the CLI model-scan matches. No new config keys.
 
 Evidence: `cargo test --locked -p honkbox-ash-backend --features
 ash-stt,ash-tts` → 51 passed (4 new: backend id
-+ named-unimplemented error per seam); `--features ash-compute` regression
+named-unimplemented error per seam); `--features ash-compute` regression
 → 47 passed; server `cargo check --locked` green with and without the two
 features; workspace clippy `--features
 honkbox-server/ash-stt,honkbox-server/ash-tts --

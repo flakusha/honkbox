@@ -1,12 +1,12 @@
 # TASK: Tesseract CLI engine (external supervisor lane)
 
-Status: proposed — BLOCKED on TASK-external-tool-registry + TASK-process-supervisor
+Status: proposed
 Priority: P2
 Epic: epic-external-tools
 Owner: unassigned
 Acceptance: tesseract runs as a supervised external process (per-page args, timeout, RSS/thread caps, cancel, artifact collection) for 100+ language OCR; missing binary → 501 naming the tool.
 Verification: `cargo test --locked -p honkbox-server`, `bun run test:server`
-Links: `.tmp/research/ReviewedRecognition.md` §1 (Tesseract row + license note); TASK-external-tool-registry; TASK-process-supervisor; FEAT-ocr-ingest
+Links: `.tmp/research/master-next-items-while-ash-cooks-2026-11-24.md`; `.tmp/research/next-tickets-implementation-plan-2026-11-22.md`; TASK-external-tool-registry; TASK-process-supervisor; FEAT-ocr-ingest
 Resources: per-job temp working dirs; process groups killed in `finally`/drop
 
 ## Change

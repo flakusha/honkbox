@@ -1,6 +1,6 @@
 # TASK: EXR format support in the artifact registry
 
-Status: proposed
+Status: in progress (2026-11-25; image-ops ingest/preview landed, write/sequences open)
 Priority: P2
 Epic: epic-binary-formats
 Owner: unassigned
@@ -18,6 +18,11 @@ read-only fixture files; no GPU slot for sniffing.
 - Add the EXR registry row and a small fixture-based read test.
 - Reuse the artifact preview/map vocabulary; do not add a second preview path.
 - Record the chosen route and license verdict in the ticket before code lands.
+
+## Verification Notes (2026-11-25)
+
+- EXR magic sniff and image-ops decode are landed in `crates/server/src/formats.rs` and `crates/server/src/routes/image_ops_exec.rs`; the original is emitted as `map` and a tonemapped PNG as `preview`.
+- General EXR write, animation sequences and scene-linear mastering remain unimplemented. Do not mark the full ticket done from the ingest/preview slice.
 
 ## Non-goals
 

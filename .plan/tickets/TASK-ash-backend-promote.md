@@ -1,46 +1,41 @@
-# TASK: Promote the ash Vulkan backend slices
+# TASK: Make the Ash backend compile-reachable and HTTP-selectable
 
 Status: proposed
-Priority: P1
+Priority: P0
 Epic: epic-sd-native-backend
 Owner: unassigned
-Acceptance: all GPU-verified commits on `feat/ash-vulkan-backend`, including the
-pending SDXL-inspection slice, land on master; `FEAT-ash-vulkan-backend.md`
-(already committed on the branch) is reconciled with the landed slice record;
-`AshSdPipeline::generate` renders a deterministic fixture from a user checkpoint
-using Vulkan compute only; missing capabilities return a named
-`VkError::InsufficientCapacity`; every shader carries a `// Provenance:` line;
-dangling `ReviewedAsh-*.md` references are replaced with live paths.
-Verification: `cargo test --locked -p honkbox-ash-backend --features experimental-ash-sd`,
-`bun run check`, `bun run ci` (regenerate generated snapshots after merge).
-Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md`
-§2-§5. Resources: Vulkan GPU required for final acceptance; ownership of the
-rebase/merge is a human decision before this ticket starts.
+Acceptance: `serve --sd-backend ash-sd` and CLI `generate` share one compile-reachable Ash constructor; absent-feature builds reject Ash selection and do not advertise it; generated API snapshots match; the epic records crate/CLI/HTTP states separately.
+Verification: `cargo check --locked -p honkbox-server --features ash-sd`, `cargo test --locked -p honkbox-server --features ash-sd`, `cargo test --locked -p honkbox-server`, `bun run codegen:check`, `bun run check`; one opted-in real-checkpoint smoke render on one exclusive device.
+Links: `.tmp/research/ash-promotion-refresh-2026-11-25.md` §3.1, `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-22.md` §2-§5, `FEAT-ash-vulkan-backend.md`.
+Resources: owner-controlled merge/promotion; normal server tests for feature/capability truth; one exclusive GPU lease only for the opt-in smoke render.
 
-## Verified 2026-11-24 (pre-landing)
+## Verified master baseline (2026-11-25)
 
-Branch `feat/ash-vulkan-backend` @ `fc0ac5f`: 48 ahead / 11 behind master
-`07c5adf` (merge base `db95fb3`). Collision files changed on both sides:
-`Cargo.lock`, `crates/api-types/src/lib.rs`, `crates/server/src/main.rs`,
-`packages/web-ui/src/gen/api-types.ts`, `packages/web-ui/src/gen/openapi.json`.
-Pending uncommitted SDXL slice: modified `checkpoint_family.rs`, `lib.rs`,
-`server/src/main.rs`; untracked `ash-backend/README.md`, `src/sdxl.rs`,
-`tests/sdxl.rs` (per-test unique temp files with `Drop` teardown).
-All 13 shaders carry provenance lines. Five real SD 1.5 checkpoints pass
-`models inspect-ash`; `generate` still returns a named sampling error, so
-fixture rendering is not yet met. 12 dangling `ReviewedAsh-*.md` refs remain in
-7 files; the live doc is the research note above. Sweep refs only after merge —
-the same files are modified on the branch.
+- **[FACT]** `crates/ash-backend` implements reduced SD1.5 generation, SD2 header/spec acceptance, SDXL inspection and provenance-checked shaders. This is crate implementation, not HTTP availability.
+- **[FACT]** `crates/server/src/main.rs:196,225,976-1023` contains CLI `generate`/diagnostic Ash code behind `cfg(feature = "ash-sd")`.
+- **[FACT]** `crates/server/Cargo.toml:88-137` declares only empty `experimental-ash-sd = []`; it declares neither `ash-sd` nor a `honkbox-ash-backend` dependency. The CLI cfg path is therefore not manifest-reachable on master.
+- **[FACT]** HTTP `serve` calls `backends::make_sd` (`main.rs:677`); `SdBackend` has only `Stub` and `SdCpp` (`backends.rs:101-128`).
+- **[FACT]** `routes/capabilities.rs:212` derives `experimental_ash_sd` from the empty feature, so capability output can claim Ash without a compile-reachable pipeline.
+- **[UNKNOWN]** No compile, GPU correctness, image-quality, latency or VRAM result was produced by this planning pass.
 
 ## Change
 
-- Commit or drop the pending SDXL slice; resolve the five collision files,
-  regenerate TS/OpenAPI snapshots, then land the branch (rebase/merge chosen by owner).
-- Reconcile `FEAT-ash-vulkan-backend.md` slice history with landed commits.
-- Close the generate gap: bias path, EOS pooling, fused-QKV parity need a real checkpoint.
-- Sweep dangling research references after merge; add the deferred `// Provenance:`
-  check to `bun run spdx` (research §3 trigger was a second shader — 13 have landed).
+1. Forward one real `ash-sd` feature through `honkbox-server`, add the backend dependency, and remove the empty `experimental-ash-sd` feature.
+2. Share one constructor between CLI `generate` and HTTP `serve`; extend the existing backend enum rather than growing a second convention. Keep Stub/SdCpp behavior unchanged.
+3. Accept `--sd-backend ash-sd` only when that path is compiled. Unsupported builds return a named configuration error before server startup.
+4. Derive `experimental_ash_sd` from the real constructor path, not an empty marker. Regenerate `api-types.ts`/OpenAPI only after behavior changes.
+5. Add default/feature-on/feature-off selection and capability tests, then run the existing Ash tests. A real checkpoint smoke render remains opt-in evidence; no test downloads or bundles weights.
+6. Reconcile `FEAT-ash-vulkan-backend.md` slice history and any branch-only work during the owner-chosen merge. Do not use this ticket to re-file reduced generation, SD2 specs, SDXL inspection, readiness markers, or upscaler spikes.
+
+## Acceptance detail
+
+- [ ] Default server build neither accepts `ash-sd` nor advertises it.
+- [ ] `--features ash-sd` compiles the shared constructor and both CLI/HTTP selection paths.
+- [ ] HTTP capability output matches actual compiled selection; generated snapshots stay in sync.
+- [ ] Missing Vulkan capabilities fail by name rather than returning a fake image or silently selecting another backend.
+- [ ] Existing Stub/SdCpp tests pass with and without the feature.
+- [ ] Opt-in smoke evidence records checkpoint digest/license, device/driver and output hash; absence of hardware remains an explicit unmeasured result.
 
 ## Non-goals
 
-Replacing the diffusers backend, new licensing policy, dispatch changes.
+Full SD2/SDXL generation, Ash LLM, new public performance flags, automatic model downloads, replacing the diffusers backend, or claiming parity/throughput without the separate evidence tickets.

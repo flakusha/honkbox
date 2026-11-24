@@ -6,7 +6,7 @@ Epic: epic-model-feedback
 Owner: unassigned
 Acceptance: a headless Blender bake job declares source mesh, UV/map targets, bake type, resolution, and output paths; results are deterministic and logged.
 Verification: `bun run test:server`, opt-in local Blender fixture
-Links: `.tmp/research/ReviewedCreative-BakingModels.md`
+Links: `.tmp/research/creative-pipeline-promotion-2026-11-25.md`
 Resources: per-job temp `.blend` and map dirs; no shared Blender process
 
 ## Change

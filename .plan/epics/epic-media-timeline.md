@@ -3,7 +3,8 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedExpansion-TimelineEditing.md`
+Research: `.tmp/research/media-video-normalization-and-repair-2026-11-24.md`,
+`.tmp/research/media-audio-normalization-and-cleanup-2026-11-24.md`
 
 ## Scope
 

@@ -3,8 +3,8 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedFullCycle-GameEngines.md`,
-`ReviewedFullCycle-LoopLore-Acceleration.md`
+Research: `.tmp/research/loop-lore-godot-actionables.md`,
+`.tmp/research/shaders-materials-uiux-asset-pipeline-2026-11-20.md`
 
 ## Scope
 

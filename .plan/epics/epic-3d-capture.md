@@ -3,8 +3,8 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedFullCycle-3D.md`,
-`ReviewedFullCycle-Blender-Addons.md` (NeRF/3DGS bridges)
+Research: `.tmp/research/splat-generation-rendering-idol-vkgs-2026-11-20.md`,
+`.tmp/research/loop-lore-godot-actionables.md`
 
 ## Scope
 

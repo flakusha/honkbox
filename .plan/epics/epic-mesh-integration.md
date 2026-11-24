@@ -3,7 +3,8 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedMesh-*.md`
+Research: `.tmp/research/media-transport-federation-2026-11-20.md`,
+`.tmp/research/gen-flows-props-characters-locations-2026-11-20.md`
 
 ## Scope
 
