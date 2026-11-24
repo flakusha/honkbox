@@ -481,7 +481,6 @@ impl Default for PythonConfig {
     }
 }
 
-
 /// How an operator-declared app is launched. Config-only: no HTTP request may
 /// name a binary, installation root or script.
 ///
@@ -2271,15 +2270,18 @@ fn managed_app_config(
         .map_err(|e| format!("{table}.{e}"))?;
     let resource_kind = match raw.resource_kind.as_deref() {
         None => default_kind,
-        Some(value) => ManagedAppResource::parse(value)
-            .map_err(|e| format!("{table}.{e}"))?,
+        Some(value) => ManagedAppResource::parse(value).map_err(|e| format!("{table}.{e}"))?,
     };
     let host = raw.host.unwrap_or_else(|| "127.0.0.1".to_owned());
     if host != "127.0.0.1" && host != "::1" && host != "localhost" && host != "unix" {
-        return Err(format!("{table}.host must be loopback or \"unix\", got {host:?}"));
+        return Err(format!(
+            "{table}.host must be loopback or \"unix\", got {host:?}"
+        ));
     }
     if host == "unix" && resource_kind == ManagedAppResource::Comfy {
-        return Err(format!("{table}.host = \"unix\" is not supported by ComfyUI"));
+        return Err(format!(
+            "{table}.host = \"unix\" is not supported by ComfyUI"
+        ));
     }
     let mut out = ManagedAppConfig::new(resource_kind);
     out.enabled = raw.enabled.unwrap_or(false);

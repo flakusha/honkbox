@@ -303,7 +303,10 @@ pub(crate) fn route_label(path: &str) -> &'static str {
                 Some("/v1/apps/{id}/start")
             } else if path.starts_with("/v1/apps/") && path.ends_with("/stop") {
                 Some("/v1/apps/{id}/stop")
-            } else if path.strip_prefix("/v1/apps/").is_some_and(|rest| !rest.contains('/')) {
+            } else if path
+                .strip_prefix("/v1/apps/")
+                .is_some_and(|rest| !rest.contains('/'))
+            {
                 Some("/v1/apps/{id}")
             } else if path.starts_with("/comfyui/history/") {
                 Some("/comfyui/history/{id}")

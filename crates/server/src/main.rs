@@ -477,9 +477,11 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // The attached-backend endpoint is config-only; clone before the tools
     // snapshot moves into the startup probe.
     let attach_url = loaded.tools.llama_server_url.clone();
-    let comfyui_url = loaded.tools.comfyui_url.clone().unwrap_or_else(|| {
-        honkbox_external_tools::DEFAULT_COMFYUI_URL.to_owned()
-    });
+    let comfyui_url = loaded
+        .tools
+        .comfyui_url
+        .clone()
+        .unwrap_or_else(|| honkbox_external_tools::DEFAULT_COMFYUI_URL.to_owned());
     let cfg = loaded.models;
     // REQ-6 Option A: install the resolved admission-queue bound before any
     // route can acquire the GPU slot.

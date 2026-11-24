@@ -157,7 +157,6 @@ fn png_data_uri(width: u32, height: u32) -> String {
     )
 }
 
-
 /// A linear 2x2 EXR with an HDR red sample (4.0), via the same `image`
 /// encoder the registry probe compiles in. Scanline container, RGBA float.
 fn exr_data_uri() -> String {
@@ -1010,7 +1009,10 @@ async fn exr_input_is_tonemapped_and_emits_map_and_preview() {
     let decoded = image::load_from_memory(&png).expect("output decodes");
     assert_eq!((decoded.width(), decoded.height()), (2, 2));
     let red = decoded.to_rgba8().get_pixel(0, 0).0[0];
-    assert!((200..250).contains(&red), "HDR 4.0 compressed, not clipped: {red}");
+    assert!(
+        (200..250).contains(&red),
+        "HDR 4.0 compressed, not clipped: {red}"
+    );
 
     let mut kinds = Vec::new();
     while kinds.len() < 2 {

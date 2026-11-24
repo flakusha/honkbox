@@ -248,7 +248,6 @@ pub(super) fn decode_admitted_input(
     }
 }
 
-
 /// Map linear EXR scene-referred floats to display-referred LDR pixels:
 /// Reinhard compression (`v / (1 + v)`), then sRGB transfer. Values are
 /// clamped defensively so NaN/infinite EXR samples cannot poison the byte
@@ -320,12 +319,10 @@ fn decode_exr(raw: &[u8]) -> Result<image::DynamicImage, ImageOpWorkError> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(raw));
     reader.set_format(image::ImageFormat::OpenExr);
     reader.limits(image_decode_limits());
-    let decoded = reader
-        .decode()
-        .map_err(|e| ImageOpWorkError::Bad {
-            message: format!("cannot decode exr image: {e}"),
-            code: "invalid_image_op_inputs",
-        })?;
+    let decoded = reader.decode().map_err(|e| ImageOpWorkError::Bad {
+        message: format!("cannot decode exr image: {e}"),
+        code: "invalid_image_op_inputs",
+    })?;
     Ok(tonemap_exr(decoded))
 }
 
