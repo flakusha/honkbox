@@ -1,6 +1,6 @@
 # TASK: Decide on salvo.rs as the server framework
 
-Status: in progress (2026-11-24 user override; bounded spike in flight)
+Status: done (2026-11-24 user override executed; bounded spike landed in `12e7bd7`)
 Priority: P3
 Epic: epic-salvo-migration
 Owner: unassigned
@@ -16,7 +16,7 @@ work is claimed before it is run.
 Verification: research record `.tmp/research/salvo-migration-and-support-2026-11-24.md`
 (upstream docs + local grep at master `07c5adf`). The spike owns the
 build/test commands
-(`CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test health`,
+(`CARGO_TARGET_DIR=/tmp/cargo-honkbox-salvo cargo test --locked -p honkbox-server --test salvo_version`,
 `bun run check`,
 `bun run codegen:check`).
 Links: `.tmp/research/salvo-migration-and-support-2026-11-24.md`;

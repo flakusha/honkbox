@@ -1,6 +1,6 @@
 # TASK: Salvo migration spike — one route, one test, one artifact
 
-Status: in progress
+Status: done (2026-11-24; landed in `12e7bd7`)
 Priority: P1
 Epic: epic-salvo-migration
 Owner: unassigned
