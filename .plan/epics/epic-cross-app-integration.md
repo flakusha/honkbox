@@ -3,8 +3,10 @@
 Status: proposed
 Priority: P2
 Owner: unassigned
-Research: `.tmp/research/ReviewedFullCycle-LoopLore-Acceleration.md`,
-`ReviewedFullCycle-GameEngines.md`
+Research: `.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
+`.tmp/research/loop-lore-godot-actionables.md`,
+`.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md` (honkbox half; loop-lore half in
+`../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`)
 
 ## Scope
 
@@ -20,6 +22,9 @@ provider routing, engine projects, and MCP calls. No MCP surface in honkbox.
 
 A loop-lore Custom provider pointed at honkbox completes one chat turn and one
 image job with observable `/v1/jobs` + `/v1/events` state; no double GPU admission.
+Closed-loop runs additionally require manifest-last publication on the honkbox side
+and the loop-lore DevelopmentRun/version/approval spine; SSE remains a hint, never
+publication proof.
 
 ## Verification
 

@@ -4,9 +4,9 @@ Status: proposed
 Priority: P2
 Epic: epic-editor-integration
 Owner: unassigned
-Acceptance: a Krita Python plugin reads the active document, sends one bounded image-op command, and imports the returned PNG/ORA result as a layer.
+Acceptance: a Krita Python plugin reads the active document, sends one bounded image-op command, and imports the returned PNG result as a new layer (ORA return only after `TASK-ora-output` lands).
 Verification: local Krita GUI fixture; no CI editor install
-Links: `.tmp/research/ReviewedImageEdit-Clients.md` §Krita
+Links: `.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md`, `.tmp/research/media-image-intermediates-and-enhancement-2026-11-24.md` (supersedes historical `ReviewedImageEdit-Clients.md` §Krita)
 Resources: throwaway Krita resource dir per test; no shared document state
 
 ## Change

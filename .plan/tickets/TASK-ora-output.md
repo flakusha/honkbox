@@ -6,7 +6,7 @@ Epic: epic-editor-integration
 Owner: unassigned
 Acceptance: editor jobs can emit `result.ora` with stable `stack.xml`, relative paths, and PNG layers, alongside the flat output.
 Verification: `bun run test:server`, `cargo test --locked -p honkbox-server`
-Links: `.tmp/research/ReviewedImageEdit-Clients.md` §Layered interchange
+Links: `.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md` (H-DCC2; supersedes historical `ReviewedImageEdit-Clients.md` §Layered interchange)
 Resources: per-test ORA dirs; no shared layer cache
 
 ## Change

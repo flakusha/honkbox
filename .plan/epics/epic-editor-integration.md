@@ -3,7 +3,11 @@
 Status: proposed
 Priority: P1
 Owner: unassigned
-Research: `.tmp/research/ReviewedImageEdit-*.md`
+Research: `.tmp/research/media-image-intermediates-and-enhancement-2026-11-24.md`,
+`.tmp/research/content-experience-gaps-2026-11-20.md`,
+`.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md` (honkbox-owned DCC items;
+consumer spine in `../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`).
+Historical `ReviewedImageEdit-Clients.md` links in member tickets are superseded by the above.
 
 ## Scope
 

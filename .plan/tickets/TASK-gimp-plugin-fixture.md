@@ -4,9 +4,9 @@ Status: proposed
 Priority: P2
 Epic: epic-editor-integration
 Owner: unassigned
-Acceptance: a GIMP 3 Python plug-in sends one bounded image-op command to honkbox and inserts the returned layer into the open image.
+Acceptance: a GIMP 3 Python plug-in sends one bounded image-op command to honkbox and inserts the returned PNG as a new layer (ORA return only after `TASK-ora-output` lands).
 Verification: local GIMP 3 fixture; no CI editor install
-Links: `.tmp/research/ReviewedImageEdit-Clients.md` §GIMP 3
+Links: `.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md`, `.tmp/research/media-image-intermediates-and-enhancement-2026-11-24.md` (supersedes historical `ReviewedImageEdit-Clients.md` §GIMP 3)
 Resources: throwaway GIMP profile and image per test; no shared PDB instance
 
 ## Change
