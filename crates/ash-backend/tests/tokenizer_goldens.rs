@@ -19,6 +19,7 @@
 //! ```
 //! `decoded` is optional; without it the vector's `text` is the expected
 //! round trip. `limit` is optional and defaults to no caller limit.
+#![cfg(feature = "ash-compute")]
 
 use honkbox_ash_backend::tokenizer::{ClipTokenizer, Tokenizer, TokenizerMetadata, UnigramAsset};
 use serde::Deserialize;
