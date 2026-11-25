@@ -17,6 +17,7 @@ Resources: deterministic tiny synthetic tensors and sparse safetensors fixtures 
 - **[FACT]** Pinned Qwen key conversion explicitly maps Diffusers `down_blocks`/`up_blocks`, resnets, shortcuts, samplers, quant convolutions, mid blocks and output norms/convolutions (`vendor/diffusion-rs/sys/stable-diffusion.cpp/src/name_conversion.cpp:1253-1360`).
 - **[FACT]** `CheckpointMap` strictly validates safetensors headers, shapes, offsets and payload bounds; its generic alias fallback is SD1.5-oriented (`crates/ash-backend/src/checkpoint.rs:90-258`). Family aliases must therefore be explicit, not guessed.
 - **[FACT]** Index S8 requires an explicit spec/key map per family and prohibits silent SD1.5 scale/channel reuse. MOSS and Qwen candidates consume this seam.
+- **[FACT]** S8 completion adds `crates/ash-backend/src/vae_family_adapters.rs`: family-specific two-block geometry, synthetic encode/decode, named missing-block/shape guards, CPU/GPU parity tests and an opt-in real-artifact header evidence test. License terms are operator-supplied; no gate work.
 
 ## Dependencies
 

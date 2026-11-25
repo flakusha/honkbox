@@ -32,6 +32,8 @@
 //!   the kernels above (weights come from the caller, never bundled).
 //! - [`vae_family`]: [`vae_family::VaeFamilySpec`], explicit FLUX.2-small and
 //!   Qwen-Image-2.1 channel, normalization and key contracts (no SD1.5 fallback).
+//! - [`vae_family_adapters`]: [`vae_family_adapters::FamilyAdapter`], synthetic
+//!   two-block decode geometry over the pinned family specs.
 //! - [`sampler`]: [`sampler::DdimStep`], one DDIM eta=0 scheduler update, plus
 //!   deterministic seed-derived latent noise.
 //! - [`ddim_sampler`]: [`ddim_sampler::DdimSampler`], the schedule loop over
@@ -310,6 +312,8 @@ pub mod unet_upsample;
 pub mod vae_decode;
 #[cfg(feature = "ash-sd")]
 pub mod vae_family;
+#[cfg(feature = "ash-sd")]
+pub mod vae_family_adapters;
 #[cfg(feature = "ash-sd")]
 pub mod vae_real;
 

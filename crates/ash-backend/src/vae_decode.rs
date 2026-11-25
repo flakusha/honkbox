@@ -84,118 +84,120 @@ impl VaeDecode {
     }
 }
 
+/// Independent CPU reference for one decoder block.
+///
+/// Signed index math is checked by the shape guards, so the pedantic cast
+/// lints add no safety here.
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+pub fn cpu_decode_reference(
+    latent: &[f32],
+    up_shape: ConvTransposeShape,
+    groups: usize,
+    eps: f32,
+    proj_shape: ConvShape,
+    weights: &VaeWeights<'_>,
+) -> Vec<f32> {
+    let in_plane = up_shape.in_h * up_shape.in_w;
+    let mut hidden = Vec::new();
+    for n in 0..up_shape.batch {
+        for oc in 0..up_shape.out_c {
+            for oh in 0..up_shape.out_h {
+                for ow in 0..up_shape.out_w {
+                    let mut sum = weights.up_bias[oc];
+                    for ic in 0..up_shape.in_c {
+                        for kh in 0..up_shape.kernel {
+                            let ih = oh as isize + up_shape.padding as isize
+                                - (kh * up_shape.stride) as isize;
+                            if ih < 0 || ih % up_shape.stride as isize != 0 {
+                                continue;
+                            }
+                            let ih = ih / up_shape.stride as isize;
+                            if ih >= up_shape.in_h as isize {
+                                continue;
+                            }
+                            for kw in 0..up_shape.kernel {
+                                let iw = ow as isize + up_shape.padding as isize
+                                    - (kw * up_shape.stride) as isize;
+                                if iw < 0 || iw % up_shape.stride as isize != 0 {
+                                    continue;
+                                }
+                                let iw = iw / up_shape.stride as isize;
+                                if iw >= up_shape.in_w as isize {
+                                    continue;
+                                }
+                                let in_index = (n * up_shape.in_c + ic) * in_plane
+                                    + ih as usize * up_shape.in_w
+                                    + iw as usize;
+                                let w = ((ic * up_shape.out_c + oc) * up_shape.kernel + kh)
+                                    * up_shape.kernel
+                                    + kw;
+                                sum += latent[in_index] * weights.up_weights[w];
+                            }
+                        }
+                    }
+                    hidden.push(sum);
+                }
+            }
+        }
+    }
+
+    let plane = up_shape.out_h * up_shape.out_w;
+    let cpg = up_shape.out_c / groups;
+    let count = (cpg * plane) as f32;
+    let mut normalized = vec![0.0_f32; hidden.len()];
+    for n in 0..up_shape.batch {
+        for group in 0..groups {
+            let mut mean = 0.0;
+            for c in group * cpg..(group + 1) * cpg {
+                for s in 0..plane {
+                    mean += hidden[n * up_shape.out_c * plane + c * plane + s];
+                }
+            }
+            mean /= count;
+            let mut variance = 0.0;
+            for c in group * cpg..(group + 1) * cpg {
+                for s in 0..plane {
+                    let delta = hidden[n * up_shape.out_c * plane + c * plane + s] - mean;
+                    variance += delta * delta;
+                }
+            }
+            variance /= count;
+            let inv_std = 1.0 / (variance + eps).sqrt();
+            for c in group * cpg..(group + 1) * cpg {
+                for s in 0..plane {
+                    let index = n * up_shape.out_c * plane + c * plane + s;
+                    let x = (hidden[index] - mean) * inv_std;
+                    normalized[index] = x * weights.norm_gamma[c] + weights.norm_beta[c];
+                }
+            }
+        }
+    }
+    let activated: Vec<f32> = normalized.iter().map(|x| x / (1.0 + (-x).exp())).collect();
+
+    let mut out = Vec::new();
+    let out_plane = proj_shape.out_h * proj_shape.out_w;
+    for n in 0..proj_shape.batch {
+        for oc in 0..proj_shape.out_c {
+            for pos in 0..out_plane {
+                let mut sum = weights.proj_bias[oc];
+                for ic in 0..proj_shape.in_c {
+                    sum += activated[(n * proj_shape.in_c + ic) * plane + pos]
+                        * weights.proj_weights[oc * proj_shape.in_c + ic];
+                }
+                out.push(sum);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Test-only reference over tiny fixed shapes; signed index math is checked
-    // by the asserts, so the pedantic cast lints add no safety here.
-    #[allow(
-        clippy::cast_possible_wrap,
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss
-    )]
-    fn cpu_decode(
-        latent: &[f32],
-        up_shape: ConvTransposeShape,
-        groups: usize,
-        eps: f32,
-        proj_shape: ConvShape,
-        weights: &VaeWeights<'_>,
-    ) -> Vec<f32> {
-        let in_plane = up_shape.in_h * up_shape.in_w;
-        let mut hidden = Vec::new();
-        for n in 0..up_shape.batch {
-            for oc in 0..up_shape.out_c {
-                for oh in 0..up_shape.out_h {
-                    for ow in 0..up_shape.out_w {
-                        let mut sum = weights.up_bias[oc];
-                        for ic in 0..up_shape.in_c {
-                            for kh in 0..up_shape.kernel {
-                                let ih = oh as isize + up_shape.padding as isize
-                                    - (kh * up_shape.stride) as isize;
-                                if ih < 0 || ih % up_shape.stride as isize != 0 {
-                                    continue;
-                                }
-                                let ih = ih / up_shape.stride as isize;
-                                if ih >= up_shape.in_h as isize {
-                                    continue;
-                                }
-                                for kw in 0..up_shape.kernel {
-                                    let iw = ow as isize + up_shape.padding as isize
-                                        - (kw * up_shape.stride) as isize;
-                                    if iw < 0 || iw % up_shape.stride as isize != 0 {
-                                        continue;
-                                    }
-                                    let iw = iw / up_shape.stride as isize;
-                                    if iw >= up_shape.in_w as isize {
-                                        continue;
-                                    }
-                                    let in_index = (n * up_shape.in_c + ic) * in_plane
-                                        + ih as usize * up_shape.in_w
-                                        + iw as usize;
-                                    let w = ((ic * up_shape.out_c + oc) * up_shape.kernel + kh)
-                                        * up_shape.kernel
-                                        + kw;
-                                    sum += latent[in_index] * weights.up_weights[w];
-                                }
-                            }
-                        }
-                        hidden.push(sum);
-                    }
-                }
-            }
-        }
-
-        let plane = up_shape.out_h * up_shape.out_w;
-        let cpg = up_shape.out_c / groups;
-        let count = (cpg * plane) as f32;
-        let mut normalized = vec![0.0_f32; hidden.len()];
-        for n in 0..up_shape.batch {
-            for group in 0..groups {
-                let mut mean = 0.0;
-                for c in group * cpg..(group + 1) * cpg {
-                    for s in 0..plane {
-                        mean += hidden[n * up_shape.out_c * plane + c * plane + s];
-                    }
-                }
-                mean /= count;
-                let mut variance = 0.0;
-                for c in group * cpg..(group + 1) * cpg {
-                    for s in 0..plane {
-                        let delta = hidden[n * up_shape.out_c * plane + c * plane + s] - mean;
-                        variance += delta * delta;
-                    }
-                }
-                variance /= count;
-                let inv_std = 1.0 / (variance + eps).sqrt();
-                for c in group * cpg..(group + 1) * cpg {
-                    for s in 0..plane {
-                        let index = n * up_shape.out_c * plane + c * plane + s;
-                        let x = (hidden[index] - mean) * inv_std;
-                        normalized[index] = x * weights.norm_gamma[c] + weights.norm_beta[c];
-                    }
-                }
-            }
-        }
-        let activated: Vec<f32> = normalized.iter().map(|x| x / (1.0 + (-x).exp())).collect();
-
-        let mut out = Vec::new();
-        let out_plane = proj_shape.out_h * proj_shape.out_w;
-        for n in 0..proj_shape.batch {
-            for oc in 0..proj_shape.out_c {
-                for pos in 0..out_plane {
-                    let mut sum = weights.proj_bias[oc];
-                    for ic in 0..proj_shape.in_c {
-                        sum += activated[(n * proj_shape.in_c + ic) * plane + pos]
-                            * weights.proj_weights[oc * proj_shape.in_c + ic];
-                    }
-                    out.push(sum);
-                }
-            }
-        }
-        out
-    }
 
     #[test]
     fn vae_decode_slice_dispatches_on_vulkan_device() {
@@ -253,7 +255,7 @@ mod tests {
         let actual = decoder
             .run(&latent, up_shape, 2, 1e-5, proj_shape, &weights)
             .expect("gpu dispatch");
-        let expected = cpu_decode(&latent, up_shape, 2, 1e-5, proj_shape, &weights);
+        let expected = cpu_decode_reference(&latent, up_shape, 2, 1e-5, proj_shape, &weights);
         assert_eq!(actual.len(), 3 * 2 * 2);
         for (got, want) in actual.iter().zip(&expected) {
             assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
