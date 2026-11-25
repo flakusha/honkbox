@@ -195,7 +195,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-ash-vulkan-backend.md",
       "title": "Pure-Vulkan (`ash`) inference backend",
-      "status": "in_progress",
+      "status": "done",
       "srcRefs": [
         "src/lib.rs"
       ],
@@ -588,9 +588,33 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-ash-backend-promote.md",
       "title": "Make the Ash backend compile-reachable and HTTP-selectable",
-      "status": "in_progress",
+      "status": "done",
       "srcRefs": [
         "src/main.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-block-level-goldens",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-block-level-goldens.md",
+      "title": "Block-level goldens with first-divergence reporting",
+      "status": "proposed",
+      "srcRefs": [
+        "src/unet_real.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-block-trait",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-block-trait.md",
+      "title": "Formal Block trait for chain-of-blocks dispatch",
+      "status": "proposed",
+      "srcRefs": [
+        "src/unet_attention.rs",
+        "src/unet_input.rs",
+        "src/unet_traversal.rs"
       ],
       "related": []
     },
@@ -605,6 +629,18 @@
         "src/mlp.rs",
         "src/model.rs",
         "src/norm.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-diffusion-scheduler-host",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-diffusion-scheduler-host.md",
+      "title": "Host-math diffusion schedulers (Euler-a, DPM++-2M) with upstream parity",
+      "status": "proposed",
+      "srcRefs": [
+        "src/ddim_sampler.rs",
+        "src/sampler.rs"
       ],
       "related": []
     },
@@ -660,6 +696,15 @@
         "src/checkpoint.rs",
         "src/metadata.rs"
       ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-lavapipe-ci",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-lavapipe-ci.md",
+      "title": "Lavapipe CPU-Vulkan correctness job plus bless-then-read rule",
+      "status": "proposed",
+      "srcRefs": [],
       "related": []
     },
     {
@@ -728,6 +773,29 @@
       "related": []
     },
     {
+      "id": "TASK-ash-shader-pipeline-cache",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-shader-pipeline-cache.md",
+      "title": "Build-time shaders plus persisted pipeline cache",
+      "status": "proposed",
+      "srcRefs": [
+        "src/compute.rs",
+        "src/device.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-taesd-decoder",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-taesd-decoder.md",
+      "title": "TAESD tiny decoder as first non-Stub VAE alternative",
+      "status": "proposed",
+      "srcRefs": [
+        "src/vae_decode.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-ash-tokenizer-framework",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-ash-tokenizer-framework.md",
@@ -778,11 +846,33 @@
       "related": []
     },
     {
+      "id": "TASK-ash-vulkan-dequant-kernel",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-vulkan-dequant-kernel.md",
+      "title": "Vulkan GGUF dequant kernel against the host oracle",
+      "status": "proposed",
+      "srcRefs": [
+        "src/checkpoint.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-audio-resampler-quality",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-audio-resampler-quality.md",
       "title": "Resampler quality",
       "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-audio-residency-contention-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-audio-residency-contention-policy.md",
+      "title": "Audio/LLM residency slot-contention policy",
+      "status": "proposed",
       "srcRefs": [
         "src/lib.rs"
       ],
@@ -938,7 +1028,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-blender-bake-extended-maps.md",
       "title": "Blender bake extension (metallic/AO/height + thumbnail)",
-      "status": "in_progress",
+      "status": "done",
       "srcRefs": [
         "src/blender_asset.py",
         "src/lib.rs"
@@ -1011,10 +1101,12 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-capability-honesty-gate.md",
       "title": "Capability honesty gate",
-      "status": "proposed",
+      "status": "done",
       "srcRefs": [
         "src/lib.rs",
-        "src/routes.rs"
+        "src/routes.rs",
+        "src/routes/blender.rs",
+        "src/routes/capabilities.rs"
       ],
       "related": []
     },
@@ -1122,8 +1214,10 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-content-record-provenance.md",
       "title": "Embed generation records in delivered images",
-      "status": "proposed",
-      "srcRefs": [],
+      "status": "done",
+      "srcRefs": [
+        "src/image_metadata.rs"
+      ],
       "related": []
     },
     {
@@ -1433,6 +1527,15 @@
       "related": []
     },
     {
+      "id": "TASK-image-ops-manifest-last",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-image-ops-manifest-last.md",
+      "title": "Manifest-last image-op publication",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
       "id": "TASK-image-tagging-spike",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-image-tagging-spike.md",
@@ -1453,6 +1556,58 @@
         "src/routes/images_edit.rs",
         "src/routes/images_inputs.rs"
       ],
+      "related": []
+    },
+    {
+      "id": "TASK-img-meta-comfyui-pair",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-img-meta-comfyui-pair.md",
+      "title": "ComfyUI prompt/workflow metadata pair",
+      "status": "proposed",
+      "srcRefs": [
+        "src/image_metadata.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-img-meta-exif-orientation",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-img-meta-exif-orientation.md",
+      "title": "Honor EXIF orientation on image inputs",
+      "status": "proposed",
+      "srcRefs": [
+        "src/routes/image_ops_exec.rs",
+        "src/routes/images_generate.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-img-meta-png-parameters",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-img-meta-png-parameters.md",
+      "title": "Embed A1111-style parameters chunk on PNG outputs",
+      "status": "done",
+      "srcRefs": [
+        "src/image_metadata.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-img-meta-preserve-forward",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-img-meta-preserve-forward.md",
+      "title": "Decide EXIF/XMP preserve-or-strip on transform",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-img-meta-webp-exif",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-img-meta-webp-exif.md",
+      "title": "WebP EXIF workflow/prompt write path",
+      "status": "proposed",
+      "srcRefs": [],
       "related": []
     },
     {
@@ -1509,6 +1664,59 @@
       "related": []
     },
     {
+      "id": "TASK-llm-constrained-output-eval",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-constrained-output-eval.md",
+      "title": "Constrained-output eval with checked-in goldens",
+      "status": "proposed",
+      "srcRefs": [
+        "src/backend.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-kv-spill-policy",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-kv-spill-policy.md",
+      "title": "Paged KV spill policy (Refuse default, SpillRam opt-in)",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-load-plan-admission",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-load-plan-admission.md",
+      "title": "Split LLM load-plan from run (admit before load)",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-moe-tier-offload",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-moe-tier-offload.md",
+      "title": "Tiered MoE expert offload for LLM worker",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-prefix-kv-reuse",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-prefix-kv-reuse.md",
+      "title": "Persistent prefix/KV reuse",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
       "id": "TASK-llm-prompt-cache",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-llm-prompt-cache.md",
@@ -1528,6 +1736,17 @@
       "title": "Speculative decoding spike (ngram-mod)",
       "status": "proposed",
       "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-speculative-model-draft",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-speculative-model-draft.md",
+      "title": "Model-based speculative draft-verify for LLM worker",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
       "related": []
     },
     {
@@ -1551,6 +1770,18 @@
       "srcRefs": [
         "src/lib.rs",
         "src/playground.ts"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-llm-vision-ingest-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-llm-vision-ingest-contract.md",
+      "title": "Vision-ingest tested contract (fixture + mmproj-less refusal)",
+      "status": "proposed",
+      "srcRefs": [
+        "src/backend.rs",
+        "src/lib.rs"
       ],
       "related": []
     },
@@ -1770,6 +2001,15 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-otio-sidecar.md",
       "title": "Deterministic OTIO sidecar",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-parity-recipe-rng-guard",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-parity-recipe-rng-guard.md",
+      "title": "Parity recipe table (SD1.5 first) plus RNG-mode guard",
       "status": "proposed",
       "srcRefs": [],
       "related": []
@@ -2495,7 +2735,9 @@
       "path": "src/backend.rs",
       "owners": [
         "TASK-ash-sampling-contract",
-        "TASK-inference-cache-correctness"
+        "TASK-inference-cache-correctness",
+        "TASK-llm-constrained-output-eval",
+        "TASK-llm-vision-ingest-contract"
       ]
     },
     {
@@ -2541,7 +2783,8 @@
         "FEAT-ash-embeddinggemma-2",
         "FEAT-ash-moss-image-family",
         "TASK-ash-gguf-reader",
-        "TASK-ash-vae-family-adapters"
+        "TASK-ash-vae-family-adapters",
+        "TASK-ash-vulkan-dequant-kernel"
       ]
     },
     {
@@ -2555,7 +2798,8 @@
       "owners": [
         "TASK-ash-decoder-ops",
         "TASK-ash-llm-evidence-integration",
-        "TASK-ash-rrdb-upscaler-spike"
+        "TASK-ash-rrdb-upscaler-spike",
+        "TASK-ash-shader-pipeline-cache"
       ]
     },
     {
@@ -2591,6 +2835,12 @@
       ]
     },
     {
+      "path": "src/ddim_sampler.rs",
+      "owners": [
+        "TASK-ash-diffusion-scheduler-host"
+      ]
+    },
+    {
       "path": "src/determinism.rs",
       "owners": [
         "FEAT-comfyui-workflow-pipeline",
@@ -2603,6 +2853,7 @@
     {
       "path": "src/device.rs",
       "owners": [
+        "TASK-ash-shader-pipeline-cache",
         "TASK-device-selection-rank-review",
         "TASK-vulkan-coopmat-baseline"
       ]
@@ -2699,6 +2950,14 @@
       ]
     },
     {
+      "path": "src/image_metadata.rs",
+      "owners": [
+        "TASK-content-record-provenance",
+        "TASK-img-meta-comfyui-pair",
+        "TASK-img-meta-png-parameters"
+      ]
+    },
+    {
       "path": "src/integrations/honkbox/capabilities.ts",
       "owners": [
         "BUG-capabilities-rerank-flag-without-ranker"
@@ -2749,6 +3008,7 @@
         "TASK-ash-sampling-contract",
         "TASK-ash-unsupported-conditioning-guards",
         "TASK-audio-resampler-quality",
+        "TASK-audio-residency-contention-policy",
         "TASK-audio-voices-loaded-backend-truth",
         "TASK-audiocpp-capabilities",
         "TASK-blender-bake-extended-maps",
@@ -2761,8 +3021,13 @@
         "TASK-gpu-slot-audit-hook",
         "TASK-inference-cache-correctness",
         "TASK-job-result-artifact-selection-metadata",
+        "TASK-llm-kv-spill-policy",
+        "TASK-llm-load-plan-admission",
+        "TASK-llm-moe-tier-offload",
+        "TASK-llm-speculative-model-draft",
         "TASK-llm-tool-choice-contract",
         "TASK-llm-vision-default",
+        "TASK-llm-vision-ingest-contract",
         "TASK-salvo-dto-schema-bridge",
         "TASK-sd-base-model-tags",
         "TASK-support-doc-truth",
@@ -3021,7 +3286,8 @@
     {
       "path": "src/routes/blender.rs",
       "owners": [
-        "FEAT-blender-job-route"
+        "FEAT-blender-job-route",
+        "TASK-capability-honesty-gate"
       ]
     },
     {
@@ -3046,6 +3312,7 @@
         "FEAT-comfyui-workflow-pipeline",
         "FEAT-residency-control-plane",
         "TASK-audio-voices-loaded-backend-truth",
+        "TASK-capability-honesty-gate",
         "TASK-fizgig-probe-honesty"
       ]
     },
@@ -3081,7 +3348,8 @@
       "path": "src/routes/image_ops_exec.rs",
       "owners": [
         "FEAT-image-output-formats",
-        "TASK-exr-format-support"
+        "TASK-exr-format-support",
+        "TASK-img-meta-exif-orientation"
       ]
     },
     {
@@ -3095,6 +3363,7 @@
       "path": "src/routes/images_generate.rs",
       "owners": [
         "TASK-ash-unsupported-conditioning-guards",
+        "TASK-img-meta-exif-orientation",
         "TASK-inference-cache-correctness",
         "TASK-job-result-artifact-selection-metadata"
       ]
@@ -3183,6 +3452,7 @@
       "path": "src/sampler.rs",
       "owners": [
         "FEAT-ash-moss-image-family",
+        "TASK-ash-diffusion-scheduler-host",
         "TASK-ash-flow-dit-substrate"
       ]
     },
@@ -3238,21 +3508,46 @@
       ]
     },
     {
+      "path": "src/unet_attention.rs",
+      "owners": [
+        "TASK-ash-block-trait"
+      ]
+    },
+    {
       "path": "src/unet_checkpoint.rs",
       "owners": [
         "TASK-ash-gguf-dequant"
       ]
     },
     {
+      "path": "src/unet_input.rs",
+      "owners": [
+        "TASK-ash-block-trait"
+      ]
+    },
+    {
       "path": "src/unet_real.rs",
       "owners": [
-        "BUG-ash-sd15-numerics"
+        "BUG-ash-sd15-numerics",
+        "TASK-ash-block-level-goldens"
+      ]
+    },
+    {
+      "path": "src/unet_traversal.rs",
+      "owners": [
+        "TASK-ash-block-trait"
       ]
     },
     {
       "path": "src/vad.rs",
       "owners": [
         "TASK-audiocpp-vad-decision"
+      ]
+    },
+    {
+      "path": "src/vae_decode.rs",
+      "owners": [
+        "TASK-ash-taesd-decoder"
       ]
     },
     {
@@ -3745,6 +4040,26 @@
       "to": "src/main.rs"
     },
     {
+      "from": "TASK-ash-block-level-goldens",
+      "kind": "produces",
+      "to": "src/unet_real.rs"
+    },
+    {
+      "from": "TASK-ash-block-trait",
+      "kind": "produces",
+      "to": "src/unet_attention.rs"
+    },
+    {
+      "from": "TASK-ash-block-trait",
+      "kind": "produces",
+      "to": "src/unet_input.rs"
+    },
+    {
+      "from": "TASK-ash-block-trait",
+      "kind": "produces",
+      "to": "src/unet_traversal.rs"
+    },
+    {
       "from": "TASK-ash-decoder-ops",
       "kind": "produces",
       "to": "src/compute.rs"
@@ -3763,6 +4078,16 @@
       "from": "TASK-ash-decoder-ops",
       "kind": "produces",
       "to": "src/norm.rs"
+    },
+    {
+      "from": "TASK-ash-diffusion-scheduler-host",
+      "kind": "produces",
+      "to": "src/ddim_sampler.rs"
+    },
+    {
+      "from": "TASK-ash-diffusion-scheduler-host",
+      "kind": "produces",
+      "to": "src/sampler.rs"
     },
     {
       "from": "TASK-ash-family-readiness-markers",
@@ -3915,6 +4240,21 @@
       "to": "src/routes/openai_chat.rs"
     },
     {
+      "from": "TASK-ash-shader-pipeline-cache",
+      "kind": "produces",
+      "to": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-shader-pipeline-cache",
+      "kind": "produces",
+      "to": "src/device.rs"
+    },
+    {
+      "from": "TASK-ash-taesd-decoder",
+      "kind": "produces",
+      "to": "src/vae_decode.rs"
+    },
+    {
       "from": "TASK-ash-tokenizer-framework",
       "kind": "produces",
       "to": "src/prompt.rs"
@@ -3970,7 +4310,17 @@
       "to": "src/vae_real.rs"
     },
     {
+      "from": "TASK-ash-vulkan-dequant-kernel",
+      "kind": "produces",
+      "to": "src/checkpoint.rs"
+    },
+    {
       "from": "TASK-audio-resampler-quality",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
       "kind": "produces",
       "to": "src/lib.rs"
     },
@@ -4085,6 +4435,16 @@
       "to": "src/routes.rs"
     },
     {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "produces",
+      "to": "src/routes/blender.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
       "from": "TASK-cheap-ops-spike",
       "kind": "produces",
       "to": "src/lib.rs"
@@ -4108,6 +4468,11 @@
       "from": "TASK-container-safety",
       "kind": "produces",
       "to": "src/ora.rs"
+    },
+    {
+      "from": "TASK-content-record-provenance",
+      "kind": "produces",
+      "to": "src/image_metadata.rs"
     },
     {
       "from": "TASK-controlnet-rendering",
@@ -4245,6 +4610,26 @@
       "to": "src/routes/images_inputs.rs"
     },
     {
+      "from": "TASK-img-meta-comfyui-pair",
+      "kind": "produces",
+      "to": "src/image_metadata.rs"
+    },
+    {
+      "from": "TASK-img-meta-exif-orientation",
+      "kind": "produces",
+      "to": "src/routes/image_ops_exec.rs"
+    },
+    {
+      "from": "TASK-img-meta-exif-orientation",
+      "kind": "produces",
+      "to": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-img-meta-png-parameters",
+      "kind": "produces",
+      "to": "src/image_metadata.rs"
+    },
+    {
       "from": "TASK-inference-cache-correctness",
       "kind": "produces",
       "to": "src/backend.rs"
@@ -4315,6 +4700,26 @@
       "to": "src/llama_server.rs"
     },
     {
+      "from": "TASK-llm-constrained-output-eval",
+      "kind": "produces",
+      "to": "src/backend.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
       "from": "TASK-llm-prompt-cache",
       "kind": "produces",
       "to": "src/config.rs"
@@ -4328,6 +4733,11 @@
       "from": "TASK-llm-prompt-cache",
       "kind": "produces",
       "to": "src/swap.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "produces",
+      "to": "src/lib.rs"
     },
     {
       "from": "TASK-llm-tool-choice-contract",
@@ -4348,6 +4758,16 @@
       "from": "TASK-llm-vision-default",
       "kind": "produces",
       "to": "src/playground.ts"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "produces",
+      "to": "src/backend.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "produces",
+      "to": "src/lib.rs"
     },
     {
       "from": "TASK-model-format-validation",
@@ -4507,6 +4927,12 @@
     {
       "from": "BUG-ash-sd15-numerics",
       "kind": "sibling",
+      "to": "TASK-ash-block-level-goldens",
+      "via": "src/unet_real.rs"
+    },
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "sibling",
       "to": "TASK-ash-flow-dit-substrate",
       "via": "src/timestep.rs"
     },
@@ -4591,6 +5017,12 @@
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -4663,6 +5095,30 @@
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -4670,6 +5126,12 @@
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -4795,6 +5257,12 @@
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs; src/routes/capabilities.rs"
     },
@@ -4814,7 +5282,7 @@
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
       "to": "TASK-capability-honesty-gate",
-      "via": "src/lib.rs; src/routes.rs"
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
     },
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
@@ -4879,6 +5347,30 @@
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -4886,6 +5378,12 @@
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -5161,6 +5659,12 @@
     {
       "from": "FEAT-ash-embeddinggemma-2",
       "kind": "sibling",
+      "to": "TASK-ash-vulkan-dequant-kernel",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
       "to": "TASK-vulkan-coopmat-baseline",
       "via": "src/llm.rs"
     },
@@ -5221,6 +5725,12 @@
     {
       "from": "FEAT-ash-moss-image-family",
       "kind": "sibling",
+      "to": "TASK-ash-diffusion-scheduler-host",
+      "via": "src/sampler.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
       "to": "TASK-ash-flow-dit-substrate",
       "via": "src/attention.rs; src/model.rs; src/sampler.rs"
     },
@@ -5259,6 +5769,12 @@
       "kind": "sibling",
       "to": "TASK-ash-vae-family-adapters",
       "via": "src/checkpoint.rs; src/vae_real.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-vulkan-dequant-kernel",
+      "via": "src/checkpoint.rs"
     },
     {
       "from": "FEAT-ash-moss-image-family",
@@ -5389,6 +5905,12 @@
     {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -5461,6 +5983,30 @@
     {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -5468,6 +6014,12 @@
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -5569,6 +6121,12 @@
     {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -5594,7 +6152,7 @@
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
       "to": "TASK-capability-honesty-gate",
-      "via": "src/lib.rs; src/routes.rs"
+      "via": "src/lib.rs; src/routes.rs; src/routes/blender.rs"
     },
     {
       "from": "FEAT-blender-job-route",
@@ -5665,8 +6223,32 @@
     {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
       "to": "TASK-llm-prompt-cache",
       "via": "src/metrics.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-blender-job-route",
@@ -5678,6 +6260,12 @@
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -5809,6 +6397,12 @@
     {
       "from": "FEAT-comfyui-workflow-pipeline",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs; src/routes/capabilities.rs"
     },
@@ -5840,7 +6434,7 @@
       "from": "FEAT-comfyui-workflow-pipeline",
       "kind": "sibling",
       "to": "TASK-capability-honesty-gate",
-      "via": "src/lib.rs; src/routes.rs"
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
     },
     {
       "from": "FEAT-comfyui-workflow-pipeline",
@@ -5923,8 +6517,32 @@
     {
       "from": "FEAT-comfyui-workflow-pipeline",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
       "to": "TASK-llm-prompt-cache",
       "via": "src/config.rs; src/metrics.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-comfyui-workflow-pipeline",
@@ -5936,6 +6554,12 @@
       "from": "FEAT-comfyui-workflow-pipeline",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -6067,6 +6691,12 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -6139,6 +6769,12 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
+      "to": "TASK-img-meta-exif-orientation",
+      "via": "src/routes/image_ops_exec.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
       "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
@@ -6151,6 +6787,30 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -6158,6 +6818,12 @@
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -6265,6 +6931,12 @@
     {
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs; src/routes/capabilities.rs"
     },
@@ -6284,7 +6956,7 @@
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
       "to": "TASK-capability-honesty-gate",
-      "via": "src/lib.rs; src/routes.rs"
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
     },
     {
       "from": "FEAT-residency-control-plane",
@@ -6349,8 +7021,32 @@
     {
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
       "to": "TASK-llm-prompt-cache",
       "via": "src/swap.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-residency-control-plane",
@@ -6362,6 +7058,12 @@
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -6457,6 +7159,12 @@
     {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -6541,6 +7249,30 @@
     {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -6548,6 +7280,12 @@
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -6631,6 +7369,12 @@
     {
       "from": "TASK-api-version-policy",
       "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
       "via": "src/lib.rs"
     },
@@ -6703,6 +7447,30 @@
     {
       "from": "TASK-api-version-policy",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -6710,6 +7478,12 @@
       "from": "TASK-api-version-policy",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -6827,6 +7601,18 @@
       "via": "src/model.rs"
     },
     {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "sibling",
+      "to": "TASK-ash-shader-pipeline-cache",
+      "via": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-diffusion-scheduler-host",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/sampler.rs"
+    },
+    {
       "from": "TASK-ash-family-readiness-markers",
       "kind": "sibling",
       "to": "TASK-ash-llm-evidence-integration",
@@ -6869,6 +7655,12 @@
       "via": "src/checkpoint.rs"
     },
     {
+      "from": "TASK-ash-gguf-reader",
+      "kind": "sibling",
+      "to": "TASK-ash-vulkan-dequant-kernel",
+      "via": "src/checkpoint.rs"
+    },
+    {
       "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-ash-rrdb-upscaler-spike",
@@ -6883,6 +7675,12 @@
     {
       "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
+      "to": "TASK-ash-shader-pipeline-cache",
+      "via": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
       "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
@@ -6890,6 +7688,12 @@
       "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
       "via": "src/lib.rs"
     },
     {
@@ -6967,6 +7771,30 @@
     {
       "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -6974,6 +7802,12 @@
       "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7037,6 +7871,12 @@
       "via": "src/config.rs"
     },
     {
+      "from": "TASK-ash-rrdb-upscaler-spike",
+      "kind": "sibling",
+      "to": "TASK-ash-shader-pipeline-cache",
+      "via": "src/compute.rs"
+    },
+    {
       "from": "TASK-ash-sampling-contract",
       "kind": "sibling",
       "to": "TASK-ash-unsupported-conditioning-guards",
@@ -7046,6 +7886,12 @@
       "from": "TASK-ash-sampling-contract",
       "kind": "sibling",
       "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
       "via": "src/lib.rs"
     },
     {
@@ -7123,6 +7969,36 @@
     {
       "from": "TASK-ash-sampling-contract",
       "kind": "sibling",
+      "to": "TASK-llm-constrained-output-eval",
+      "via": "src/backend.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -7131,6 +8007,12 @@
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
       "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/backend.rs; src/lib.rs"
     },
     {
       "from": "TASK-ash-sampling-contract",
@@ -7181,6 +8063,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-ash-shader-pipeline-cache",
+      "kind": "sibling",
+      "to": "TASK-device-selection-rank-review",
+      "via": "src/device.rs"
+    },
+    {
+      "from": "TASK-ash-shader-pipeline-cache",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/device.rs"
+    },
+    {
       "from": "TASK-ash-tokenizer-framework",
       "kind": "sibling",
       "to": "TASK-ash-unsupported-conditioning-guards",
@@ -7190,6 +8084,12 @@
       "from": "TASK-ash-unsupported-conditioning-guards",
       "kind": "sibling",
       "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
       "via": "src/lib.rs"
     },
     {
@@ -7255,6 +8155,12 @@
     {
       "from": "TASK-ash-unsupported-conditioning-guards",
       "kind": "sibling",
+      "to": "TASK-img-meta-exif-orientation",
+      "via": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
       "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs; src/routes/images_generate.rs"
     },
@@ -7267,6 +8173,30 @@
     {
       "from": "TASK-ash-unsupported-conditioning-guards",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -7274,6 +8204,12 @@
       "from": "TASK-ash-unsupported-conditioning-guards",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7319,6 +8255,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "sibling",
+      "to": "TASK-ash-vulkan-dequant-kernel",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-audio-residency-contention-policy",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
       "to": "TASK-audio-voices-loaded-backend-truth",
@@ -7393,6 +8341,30 @@
     {
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -7400,6 +8372,12 @@
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7440,6 +8418,162 @@
     },
     {
       "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-residency-contention-policy",
       "kind": "sibling",
       "to": "epic-salvo-migration",
       "via": "src/lib.rs"
@@ -7466,7 +8600,7 @@
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
       "to": "TASK-capability-honesty-gate",
-      "via": "src/lib.rs"
+      "via": "src/lib.rs; src/routes/capabilities.rs"
     },
     {
       "from": "TASK-audio-voices-loaded-backend-truth",
@@ -7525,6 +8659,30 @@
     {
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -7532,6 +8690,12 @@
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7645,6 +8809,30 @@
     {
       "from": "TASK-audiocpp-capabilities",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -7652,6 +8840,12 @@
       "from": "TASK-audiocpp-capabilities",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7765,6 +8959,30 @@
     {
       "from": "TASK-blender-bake-extended-maps",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -7772,6 +8990,12 @@
       "from": "TASK-blender-bake-extended-maps",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -7873,6 +9097,12 @@
     {
       "from": "TASK-capability-honesty-gate",
       "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
       "to": "TASK-generations-loras",
       "via": "src/routes.rs"
     },
@@ -7897,6 +9127,30 @@
     {
       "from": "TASK-capability-honesty-gate",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -7904,6 +9158,12 @@
       "from": "TASK-capability-honesty-gate",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8005,6 +9265,30 @@
     {
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -8012,6 +9296,12 @@
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8095,6 +9385,30 @@
     {
       "from": "TASK-comfy-custom-node-capability-gate",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -8102,6 +9416,12 @@
       "from": "TASK-comfy-custom-node-capability-gate",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8153,6 +9473,18 @@
       "via": "src/ora.rs"
     },
     {
+      "from": "TASK-content-record-provenance",
+      "kind": "sibling",
+      "to": "TASK-img-meta-comfyui-pair",
+      "via": "src/image_metadata.rs"
+    },
+    {
+      "from": "TASK-content-record-provenance",
+      "kind": "sibling",
+      "to": "TASK-img-meta-png-parameters",
+      "via": "src/image_metadata.rs"
+    },
+    {
       "from": "TASK-controlnet-rendering",
       "kind": "sibling",
       "to": "TASK-download-options-contract",
@@ -8191,6 +9523,30 @@
     {
       "from": "TASK-controlnet-rendering",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -8198,6 +9554,12 @@
       "from": "TASK-controlnet-rendering",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8317,6 +9679,30 @@
     {
       "from": "TASK-download-options-contract",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -8324,6 +9710,12 @@
       "from": "TASK-download-options-contract",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8377,6 +9769,12 @@
     {
       "from": "TASK-exr-format-support",
       "kind": "sibling",
+      "to": "TASK-img-meta-exif-orientation",
+      "via": "src/routes/image_ops_exec.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "sibling",
       "to": "TASK-model-format-validation",
       "via": "src/formats.rs"
     },
@@ -8407,6 +9805,30 @@
     {
       "from": "TASK-face-detection-policy",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -8414,6 +9836,12 @@
       "from": "TASK-face-detection-policy",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8545,6 +9973,30 @@
     {
       "from": "TASK-gpu-slot-audit-hook",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs; src/routes.rs"
     },
@@ -8552,6 +10004,12 @@
       "from": "TASK-gpu-slot-audit-hook",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8627,6 +10085,24 @@
       "via": "src/jobs_registry.rs"
     },
     {
+      "from": "TASK-img-meta-comfyui-pair",
+      "kind": "sibling",
+      "to": "TASK-img-meta-png-parameters",
+      "via": "src/image_metadata.rs"
+    },
+    {
+      "from": "TASK-img-meta-exif-orientation",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-img-meta-exif-orientation",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/routes/images_generate.rs"
+    },
+    {
       "from": "TASK-inference-cache-correctness",
       "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
@@ -8635,8 +10111,38 @@
     {
       "from": "TASK-inference-cache-correctness",
       "kind": "sibling",
+      "to": "TASK-llm-constrained-output-eval",
+      "via": "src/backend.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
       "to": "TASK-llm-prompt-cache",
       "via": "src/swap.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-inference-cache-correctness",
@@ -8649,6 +10155,12 @@
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
       "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/backend.rs; src/lib.rs"
     },
     {
       "from": "TASK-inference-cache-correctness",
@@ -8713,6 +10225,30 @@
     {
       "from": "TASK-job-result-artifact-selection-metadata",
       "kind": "sibling",
+      "to": "TASK-llm-kv-spill-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
       "via": "src/lib.rs"
     },
@@ -8720,6 +10256,12 @@
       "from": "TASK-job-result-artifact-selection-metadata",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8765,6 +10307,228 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-llm-constrained-output-eval",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/backend.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-load-plan-admission",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-kv-spill-policy",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-llm-moe-tier-offload",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-load-plan-admission",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-llm-speculative-model-draft",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-moe-tier-offload",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-llm-prompt-cache",
       "kind": "sibling",
       "to": "TASK-plan-index-generator",
@@ -8777,9 +10541,75 @@
       "via": "src/metrics.rs"
     },
     {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-speculative-model-draft",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-llm-tool-choice-contract",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
       "via": "src/lib.rs"
     },
     {
@@ -8839,6 +10669,12 @@
     {
       "from": "TASK-llm-vision-default",
       "kind": "sibling",
+      "to": "TASK-llm-vision-ingest-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
       "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
@@ -8874,6 +10710,48 @@
     },
     {
       "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-ingest-contract",
       "kind": "sibling",
       "to": "epic-salvo-migration",
       "via": "src/lib.rs"

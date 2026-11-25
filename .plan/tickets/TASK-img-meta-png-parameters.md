@@ -1,7 +1,6 @@
 # TASK: Embed A1111-style parameters chunk on PNG outputs
 
-Status: In Progress
-**Scope:** Emit the A1111 `parameters` tEXt chunk on PNG outputs
+Status: done
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned

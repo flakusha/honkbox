@@ -12,19 +12,19 @@ Total tickets: **257** — untagged: **257** — unbound to epic: **257** — un
 
 | Tag | Total | done | in_progress | open | draft | cancelled | other |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| (untagged) | 257 | 110 | 7 | 0 | 0 | 0 | 140 |
+| (untagged) | 257 | 112 | 7 | 0 | 0 | 0 | 138 |
 
 ## By epic × status
 
 | Epic | Total | done | in_progress | open | draft | cancelled | other |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| (unbound) | 257 | 110 | 7 | 0 | 0 | 0 | 140 |
+| (unbound) | 257 | 112 | 7 | 0 | 0 | 0 | 138 |
 
 ## By project × status
 
 | Project | Total | done | in_progress | open | draft | cancelled | other |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| (unprojected) | 257 | 110 | 7 | 0 | 0 | 0 | 140 |
+| (unprojected) | 257 | 112 | 7 | 0 | 0 | 0 | 138 |
 
 ## Ticket detail
 
