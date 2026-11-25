@@ -65,6 +65,7 @@ use base64::Engine as _;
 use honkbox_api_types::{ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelKind};
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
+use image::GenericImageView;
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
 
@@ -204,6 +205,99 @@ fn assert_png(entry: &Value, width: u32, height: u32) {
         u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
         height
     );
+}
+
+struct ScratchDir(std::path::PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+fn png_itxt(bytes: &[u8], keyword: &str) -> Option<Value> {
+    let mut at = 8;
+    while at + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[at..at + 4].try_into().ok()?) as usize;
+        let kind = &bytes[at + 4..at + 8];
+        let data = bytes.get(at + 8..at + 8 + len)?;
+        if kind == b"iTXt" {
+            let mut fields = data.splitn(5, |byte| *byte == 0);
+            if fields.next() == Some(keyword.as_bytes()) {
+                fields.next()?;
+                fields.next()?;
+                fields.next()?;
+                let rest = fields.next()?;
+                let text = rest
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .map_or(rest, |at| &rest[at + 1..]);
+                return Some(serde_json::from_slice(text).ok()?);
+            }
+        }
+        at += 12 + len;
+    }
+    None
+}
+
+fn embedded_record(bytes: &[u8], format: &str) -> Value {
+    if format == "png" {
+        return png_itxt(bytes, "honkbox_generation_record").expect("PNG generation record");
+    }
+    let exif = if format == "jpeg" {
+        jpeg_exif(bytes)
+    } else {
+        webp_exif(bytes)
+    };
+    let prefix = b"UNICODE\0";
+    let start = exif
+        .windows(prefix.len())
+        .position(|window| window == prefix)
+        .expect("EXIF JSON prefix")
+        + prefix.len();
+    let end = exif[start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(exif.len(), |offset| start + offset);
+    serde_json::from_slice(&exif[start..end]).expect("EXIF generation record")
+}
+
+fn jpeg_exif(bytes: &[u8]) -> &[u8] {
+    let mut at = 2;
+    while bytes.get(at) == Some(&0xff) {
+        let marker = bytes[at + 1];
+        if marker == 0xd9 || marker == 0xda {
+            break;
+        }
+        let length = usize::from(u16::from_be_bytes(
+            bytes[at + 2..at + 4].try_into().unwrap(),
+        ));
+        let payload = &bytes[at + 4..at + 2 + length];
+        if marker == 0xe1 {
+            if let Some(exif) = payload.strip_prefix(b"Exif\0\0") {
+                return exif;
+            }
+        }
+        at += 2 + length;
+    }
+    panic!(
+        "missing JPEG EXIF: prefix={:02x?}",
+        &bytes[..bytes.len().min(32)]
+    )
+}
+
+fn webp_exif(bytes: &[u8]) -> &[u8] {
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let kind = &bytes[at..at + 4];
+        let length = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+        let data = &bytes[at + 8..at + 8 + length];
+        if kind == b"EXIF" {
+            return data;
+        }
+        at += 8 + length + (length & 1);
+    }
+    panic!("missing WebP EXIF")
 }
 
 /// Single image: base64 decodes to a PNG matching the requested size;
@@ -352,6 +446,80 @@ async fn job_bundle_written_per_generation() {
         assert_eq!(sidecar["prompt"], "bundle me");
     }
     std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Response bytes, bundle artifact, and unsigned manifest carry one record.
+#[tokio::test]
+async fn emitted_bytes_bundle_and_manifest_share_record() {
+    let _slot = SLOT_LOCK.lock().await;
+    let scratch_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.tmp");
+    for format in ["png", "jpeg", "webp"] {
+        let data_dir = scratch_root.join(format!("provenance-image-{}", ulid::Ulid::new()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let _cleanup = ScratchDir(data_dir.clone());
+        let (status, body) = images(
+            app_with(
+                catalog_with(&[sd_entry("comfy:f.safetensors")]),
+                Some(data_dir.clone()),
+            ),
+            json!({
+                "model": "comfy:f.safetensors",
+                "prompt": "provenance red panda 🦝",
+                "seed": 1234,
+                "size": "32x24",
+                "output_format": format,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let b64 = body["data"][0]["b64_json"].as_str().expect("inline image");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("image base64");
+        assert_eq!(
+            image::load_from_memory(&bytes)
+                .expect("decode emitted image")
+                .dimensions(),
+            (32, 24)
+        );
+        let record = embedded_record(&bytes, format);
+        assert_eq!(record["record_type"], "honkbox.generation/1");
+        assert_eq!(record["prompt"], "provenance red panda 🦝");
+        assert_eq!(record["seed"], 1234);
+        assert_eq!(record["model"], "comfy:f.safetensors");
+        assert!(record["model_sha256"].is_null());
+        assert!(!record["honkbox_version"].as_str().unwrap().is_empty());
+        assert_eq!(
+            record["inputs_sha256"].as_str().unwrap().len(),
+            64,
+            "canonical input hash"
+        );
+
+        let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
+        let dir = jobs.next().expect("one bundle").unwrap().path();
+        assert!(jobs.next().is_none(), "one image, one bundle");
+        let extension = if format == "jpeg" { "jpg" } else { format };
+        assert_eq!(
+            std::fs::read(dir.join(format!("final_00.{extension}"))).unwrap(),
+            bytes,
+            "bundle artifact must be the response bytes"
+        );
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap())
+                .unwrap();
+        assert_eq!(sidecar["inputs_sha256"], record["inputs_sha256"]);
+        let manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("c2pa_manifest.json")).unwrap())
+                .unwrap();
+        assert!(manifest["signature"].is_null(), "manifest is unsigned");
+        let assertion = manifest["assertions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|assertion| assertion["label"] == "honkbox.generation")
+            .expect("generation assertion");
+        assert_eq!(assertion["data"], record);
+    }
 }
 
 /// An unknown sampler name is an explicit 400 naming it (with the accepted

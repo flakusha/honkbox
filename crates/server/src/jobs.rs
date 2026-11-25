@@ -1,7 +1,7 @@
 //! `generate` bundle writer: `<data_dir>/jobs/{ulid}/` + atomic writes.
 //!
-//! Layout per job dir: `final_00.{png,jpg,webp}` plus its single JSON
-//! sidecar `final_00.json`. Every file lands via `<name>.part` +
+//! Layout per image job dir: `final_00.{png,jpg,webp}`, `final_00.json`,
+//! and the unsigned `c2pa_manifest.json`. Every file lands via `<name>.part` +
 //! best-effort fsync + rename; `*.part` leftovers are swept by `gc_jobs`
 //! at server startup (plus stray `$TMPDIR/honkbox-*.png` scratch files
 //! from sd-cpp).
@@ -20,6 +20,9 @@ use tracing::{debug, warn};
 // to `crate::`.
 #[path = "determinism.rs"]
 pub mod determinism;
+
+#[path = "image_metadata.rs"]
+pub mod image_metadata;
 
 /// How long a job bundle or stray temp file survives before `gc_jobs` removes
 /// it (default 7 days, override via `[jobs] gc_ttl` / `HONKBOX_GC_TTL`).
@@ -284,10 +287,20 @@ pub fn write_bundle_into(
         "inputs_sha256": inputs_sha256,
         "elapsed_ms": elapsed_ms,
     });
-    // F5: commit the artifact BEFORE the sidecar. A crash mid-bundle then
-    // leaves at most an orphan artifact (swept by GC), never a sidecar
-    // that makes a half-written bundle look complete.
+    // F5: commit the artifact and provenance manifest BEFORE the sidecar.
+    // A crash mid-bundle then leaves at most orphan files (swept by GC),
+    // never a sidecar that makes a half-written bundle look complete.
     write_atomic(dir, &art, image_bytes)?;
+    if !image_bytes.is_empty() {
+        let manifest = image_metadata::unsigned_manifest(inputs);
+        write_atomic(
+            dir,
+            image_metadata::MANIFEST_NAME,
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| format!("cannot encode {}: {e}", image_metadata::MANIFEST_NAME))?
+                .as_slice(),
+        )?;
+    }
     write_atomic(
         dir,
         "final_00.json",
@@ -825,7 +838,7 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["final_00.json", "final_00.png"].map(std::ffi::OsString::from)
+            ["c2pa_manifest.json", "final_00.json", "final_00.png"].map(std::ffi::OsString::from)
         );
         assert_ne!(
             fs::read(dir.join("final_00.png")).expect("artifact"),
@@ -933,6 +946,10 @@ mod tests {
         assert!(
             !dir.join("final_00.json").exists(),
             "final_00.json must not be written before the artifact"
+        );
+        assert!(
+            !dir.join(image_metadata::MANIFEST_NAME).exists(),
+            "the provenance manifest must not be written before the artifact"
         );
         fs::remove_dir_all(&dir).ok();
     }

@@ -1002,7 +1002,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     // CLI and HTTP both select through the one constructor in `backends`.
     let pipeline = backends::make_sd(
         backend,
-        &model,
+        Some(&model),
         &|slug| resolve_model(&found, slug),
         clip_vocab_dir,
     );
@@ -1042,37 +1042,40 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         );
         std::process::exit(1);
     });
+    let inputs = jobs::BundleInputs {
+        model_slug: model,
+        prompt,
+        seed,
+        steps,
+        width,
+        height,
+        format,
+        backend_id: pipeline.backend_id(),
+        // No catalog on the CLI path: the model may be any weight the
+        // backend accepts, and provenance lookup needs the scan
+        // machinery — record null (TASK-determinism-contract: never a
+        // fabricated hash). The vendored engine identity still maps
+        // from the backend id (None for the stub).
+        model_sha256: None,
+        engine_version: honkbox_sd_core::engine_version_for(pipeline.backend_id()),
+        sampler: honkbox_sd_core::SAMPLER.to_string(),
+        scheduler: honkbox_sd_core::SCHEDULER.to_string(),
+        cfg_scale: 7.0,
+        negative_prompt: None,
+        loras: Vec::new(),
+        strength: None,
+        mask_mode: None,
+        mask_sha256: None,
+        checkpoint_base_model: None,
+        recipe: None,
+        hires: None,
+        annotations: Vec::new(),
+    };
+    let record = jobs::image_metadata::generation_record(&inputs);
+    let bytes = or_exit(jobs::image_metadata::embed_record(bytes, format, &record));
     let dir = or_exit(jobs::write_bundle(
         &base,
-        &jobs::BundleInputs {
-            model_slug: model,
-            prompt,
-            seed,
-            steps,
-            width,
-            height,
-            format,
-            backend_id: pipeline.backend_id(),
-            // No catalog on the CLI path: the model may be any weight the
-            // backend accepts, and provenance lookup needs the scan
-            // machinery — record null (TASK-determinism-contract: never a
-            // fabricated hash). The vendored engine identity still maps
-            // from the backend id (None for the stub).
-            model_sha256: None,
-            engine_version: honkbox_sd_core::engine_version_for(pipeline.backend_id()),
-            sampler: honkbox_sd_core::SAMPLER.to_string(),
-            scheduler: honkbox_sd_core::SCHEDULER.to_string(),
-            cfg_scale: 7.0,
-            negative_prompt: None,
-            loras: Vec::new(),
-            strength: None,
-            mask_mode: None,
-            mask_sha256: None,
-            checkpoint_base_model: None,
-            recipe: None,
-            hires: None,
-            annotations: Vec::new(),
-        },
+        &inputs,
         &bytes,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     ));

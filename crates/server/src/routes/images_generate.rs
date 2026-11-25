@@ -710,6 +710,20 @@ pub(crate) async fn post_images_generations(
             }),
             annotations: bundle_annotations,
         };
+        let record = crate::jobs::image_metadata::generation_record(&bundle_inputs);
+        let bytes = match crate::jobs::image_metadata::embed_record(bytes, format, &record) {
+            Ok(bytes) => bytes,
+            Err(message) => {
+                return with_job_id(
+                    super::openai_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        message,
+                        Some("metadata_write_failed"),
+                    ),
+                    job.id(),
+                );
+            }
+        };
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match delivery {
             DeliveryMode::Inline => {
