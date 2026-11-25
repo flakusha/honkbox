@@ -155,9 +155,7 @@ fn feature_on_selects_ash_and_advertises_it() {
 #[cfg(not(feature = "ash-sd"))]
 #[test]
 fn feature_off_rejects_ash_and_hides_it() {
-    const {
-        assert!(!backends::ASH_SD_COMPILED);
-    };
+    const { assert!(!backends::ASH_SD_COMPILED) };
     let err = select("ash-sd").expect_err("feature-off build must reject ash-sd");
     let message = err.to_string();
     assert!(message.contains("ash-sd"), "{message}");
