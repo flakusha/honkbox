@@ -33,10 +33,11 @@ const TIME_DIM: usize = 320;
 const TIME_CHANNELS: usize = 1280;
 const CONTEXT_ROWS: usize = 77;
 const CONTEXT_DIM: usize = 768;
-/// SD 1.5 cross-attention uses `head_dim` 64: 1280 / 64 = 20 heads.
-const CROSS_HEADS: usize = TIME_CHANNELS / 64;
+/// Vendored SD 1.5 `UNetConfig` (`unet.hpp`) uses 8 heads and
+/// `num_head_channels = -1`, giving `head_dim` 1280 / 8 = 160.
+const CROSS_HEADS: usize = 8;
 const GROUPS: usize = 32;
-const EPS: f32 = 1e-5;
+const EPS: f32 = 1e-6;
 const UPSAMPLE: usize = 8;
 
 /// `[out,in,k,k]` kernel plus `[out]` bias, in checkpoint order.
@@ -684,9 +685,11 @@ mod tests {
     }
 
     #[test]
-    fn mid_cross_attention_heads_derive_from_channel_width() {
-        assert_eq!(CROSS_HEADS, TIME_CHANNELS / 64);
-        assert_eq!(CROSS_HEADS, 20);
+    fn mid_cross_attention_heads_match_vendored_sd15_config() {
+        // `stable-diffusion.cpp/src/model/diffusion/unet.hpp`: `num_heads = 8`,
+        // `num_head_channels = -1` -> `head_dim` = 1280 / 8 = 160.
+        assert_eq!(CROSS_HEADS, 8);
+        assert_eq!(TIME_CHANNELS / CROSS_HEADS, 160);
     }
 
     #[test]
