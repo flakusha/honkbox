@@ -5,7 +5,7 @@
 //! under different paths, and guessing would bind the wrong tensors silently.
 
 use crate::{
-    checkpoint::{CheckpointMap, TensorMeta},
+    checkpoint::{CheckpointMap, TensorMeta, bfloat16_bits_to_f32, half_bits_to_f32},
     unet_input::UnetInputShape,
 };
 use std::io::{self, ErrorKind};
@@ -38,37 +38,6 @@ pub struct UnetInputTensors {
     pub gamma: Vec<f32>,
     /// Group-norm bias.
     pub beta: Vec<f32>,
-}
-
-/// IEEE binary16 → f32 by bit expansion (std `f16` is still unstable here).
-fn half_bits_to_f32(bits: u16) -> f32 {
-    let sign = u32::from(bits >> 15);
-    let exponent = (bits >> 10) & 0x1f;
-    let fraction = u32::from(bits & 0x03ff);
-    let result = if exponent == 0 {
-        if fraction == 0 {
-            sign << 31
-        } else {
-            let mut mantissa = fraction;
-            let mut biased = 127 - 14;
-            while mantissa & 0x0400 == 0 {
-                mantissa <<= 1;
-                biased -= 1;
-            }
-            (sign << 31) | (biased << 23) | (mantissa & 0x03ff)
-        }
-    } else if exponent == 0x1f {
-        (sign << 31) | 0x7f80_0000 | (fraction << 13)
-    } else {
-        let biased = u32::try_from(i32::from(exponent) - 15 + 127).expect("half exponent range");
-        (sign << 31) | (biased << 23) | (fraction << 13)
-    };
-    f32::from_bits(result)
-}
-
-/// bf16 is the top 16 bits of an f32; no rounding is needed.
-fn bfloat16_bits_to_f32(bits: u16) -> f32 {
-    f32::from_bits(u32::from(bits) << 16)
 }
 
 pub(crate) fn decode(bytes: &[u8], meta: &TensorMeta) -> io::Result<Vec<f32>> {

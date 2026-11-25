@@ -11,6 +11,7 @@ fn main() {
         ("shaders/layer_norm.comp", "layer_norm.spv"),
         ("shaders/conv2d.comp", "conv2d.spv"),
         ("shaders/silu.comp", "silu.spv"),
+        ("shaders/leaky_relu.comp", "leaky_relu.spv"),
         ("shaders/group_norm.comp", "group_norm.spv"),
         ("shaders/conv_transpose.comp", "conv_transpose.spv"),
         ("shaders/ddim_step.comp", "ddim_step.spv"),

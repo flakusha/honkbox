@@ -2569,9 +2569,11 @@ dependencies = [
  "ash",
  "honkbox-audio-worker",
  "honkbox-llm-worker",
+ "honkbox-residency",
  "honkbox-sd-core",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]

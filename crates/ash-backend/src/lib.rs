@@ -23,6 +23,8 @@
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
 //! - [`conv2d`]: [`conv2d::Conv2d`], direct NCHW convolution.
 //! - [`silu`]: [`silu::Silu`], elementwise `SiLU` activation.
+//! - [`leaky_relu`]: [`leaky_relu::LeakyRelu`], elementwise `LeakyReLU(0.2)`.
+//! - [`rrdb`]: [`rrdb::RrdbBlock`], one synthetic residual-dense block (spike).
 //! - [`group_norm`]: [`group_norm::GroupNorm`], NCHW group normalization.
 //! - [`conv_transpose`]: [`conv_transpose::ConvTranspose2d`], transposed conv.
 //! - [`vae_decode`]: [`vae_decode::VaeDecode`], one decoder block composed from
@@ -36,7 +38,8 @@
 //! - [`checkpoint`]: [`checkpoint::CheckpointMap`], a strict safetensors
 //!   header → tensor slot map; payload bytes are read on demand.
 //! - [`checkpoint::GgufMap`], the strict GGUF v2/v3 metadata and tensor reader
-//!   on the same lookup/on-demand read contract; no dequantization or tokenizer.
+//!   on the same lookup/on-demand read contract; [`checkpoint::decode_gguf_tensor`]
+//!   converts F32/F16/BF16/Q4_K payloads to flat f32 on the CPU.
 //! - [`embedding`]: [`embedding::TextEncoder`], token + positional embedding
 //!   gather and sum over caller-supplied tables (no tokenizer assets yet).
 //! - [`mlp`]: [`mlp::FeedForward`], GELU activation and a two-matrix MLP block.
@@ -230,6 +233,8 @@ pub mod device;
 pub mod embedding;
 #[cfg(feature = "ash-compute")]
 pub mod group_norm;
+#[cfg(feature = "ash-compute")]
+pub mod leaky_relu;
 #[cfg(feature = "ash-llm")]
 pub mod llm;
 #[cfg(feature = "ash-compute")]
@@ -246,6 +251,8 @@ pub mod norm;
 pub mod prompt;
 #[cfg(feature = "ash-compute")]
 pub mod raw;
+#[cfg(feature = "ash-compute")]
+pub mod rrdb;
 #[cfg(feature = "ash-compute")]
 pub mod sampler;
 #[cfg(feature = "ash-sd")]

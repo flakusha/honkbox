@@ -12,8 +12,10 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 mod gguf;
+mod gguf_dequant;
 
 pub use gguf::{GgufMap, GgufTensor, GgufType, GgufValue};
+pub use gguf_dequant::decode_gguf_tensor;
 
 /// Safetensors header cap, same bound as the catalog probe.
 const MAX_HEADER: u64 = 16 * 1024 * 1024;
@@ -111,6 +113,37 @@ fn dtype_width(dtype: &str) -> Option<usize> {
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// IEEE binary16 → f32 by bit expansion (std `f16` is still unstable here).
+pub(crate) fn half_bits_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15);
+    let exponent = (bits >> 10) & 0x1f;
+    let fraction = u32::from(bits & 0x03ff);
+    let result = if exponent == 0 {
+        if fraction == 0 {
+            sign << 31
+        } else {
+            let mut mantissa = fraction;
+            let mut biased = 127 - 14;
+            while mantissa & 0x0400 == 0 {
+                mantissa <<= 1;
+                biased -= 1;
+            }
+            (sign << 31) | (biased << 23) | ((mantissa & 0x03ff) << 13)
+        }
+    } else if exponent == 0x1f {
+        (sign << 31) | 0x7f80_0000 | (fraction << 13)
+    } else {
+        let biased = u32::try_from(i32::from(exponent) - 15 + 127).expect("half exponent range");
+        (sign << 31) | (biased << 23) | (fraction << 13)
+    };
+    f32::from_bits(result)
+}
+
+/// bf16 is the top 16 bits of an f32; no rounding is needed.
+pub(crate) fn bfloat16_bits_to_f32(bits: u16) -> f32 {
+    f32::from_bits(u32::from(bits) << 16)
 }
 
 impl CheckpointMap {

@@ -3,8 +3,7 @@
 //! Every test owns a unique temp directory under `TMPDIR` with PID, timestamp
 //! and a local collision counter; RAII removes it on every exit path.
 #![cfg(feature = "ash-compute")]
-
-use honkbox_ash_backend::checkpoint::{GgufMap, GgufType, GgufValue};
+use honkbox_ash_backend::checkpoint::{GgufMap, GgufType, GgufValue, decode_gguf_tensor};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -106,11 +105,6 @@ fn kv_str(key: &str, value: &str) -> Kv {
 fn kv_u8(key: &str, value: u8) -> Kv {
     kv_scalar(key, 0, vec![value])
 }
-
-fn kv_i8(key: &str, value: i8) -> Kv {
-    kv_scalar(key, 1, vec![value as u8])
-}
-
 fn kv_u16(key: &str, value: u16) -> Kv {
     let mut bytes = Bytes::default();
     bytes.0.extend_from_slice(&value.to_le_bytes());
@@ -773,4 +767,67 @@ fn rejects_malformed_truncated_and_oversized_inputs() {
             needle,
         );
     }
+}
+
+#[test]
+fn gguf_dequant_container_labels_do_not_change_tensor_dtype() {
+    let mut payload = vec![0; 144];
+    payload[..2].copy_from_slice(&0x3c00_u16.to_le_bytes());
+    payload[4..8].fill(1);
+    payload[12..16].fill(1);
+    payload[16..].fill(0xff);
+    let mut decoded = Vec::new();
+    for file_type in [14_u32, 15] {
+        let dir = TempDir::new(&format!("q4-k-file-type-{file_type}"));
+        let mut kvs = base_kvs(None);
+        kvs.push(kv_u32("general.file_type", file_type));
+        let bytes = build(3, &kvs, &[tensor("w", &[256], 12, 0)], &payload);
+        let path = dir.write("model.gguf", &bytes);
+        let map = GgufMap::read(&path).expect("GGUF map");
+        let tensor = map.get("w").expect("tensor");
+        let values = decode_gguf_tensor(&map.read_tensor(&path, "w").expect("payload"), tensor)
+            .expect("decode");
+        assert!(values.iter().all(|&value| value == 15.0));
+        decoded.push(values);
+    }
+    assert_eq!(decoded[0], decoded[1]);
+}
+
+#[test]
+fn gguf_dequant_honors_each_tensor_dtype_not_file_label() {
+    let dir = TempDir::new("mixed-dtypes");
+    let mut kvs = base_kvs(None);
+    kvs.push(kv_u32("general.file_type", 15));
+    let mut q4_k = vec![0; 144];
+    q4_k[..2].copy_from_slice(&0x3c00_u16.to_le_bytes());
+    q4_k[4..8].fill(1);
+    q4_k[12..16].fill(1);
+    q4_k[16..].fill(0xff);
+    let f16 = 0x3c00_u16.to_le_bytes().repeat(256);
+    let mut payload = q4_k.clone();
+    payload.resize(160, 0);
+    payload.extend_from_slice(&f16);
+    let bytes = build(
+        3,
+        &kvs,
+        &[
+            tensor("quant", &[256], 12, 0),
+            tensor("half", &[256], 1, 160),
+        ],
+        &payload,
+    );
+    let path = dir.write("mixed.gguf", &bytes);
+    let map = GgufMap::read(&path).expect("GGUF map");
+    let quant = decode_gguf_tensor(
+        &map.read_tensor(&path, "quant").expect("quant payload"),
+        map.get("quant").expect("quant tensor"),
+    )
+    .expect("quant decode");
+    let half = decode_gguf_tensor(
+        &map.read_tensor(&path, "half").expect("half payload"),
+        map.get("half").expect("half tensor"),
+    )
+    .expect("half decode");
+    assert!(quant.iter().all(|&value| value == 15.0));
+    assert!(half.iter().all(|&value| value == 1.0));
 }

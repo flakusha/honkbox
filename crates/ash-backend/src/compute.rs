@@ -23,6 +23,8 @@ pub(crate) static LAYER_NORM_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/layer_norm.spv"));
 pub(crate) static CONV2D_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/conv2d.spv"));
 pub(crate) static SILU_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/silu.spv"));
+pub(crate) static LEAKY_RELU_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/leaky_relu.spv"));
 pub(crate) static GROUP_NORM_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/group_norm.spv"));
 pub(crate) static CONV_TRANSPOSE_SPIRV: &[u8] =
@@ -388,6 +390,7 @@ mod tests {
         assert_eq!(spirv_words(LAYER_NORM_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(CONV2D_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(SILU_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(LEAKY_RELU_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(spirv_words(GROUP_NORM_SPIRV).first(), Some(&SPIRV_MAGIC));
         assert_eq!(
             spirv_words(CONV_TRANSPOSE_SPIRV).first(),
