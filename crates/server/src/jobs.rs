@@ -358,6 +358,8 @@ pub struct OpsBundleInputs {
     pub inputs: Vec<OpsInputRecord>,
     /// Output container.
     pub format: honkbox_sd_core::OutputFormat,
+    /// Debug-only provenance parsed from admitted uploads; never execution input.
+    pub annotations: Vec<BundleAnnotation>,
 }
 
 /// Write an image-ops job bundle under `<data_dir>/jobs/{ulid}/`; returns
@@ -406,6 +408,7 @@ pub fn write_ops_bundle(
         "output_format": inputs.format.name(),
         "client": inputs.client,
         "inputs": inputs.inputs,
+        "annotations": inputs.annotations,
         "outputs": outputs,
         "seed": serde_json::Value::Null,
         "tool": tool,
@@ -953,6 +956,7 @@ mod tests {
             client: None,
             inputs: Vec::new(),
             format: honkbox_sd_core::OutputFormat::Png,
+            annotations: Vec::new(),
         };
         let outputs = [
             OpsOutputRecord {

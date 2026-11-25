@@ -18,3 +18,9 @@ Resources: per-test fixture dirs; no shared image cache
 ## Acceptance detail
 
 - A ComfyUI PNG round-trips its recipe text through honkbox image-ops into the job record; honkbox PNGs opened in ComfyUI show the recorded prompt text.
+
+## Verification Notes (2026-11-25)
+
+- Emit: `png_prompt` and `png_workflow` derive text only from the canonical record; `workflow` is an honest `honkbox.recipe/1` JSON record with no fabricated ComfyUI nodes. Chunks are deterministic, NUL-free, bounded, and ordered record → parameters → prompt → workflow → XMP.
+- Ingest: `png_source_annotations` is one bounded PNG tEXt scanner; image-ops copies its `source_prompt`/`source_workflow`/`source_parameters` annotations into `ops.json` before the worker runs. They are debug provenance, never execution input.
+- Gate run this turn: `cargo fmt --all -- --check` clean. Product tests intentionally NOT run per operator instruction; run `cargo test --locked -p honkbox-server --bin honkbox image_metadata` before final promotion.

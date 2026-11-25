@@ -18,6 +18,8 @@ const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const XMP_NAMESPACE: &str = "https://honkbox.org/ns/provenance/1/";
 const RECORD_KEYWORD: &[u8] = b"honkbox_generation_record";
 const PARAMETERS_KEYWORD: &[u8] = b"parameters";
+const PROMPT_KEYWORD: &[u8] = b"prompt";
+const WORKFLOW_KEYWORD: &[u8] = b"workflow";
 const XMP_KEYWORD: &[u8] = b"XML:com.adobe.xmp";
 const XMP_EXTENDED_NAMESPACE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const EXIF_DESCRIPTION: &[u8] = b"Honkbox generation provenance\0";
@@ -91,7 +93,17 @@ pub(crate) fn embed_record(
     match format {
         honkbox_sd_core::OutputFormat::Png => {
             let parameters = png_parameters(record).map_err(str::to_owned)?;
-            embed_png(bytes, &metadata.json, &parameters, &metadata.xmp).map_err(str::to_owned)
+            let prompt = png_prompt(record).map_err(str::to_owned)?;
+            let workflow = png_workflow(record).map_err(str::to_owned)?;
+            embed_png(
+                bytes,
+                &metadata.json,
+                &parameters,
+                prompt.as_deref().unwrap_or_default(),
+                workflow.as_deref().unwrap_or_default(),
+                &metadata.xmp,
+            )
+            .map_err(str::to_owned)
         }
         honkbox_sd_core::OutputFormat::Jpeg => embed_jpeg(bytes, &metadata).map_err(str::to_owned),
         honkbox_sd_core::OutputFormat::Webp => embed_webp(bytes, &metadata).map_err(str::to_owned),
@@ -167,6 +179,75 @@ fn png_parameters(record: &Value) -> CodecResult<Vec<u8>> {
     Ok(text.into_bytes())
 }
 
+/// ComfyUI-readable `prompt` text, from facts already in the canonical record.
+fn png_prompt(record: &Value) -> CodecResult<Option<Vec<u8>>> {
+    let Some(prompt) = record
+        .get("prompt")
+        .and_then(Value::as_str)
+        .filter(|prompt| !prompt.is_empty())
+    else {
+        return Ok(None);
+    };
+    let mut text = String::new();
+    push_plain_text(&mut text, prompt)?;
+    let negative = record
+        .get("negative_prompt")
+        .and_then(Value::as_str)
+        .filter(|negative| !negative.is_empty());
+    if let Some(negative) = negative {
+        text.push('\n');
+        text.push_str("Negative prompt: ");
+        push_plain_text(&mut text, negative)?;
+    }
+    if text.len() > MAX_METADATA_BYTES {
+        return Err("prompt exceeds 1 MiB limit");
+    }
+    Ok(Some(text.into_bytes()))
+}
+
+/// Honest honkbox recipe record — never a fabricated ComfyUI node graph.
+fn png_workflow(record: &Value) -> CodecResult<Option<Vec<u8>>> {
+    const WORKFLOW_FIELDS: &[&str] = &[
+        "prompt",
+        "negative_prompt",
+        "model",
+        "seed",
+        "steps",
+        "width",
+        "height",
+        "sampler",
+        "scheduler",
+        "cfg_scale",
+        "loras",
+        "strength",
+        "mask_mode",
+        "hires",
+        "checkpoint_base_model",
+    ];
+    let recipe = record
+        .get("recipe")
+        .filter(|value| !value.is_null() && value.as_str().map_or(true, |name| !name.is_empty()));
+    let mut workflow = serde_json::Map::new();
+    workflow.insert("source".to_owned(), json!("honkbox"));
+    workflow.insert("kind".to_owned(), json!("honkbox.recipe/1"));
+    workflow.insert("recipe".to_owned(), recipe.cloned().unwrap_or(Value::Null));
+    let mut facts = recipe.is_some();
+    for field in WORKFLOW_FIELDS {
+        if let Some(value) = record.get(*field).filter(|value| !value.is_null()) {
+            workflow.insert((*field).to_owned(), value.clone());
+            facts = true;
+        }
+    }
+    if !facts {
+        return Ok(None);
+    }
+    let text = canonical_json(&Value::Object(workflow));
+    if text.len() > MAX_METADATA_BYTES {
+        return Err("workflow exceeds 1 MiB limit");
+    }
+    Ok(Some(text.into_bytes()))
+}
+
 /// Keep tEXt payloads single-line and NUL-free without dropping user text.
 fn push_plain_text(out: &mut String, text: &str) -> CodecResult<()> {
     for ch in text.chars() {
@@ -231,7 +312,14 @@ fn read_u32_le(bytes: &[u8], offset: usize, error: &'static str) -> CodecResult<
     ))
 }
 
-fn embed_png(bytes: &[u8], record: &[u8], parameters: &[u8], xmp: &[u8]) -> CodecResult<Vec<u8>> {
+fn embed_png(
+    bytes: &[u8],
+    record: &[u8],
+    parameters: &[u8],
+    prompt: &[u8],
+    workflow: &[u8],
+    xmp: &[u8],
+) -> CodecResult<Vec<u8>> {
     const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
     if bytes.get(..8) != Some(SIGNATURE) {
         return Err("PNG: invalid signature");
@@ -290,6 +378,8 @@ fn embed_png(bytes: &[u8], record: &[u8], parameters: &[u8], xmp: &[u8]) -> Code
         .len()
         .checked_add(xmp.len())
         .and_then(|len| len.checked_add(parameters.len()))
+        .and_then(|len| len.checked_add(prompt.len()))
+        .and_then(|len| len.checked_add(workflow.len()))
         .ok_or("PNG: metadata too large")?;
     if payload_len > MAX_METADATA_BYTES {
         return Err("PNG: metadata exceeds 1 MiB limit");
@@ -297,10 +387,16 @@ fn embed_png(bytes: &[u8], record: &[u8], parameters: &[u8], xmp: &[u8]) -> Code
     let record_chunk = png_chunk(*b"iTXt", &png_text(RECORD_KEYWORD, record));
     let parameters_chunk = (!parameters.is_empty())
         .then(|| png_chunk(*b"tEXt", &png_plaintext(PARAMETERS_KEYWORD, parameters)));
+    let prompt_chunk =
+        (!prompt.is_empty()).then(|| png_chunk(*b"tEXt", &png_plaintext(PROMPT_KEYWORD, prompt)));
+    let workflow_chunk = (!workflow.is_empty())
+        .then(|| png_chunk(*b"tEXt", &png_plaintext(WORKFLOW_KEYWORD, workflow)));
     let xmp_chunk = png_chunk(*b"iTXt", &png_text(XMP_KEYWORD, xmp));
     let added = record_chunk
         .len()
         .checked_add(parameters_chunk.as_ref().map_or(0, Vec::len))
+        .and_then(|len| len.checked_add(prompt_chunk.as_ref().map_or(0, Vec::len)))
+        .and_then(|len| len.checked_add(workflow_chunk.as_ref().map_or(0, Vec::len)))
         .and_then(|len| len.checked_add(xmp_chunk.len()))
         .ok_or("PNG: output too large")?;
     let capacity = bytes
@@ -311,6 +407,12 @@ fn embed_png(bytes: &[u8], record: &[u8], parameters: &[u8], xmp: &[u8]) -> Code
     out.extend_from_slice(&bytes[..insert_at]);
     out.extend_from_slice(&record_chunk);
     if let Some(chunk) = parameters_chunk {
+        out.extend_from_slice(&chunk);
+    }
+    if let Some(chunk) = prompt_chunk {
+        out.extend_from_slice(&chunk);
+    }
+    if let Some(chunk) = workflow_chunk {
         out.extend_from_slice(&chunk);
     }
     out.extend_from_slice(&xmp_chunk);
@@ -342,6 +444,68 @@ fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
     chunk.extend_from_slice(data);
     chunk.extend_from_slice(&crc32(&kind, data).to_be_bytes());
     chunk
+}
+
+/// Debug-only provenance from an uploaded `PNG`: ComfyUI's `prompt` and
+/// `workflow` plus A1111 `parameters`. Never execution input.
+pub(crate) fn png_source_annotations(bytes: &[u8]) -> Vec<crate::jobs::BundleAnnotation> {
+    let mut annotations = Vec::new();
+    if bytes.get(..8) != Some(b"\x89PNG\r\n\x1a\n") {
+        return annotations;
+    }
+    let mut offset = 8;
+    while bytes.len().saturating_sub(offset) >= 12 {
+        let Ok(length) = read_u32_be(bytes, offset, "PNG: truncated chunk length") else {
+            break;
+        };
+        let Ok(length) = usize::try_from(length) else {
+            break;
+        };
+        let Ok(kind) = slice(bytes, offset + 4, 4, "PNG: truncated chunk type") else {
+            break;
+        };
+        let Ok(data) = slice(bytes, offset + 8, length, "PNG: truncated chunk data") else {
+            break;
+        };
+        let Ok(stored_crc) = read_u32_be(bytes, offset + 8 + length, "PNG: truncated chunk CRC")
+        else {
+            break;
+        };
+        if crc32(kind, data) != stored_crc {
+            break;
+        }
+        let Some(next) = offset
+            .checked_add(12)
+            .and_then(|end| end.checked_add(length))
+        else {
+            break;
+        };
+        if kind == b"tEXt" && length <= MAX_METADATA_BYTES {
+            if let Some(separator) = data.iter().position(|byte| *byte == 0) {
+                let keyword = &data[..separator];
+                let value = &data[separator + 1..];
+                if !value.contains(&0) {
+                    let name = if keyword == PROMPT_KEYWORD {
+                        "source_prompt"
+                    } else if keyword == WORKFLOW_KEYWORD {
+                        "source_workflow"
+                    } else if keyword == PARAMETERS_KEYWORD {
+                        "source_parameters"
+                    } else {
+                        ""
+                    };
+                    if !name.is_empty() {
+                        annotations.push(crate::jobs::BundleAnnotation {
+                            name: name.to_owned(),
+                            value: json!(String::from_utf8_lossy(value).into_owned()),
+                        });
+                    }
+                }
+            }
+        }
+        offset = next;
+    }
+    annotations
 }
 
 static CRC32_TABLE: std::sync::LazyLock<[u32; 256]> = std::sync::LazyLock::new(|| {
@@ -707,6 +871,21 @@ mod tests {
         bytes
     }
 
+    fn png_with_text_chunks() -> Vec<u8> {
+        let source = png_source();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&source[..33]);
+        for (keyword, text) in [
+            (PROMPT_KEYWORD, &b"a ComfyUI prompt"[..]),
+            (WORKFLOW_KEYWORD, &br#"{"nodes":[]}"#[..]),
+            (PARAMETERS_KEYWORD, &b"a ComfyUI prompt\nSteps: 20"[..]),
+        ] {
+            bytes.extend_from_slice(&png_chunk(*b"tEXt", &png_plaintext(keyword, text)));
+        }
+        bytes.extend_from_slice(&source[33..]);
+        bytes
+    }
+
     fn jpeg_source() -> Vec<u8> {
         let image = image::DynamicImage::ImageRgba8(pixels()).to_rgb8();
         let mut bytes = Vec::new();
@@ -980,8 +1159,8 @@ mod tests {
             decode(&first, ImageFormat::Png)
         );
         assert_eq!(
-            &png_kinds(&first)[..4],
-            &[*b"IHDR", *b"iTXt", *b"tEXt", *b"iTXt"]
+            &png_kinds(&first)[..6],
+            &[*b"IHDR", *b"iTXt", *b"tEXt", *b"tEXt", *b"tEXt", *b"iTXt"]
         );
         assert_eq!(
             png_plain_text(&first, PARAMETERS_KEYWORD).expect("parameters tEXt"),
@@ -998,6 +1177,70 @@ mod tests {
         let record = json!({"record_type": "honkbox.generation/1"});
         let embedded = embed_record(&png_source(), OutputFormat::Png, &record).expect("embed PNG");
         assert!(png_plain_text(&embedded, PARAMETERS_KEYWORD).is_none());
+        assert!(png_plain_text(&embedded, PROMPT_KEYWORD).is_none());
+        assert!(png_plain_text(&embedded, WORKFLOW_KEYWORD).is_none());
+    }
+
+    #[test]
+    fn png_prompt_and_workflow_chunks_are_deterministic_and_honest() {
+        let source = png_source();
+        let mut named = inputs();
+        named.recipe = Some("cinematic".to_owned());
+        named.negative_prompt = Some("blur".to_owned());
+        let record = generation_record(&named);
+        let first = embed_record(&source, OutputFormat::Png, &record).expect("embed PNG");
+        let second = embed_record(&source, OutputFormat::Png, &record).expect("embed PNG");
+        assert_eq!(first, second);
+
+        let prompt = png_plain_text(&first, PROMPT_KEYWORD).expect("prompt tEXt");
+        assert_eq!(prompt, b"a tiny test image\nNegative prompt: blur");
+        assert!(!prompt.contains(&0));
+        let workflow = png_plain_text(&first, WORKFLOW_KEYWORD).expect("workflow tEXt");
+        assert!(!workflow.contains(&0));
+        let workflow: Value = serde_json::from_slice(&workflow).expect("workflow JSON");
+        assert_eq!(workflow["source"], "honkbox");
+        assert_eq!(workflow["kind"], "honkbox.recipe/1");
+        assert_eq!(workflow["recipe"], "cinematic");
+        assert_eq!(workflow["prompt"], "a tiny test image");
+        assert_eq!(workflow["seed"], 42);
+        assert!(
+            workflow.get("nodes").is_none(),
+            "no fabricated ComfyUI graph"
+        );
+
+        let unnamed = embed_record(&source, OutputFormat::Png, &generation_record(&inputs()))
+            .expect("embed PNG");
+        let unnamed_workflow = png_plain_text(&unnamed, WORKFLOW_KEYWORD).expect("workflow tEXt");
+        let unnamed_workflow: Value = serde_json::from_slice(&unnamed_workflow).expect("JSON");
+        assert!(unnamed_workflow["recipe"].is_null());
+    }
+
+    #[test]
+    fn png_source_annotations_parse_all_three_keywords() {
+        let annotations = png_source_annotations(&png_with_text_chunks());
+        assert_eq!(
+            annotations,
+            vec![
+                BundleAnnotation {
+                    name: "source_prompt".to_owned(),
+                    value: json!("a ComfyUI prompt"),
+                },
+                BundleAnnotation {
+                    name: "source_workflow".to_owned(),
+                    value: json!(r#"{"nodes":[]}"#),
+                },
+                BundleAnnotation {
+                    name: "source_parameters".to_owned(),
+                    value: json!("a ComfyUI prompt\nSteps: 20"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn png_source_annotations_absent_without_text_keywords() {
+        assert!(png_source_annotations(&png_source()).is_empty());
+        assert!(png_source_annotations(b"not a png").is_empty());
     }
 
     #[test]

@@ -260,6 +260,12 @@ pub(super) async fn execute_image_op(
     let token = job.token().clone();
     let artifacts = config.artifacts.clone();
     let job_id = job.id().to_owned();
+    // Debug-only provenance: read admitted upload text before `admitted`
+    // moves into the worker. These annotations never reach op execution.
+    let source_annotations: Vec<crate::jobs::BundleAnnotation> = admitted
+        .iter()
+        .flat_map(|input| crate::jobs::image_metadata::png_source_annotations(&input.raw))
+        .collect();
     let (units, input_records) = if let Some(url) = matting_url {
         // Matting bypasses the blocking pool: the sidecar is an async HTTP
         // call per input (cancel honored BETWEEN inputs, like the CPU path).
@@ -346,6 +352,7 @@ pub(super) async fn execute_image_op(
             client: req.client.clone(),
             inputs: input_records.clone(),
             format,
+            annotations: source_annotations,
         };
         let written = crate::jobs::write_ops_bundle(
             data_dir,
