@@ -21,6 +21,11 @@ pub use db::env_db_path as registry_db_path;
 pub use db::{AliasRow, DB_ENV, Db, DbError, DbResult, EntryOverride, SCHEMA_VERSION};
 use metadata::probe;
 pub use metadata::{GgufMetadata, ModelFileMetadata, SafetensorsMetadata};
+mod presets;
+pub use presets::{
+    PRESET_MANIFEST_REL, PRESET_SCHEMA_VERSION, Preset, PresetLoadError, PresetManifest,
+    empty_preset_manifest, load_presets, preset_manifest_path,
+};
 
 /// Which kind of root a model file was found under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

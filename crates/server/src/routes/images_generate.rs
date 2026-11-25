@@ -418,8 +418,20 @@ pub(super) fn image_scheduler_name(scheduler: honkbox_sd_core::Scheduler) -> Str
 pub(crate) async fn post_images_generations(
     State(config): State<AppConfig>,
     headers: HeaderMap,
-    Json(req): Json<ImagesGenerationRequest>,
+    Json(mut req): Json<ImagesGenerationRequest>,
 ) -> Response {
+    // H1: the preset id is a routing header; prompt text stays in the body.
+    // Composition runs before validation so a preset's text is validated by
+    // the same rules as caller-supplied text.
+    if let Err(response) = super::presets::apply_preset(
+        &config,
+        headers
+            .get("X-Honkbox-Preset")
+            .map(|value| value.to_str().unwrap_or_default()),
+        &mut req,
+    ) {
+        return response;
+    }
     let (width, height, n, recipe, hires, format, compression, delivery) =
         match validate_images_request(
             &req,

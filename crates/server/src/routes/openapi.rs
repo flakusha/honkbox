@@ -51,6 +51,8 @@ pub struct EmbeddedUi;
         get_version,
         get_capabilities,
         get_models,
+        get_presets,
+        get_preset,
         refresh_models,
         post_model_unload,
         get_memory,

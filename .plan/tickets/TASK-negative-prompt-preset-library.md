@@ -22,3 +22,18 @@ Resources: read-only registry files; no fixed port.
 ## Non-goals
 
 Preset editor UI, remote preset sync, per-user presets.
+
+## Verification Notes (2026-11-25)
+
+- `crates/registry/src/presets.rs` parses
+  `<data_dir>/models/presets/manifest.json` as a versioned, bounded,
+  validated, id-sorted document; a missing file means no presets.
+- `GET /v1/presets` and `GET /v1/presets/{id}` are read-only. Unknown ids
+  return 400 `unknown_preset`; unreadable manifests return 500
+  `preset_manifest_invalid`.
+- `X-Honkbox-Preset` composes style/negative text into the existing
+  `ImagesGenerationRequest` before validation, so no DTO or client format
+  changes.
+- Gate run this turn: `cargo fmt --all` clean, `giwt plan check-links`
+  clean. Product tests and `codegen:check` were not run under the
+  no-build instruction.

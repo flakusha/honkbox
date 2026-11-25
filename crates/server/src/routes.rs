@@ -70,6 +70,9 @@ pub(super) mod capabilities;
 #[path = "routes/models.rs"]
 pub(super) mod models;
 
+#[path = "routes/presets.rs"]
+pub(super) mod presets;
+
 #[path = "routes/runtime.rs"]
 pub(super) mod runtime;
 
@@ -89,6 +92,8 @@ use self::models::{
     __path_refresh_models, delete_model, get_catalog, get_models, post_model_unload,
     refresh_models,
 };
+#[allow(unused_imports)] // handler names are used by .route() and the OpenApi derive
+use self::presets::{__path_get_preset, __path_get_presets, get_preset, get_presets};
 #[allow(unused_imports)]
 use self::runtime::{
     __path_get_memory, __path_get_running, __path_post_unload_all, __path_post_unload_one,
@@ -411,6 +416,8 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/models/{slug}/unload", post(post_model_unload))
         .route("/v1/models/{slug}", delete(delete_model))
         .route("/v1/catalog", get(get_catalog))
+        .route("/v1/presets", get(get_presets))
+        .route("/v1/presets/{id}", get(get_preset))
         .route("/v1/memory", get(get_memory))
         .route("/v1/openapi.json", get(openapi_json))
         .route(
