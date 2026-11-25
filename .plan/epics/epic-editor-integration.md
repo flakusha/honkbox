@@ -6,7 +6,9 @@ Owner: unassigned
 Research: `.tmp/research/media-image-intermediates-and-enhancement-2026-11-24.md`,
 `.tmp/research/content-experience-gaps-2026-11-20.md`,
 `.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md` (honkbox-owned DCC items;
-consumer spine in `../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`).
+consumer spine in `../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`),
+`.tmp/research/creative-provenance-fields-2026-11-25.md`,
+`.tmp/research/api-provisioning-extended-fields-2026-11-25.md`.
 Historical `ReviewedImageEdit-Clients.md` links in member tickets are superseded by the above.
 
 ## Scope
@@ -24,6 +26,7 @@ jobs; it never embeds GTK/Qt/libgimp or automates the editor GUI.
 - `TASK-gimp-plugin-fixture.md` — GIMP 3 Python PDB client fixture (P2).
 - `TASK-krita-plugin-fixture.md` — Krita pykrita client fixture (P2).
 - `TASK-external-upscale-probe.md` — Real-ESRGAN/waifu2x external process (P2).
+- `TASK-image-ops-idempotency-isolation.md` — image ops idempotency isolation wave-1 follow-up.
 
 ## Acceptance
 

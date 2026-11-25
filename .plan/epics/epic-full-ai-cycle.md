@@ -5,7 +5,11 @@ Priority: P1
 Owner: unassigned
 Research: `.tmp/research/llm-runtime-memory-2026-11-25.md`,
 `.tmp/research/plan-research-promotion-index-2026-11-25.md`,
-`.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`
+`.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
+`.tmp/research/determinism-extended-fields-2026-11-25.md`,
+`.tmp/research/residency-extended-fields-2026-11-25.md`,
+`.tmp/research/comfyui-lane-fields-2026-11-25.md`,
+`.tmp/research/creative-provenance-fields-2026-11-25.md`
 
 ## Scope
 
@@ -91,6 +95,11 @@ hardware measurement.
 - `epic-comfyui-managed-runtime.md` — build-order item 6 now sits on the landed
   managed app + typed `/comfyui/*` reads; readiness/history honesty are filed
   there before the workflow pipeline grows a write surface.
+
+- `TASK-scheduler-lifecycle-spec.md` — scheduler lifecycle wave-1 follow-up.
+- `TASK-admission-dedupe-analysis.md` — admission dedupe wave-1 follow-up.
+- `TASK-ash-placement-grammar.md` — Ash placement grammar wave-1 follow-up.
+- `TASK-lease-safety-fuzz.md` — lease safety fuzz wave-1 follow-up.
 
 ## Non-goals
 

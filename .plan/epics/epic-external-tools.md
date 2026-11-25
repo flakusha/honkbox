@@ -7,7 +7,11 @@ Owner: unassigned
 Research: `.tmp/research/comfyui-workflow-sidecar-2026-11-25.md`,
 `.tmp/research/comfyui-custom-nodes-integration-2026-11-24.md`,
 `.tmp/research/cli-app-management-llama-server-2026-11-22.md`,
-`.tmp/research/multi-gpu-2026-11-20.md`.
+`.tmp/research/multi-gpu-2026-11-20.md`,
+`.tmp/research/comfyui-lane-fields-2026-11-25.md`,
+`.tmp/research/video-ffi-fields-2026-11-25.md`,
+`.tmp/research/api-provisioning-extended-fields-2026-11-25.md`,
+`.tmp/research/creative-provenance-fields-2026-11-25.md`.
 
 ## Scope
 
@@ -45,6 +49,7 @@ H-DCC3); aspirational tools are never advertised.
 - `FEAT-download-provider-adapters.md` — staged HF / llama.cpp / ComfyUI-node
   adapters over the contract. Any ComfyUI-node work remains operator-owned
   acquisition/admission; it must not perform automatic runtime install/fetch.
+- `TASK-shared-model-library.md` — shared model library wave-1 follow-up.
 
 Cross-epic execution contracts (owned in `epic-comfyui-managed-runtime.md`):
 

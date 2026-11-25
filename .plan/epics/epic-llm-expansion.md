@@ -7,7 +7,9 @@ Research: `.tmp/research/llm-runtime-memory-2026-11-25.md`,
 `.tmp/research/llm-support-local-roster-2026-11-24.md`,
 `.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
 `.tmp/research/ash-family-implementation-index-2026-11-25.md`,
-`.tmp/research/residency-kv-cache-memory-planning-2026-11-25.md`
+`.tmp/research/residency-kv-cache-memory-planning-2026-11-25.md`,
+`.tmp/research/residency-extended-fields-2026-11-25.md`,
+`.tmp/research/api-provisioning-extended-fields-2026-11-25.md`
 
 ## Scope
 
@@ -48,6 +50,11 @@ belong to `epic-ash-native-families.md`; retrieval/rerank stays in
   user-installed `llama-server` (landed 2026-11-22).
 - `TASK-negative-prompt-preset-library.md` — versioned prompt/style presets
   served from the model registry.
+- `TASK-memory-demand-estimator.md` — memory demand estimator wave-1 follow-up.
+- `TASK-swap-byte-awareness.md` — swap byte awareness wave-1 follow-up.
+- `TASK-embed-cache-parity.md` — embed cache parity wave-1 follow-up.
+- `TASK-llm-keepalive-knob.md` — LLM keepalive knob wave-1 follow-up.
+- `TASK-memory-readout-bytes.md` — memory readout bytes wave-1 follow-up.
 
 ## Current status (2026-11-25)
 

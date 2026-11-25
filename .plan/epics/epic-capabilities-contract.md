@@ -5,7 +5,9 @@ Priority: P0
 Owner: unassigned
 Research: `.tmp/research/model-identity-license-download-2026-11-25.md`,
 `.tmp/research/media-integration-defaults-and-gaps-2026-11-24.md`,
-`.tmp/research/master-next-items-while-ash-cooks-2026-11-24.md`
+`.tmp/research/master-next-items-while-ash-cooks-2026-11-24.md`,
+`.tmp/research/determinism-extended-fields-2026-11-25.md`,
+`.tmp/research/api-provisioning-extended-fields-2026-11-25.md`
 
 ## Scope
 
@@ -26,6 +28,10 @@ Keep the existing `/api/version` response byte-compatible.
 - `TASK-audiocpp-capabilities.md` — `features.audio_cpp` compile-probed flags and family lists (P2).
 - `TASK-download-options-contract.md` — advertise only implemented provider/option support after its validator and staged commit contract land (P1).
 - `TASK-model-provenance-contract.md` — advertise identity status/confidence/reason, component coverage and existing-license-gate policy results; never promote unknown to identified/licensed (P1).
+- `TASK-admit-then-register-invariant.md` — admit-then-register invariant wave-1 follow-up.
+- `TASK-determinism-profile-surface.md` — determinism profile surface wave-1 follow-up.
+- `TASK-cancel-checkpoint-taxonomy.md` — cancel checkpoint taxonomy wave-1 follow-up.
+- `TASK-api-compat-matrix.md` — API compat matrix wave-1 follow-up.
 
 ## Acceptance
 
