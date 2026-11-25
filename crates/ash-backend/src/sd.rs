@@ -390,14 +390,18 @@ impl SdPipeline for AshSdPipeline {
         }
         let tokenizer = prompt::tokenizer_from(self.vocab_dir.as_deref()).map_err(backend_error)?;
         let positive = prompt::pad_ids(
-            tokenizer.encode(&req.prompt).map_err(backend_error)?,
+            tokenizer
+                .encode(&req.prompt, usize::MAX)
+                .map_err(backend_error)?
+                .ids,
             CLIP_TOKENS,
             CLIP_EOS,
         );
         let negative = prompt::pad_ids(
             tokenizer
-                .encode(req.negative_prompt.as_deref().unwrap_or(""))
-                .map_err(backend_error)?,
+                .encode(req.negative_prompt.as_deref().unwrap_or(""), usize::MAX)
+                .map_err(backend_error)?
+                .ids,
             CLIP_TOKENS,
             CLIP_EOS,
         );

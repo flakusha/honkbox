@@ -818,7 +818,12 @@ fn models_inspect_ash(
     let family = honkbox_ash_backend::checkpoint_family::detect(&map);
     if family == honkbox_ash_backend::checkpoint_family::CheckpointFamily::Sdxl {
         let (shapes, keys) = or_exit(honkbox_ash_backend::sdxl::inspect_sdxl_checkpoint(&path));
+        let marker = or_exit(readiness_markers(
+            family.label(),
+            keys.unet_ready && keys.clip_ready,
+        ));
         println!("family: sdxl");
+        println!("{marker}");
         print_ash_capabilities();
         println!("latent_channels: {}", shapes.latent_channels);
         println!("entry_kernel: {}", shapes.entry_kernel);
@@ -833,12 +838,12 @@ fn models_inspect_ash(
         println!("vae_exit_in: {}", shapes.vae_exit_in);
         println!("vae_exit_out: {}", shapes.vae_exit_out);
         println!(
-            "unet_keys: ready={} missing={}",
+            "unet_keys: subset_audit ready={} missing={}",
             keys.unet_ready,
             keys.unet_missing.len()
         );
         println!(
-            "clip_keys: ready={} missing={}",
+            "clip_keys: subset_audit ready={} missing={}",
             keys.clip_ready,
             keys.clip_missing.len()
         );
@@ -846,14 +851,35 @@ fn models_inspect_ash(
         print_missing("clip", &keys.clip_missing, all_missing);
         return;
     }
+    // ponytail: backend has no Sd2 variant yet; gate by label and switch to a
+    // typed match once checkpoint_family exposes Sd2.
+    let family_label = family.label();
+    if family_label == "sd2" {
+        println!("family: {family_label}");
+        println!("{}", or_exit(readiness_markers(family_label, false)));
+        print_ash_capabilities();
+        return;
+    }
+    // Compute the subset audits first: the marker precedes all detail output,
+    // and an unrecognised family is rejected by name before any SD1.5 audit.
+    let unet = honkbox_ash_backend::sd15_keys::audit(&map);
+    let clip = honkbox_ash_backend::clip_checkpoint::audit(
+        &map,
+        honkbox_ash_backend::clip_checkpoint::SD15_CLIP,
+    );
+    let marker = or_exit(readiness_markers(
+        family_label,
+        unet.is_ready() && clip.is_ready(),
+    ));
     let shapes = or_exit(honkbox_ash_backend::sd::inspect_checkpoint(&path));
-    println!("family: {}", family.label());
+    println!("family: {family_label}");
+    println!("{marker}");
     print_ash_capabilities();
     println!("latent_channels: {}", shapes.latent_channels);
     println!("entry_kernel: {}", shapes.entry_kernel);
-    println!("down: {:?}", shapes.down);
+    println!("downsamples: {:?}", shapes.downsamples);
     println!("mid_channels: {}", shapes.mid_channels);
-    println!("up: {:?}", shapes.up);
+    println!("projections: {:?}", shapes.projections);
     println!("output_channels: {}", shapes.output_channels);
     println!(
         "timestep: dim={} hidden={} channels={}",
@@ -861,19 +887,14 @@ fn models_inspect_ash(
     );
     println!("vae_entry: {:?}", shapes.vae_entry);
     println!("vae_exit: {:?}", shapes.vae_exit);
-    let unet = honkbox_ash_backend::sd15_keys::audit(&map);
     println!(
-        "unet_keys: ready={} missing={}",
+        "unet_keys: subset_audit ready={} missing={}",
         unet.is_ready(),
         unet.missing.len()
     );
     print_missing("unet", &unet.missing, all_missing);
-    let clip = honkbox_ash_backend::clip_checkpoint::audit(
-        &map,
-        honkbox_ash_backend::clip_checkpoint::SD15_CLIP,
-    );
     println!(
-        "clip_keys: ready={} missing={} wrong_shape={}",
+        "clip_keys: subset_audit ready={} missing={} wrong_shape={}",
         clip.is_ready(),
         clip.missing.len(),
         clip.wrong_shape.len()
@@ -881,6 +902,29 @@ fn models_inspect_ash(
     print_missing("clip", &clip.missing, all_missing);
 }
 
+/// Stable one-line marker: accepted header, subset-only key audit and actual
+/// execution scope. Never a whole-family availability boolean.
+#[cfg(feature = "ash-sd")]
+fn readiness_markers(family: &str, subset_keys_pass: bool) -> Result<&'static str, &'static str> {
+    match (family, subset_keys_pass) {
+        ("sd15", true) => Ok(
+            "readiness: family=sd15 header=accepted keys=subset-audit-pass execution=reduced-sd15-path",
+        ),
+        ("sd15", false) => Ok(
+            "readiness: family=sd15 header=accepted keys=subset-audit-incomplete execution=reduced-sd15-path",
+        ),
+        ("sd2", _) => Ok(
+            "readiness: family=sd2 header=accepted keys=family-spec-required execution=blocked-spec-only",
+        ),
+        ("sdxl", true) => Ok(
+            "readiness: family=sdxl header=accepted keys=subset-audit-pass execution=inspection-only",
+        ),
+        ("sdxl", false) => Ok(
+            "readiness: family=sdxl header=accepted keys=subset-audit-incomplete execution=inspection-only",
+        ),
+        _ => Err("unsupported checkpoint family"),
+    }
+}
 /// Print missing keys, or nothing when the inventory is complete.
 /// Limits to the first three unless `all` is set.
 #[cfg(feature = "ash-sd")]
@@ -1321,5 +1365,53 @@ mod tests {
                 "{args:?}"
             );
         }
+    }
+
+    #[cfg(feature = "ash-sd")]
+    #[test]
+    fn readiness_markers_sd15_reports_subset_audit_and_reduced_execution() {
+        assert_eq!(
+            readiness_markers("sd15", true).expect("marker"),
+            "readiness: family=sd15 header=accepted keys=subset-audit-pass execution=reduced-sd15-path"
+        );
+        assert_eq!(
+            readiness_markers("sd15", false).expect("marker"),
+            "readiness: family=sd15 header=accepted keys=subset-audit-incomplete execution=reduced-sd15-path"
+        );
+    }
+
+    #[cfg(feature = "ash-sd")]
+    #[test]
+    fn readiness_markers_sd2_requires_family_spec_and_blocks_execution() {
+        assert_eq!(
+            readiness_markers("sd2", true).expect("marker"),
+            "readiness: family=sd2 header=accepted keys=family-spec-required execution=blocked-spec-only"
+        );
+    }
+
+    #[cfg(feature = "ash-sd")]
+    #[test]
+    fn readiness_markers_sdxl_is_inspection_only() {
+        assert_eq!(
+            readiness_markers("sdxl", true).expect("marker"),
+            "readiness: family=sdxl header=accepted keys=subset-audit-pass execution=inspection-only"
+        );
+        assert_eq!(
+            readiness_markers("sdxl", false).expect("marker"),
+            "readiness: family=sdxl header=accepted keys=subset-audit-incomplete execution=inspection-only"
+        );
+    }
+
+    #[cfg(feature = "ash-sd")]
+    #[test]
+    fn readiness_markers_reject_wrong_family() {
+        assert_eq!(
+            readiness_markers("sd35", true),
+            Err("unsupported checkpoint family")
+        );
+        assert_eq!(
+            readiness_markers("unknown", false),
+            Err("unsupported checkpoint family")
+        );
     }
 }

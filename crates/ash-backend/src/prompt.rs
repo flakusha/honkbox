@@ -5,28 +5,28 @@
 //! bytes this engine does not own. Add a packaged asset when distribution
 //! requirements change.
 
-use crate::tokenizer::ClipTokenizer;
+use crate::tokenizer::{ClipTokenizer, Tokenizer, TokenizerError};
 use std::env;
-use std::io;
 use std::path::{Path, PathBuf};
 
 /// Environment variable naming the directory with CLIP tokenizer assets.
 pub const VOCAB_DIR_ENV: &str = "HONKBOX_ASH_CLIP_VOCAB_DIR";
 
 /// Resolve tokenizer files from `dir`, then from the env var, then fail loudly.
-pub fn tokenizer_from(dir: Option<&Path>) -> io::Result<ClipTokenizer> {
+pub fn tokenizer_from(dir: Option<&Path>) -> Result<Tokenizer, TokenizerError> {
     let root = match dir {
         Some(path) => PathBuf::from(path),
         None => env::var_os(VOCAB_DIR_ENV)
             .map(PathBuf::from)
             .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{VOCAB_DIR_ENV} is unset; pass --clip-vocab-dir"),
-                )
+                TokenizerError::MissingAsset(format!(
+                    "{VOCAB_DIR_ENV} is unset; pass --clip-vocab-dir"
+                ))
             })?,
     };
-    ClipTokenizer::from_files(&root.join("vocab.json"), &root.join("merges.txt"))
+    let clip = ClipTokenizer::from_files(&root.join("vocab.json"), &root.join("merges.txt"))
+        .map_err(|e| TokenizerError::MissingAsset(e.to_string()))?;
+    Tokenizer::clip(clip)
 }
 
 /// Truncate to `tokens` and right-pad with EOS so CFG can compare sequences.
