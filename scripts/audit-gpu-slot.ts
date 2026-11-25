@@ -51,8 +51,8 @@ const GATED_BEFORE_SLOT: Record<string, string> = {
   "models.rs:transcribe_validates_model_first": "x-job-id",
   // The synthesize route checks the input cap before it registers a job.
   "audio.rs:synthesize_input_over_cap_is_rejected": "x-job-id",
-  // The blender route refuses a malformed manifest, an unstored mesh, a
-  // wrong digest and a missing engine BEFORE it registers a job, so the
+  // The blender route refuses a malformed manifest, an unknown stage op, an
+  // unstored mesh, a wrong digest and a missing engine BEFORE it registers a
   // request never reaches the ledger.
   "blender_jobs.rs:the_request_shape_is_checked_before_the_store": "x-job-id",
   "blender_jobs.rs:an_unstored_mesh_is_a_404": "x-job-id",
