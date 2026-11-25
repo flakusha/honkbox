@@ -1,23 +1,24 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Exercises the real scripts/check-plan-doc-refs.ts gate against disposable
 // fixture trees.
 //
-// Resource contract: each test owns ONE unique temp directory created with
-// mkdtemp under the OS temp root and removes it in finally. The gate only reads
-// that tree, so parallel tests share no mutable state and need no ordering.
+// Resource contract: each test owns ONE unique directory created with mkdtemp
+// under the gitignored repo `.tmp/` scratch root and removes it in finally. The
+// gate only reads that tree, so parallel tests share no mutable state or order.
 //
 // TODO(env): bun-only - add an executor adapter when a node test target lands
 // Named Bun-only APIs: bun:test, import.meta.dir.
 
 const SCRIPT = join(import.meta.dir, "check-plan-doc-refs.ts");
+const SCRATCH = join(import.meta.dir, "..", ".tmp");
 
 function withRepo(run: (root: string) => void): void {
-  const root = mkdtempSync(join(tmpdir(), "honkbox-plan-refs-"));
+  mkdirSync(SCRATCH, { recursive: true });
+  const root = mkdtempSync(join(SCRATCH, "honkbox-plan-refs-"));
   try {
     mkdirSync(join(root, ".plan", "tickets"), { recursive: true });
     mkdirSync(join(root, ".plan", "epics"), { recursive: true });
