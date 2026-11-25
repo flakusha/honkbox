@@ -2740,7 +2740,7 @@ pub struct BlenderOutput {
 
 /// One stage of a Blender job, in execution order, as a tagged record
 /// (`{ "op": "uv_unpack", "margin": … }`). The vocabulary is closed: these
-/// snake_case `op` tags are the only wire names — internal Rust variant
+/// `snake_case` `op` tags are the only wire names — internal Rust variant
 /// names and array/tuple shapes are never part of this contract. An
 /// unknown `op` is rejected as a named 400 at the route.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]

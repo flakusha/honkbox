@@ -82,7 +82,7 @@ pub(crate) fn unsigned_manifest(inputs: &BundleInputs) -> Value {
 
 /// Inject canonical generation metadata without changing encoded image pixels.
 pub(crate) fn embed_record(
-    bytes: Vec<u8>,
+    bytes: &[u8],
     format: honkbox_sd_core::OutputFormat,
     record: &Value,
 ) -> Result<Vec<u8>, String> {
@@ -172,7 +172,7 @@ fn read_u32_le(bytes: &[u8], offset: usize, error: &'static str) -> CodecResult<
     ))
 }
 
-fn embed_png(bytes: Vec<u8>, record: &[u8], xmp: &[u8]) -> CodecResult<Vec<u8>> {
+fn embed_png(bytes: &[u8], record: &[u8], xmp: &[u8]) -> CodecResult<Vec<u8>> {
     const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
     if bytes.get(..8) != Some(SIGNATURE) {
         return Err("PNG: invalid signature");
@@ -183,16 +183,16 @@ fn embed_png(bytes: Vec<u8>, record: &[u8], xmp: &[u8]) -> CodecResult<Vec<u8>> 
     let mut saw_iend = false;
     let mut saw_idat = false;
     while offset < bytes.len() {
-        let length = usize::try_from(read_u32_be(&bytes, offset, "PNG: truncated chunk length")?)
+        let length = usize::try_from(read_u32_be(bytes, offset, "PNG: truncated chunk length")?)
             .map_err(|_| "PNG: chunk too large")?;
-        let kind = slice(&bytes, offset + 4, 4, "PNG: truncated chunk type")?;
+        let kind = slice(bytes, offset + 4, 4, "PNG: truncated chunk type")?;
         if !kind.iter().all(u8::is_ascii_alphabetic) || !kind[2].is_ascii_uppercase() {
             return Err("PNG: invalid chunk type");
         }
         let data_start = offset + 8;
-        let data = slice(&bytes, data_start, length, "PNG: truncated chunk data")?;
+        let data = slice(bytes, data_start, length, "PNG: truncated chunk data")?;
         let crc_offset = data_start + length;
-        let stored_crc = read_u32_be(&bytes, crc_offset, "PNG: truncated chunk CRC")?;
+        let stored_crc = read_u32_be(bytes, crc_offset, "PNG: truncated chunk CRC")?;
         if crc32(kind, data) != stored_crc {
             return Err("PNG: chunk CRC mismatch");
         }
@@ -227,8 +227,8 @@ fn embed_png(bytes: Vec<u8>, record: &[u8], xmp: &[u8]) -> CodecResult<Vec<u8>> 
         return Err("PNG: missing IDAT");
     }
     let insert_at = ihdr_end.ok_or("PNG: missing IHDR")?;
-    let record_chunk = png_chunk(b"iTXt", &png_text(RECORD_KEYWORD, record));
-    let xmp_chunk = png_chunk(b"iTXt", &png_text(XMP_KEYWORD, xmp));
+    let record_chunk = png_chunk(*b"iTXt", &png_text(RECORD_KEYWORD, record));
+    let xmp_chunk = png_chunk(*b"iTXt", &png_text(XMP_KEYWORD, xmp));
     let added = record_chunk
         .len()
         .checked_add(xmp_chunk.len())
@@ -253,13 +253,13 @@ fn png_text(keyword: &[u8], text: &[u8]) -> Vec<u8> {
     data
 }
 
-fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
     let length = u32::try_from(data.len()).expect("metadata is bounded below u32::MAX");
     let mut chunk = Vec::with_capacity(data.len() + 12);
     chunk.extend_from_slice(&length.to_be_bytes());
-    chunk.extend_from_slice(kind);
+    chunk.extend_from_slice(&kind);
     chunk.extend_from_slice(data);
-    chunk.extend_from_slice(&crc32(kind, data).to_be_bytes());
+    chunk.extend_from_slice(&crc32(&kind, data).to_be_bytes());
     chunk
 }
 
@@ -288,8 +288,8 @@ fn crc32(kind: &[u8], data: &[u8]) -> u32 {
     !crc
 }
 
-fn embed_jpeg(bytes: Vec<u8>, metadata: &RecordMetadata) -> CodecResult<Vec<u8>> {
-    validate_jpeg(&bytes)?;
+fn embed_jpeg(bytes: &[u8], metadata: &RecordMetadata) -> CodecResult<Vec<u8>> {
+    validate_jpeg(bytes)?;
     let exif = jpeg_app1(&exif_payload(&metadata.json)?)?;
     let xmp = jpeg_app1(&xmp_payload(&metadata.xmp))?;
     let added = exif
@@ -441,14 +441,14 @@ fn push_ifd_entry(out: &mut Vec<u8>, tag: u16, field_type: u16, count: u32, valu
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-fn embed_webp(bytes: Vec<u8>, metadata: &RecordMetadata) -> CodecResult<Vec<u8>> {
+fn embed_webp(bytes: &[u8], metadata: &RecordMetadata) -> CodecResult<Vec<u8>> {
     if bytes.len() < 12 {
         return Err("WebP: truncated RIFF header");
     }
     if bytes.get(..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WEBP") {
         return Err("WebP: invalid RIFF/WEBP signature");
     }
-    let riff_size = usize::try_from(read_u32_le(&bytes, 4, "WebP: truncated RIFF header")?)
+    let riff_size = usize::try_from(read_u32_le(bytes, 4, "WebP: truncated RIFF header")?)
         .map_err(|_| "WebP: RIFF size mismatch")?;
     if riff_size != bytes.len() - 8 {
         return Err("WebP: RIFF size mismatch");
@@ -457,15 +457,15 @@ fn embed_webp(bytes: Vec<u8>, metadata: &RecordMetadata) -> CodecResult<Vec<u8>>
     let mut offset = 12;
     let mut vp8l = None;
     while offset < bytes.len() {
-        let kind = slice(&bytes, offset, 4, "WebP: truncated chunk header")?;
+        let kind = slice(bytes, offset, 4, "WebP: truncated chunk header")?;
         let length = usize::try_from(read_u32_le(
-            &bytes,
+            bytes,
             offset + 4,
             "WebP: truncated chunk header",
         )?)
         .map_err(|_| "WebP: chunk too large")?;
         let data_start = offset + 8;
-        let data = slice(&bytes, data_start, length, "WebP: truncated chunk data")?;
+        let data = slice(bytes, data_start, length, "WebP: truncated chunk data")?;
         let padded_end = data_start
             .checked_add(length)
             .and_then(|end| end.checked_add(length & 1))
@@ -495,10 +495,10 @@ fn embed_webp(bytes: Vec<u8>, metadata: &RecordMetadata) -> CodecResult<Vec<u8>>
     vp8x_payload.extend_from_slice(&[0, 0, 0]);
     push_u24_le(&mut vp8x_payload, width - 1);
     push_u24_le(&mut vp8x_payload, height - 1);
-    let vp8x = webp_chunk(b"VP8X", &vp8x_payload);
-    let exif = webp_chunk(b"EXIF", &exif_payload(&metadata.json)?);
-    let xmp = webp_chunk(b"XMP ", &metadata.xmp);
-    let added = vp8x
+    let vp8x_chunk = webp_chunk(*b"VP8X", &vp8x_payload);
+    let exif = webp_chunk(*b"EXIF", &exif_payload(&metadata.json)?);
+    let xmp = webp_chunk(*b"XMP ", &metadata.xmp);
+    let added = vp8x_chunk
         .len()
         .checked_add(exif.len())
         .and_then(|length| length.checked_add(xmp.len()))
@@ -511,7 +511,7 @@ fn embed_webp(bytes: Vec<u8>, metadata: &RecordMetadata) -> CodecResult<Vec<u8>>
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&[0; 4]);
     out.extend_from_slice(b"WEBP");
-    out.extend_from_slice(&vp8x);
+    out.extend_from_slice(&vp8x_chunk);
     out.extend_from_slice(&bytes[12..]);
     out.extend_from_slice(&exif);
     out.extend_from_slice(&xmp);
@@ -539,10 +539,10 @@ fn push_u24_le(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&bytes[..3]);
 }
 
-fn webp_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+fn webp_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
     let length = u32::try_from(data.len()).expect("metadata is bounded below u32::MAX");
     let mut chunk = Vec::with_capacity(data.len() + 8 + (data.len() & 1));
-    chunk.extend_from_slice(kind);
+    chunk.extend_from_slice(&kind);
     chunk.extend_from_slice(&length.to_le_bytes());
     chunk.extend_from_slice(data);
     if data.len() & 1 != 0 {
@@ -824,12 +824,8 @@ mod tests {
     #[test]
     fn png_round_trip_preserves_pixels_and_embeds_canonical_record() {
         let source = png_source();
-        let embedded = embed_record(
-            source.clone(),
-            OutputFormat::Png,
-            &generation_record(&inputs()),
-        )
-        .expect("embed PNG");
+        let embedded = embed_record(&source, OutputFormat::Png, &generation_record(&inputs()))
+            .expect("embed PNG");
         assert_eq!(
             decode(&source, ImageFormat::Png),
             decode(&embedded, ImageFormat::Png)
@@ -864,12 +860,8 @@ mod tests {
     #[test]
     fn jpeg_round_trip_preserves_pixels_and_embeds_canonical_record() {
         let source = jpeg_source();
-        let embedded = embed_record(
-            source.clone(),
-            OutputFormat::Jpeg,
-            &generation_record(&inputs()),
-        )
-        .expect("embed JPEG");
+        let embedded = embed_record(&source, OutputFormat::Jpeg, &generation_record(&inputs()))
+            .expect("embed JPEG");
         assert_eq!(
             decode(&source, ImageFormat::Jpeg),
             decode(&embedded, ImageFormat::Jpeg)
@@ -889,12 +881,8 @@ mod tests {
     #[test]
     fn webp_round_trip_preserves_pixels_alpha_and_canonical_record() {
         let source = webp_source();
-        let embedded = embed_record(
-            source.clone(),
-            OutputFormat::Webp,
-            &generation_record(&inputs()),
-        )
-        .expect("embed WebP");
+        let embedded = embed_record(&source, OutputFormat::Webp, &generation_record(&inputs()))
+            .expect("embed WebP");
         assert_eq!(
             decode(&source, ImageFormat::WebP),
             decode(&embedded, ImageFormat::WebP)
@@ -922,8 +910,8 @@ mod tests {
             (jpeg_source(), OutputFormat::Jpeg),
             (webp_source(), OutputFormat::Webp),
         ] {
-            let first = embed_record(source.clone(), format, &record).expect("first embed");
-            let second = embed_record(source, format, &record).expect("second embed");
+            let first = embed_record(&source, format, &record).expect("first embed");
+            let second = embed_record(&source, format, &record).expect("second embed");
             assert_eq!(first, second);
         }
     }
@@ -935,14 +923,14 @@ mod tests {
         let last = bad_crc.len() - 5;
         bad_crc[last] ^= 1;
         let mut no_idat = png_source()[..33].to_vec();
-        no_idat.extend(png_chunk(b"IEND", &[]));
+        no_idat.extend(png_chunk(*b"IEND", &[]));
         for bytes in [
             b"not a png".to_vec(),
             png_source()[..20].to_vec(),
             bad_crc,
             no_idat,
         ] {
-            let error = embed_record(bytes, OutputFormat::Png, &record).expect_err("bad PNG");
+            let error = embed_record(&bytes, OutputFormat::Png, &record).expect_err("bad PNG");
             assert!(error.starts_with("PNG:"), "{error}");
         }
     }
@@ -956,7 +944,7 @@ mod tests {
             vec![0xff, 0xd8, 0xff, 0xe0, 0, 16],
             source[..source.len() - 2].to_vec(),
         ] {
-            let error = embed_record(bytes, OutputFormat::Jpeg, &record).expect_err("bad JPEG");
+            let error = embed_record(&bytes, OutputFormat::Jpeg, &record).expect_err("bad JPEG");
             assert!(error.starts_with("JPEG:"), "{error}");
         }
     }
@@ -971,7 +959,7 @@ mod tests {
             webp_source()[..20].to_vec(),
             bad_size,
         ] {
-            let error = embed_record(bytes, OutputFormat::Webp, &record).expect_err("bad WebP");
+            let error = embed_record(&bytes, OutputFormat::Webp, &record).expect_err("bad WebP");
             assert!(error.starts_with("WebP:"), "{error}");
         }
     }
@@ -984,21 +972,21 @@ mod tests {
             Value::String("x".repeat(MAX_METADATA_BYTES + 1)),
         );
         assert_eq!(
-            embed_record(png_source(), OutputFormat::Png, &Value::Object(oversized))
+            embed_record(&png_source(), OutputFormat::Png, &Value::Object(oversized))
                 .expect_err("oversized record"),
             "record exceeds 1 MiB limit"
         );
 
         let expanded_xmp = json!({"payload": "<".repeat(MAX_METADATA_BYTES / 4)});
         assert_eq!(
-            embed_record(png_source(), OutputFormat::Png, &expanded_xmp)
+            embed_record(&png_source(), OutputFormat::Png, &expanded_xmp)
                 .expect_err("oversized XMP"),
             "XMP packet exceeds 1 MiB limit"
         );
 
         let large_jpeg_record = json!({"payload": "x".repeat(100_000)});
         assert_eq!(
-            embed_record(jpeg_source(), OutputFormat::Jpeg, &large_jpeg_record)
+            embed_record(&jpeg_source(), OutputFormat::Jpeg, &large_jpeg_record)
                 .expect_err("oversized APP1"),
             "JPEG: APP1 segment exceeds 65533 bytes"
         );

@@ -244,10 +244,10 @@ pub(super) fn admit_op_inputs(
         check_admitted_container(row, &raw)?;
         admitted.push(AdmittedOpInput {
             source,
+            artifact_id,
             raw,
             row,
             sha256,
-            artifact_id,
         });
     }
     Ok(admitted)
