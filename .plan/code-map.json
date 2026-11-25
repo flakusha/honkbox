@@ -351,6 +351,12 @@
       "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md"
     }
   ],
+  "src/image_metadata.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-content-record-provenance.md"
+    }
+  ],
   "src/integrations/honkbox/capabilities.ts": [
     {
       "kind": "ticket",
