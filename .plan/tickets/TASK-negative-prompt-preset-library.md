@@ -1,6 +1,7 @@
 # TASK: Versioned prompt/style preset library
 
-Status: proposed
+Status: In Progress
+**Scope:** Versioned negative-prompt/style preset library + X-Honkbox-Preset composition
 Priority: P2
 Epic: epic-llm-expansion
 Owner: unassigned
