@@ -1064,6 +1064,32 @@
     "source": ".plan/tickets/TASK-ash-backend-promote.md",
     "status": "done"
   },
+  "TASK-ASH-BLOCK-LEVEL-GOLDENS": {
+    "hash": "pending",
+    "extid": "TASK-ASH-BLOCK-LEVEL-GOLDENS",
+    "type": "TASK",
+    "title": "Block-level goldens with first-divergence reporting",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-block-level-goldens.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-BLOCK-TRAIT": {
+    "hash": "pending",
+    "extid": "TASK-ASH-BLOCK-TRAIT",
+    "type": "TASK",
+    "title": "Formal Block trait for chain-of-blocks dispatch",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-block-trait.md",
+    "status": "proposed"
+  },
   "TASK-ASH-DECODER-OPS": {
     "hash": "pending",
     "extid": "TASK-ASH-DECODER-OPS",
@@ -1075,6 +1101,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-decoder-ops.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-DIFFUSION-SCHEDULER-HOST": {
+    "hash": "pending",
+    "extid": "TASK-ASH-DIFFUSION-SCHEDULER-HOST",
+    "type": "TASK",
+    "title": "Host-math diffusion schedulers (Euler-a, DPM++-2M) with upstream parity",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-diffusion-scheduler-host.md",
     "status": "proposed"
   },
   "TASK-ASH-FAMILY-READINESS-MARKERS": {
@@ -1194,6 +1233,32 @@
     "source": ".plan/tickets/TASK-ash-sampling-contract.md",
     "status": "proposed"
   },
+  "TASK-ASH-SHADER-PIPELINE-CACHE": {
+    "hash": "pending",
+    "extid": "TASK-ASH-SHADER-PIPELINE-CACHE",
+    "type": "TASK",
+    "title": "Build-time shaders plus persisted pipeline cache",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-shader-pipeline-cache.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-TAESD-DECODER": {
+    "hash": "pending",
+    "extid": "TASK-ASH-TAESD-DECODER",
+    "type": "TASK",
+    "title": "TAESD tiny decoder as first non-Stub VAE alternative",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-taesd-decoder.md",
+    "status": "proposed"
+  },
   "TASK-ASH-TOKENIZER-FRAMEWORK": {
     "hash": "pending",
     "extid": "TASK-ASH-TOKENIZER-FRAMEWORK",
@@ -1246,6 +1311,19 @@
     "source": ".plan/tickets/TASK-ash-verification-gates.md",
     "status": "done"
   },
+  "TASK-ASH-VULKAN-DEQUANT-KERNEL": {
+    "hash": "pending",
+    "extid": "TASK-ASH-VULKAN-DEQUANT-KERNEL",
+    "type": "TASK",
+    "title": "Vulkan GGUF dequant kernel against the host oracle",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-vulkan-dequant-kernel.md",
+    "status": "proposed"
+  },
   "TASK-AUDIO-RESAMPLER-QUALITY": {
     "hash": "355fa7f",
     "git_issue": "355fa7f",
@@ -1259,6 +1337,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-audio-resampler-quality.md",
     "status": "done"
+  },
+  "TASK-AUDIO-RESIDENCY-CONTENTION-POLICY": {
+    "hash": "pending",
+    "extid": "TASK-AUDIO-RESIDENCY-CONTENTION-POLICY",
+    "type": "TASK",
+    "title": "Audio/LLM residency slot-contention policy",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-audio-residency-contention-policy.md",
+    "status": "proposed"
   },
   "TASK-AUDIO-VAD-SURFACE": {
     "hash": "92aceb8",
@@ -2166,6 +2257,71 @@
     "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md",
     "status": "done"
   },
+  "TASK-IMG-META-COMFYUI-PAIR": {
+    "hash": "pending",
+    "extid": "TASK-IMG-META-COMFYUI-PAIR",
+    "type": "TASK",
+    "title": "ComfyUI prompt/workflow metadata pair",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-img-meta-comfyui-pair.md",
+    "status": "proposed"
+  },
+  "TASK-IMG-META-EXIF-ORIENTATION": {
+    "hash": "pending",
+    "extid": "TASK-IMG-META-EXIF-ORIENTATION",
+    "type": "TASK",
+    "title": "Honor EXIF orientation on image inputs",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-img-meta-exif-orientation.md",
+    "status": "proposed"
+  },
+  "TASK-IMG-META-PNG-PARAMETERS": {
+    "hash": "pending",
+    "extid": "TASK-IMG-META-PNG-PARAMETERS",
+    "type": "TASK",
+    "title": "Embed A1111-style parameters chunk on PNG outputs",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-img-meta-png-parameters.md",
+    "status": "proposed"
+  },
+  "TASK-IMG-META-PRESERVE-FORWARD": {
+    "hash": "pending",
+    "extid": "TASK-IMG-META-PRESERVE-FORWARD",
+    "type": "TASK",
+    "title": "Decide EXIF/XMP preserve-or-strip on transform",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-img-meta-preserve-forward.md",
+    "status": "proposed"
+  },
+  "TASK-IMG-META-WEBP-EXIF": {
+    "hash": "pending",
+    "extid": "TASK-IMG-META-WEBP-EXIF",
+    "type": "TASK",
+    "title": "WebP EXIF workflow/prompt write path",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-img-meta-webp-exif.md",
+    "status": "proposed"
+  },
   "TASK-INFERENCE-CACHE-CORRECTNESS": {
     "hash": "pending",
     "extid": "TASK-INFERENCE-CACHE-CORRECTNESS",
@@ -2221,6 +2377,58 @@
     "source": ".plan/tickets/TASK-llama-server-attach.md",
     "status": "done"
   },
+  "TASK-LLM-CONSTRAINED-OUTPUT-EVAL": {
+    "hash": "pending",
+    "extid": "TASK-LLM-CONSTRAINED-OUTPUT-EVAL",
+    "type": "TASK",
+    "title": "Constrained-output eval with checked-in goldens",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-constrained-output-eval.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-KV-SPILL-POLICY": {
+    "hash": "pending",
+    "extid": "TASK-LLM-KV-SPILL-POLICY",
+    "type": "TASK",
+    "title": "Paged KV spill policy (Refuse default, SpillRam opt-in)",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-kv-spill-policy.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-LOAD-PLAN-ADMISSION": {
+    "hash": "pending",
+    "extid": "TASK-LLM-LOAD-PLAN-ADMISSION",
+    "type": "TASK",
+    "title": "Split LLM load-plan from run (admit before load)",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-load-plan-admission.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-MOE-TIER-OFFLOAD": {
+    "hash": "pending",
+    "extid": "TASK-LLM-MOE-TIER-OFFLOAD",
+    "type": "TASK",
+    "title": "Tiered MoE expert offload for LLM worker",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-moe-tier-offload.md",
+    "status": "proposed"
+  },
   "TASK-LLM-PROMPT-CACHE": {
     "hash": "dc9ad0a",
     "git_issue": "dc9ad0a",
@@ -2247,6 +2455,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-llm-speculative-decoding-spike.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-SPECULATIVE-MODEL-DRAFT": {
+    "hash": "pending",
+    "extid": "TASK-LLM-SPECULATIVE-MODEL-DRAFT",
+    "type": "TASK",
+    "title": "Model-based speculative draft-verify for LLM worker",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-speculative-model-draft.md",
     "status": "proposed"
   },
   "TASK-LLM-TOOL-CHOICE-CONTRACT": {
@@ -2276,6 +2497,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-llm-vision-default.md",
     "status": "done"
+  },
+  "TASK-LLM-VISION-INGEST-CONTRACT": {
+    "hash": "pending",
+    "extid": "TASK-LLM-VISION-INGEST-CONTRACT",
+    "type": "TASK",
+    "title": "Vision-ingest tested contract (fixture + mmproj-less refusal)",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-vision-ingest-contract.md",
+    "status": "proposed"
   },
   "TASK-LOD-NAMING-CONTRACT": {
     "hash": "2ad28fd",

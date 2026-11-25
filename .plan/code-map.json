@@ -63,6 +63,14 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-inference-cache-correctness.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-constrained-output-eval.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-vision-ingest-contract.md"
     }
   ],
   "src/backends.rs": [
@@ -121,6 +129,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vulkan-dequant-kernel.md"
     }
   ],
   "src/checkpoint_family.rs": [
@@ -141,6 +153,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-shader-pipeline-cache.md"
     }
   ],
   "src/config.rs": [
@@ -181,6 +197,12 @@
       "source": ".plan/tickets/TASK-support-doc-truth.md"
     }
   ],
+  "src/ddim_sampler.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-diffusion-scheduler-host.md"
+    }
+  ],
   "src/determinism.rs": [
     {
       "kind": "ticket",
@@ -204,6 +226,10 @@
     }
   ],
   "src/device.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-shader-pipeline-cache.md"
+    },
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-device-selection-rank-review.md"
@@ -456,6 +482,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-audio-residency-contention-policy.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
     },
     {
@@ -504,11 +534,31 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-kv-spill-policy.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-load-plan-admission.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-moe-tier-offload.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-speculative-model-draft.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-tool-choice-contract.md"
     },
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-vision-default.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-vision-ingest-contract.md"
     },
     {
       "kind": "ticket",
@@ -985,6 +1035,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-exr-format-support.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-img-meta-exif-orientation.md"
     }
   ],
   "src/routes/images_edit.rs": [
@@ -1001,6 +1055,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-img-meta-exif-orientation.md"
     },
     {
       "kind": "ticket",
@@ -1104,6 +1162,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-diffusion-scheduler-host.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md"
     }
   ],
@@ -1185,22 +1247,50 @@
       "source": ".plan/tickets/TASK-audiocpp-tts-provider.md"
     }
   ],
+  "src/unet_attention.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-block-trait.md"
+    }
+  ],
   "src/unet_checkpoint.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
     }
   ],
+  "src/unet_input.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-block-trait.md"
+    }
+  ],
   "src/unet_real.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-ash-sd15-numerics.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-block-level-goldens.md"
+    }
+  ],
+  "src/unet_traversal.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-block-trait.md"
     }
   ],
   "src/vad.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-audiocpp-vad-decision.md"
+    }
+  ],
+  "src/vae_decode.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-taesd-decoder.md"
     }
   ],
   "src/vae_real.rs": [
