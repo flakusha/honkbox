@@ -19,6 +19,7 @@ higher-authority source is wrong or aspirational and must be marked as such.
 | `guide/configuration.md` | Data dir, config file, model roots, env overrides, auth, logs, registry cache |
 | `guide/operations.md` | Jobs, cancellation, SSE events, deployment topology, ComfyUI read surface |
 | `guide/media-capabilities.md` | ControlNet, vision chat (mmproj), audio formats |
+| `guide/content-provenance.md` | Embedded image records and unsigned C2PA-shaped job manifests |
 | `guide/migrating.md` | Moving state from sd-rip / `~/.honkbox` layouts |
 | `meta/docs-shipping.md` | Shipping/generation review: plain `.md` vs Pages vs VitePress |
 

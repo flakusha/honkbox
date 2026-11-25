@@ -656,6 +656,49 @@ fn decode_entry(entry: &Value) -> Vec<u8> {
         .expect("valid base64")
 }
 
+/// Parse the generation record from the first JPEG APP1 EXIF `UserComment`.
+fn jpeg_exif_record(bytes: &[u8]) -> Value {
+    assert_eq!(&bytes[..4], b"\xff\xd8\xff\xe1");
+    let length = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+    let exif = &bytes[6..length + 4];
+    let tiff = exif.strip_prefix(b"Exif\0\0").expect("EXIF prefix");
+    assert_eq!(&tiff[..2], b"II");
+    let ifd_offset = usize::try_from(u32::from_le_bytes(
+        tiff[4..8].try_into().expect("IFD offset"),
+    ))
+    .expect("IFD offset fits usize");
+    let count = usize::from(u16::from_le_bytes(
+        tiff[ifd_offset..ifd_offset + 2]
+            .try_into()
+            .expect("IFD count"),
+    ));
+    let comment = (0..count)
+        .find_map(|index| {
+            let entry = ifd_offset + 2 + index * 12;
+            if u16::from_le_bytes(tiff[entry..entry + 2].try_into().expect("tag")) != 0x9286 {
+                return None;
+            }
+            let length = usize::try_from(u32::from_le_bytes(
+                tiff[entry + 4..entry + 8]
+                    .try_into()
+                    .expect("comment count"),
+            ))
+            .expect("comment count fits usize");
+            let offset = usize::try_from(u32::from_le_bytes(
+                tiff[entry + 8..entry + 12]
+                    .try_into()
+                    .expect("comment offset"),
+            ))
+            .expect("comment offset fits usize");
+            Some(&tiff[offset..offset + length])
+        })
+        .expect("EXIF UserComment");
+    let json = comment
+        .strip_prefix(b"UNICODE\0")
+        .expect("Unicode UserComment");
+    serde_json::from_slice(json).expect("generation record JSON")
+}
+
 /// `output_format=jpeg` returns JPEG bytes and lands a `final_00.jpg`
 /// bundle whose sidecar `format` says `jpeg`.
 #[tokio::test]
@@ -681,9 +724,34 @@ async fn jpeg_output_format_and_bundle_agree() {
     let dir = jobs.next().expect("one bundle").unwrap().path();
     let art = std::fs::read(dir.join("final_00.jpg")).expect("bundle artifact with jpg extension");
     assert_eq!(&art[..3], &[0xFF, 0xD8, 0xFF]);
-    let record: Value =
+    assert_eq!(
+        decode_entry(&body["data"][0]),
+        art,
+        "bundle bytes are response bytes"
+    );
+    let embedded_record = jpeg_exif_record(&art);
+    let sidecar: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
-    assert_eq!(record["format"], "jpeg", "final_00.json");
+    assert_eq!(sidecar["format"], "jpeg", "final_00.json");
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("c2pa_manifest.json")).unwrap())
+            .unwrap();
+    let assertion = manifest["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|assertion| assertion["label"] == "honkbox.generation")
+        .expect("generation assertion");
+    assert_eq!(
+        embedded_record, assertion["data"],
+        "JPEG EXIF and manifest carry the same generation record"
+    );
+    assert_eq!(embedded_record["record_type"], "honkbox.generation/1");
+    assert_eq!(embedded_record["prompt"], "redo this");
+    assert!(
+        embedded_record["strength"].is_number(),
+        "img2img strength recorded"
+    );
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
