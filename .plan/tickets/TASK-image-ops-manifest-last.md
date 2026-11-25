@@ -1,6 +1,7 @@
 # TASK: Manifest-last image-op publication
 
-Status: proposed
+Status: In Progress
+**Scope:** Manifest-last image-op bundle publication with verified manifest gate
 Priority: P1
 Epic: epic-editor-integration
 Owner: unassigned
