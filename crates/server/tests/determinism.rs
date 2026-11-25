@@ -59,9 +59,10 @@ fn sha256_hex_matches_reference() {
 }
 
 /// Acceptance: the same request written twice on the stub backend lands
-/// byte-identical bundle INPUT files — `request.json` and the sidecar.
-/// `metrics.jsonl` is telemetry (carries `elapsed_ms`) and is deliberately
-/// not compared; the ULID dir names differ and are excluded by design.
+/// identical bundle INPUTS. The sidecar carries volatile telemetry
+/// (`elapsed_ms`), so byte-identical inputs are compared CANONICALLY
+/// (volatile keys dropped), not as raw telemetry-bearing bytes; the ULID
+/// dir names differ and are excluded by design.
 #[test]
 fn same_request_twice_writes_byte_identical_inputs() {
     let a = std::env::temp_dir().join(format!("honkbox-det-a-{}", std::process::id()));
@@ -73,22 +74,30 @@ fn same_request_twice_writes_byte_identical_inputs() {
     write_bundle_into(&a, &fixture(), &[0u8; 8], 7).expect("bundle a");
     write_bundle_into(&b, &fixture(), &[0u8; 8], 999).expect("bundle b");
 
-    let req_a = std::fs::read(a.join("request.json")).expect("request a");
-    let req_b = std::fs::read(b.join("request.json")).expect("request b");
+    let side_a: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(a.join("final_00.json")).expect("sidecar a"))
+            .expect("sidecar a json");
+    let side_b: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(b.join("final_00.json")).expect("sidecar b"))
+            .expect("sidecar b json");
+
+    // The two runs really did record different telemetry.
+    assert_eq!(side_a["elapsed_ms"], 7);
+    assert_eq!(side_b["elapsed_ms"], 999);
+
+    // Same inputs ⇒ same canonical record (volatile keys excluded).
     assert_eq!(
-        req_a, req_b,
-        "request.json byte-identical for the same inputs"
+        determinism::canonical_json(&side_a),
+        determinism::canonical_json(&side_b),
+        "canonical sidecar identical for the same inputs"
     );
-    let side_a = std::fs::read(a.join("final_00.json")).expect("sidecar a");
-    let side_b = std::fs::read(b.join("final_00.json")).expect("sidecar b");
-    assert_eq!(side_a, side_b, "sidecar byte-identical for the same inputs");
 
     // The recorded key is exactly the canonical hash of the same inputs.
-    let req: serde_json::Value = serde_json::from_slice(&req_a).expect("request json");
     assert_eq!(
-        req["inputs_sha256"],
+        side_a["inputs_sha256"],
         determinism::bundle_record_hash(&fixture())
     );
+    assert_eq!(side_a["inputs_sha256"], side_b["inputs_sha256"]);
 
     for dir in [&a, &b] {
         std::fs::remove_dir_all(dir).ok();

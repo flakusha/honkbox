@@ -176,7 +176,7 @@ pub(crate) async fn post_app_start(headers: HeaderMap, AxumPath(id): AxumPath<St
     start_managed_app(&headers, &id, "managed apps").await
 }
 
-/// Calling `/comfyui` starts ComfyUI, llama-swap style: convenience alias for
+/// Calling `/comfyui` starts `ComfyUI`, llama-swap style: convenience alias for
 /// `POST /v1/apps/comfyui/start`. Same branches, same DTO, `/comfyui` voice.
 #[utoipa::path(
     post,

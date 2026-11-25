@@ -1,8 +1,8 @@
 //! Read-only generation history over finished job bundles.
 //!
-//! Finished bundles live at `<data_dir>/jobs/<ulid>/` with a `final_00.json`
-//! sidecar. There is no job-id to bundle index and no `manifest.json` on
-//! image bundles, so this module reads the sidecar directly; it never calls
+//! Finished bundles live at `<data_dir>/jobs/<ulid>/` with a single JSON
+//! report `final_00.json`. There is no job-id to bundle index and no
+//! `manifest.json` on image bundles, so this module reads the report directly;
 //! the content routes and never mutates job state. File access runs on the
 //! blocking pool, skips symlinks, and caps both sidecar size and the number
 //! of bundle directories scanned.

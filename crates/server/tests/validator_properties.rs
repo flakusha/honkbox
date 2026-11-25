@@ -1222,7 +1222,7 @@ async fn images_base_size_cap_is_backend_enforced() {
 }
 
 /// Recipe precedence (explicit field > recipe default > server default)
-/// lands verbatim in the job-bundle sidecar `request.json`.
+/// lands verbatim in the job-bundle sidecar `final_00.json`.
 #[tokio::test]
 // Deliberate: same std-guard serialization as above.
 #[allow(clippy::await_holding_lock)]
@@ -1235,7 +1235,7 @@ async fn recipe_precedence_lands_in_sidecar() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-    // One fresh app dir per request: `latest_bundle_request` then sees
+    // One fresh app dir per request: `latest_bundle_sidecar` then sees
     // exactly one bundle per phase — no newest-by-mtime tie to race on
     // (back-to-back writes under `-j 1` can share an mtime tick).
     let phase_app = |n: usize| {
@@ -1262,7 +1262,7 @@ async fn recipe_precedence_lands_in_sidecar() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let request = latest_bundle_request(&phase).expect("bundle written");
+    let request = latest_bundle_sidecar(&phase).expect("bundle written");
     assert_eq!(request["sampler"], json!("euler"), "explicit override wins");
     assert_eq!(
         request["scheduler"],
@@ -1282,7 +1282,7 @@ async fn recipe_precedence_lands_in_sidecar() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let request = latest_bundle_request(&phase).expect("bundle written");
+    let request = latest_bundle_sidecar(&phase).expect("bundle written");
     assert_eq!(request["sampler"], json!("dpm++2m"));
     assert_eq!(request["scheduler"], json!("karras"));
     assert_eq!(request["cfg_scale"], json!(7.0));
@@ -1292,7 +1292,7 @@ async fn recipe_precedence_lands_in_sidecar() {
     let (router, phase) = phase_app(3);
     let (status, _) = post_json(&router, "/v1/images/generations", &json!({"prompt": "p"})).await;
     assert_eq!(status, StatusCode::OK);
-    let request = latest_bundle_request(&phase).expect("bundle written");
+    let request = latest_bundle_sidecar(&phase).expect("bundle written");
     assert_eq!(request["sampler"], json!("euler"));
     // The discrete schedule keeps its historical sidecar recording name
     // (`normal`); sd.cpp wire spellings apply only to explicit requests.
@@ -1316,8 +1316,8 @@ impl Drop for TempDirGuard {
     }
 }
 
-/// The `request.json` sidecar of the most recently written job bundle.
-fn latest_bundle_request(data_dir: &Path) -> Option<Value> {
+/// The `final_00.json` sidecar of the most recently written job bundle.
+fn latest_bundle_sidecar(data_dir: &Path) -> Option<Value> {
     let jobs = data_dir.join("jobs");
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in std::fs::read_dir(&jobs).ok()? {
@@ -1327,6 +1327,6 @@ fn latest_bundle_request(data_dir: &Path) -> Option<Value> {
             newest = Some((modified, entry.path()));
         }
     }
-    let path = newest?.1.join("request.json");
+    let path = newest?.1.join("final_00.json");
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }

@@ -34,8 +34,8 @@ Model weights and asset packs (fetched at runtime, not vendored)
 ================================================================================
 Weights are never committed here. The curated rows in
 crates/server/src/catalog.json are the authoritative record; the same license
-ids are published on GET /v1/capabilities (`licenses`) and stamped into job
-bundle sidecars (`final_00.json`: `model_license`). Curated license ids:
+ids are published on GET /v1/capabilities (`licenses`) and stamped into the
+job bundle report (`final_00.json`: `model_license`). Curated license ids:
 
 - llama3.2 — Meta Llama 3.2 Community License (bartowski/Llama-3.2-*-Instruct-GGUF).
 - llama3.1 — Meta Llama 3.1 Community License (bartowski/Meta-Llama-3.1-8B-Instruct-GGUF).
@@ -56,5 +56,5 @@ bundle sidecars (`final_00.json`: `model_license`). Curated license ids:
 
 Per-row terms URL, territory, gating, commercial terms, source URL, published
 sha256 and required attribution text live on the catalog record; non-commercial
-weights are stamped `non_commercial: true` in bundle sidecars. The machine-readable
+weights are stamped `non_commercial: true` in the job bundle report. The machine-readable
 set on GET /v1/capabilities is always current.

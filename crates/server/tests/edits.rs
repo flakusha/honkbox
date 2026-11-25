@@ -495,13 +495,13 @@ async fn img2img_without_mask_records_default_strength() {
     assert_png(&data[0], 4, 4);
     let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     let dir = jobs.next().expect("one bundle").unwrap();
-    let request: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("request.json")).unwrap())
+    let sidecar: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.path().join("final_00.json")).unwrap())
             .unwrap();
-    assert_eq!(request["strength"], 0.75, "{request}");
-    assert_eq!(request["mask_mode"], "replace", "{request}");
-    assert!(request["mask_sha256"].is_null(), "{request}");
-    assert_eq!(request["loras"], json!([]), "{request}");
+    assert_eq!(sidecar["strength"], 0.75, "{sidecar}");
+    assert_eq!(sidecar["mask_mode"], "replace", "{sidecar}");
+    assert!(sidecar["mask_sha256"].is_null(), "{sidecar}");
+    assert_eq!(sidecar["loras"], json!([]), "{sidecar}");
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
@@ -529,20 +529,20 @@ async fn inpaint_with_mask_records_explicit_strength() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     let dir = jobs.next().expect("one bundle").unwrap();
-    let request: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.path().join("request.json")).unwrap())
+    let sidecar: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.path().join("final_00.json")).unwrap())
             .unwrap();
     // f32 strengths widen to f64 in the sidecar JSON: compare with a
     // tolerance, not equality.
     assert!(
-        (request["strength"].as_f64().unwrap() - 0.42).abs() < 1e-6,
-        "{request}"
+        (sidecar["strength"].as_f64().unwrap() - 0.42).abs() < 1e-6,
+        "{sidecar}"
     );
-    assert_eq!(request["mask_mode"], "inpaint", "{request}");
+    assert_eq!(sidecar["mask_mode"], "inpaint", "{sidecar}");
     assert_eq!(
-        request["mask_sha256"],
+        sidecar["mask_sha256"],
         artifacts::hex_lower(&<sha2::Sha256 as sha2::Digest>::digest(&mask)),
-        "{request}"
+        "{sidecar}"
     );
     std::fs::remove_dir_all(&data_dir).ok();
 }
@@ -657,7 +657,7 @@ fn decode_entry(entry: &Value) -> Vec<u8> {
 }
 
 /// `output_format=jpeg` returns JPEG bytes and lands a `final_00.jpg`
-/// bundle whose request/sidecar `format` say `jpeg`.
+/// bundle whose sidecar `format` says `jpeg`.
 #[tokio::test]
 async fn jpeg_output_format_and_bundle_agree() {
     let _slot = SLOT_LOCK.lock().await;
@@ -681,11 +681,9 @@ async fn jpeg_output_format_and_bundle_agree() {
     let dir = jobs.next().expect("one bundle").unwrap().path();
     let art = std::fs::read(dir.join("final_00.jpg")).expect("bundle artifact with jpg extension");
     assert_eq!(&art[..3], &[0xFF, 0xD8, 0xFF]);
-    for name in ["request.json", "final_00.json"] {
-        let record: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap();
-        assert_eq!(record["format"], "jpeg", "{name}");
-    }
+    let record: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(record["format"], "jpeg", "final_00.json");
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
@@ -843,10 +841,10 @@ async fn matching_base_model_tags_are_recorded_in_sidecar() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     let dir = jobs.next().expect("one bundle").unwrap().path();
-    let request: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
-    assert_eq!(request["checkpoint_base_model"], "sd15", "{request}");
-    assert_eq!(request["loras"][0]["base_model"], "sd15", "{request}");
+    let sidecar: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
+    assert_eq!(sidecar["checkpoint_base_model"], "sd15", "{sidecar}");
+    assert_eq!(sidecar["loras"][0]["base_model"], "sd15", "{sidecar}");
     std::fs::remove_dir_all(&data_dir).ok();
 }
 
@@ -978,15 +976,15 @@ async fn edits_loras_warn_and_record() {
     );
     let mut jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     let dir = jobs.next().expect("one bundle").unwrap().path();
-    let request: Value =
-        serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap()).unwrap();
+    let sidecar: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap()).unwrap();
     assert_eq!(
-        request["loras"][0]["slug"],
+        sidecar["loras"][0]["slug"],
         "comfy:loras/detail.safetensors"
     );
     // f32 strengths widen to f64 in the sidecar JSON: compare with a
     // tolerance, not equality.
-    assert!((request["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+    assert!((sidecar["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
     std::fs::remove_dir_all(&data_dir).ok();
 }
 

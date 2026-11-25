@@ -345,11 +345,11 @@ async fn job_bundle_written_per_generation() {
     for dir in dirs {
         let png = std::fs::read(dir.path().join("final_00.png")).expect("bundle png");
         assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
-        let request: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.path().join("request.json")).unwrap(),
+        let sidecar: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("final_00.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(request["prompt"], "bundle me");
+        assert_eq!(sidecar["prompt"], "bundle me");
     }
     std::fs::remove_dir_all(&data_dir).ok();
 }
@@ -631,17 +631,17 @@ async fn loras_warn_and_record() {
     );
     let jobs = std::fs::read_dir(data_dir.join("jobs")).expect("jobs dir");
     for dir in jobs.filter_map(Result::ok) {
-        let request: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.path().join("request.json")).unwrap(),
+        let sidecar: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("final_00.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(
-            request["loras"][0]["slug"],
+            sidecar["loras"][0]["slug"],
             "comfy:loras/detail.safetensors"
         );
         // f32 strengths widen to f64 in the sidecar JSON: compare with a
         // tolerance, not equality.
-        assert!((request["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        assert!((sidecar["loras"][0]["strength"].as_f64().unwrap() - 0.8).abs() < 1e-6);
     }
     std::fs::remove_dir_all(&data_dir).ok();
 }
@@ -921,9 +921,9 @@ async fn webp_output_format_returns_webp_bytes() {
     assert_eq!(&bytes[8..12], b"WEBP", "WebP format chunk, {body}");
 }
 
-/// The requested `output_format` lands in the bundle: artifact extension,
-/// request `format`, and sidecar `format` all agree with it (and the MIME
-/// mapping matches the same format).
+/// The requested `output_format` lands in the bundle: artifact extension
+/// and sidecar `format` agree with it (and the MIME mapping matches the
+/// same format).
 #[tokio::test]
 async fn bundle_sidecar_agrees_with_output_format() {
     let _slot = SLOT_LOCK.lock().await;
@@ -946,13 +946,9 @@ async fn bundle_sidecar_agrees_with_output_format() {
         let dir = jobs.next().expect("one bundle").unwrap().path();
         assert!(jobs.next().is_none(), "single-image request: one bundle");
         let art = std::fs::read(dir.join(artifact)).expect("artifact with requested extension");
-        let request: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir.join("request.json")).unwrap())
-                .unwrap();
         let sidecar: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("final_00.json")).unwrap())
                 .unwrap();
-        assert_eq!(request["format"], sidecar_format, "{request}");
         assert_eq!(sidecar["format"], sidecar_format, "{sidecar}");
         assert_eq!(
             honkbox_sd_core::OutputFormat::from_name(sidecar_format)

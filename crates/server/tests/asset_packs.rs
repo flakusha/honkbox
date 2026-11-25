@@ -324,10 +324,7 @@ async fn cc0_fetch_records_sha_and_license_row() {
             .expect("sidecar json");
     assert_eq!(sidecar["pack_licenses"][0]["sha256"], expected);
     assert_eq!(sidecar["pack_licenses"][0]["license"], "CC0-1.0");
-    let request: Value =
-        serde_json::from_slice(&std::fs::read(dir.join("request.json")).expect("request"))
-            .expect("request json");
-    assert_eq!(request["pack_licenses"][0]["pack_id"], "polyhaven-rocks");
+    assert_eq!(sidecar["pack_licenses"][0]["pack_id"], "polyhaven-rocks");
     std::fs::remove_dir_all(&root).ok();
 }
 

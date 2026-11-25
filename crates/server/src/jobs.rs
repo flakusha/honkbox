@@ -1,10 +1,10 @@
 //! `generate` bundle writer: `<data_dir>/jobs/{ulid}/` + atomic writes.
 //!
-//! Layout per job dir: `request.json` (full params + slug), `final_00.{png,jpg,webp}` +
-//! sidecar `final_00.json`, `metrics.jsonl` (one line), `run.log`. Every file
-//! lands via `<name>.part` + best-effort fsync + rename; `*.part` leftovers
-//! are swept by `gc_jobs` at server startup (plus stray
-//! `$TMPDIR/honkbox-*.png` scratch files from sd-cpp).
+//! Layout per job dir: `final_00.{png,jpg,webp}` plus its single JSON
+//! sidecar `final_00.json`. Every file lands via `<name>.part` +
+//! best-effort fsync + rename; `*.part` leftovers are swept by `gc_jobs`
+//! at server startup (plus stray `$TMPDIR/honkbox-*.png` scratch files
+//! from sd-cpp).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ pub const DEFAULT_GC_TTL: Duration = Duration::from_hours(7 * 24);
 /// `[jobs] gc_max_bytes` / `HONKBOX_GC_MAX_BYTES`).
 pub const DEFAULT_GC_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
-/// Bundle inputs: everything the sidecars record.
+/// Bundle inputs: everything the sidecar records.
 #[derive(Debug, Clone)]
 pub struct BundleInputs {
     /// Registry slug (e.g. `comfy:checkpoints/sdxl.safetensors`).
@@ -257,29 +257,6 @@ pub fn write_bundle_into(
     let inputs_sha256 = determinism::bundle_record_hash(inputs);
     let model_license = model_license_record(&inputs.model_slug);
     let pack_licenses = pack_license_rows(dir);
-    let request = serde_json::json!({
-        "model": inputs.model_slug,
-        "model_sha256": inputs.model_sha256,
-        "engine_version": inputs.engine_version,
-        "pack_licenses": pack_licenses.clone(),
-        "prompt": inputs.prompt,
-        "seed": inputs.seed,
-        "steps": inputs.steps,
-        "size": size,
-        "format": inputs.format.name(),
-        "sampler": inputs.sampler,
-        "scheduler": inputs.scheduler,
-        "cfg_scale": inputs.cfg_scale,
-        "negative_prompt": inputs.negative_prompt.clone().unwrap_or_default(),
-        "loras": inputs.loras,
-        "strength": inputs.strength,
-        "mask_mode": inputs.mask_mode,
-        "mask_sha256": inputs.mask_sha256,
-        "checkpoint_base_model": inputs.checkpoint_base_model,
-        "recipe": inputs.recipe,
-        "hires": inputs.hires,
-        "inputs_sha256": inputs_sha256,
-    });
     let sidecar = serde_json::json!({
         "prompt": inputs.prompt,
         "seed": inputs.seed,
@@ -305,30 +282,12 @@ pub fn write_bundle_into(
         "hires": inputs.hires,
         "annotations": inputs.annotations,
         "inputs_sha256": inputs_sha256,
-    });
-    let metrics = serde_json::json!({
-        "event": "done",
-        "seed": inputs.seed,
-        "steps": inputs.steps,
-        "width": inputs.width,
-        "height": inputs.height,
         "elapsed_ms": elapsed_ms,
     });
-    let log = format!(
-        "model={}\nprompt={}\nseed={} steps={} size={} backend={}\ndone elapsed_ms={elapsed_ms}\n",
-        inputs.model_slug, inputs.prompt, inputs.seed, inputs.steps, size, inputs.backend_id,
-    );
-    // F5: commit the artifact BEFORE any sidecar. A crash mid-bundle then
-    // leaves at most an orphan artifact (swept by GC), never a sidecar set
+    // F5: commit the artifact BEFORE the sidecar. A crash mid-bundle then
+    // leaves at most an orphan artifact (swept by GC), never a sidecar
     // that makes a half-written bundle look complete.
     write_atomic(dir, &art, image_bytes)?;
-    write_atomic(
-        dir,
-        "request.json",
-        serde_json::to_string_pretty(&request)
-            .map_err(|e| format!("cannot encode request.json: {e}"))?
-            .as_bytes(),
-    )?;
     write_atomic(
         dir,
         "final_00.json",
@@ -336,11 +295,6 @@ pub fn write_bundle_into(
             .map_err(|e| format!("cannot encode final_00.json: {e}"))?
             .as_bytes(),
     )?;
-    let mut metrics_line =
-        serde_json::to_string(&metrics).map_err(|e| format!("cannot encode metrics: {e}"))?;
-    metrics_line.push('\n');
-    write_atomic(dir, "metrics.jsonl", metrics_line.as_bytes())?;
-    write_atomic(dir, "run.log", log.as_bytes())?;
     Ok(())
 }
 
@@ -776,10 +730,6 @@ mod tests {
                 .expect("sidecar json");
         assert_eq!(side["model_sha256"], "a".repeat(64));
         assert_eq!(side["engine_version"], "stable-diffusion.cpp test");
-        let req: serde_json::Value =
-            serde_json::from_slice(&fs::read(dir.join("request.json")).expect("request"))
-                .expect("request json");
-        assert_eq!(req["model_sha256"], "a".repeat(64));
 
         write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("plain bundle");
         let side: serde_json::Value =
@@ -865,18 +815,22 @@ mod tests {
     #[test]
     fn bundle_layout_exact() {
         let dir = std::env::temp_dir().join(format!("honkbox-jobs-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("test dir");
         write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("bundle");
-        for name in [
-            "request.json",
-            "final_00.png",
-            "final_00.json",
-            "metrics.jsonl",
-            "run.log",
-        ] {
-            let bytes = fs::read(dir.join(name)).expect(name);
-            assert!(!bytes.is_empty(), "{name}");
-        }
+        let mut names: Vec<_> = fs::read_dir(&dir)
+            .expect("ls")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["final_00.json", "final_00.png"].map(std::ffi::OsString::from)
+        );
+        assert_ne!(
+            fs::read(dir.join("final_00.png")).expect("artifact"),
+            [] as [u8; 0]
+        );
         let side: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("final_00.json")).expect("sidecar"))
                 .expect("sidecar json");
@@ -887,23 +841,11 @@ mod tests {
         assert_eq!(side["backend_id"], "stub");
         assert_eq!(side["format"], "png");
         assert_eq!(side["model_slug"], "comfy:checkpoints/x.safetensors");
-        let req: serde_json::Value =
-            serde_json::from_slice(&fs::read(dir.join("request.json")).expect("request"))
-                .expect("request json");
-        assert_eq!(req["format"], "png");
-        let metrics = fs::read_to_string(dir.join("metrics.jsonl")).expect("metrics");
-        assert_eq!(metrics.lines().count(), 1);
-        assert!(serde_json::from_str::<serde_json::Value>(metrics.trim()).is_ok());
-        let leftovers: Vec<_> = fs::read_dir(&dir)
-            .expect("ls")
-            .map(|e| e.expect("entry").file_name())
-            .filter(|n| {
-                std::path::Path::new(n)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("part"))
-            })
-            .collect();
-        assert_eq!(leftovers, [] as [std::ffi::OsString; 0]);
+        assert_eq!(side.as_object().expect("object").len(), 25);
+        assert_eq!(side["elapsed_ms"], 7);
+        assert!(side.get("event").is_none());
+        assert!(side.get("width").is_none());
+        assert!(side.get("height").is_none());
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -977,7 +919,7 @@ mod tests {
         fs::remove_dir_all(&base).ok();
     }
 
-    /// F5: the artifact is committed before any sidecar. Forcing the
+    /// F5: the artifact is committed before its sidecar. Forcing the
     /// artifact commit to fail (its target path is a directory) must leave
     /// NO sidecar behind — under the old request.json-first order a
     /// complete-looking bundle survived exactly this kind of crash.
@@ -988,12 +930,10 @@ mod tests {
         fs::create_dir_all(&dir).expect("test dir");
         fs::create_dir(dir.join("final_00.png")).expect("artifact blocker dir");
         assert!(write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).is_err());
-        for sidecar in ["request.json", "final_00.json", "metrics.jsonl", "run.log"] {
-            assert!(
-                !dir.join(sidecar).exists(),
-                "{sidecar} must not be written before the artifact"
-            );
-        }
+        assert!(
+            !dir.join("final_00.json").exists(),
+            "final_00.json must not be written before the artifact"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 
