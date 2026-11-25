@@ -30,6 +30,8 @@
 //! - [`conv_transpose`]: [`conv_transpose::ConvTranspose2d`], transposed conv.
 //! - [`vae_decode`]: [`vae_decode::VaeDecode`], one decoder block composed from
 //!   the kernels above (weights come from the caller, never bundled).
+//! - [`vae_family`]: [`vae_family::VaeFamilySpec`], explicit FLUX.2-small and
+//!   Qwen-Image-2.1 channel, normalization and key contracts (no SD1.5 fallback).
 //! - [`sampler`]: [`sampler::DdimStep`], one DDIM eta=0 scheduler update, plus
 //!   deterministic seed-derived latent noise.
 //! - [`ddim_sampler`]: [`ddim_sampler::DdimSampler`], the schedule loop over
@@ -306,6 +308,8 @@ pub mod unet_traversal;
 pub mod unet_upsample;
 #[cfg(feature = "ash-compute")]
 pub mod vae_decode;
+#[cfg(feature = "ash-sd")]
+pub mod vae_family;
 #[cfg(feature = "ash-sd")]
 pub mod vae_real;
 
