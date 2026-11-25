@@ -16,7 +16,7 @@ Current behavior is what the code does; ticket status is a claim to verify.
 | --- | --- |
 | `tickets/` | `TASK\|FEAT\|BUG-<slug>.md` implementation/feature/fix specs |
 | `epics/` | `epic-<slug>.md` cross-cutting initiatives |
-| `epics-index.md`, `index.json`, `feature-matrix.md`, `interconnect.md`, `code-map.json` | Generated planning artifacts; currently stale until `TASK-plan-index-generator.md` lands |
+| `epics-index.md`, `tickets/index.json`, `feature-matrix.md`, `interconnect.md`, `code-map.json` | Generated planning artifacts; currently stale until `TASK-plan-index-generator.md` lands |
 
 ## Ticket header
 
@@ -79,7 +79,7 @@ Resources: <per-test tmp dirs/ports/DB names owned>
 | Research document | Promoted / reconciled plan surface |
 | --- | --- |
 | `native-video-backend-refresh-2026-11-25.md` | Native/video epics, current-pin `TASK-video-ffi-spike`, postponed `FEAT-video-output` |
-| `ash-promotion-refresh-2026-11-25.md` | Ash feature/promotion truth, four bounded follow-ups, native epic build order |
+| `ash-promotion-refresh-2026-11-25.md` | Ash feature/promotion truth, four bounded follow-ups, SD1.5 numerics and verification-gate blockers, native epic build order |
 | `llm-runtime-memory-2026-11-25.md` | P0 `TASK-inference-cache-correctness`, P1 `TASK-vulkan-coopmat-baseline`, LLM/full-cycle epics |
 | `model-identity-license-download-2026-11-25.md` | Registry provenance/license tickets and revision-aware download contracts |
 | `creative-pipeline-promotion-2026-11-25.md` | Scene-spec/fixed-view/critique tickets; false-done Blender bake correction |
@@ -106,7 +106,8 @@ available evidence.
 
 ## Current build order (heavy inference first)
 
-1. **P0 correctness:** Ash compile reachability/HTTP selection/capability truth;
+1. **P0 correctness:** Ash SD1.5 timestep/residual numerics and verification
+   gates; Ash compile reachability/HTTP selection/capability truth;
    inference-cache identity plus byte-bearing LLM admission.
 2. **P1 provenance/runtime:** persistent bounded model provenance and license
    decisions; staged revision-aware multi-file downloads through the existing

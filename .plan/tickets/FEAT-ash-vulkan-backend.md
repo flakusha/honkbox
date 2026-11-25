@@ -5,8 +5,14 @@ Priority: P1
 Epic: epic-full-ai-cycle
 Owner: ash-vulkan lane
 Acceptance: With `ash-sd` enabled, `AshSdPipeline::generate` renders a deterministic fixture from a user-supplied checkpoint using Vulkan compute only (no CUDA/ComfyUI process); missing device features return named `VkError::InsufficientCapacity`; every shader carries a provenance line (license comes from `REUSE.toml`, which overrides per-file headers in this repo).
-Verification: `cargo test --locked -p honkbox-ash-backend --features ash-compute` (first slice, no vendor stack); `cargo test --locked -p honkbox-ash-backend --features ash-sd`; `bun run test:parity` with a local checkpoint (opt-in); `bun run check`.
-Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md`, `.tmp/research/ash-promotion-refresh-2026-11-25.md`, `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`, `TASK-ash-backend-promote.md`.
+Verification: `cargo test --locked -p honkbox-ash-backend --features ash-compute` (first slice, no vendor stack); `cargo test --locked -p honkbox-ash-backend --features ash-sd`; `cargo test --locked -p honkbox-ash-backend --features ash-sd --test ash_parity -- --ignored --nocapture` with local checkpoint/vocab assets (opt-in); `bun run check`.
+Links: `.tmp/research/ash-vulkan-backend-licensing-extensibility-2026-11-24.md`, `.tmp/research/ash-promotion-refresh-2026-11-25.md`, `crates/ash-backend/src/{device,sd}.rs`, `TASK-device-capacity-gates.md`, `TASK-ash-backend-promote.md`, `BUG-ash-sd15-numerics.md`, `TASK-ash-verification-gates.md`.
+
+## Master reconciliation (2026-11-25)
+
+- The slice history below includes worktree/branch-only server claims. Current master `crates/server/Cargo.toml:91` defines only empty `experimental-ash-sd`; the slice 15/16 `server/ash-llm`, `server/ash-stt` and `server/ash-tts` forwarding is not present on master and must not be read as landed server capability.
+- Current crate source also has the two SD1.5 numerical mismatches owned by `BUG-ash-sd15-numerics.md`; shader provenance annotations exist, but the checker is not wired into `bun run spdx` (`TASK-ash-verification-gates.md`).
+- Master CLI/HTTP promotion remains owned by `TASK-ash-backend-promote.md` and is blocked on those two tickets.
 
 ## Change
 

@@ -37,6 +37,10 @@ it proves the current pin before any video surface is admitted.
 - `FEAT-sd-edit-loras.md` — P1, done.
 - `TASK-sd-inpaint-mask-semantics.md` — P1, done 2026-11-24.
 - `TASK-sd-base-model-tags.md` — P2, done 2026-11-24.
+- `BUG-ash-sd15-numerics.md` — P0, proposed; canonical timestep layout and
+  ResBlock timestep activation before any Ash promotion.
+- `TASK-ash-verification-gates.md` — P1, proposed; restore package/CI/hook
+  commands and gate shader provenance.
 - `TASK-ash-backend-promote.md` — P0, proposed; compile-reachable shared CLI/HTTP
   constructor and truthful capability output.
 - `TASK-ash-unsupported-conditioning-guards.md` — P1, proposed; typed refusal at
@@ -55,8 +59,9 @@ it proves the current pin before any video surface is admitted.
 ## Dependency order
 
 1. Keep landed image completeness independent.
-2. Make Ash compile-reachable and capability-truthful; guard unsupported
-   conditioning and mark family execution scope without advertising availability.
+2. Fix Ash SD1.5 numerics and restore verification/provenance gates; then make
+   Ash compile-reachable and capability-truthful. Guard unsupported conditioning
+   and mark family execution scope without advertising availability.
 3. Prove SD2 one-step numerics and the RRDB/PixelShuffle spike as separate,
    bounded evidence; neither implies full-family support.
 4. Complete the license-gated current-pin video FFI spike.
@@ -65,8 +70,9 @@ it proves the current pin before any video surface is admitted.
 
 ## Acceptance
 
-The image-completeness tickets stay green. Ash selection and capability output
-match the compiled constructor, direct callers receive named conditioning
+The image-completeness tickets stay green. Ash SD1.5 numerics match the vendored
+reference, verification/provenance gates run, and Ash selection/capability
+output match the compiled constructor. Direct callers receive named conditioning
 refusals, and family diagnostics never imply unsupported execution. The video
 spike records exact family/mode/frame/fps/edge evidence and does not change the
 HTTP surface.

@@ -2,7 +2,7 @@
 
 Status: proposed
 Priority: P0
-Epic: epic-full-ai-cycle
+Epic: epic-comfyui-managed-runtime
 Owner: unassigned
 Acceptance: two pinned, versioned texture templates ship and emit map sets that pass PBR validation.
 Verification: `bun run test:server`, `bun run codegen:check` (live-ComfyUI run opt-in/ignored)
