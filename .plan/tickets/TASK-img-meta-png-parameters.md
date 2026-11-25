@@ -4,16 +4,17 @@ Status: proposed
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned
-Acceptance: PNG outputs carry a `parameters` tEXt chunk (prompt/seed/model/dims) readable by A1111-family tooling; pixels and determinism unchanged.
+Acceptance: PNG outputs carry a `parameters` tEXt chunk (prompt/seed/model/dims) readable by A1111-family tooling, emitted beside the existing honkbox record chunk; pixels and determinism unchanged.
 Verification: `bun run test:server`, `cargo test --locked -p honkbox-sd-core`, `bun run codegen:check`
-Links: `.tmp/research/image-metadata-provenance-2026-11-25.md` (H-IMG-META-2)
+Links: `.tmp/research/image-metadata-provenance-2026-11-25.md` (H-IMG-META-2); `crates/server/src/image_metadata.rs`
 Resources: per-test output dirs; no shared encode cache
 
-## Change
+## Change (premise corrected 2026-11-25)
 
-- Re-encode PNG through `png@0.18` (`Info::add_text_chunk`) when a metadata payload is requested; keep `image` for pixels. `png@0.18` is already in `Cargo.lock` (via `image`), so this adds a direct edge, not a new crate version.
-- `image@0.25` encoder has no text-chunk API; do not hand-roll chunks.
+- [stale premise removed] Master `80a5836` landed container-level provenance embedding: `crates/server/src/image_metadata.rs` copies container bytes verbatim and never re-encodes pixels (header comment, `image_metadata.rs:1-7`). It inserts iTXt chunks after IHDR via a hand-rolled chunk writer — `embed_png` (`image_metadata.rs:175-246`), `png_text` (`:248-254`), `png_chunk` (`:256-264`), keyword `honkbox_generation_record` (`RECORD_KEYWORD`, `:19`). No `png@0.18` direct dependency and no pixel re-encode is needed or wanted here.
+- Add an A1111-style `parameters` tEXt chunk (plain text: prompt, seed, model, dimensions) beside the existing record chunk inside `image_metadata.rs` (`embed_png`), reusing `png_text`/`png_chunk`; fixed chunk order (record, parameters, XMP); no pixel re-encode; no new dependency.
+- Keep the existing `MAX_METADATA_BYTES` bound (`image_metadata.rs:17`) applying to the combined payload.
 
 ## Acceptance detail
 
-- Same job re-run produces byte-identical PNG (fixed chunk order, no wall-clock text); chunk absent when no params exist.
+- Same job re-run produces byte-identical PNG (fixed chunk order, no wall-clock text); `parameters` chunk absent when no params exist; the existing record/XMP chunks and their order stay stable.

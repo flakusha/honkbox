@@ -11,8 +11,8 @@ Resources: per-test fixture dirs; no shared image cache
 
 ## Change
 
-- Emit: serialized effective prompt template id + resolved params only. honkbox has no ComfyUI graph; emitting a fake graph is dishonest provenance and out of scope.
-- Ingest: parse `prompt`/`workflow`/`parameters` tEXt keywords from uploads into the job record (debug surface, not execution input).
+- Emit: serialized effective prompt template id + resolved params only. honkbox has no ComfyUI graph; emitting a fake graph is dishonest provenance and out of scope. Premise note (2026-11-25): the PNG text-chunk emit seam already exists — `crates/server/src/image_metadata.rs` embeds iTXt chunks without re-encoding pixels (`embed_png` `:175-246`, `png_text` `:248-254`, `RECORD_KEYWORD` `:19`, landed in `80a5836`) — so the `prompt`/`workflow` chunks here extend that seam instead of adding one.
+- Ingest: parse `prompt`/`workflow`/`parameters` tEXt keywords from uploads into the job record (debug surface, not execution input); reuse the same chunk scanner rather than a second PNG parser.
 
 ## Acceptance detail
 
