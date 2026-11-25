@@ -1,4 +1,4 @@
-//! Opt-in Real-ESRGAN RRDB + PixelShuffle spike.
+//! Opt-in Real-ESRGAN RRDB + `PixelShuffle` spike.
 //!
 //! Set `HONKBOX_ASH_UPSCALER_MODEL` and
 //! `HONKBOX_ASH_UPSCALER_MODEL_SHA256`. `HONKBOX_ASH_UPSCALER_LICENSE` may
