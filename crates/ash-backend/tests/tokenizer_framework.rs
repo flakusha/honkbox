@@ -2,6 +2,7 @@
 //!
 //! No assets are bundled or downloaded: vocabularies and metadata are built
 //! in memory by every test.
+#![cfg(feature = "ash-compute")]
 
 use honkbox_ash_backend::tokenizer::{
     ChatMessage, ChatRole, ClipTokenizer, PreTokenizer, SpecialTokenMeta, Tokenizer,
