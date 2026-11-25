@@ -250,8 +250,6 @@ pub fn make_recognition(
     }
 }
 
-
-
 /// Dispatch by kind so enabling OCR never takes barcode away. `backend_id`
 /// names `ocrs-rten` whenever that engine is compiled: the route's first-gate
 /// 501 for absent OCR weights must name the missing engine, not rxing.
@@ -375,8 +373,6 @@ pub fn make_recognition(
         id: OCRS_BACKEND_ID,
     })
 }
-
-
 
 #[cfg(all(test, feature = "ocr-ocrs"))]
 mod ocr_tests {
