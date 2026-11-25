@@ -1049,7 +1049,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         backend,
         Some(&model),
         &|slug| resolve_model(&found, slug),
-        clip_vocab_dir,
+        clip_vocab_dir.as_deref(),
     );
     let img = or_exit(pipeline.generate(
         &honkbox_sd_core::Txt2ImgRequest {

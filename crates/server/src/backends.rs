@@ -127,7 +127,7 @@ pub fn make_sd(
     backend: SdBackend,
     model: Option<&str>,
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
-    vocab_dir: Option<PathBuf>,
+    vocab_dir: Option<&std::path::Path>,
 ) -> Arc<dyn honkbox_sd_core::SdPipeline> {
     #[cfg(not(feature = "ash-sd"))]
     let _ = vocab_dir;
@@ -152,7 +152,9 @@ pub fn make_sd(
                 honkbox_ash_backend::device::VulkanDevice::headless(),
             ));
             Arc::new(honkbox_ash_backend::sd::AshSdPipeline::new_with_vocab_dir(
-                device, path, vocab_dir,
+                device,
+                path,
+                vocab_dir.map(std::path::Path::to_path_buf),
             ))
         }
     }
@@ -248,6 +250,7 @@ pub fn make_recognition(
         Arc::new(honkbox_recognition_worker::StubRecognition)
     }
 }
+
 
 /// Dispatch by kind so enabling OCR never takes barcode away. `backend_id`
 /// names `ocrs-rten` whenever that engine is compiled: the route's first-gate
@@ -372,6 +375,7 @@ pub fn make_recognition(
         id: OCRS_BACKEND_ID,
     })
 }
+
 
 #[cfg(all(test, feature = "ocr-ocrs"))]
 mod ocr_tests {
