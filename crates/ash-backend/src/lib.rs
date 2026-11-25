@@ -18,6 +18,7 @@
 //! - [`compute`]: [`compute::ElementwiseAdd`] and the shared [`compute::Kernel`].
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
+//! - [`decoder_ops_gpu`]: RMSNorm/QK norm, RoPE, SwiGLU and causal ShortConv.
 //! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
 //! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
@@ -227,6 +228,8 @@ pub mod conv_transpose;
 pub mod cross_attention;
 #[cfg(feature = "ash-compute")]
 pub mod ddim_sampler;
+#[cfg(feature = "ash-compute")]
+pub mod decoder_ops_gpu;
 #[cfg(feature = "ash-compute")]
 pub mod device;
 #[cfg(feature = "ash-compute")]

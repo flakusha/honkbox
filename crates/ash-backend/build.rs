@@ -20,6 +20,10 @@ fn main() {
         ("shaders/gelu.comp", "gelu.spv"),
         ("shaders/gelu_quick.comp", "gelu_quick.spv"),
         ("shaders/transpose.comp", "transpose.spv"),
+        ("shaders/rms_norm.comp", "rms_norm.spv"),
+        ("shaders/rope.comp", "rope.spv"),
+        ("shaders/swiglu.comp", "swiglu.spv"),
+        ("shaders/short_conv.comp", "short_conv.spv"),
     ];
     for (source, _) in shaders {
         println!("cargo:rerun-if-changed={source}");

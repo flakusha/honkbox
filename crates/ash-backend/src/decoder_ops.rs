@@ -2,7 +2,7 @@
 //!
 //! Every function is stateless: values, gains/weights and the output slice stay
 //! caller-owned. No device, shader, checkpoint or cross-call state is touched,
-//! so a future GPU path stays an optional measured addition. Shapes are
+//! so the Vulkan path in [`crate::decoder_ops_gpu`] stays optional. Shapes are
 //! row-major, and all validation completes before any element is written.
 
 // Shapes are bounded by caller slice lengths and test data is synthetic.

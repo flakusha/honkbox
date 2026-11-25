@@ -32,6 +32,8 @@ default = []
 # Compute kernels need only `ash`; keeping this separate lets the first slice
 # build and test without pulling the vendored diffusion-rs stack.
 ash-compute = ["dep:ash"]
+# Portable decoder primitives and their optional Vulkan implementations.
+ash_decoder_ops = ["ash-compute"]
 # Experimental direct-Vulkan path: one flag for the whole ash surface.
 # `server/ash-sd` forwards here (server wiring is a later
 # ticket), and this forwards `ash-backend` to sd-core, mirroring

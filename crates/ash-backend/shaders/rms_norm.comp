@@ -1,0 +1,31 @@
+// Provenance: original (RMSNorm written from the published equation; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation normalizes one row. QK norm reuses this shader by treating
+// each [row, head] pair as a row of width head_dim.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Gain { float gain[]; };
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape { uint dims[3]; }; // rows, cols, eps bits
+
+void main() {
+    uint row = gl_GlobalInvocationID.x;
+    uint rows = dims[0];
+    uint cols = dims[1];
+    if (row >= rows) {
+        return;
+    }
+    uint base = row * cols;
+    float sum_sq = 0.0;
+    for (uint i = 0; i < cols; ++i) {
+        float value = values[base + i];
+        sum_sq += value * value;
+    }
+    float inv_rms = inversesqrt(sum_sq / float(cols) + uintBitsToFloat(dims[2]));
+    for (uint i = 0; i < cols; ++i) {
+        result[base + i] = values[base + i] * inv_rms * gain[i];
+    }
+}

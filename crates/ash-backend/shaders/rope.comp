@@ -1,0 +1,37 @@
+// Provenance: original (half-split RoPE written from the published equation; no upstream derivative).
+// License: AGPL-3.0-or-later via REUSE.toml (repo has no per-file SPDX headers).
+#version 450
+
+// One invocation rotates one head; the non-rotary tail is copied unchanged.
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input { float values[]; };
+layout(std430, binding = 1) readonly buffer Trig { float trig[]; };
+layout(std430, binding = 2) buffer Output { float result[]; };
+layout(std430, binding = 3) readonly buffer Shape {
+    uint dims[5];
+}; // rows, heads, head_dim, position, rotary_dim
+
+void main() {
+    uint head = gl_GlobalInvocationID.x;
+    uint rows = dims[0];
+    uint heads = dims[1];
+    uint head_dim = dims[2];
+    if (head >= rows * heads) {
+        return;
+    }
+    uint base = head * head_dim;
+    uint rotary_dim = dims[4];
+    uint half_dim = rotary_dim / 2;
+    for (uint i = 0; i < half_dim; ++i) {
+        float cos_angle = trig[2 * i];
+        float sin_angle = trig[2 * i + 1];
+        float x = values[base + i];
+        float y = values[base + half_dim + i];
+        result[base + i] = x * cos_angle - y * sin_angle;
+        result[base + half_dim + i] = y * cos_angle + x * sin_angle;
+    }
+    for (uint i = rotary_dim; i < head_dim; ++i) {
+        result[base + i] = values[base + i];
+    }
+}

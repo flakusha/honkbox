@@ -40,6 +40,11 @@ pub(crate) static QUICK_GELU_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/gelu_quick.spv"));
 pub(crate) static TRANSPOSE_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/transpose.spv"));
+pub(crate) static RMS_NORM_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rms_norm.spv"));
+pub(crate) static ROPE_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rope.spv"));
+pub(crate) static SWIGLU_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/swiglu.spv"));
+pub(crate) static SHORT_CONV_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/short_conv.spv"));
 
 /// Reinterpret a little-endian SPIR-V byte stream as Vulkan words.
 pub(crate) fn spirv_words(bytes: &[u8]) -> Vec<u32> {
@@ -396,6 +401,10 @@ mod tests {
             spirv_words(CONV_TRANSPOSE_SPIRV).first(),
             Some(&SPIRV_MAGIC)
         );
+        assert_eq!(spirv_words(RMS_NORM_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(ROPE_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(SWIGLU_SPIRV).first(), Some(&SPIRV_MAGIC));
+        assert_eq!(spirv_words(SHORT_CONV_SPIRV).first(), Some(&SPIRV_MAGIC));
     }
 
     #[test]
