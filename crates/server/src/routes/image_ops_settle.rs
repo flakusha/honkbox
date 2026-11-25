@@ -323,32 +323,41 @@ pub(super) async fn execute_image_op(
     // bytes. Promotion dedups by sha256, so retries never duplicate storage.
     let mut warnings: Vec<String> = Vec::new();
     let bundle = config.data_dir.as_deref().and_then(|data_dir| {
+        let promoted = units
+            .iter()
+            .map(|unit| {
+                config
+                    .artifacts
+                    .put_bytes(&unit.bytes, format.mime())
+                    .map_err(|err| format!("artifact promotion failed: {err}"))
+            })
+            .collect::<Result<Vec<_>, _>>();
+        let promoted = match promoted {
+            Ok(promoted) => promoted,
+            Err(err) => {
+                tracing::warn!(%err, "image-ops artifact promotion failed; inline fallback");
+                warnings.push(BUNDLE_WRITE_WARNING.to_owned());
+                return None;
+            }
+        };
         let output_records: Vec<crate::jobs::OpsOutputRecord> = units
             .iter()
+            .zip(promoted)
             .enumerate()
-            .map(|(i, unit)| crate::jobs::OpsOutputRecord {
+            .map(|(i, (unit, info))| crate::jobs::OpsOutputRecord {
                 file: format!("op_{i:02}.{}", format.extension()),
-                sha256: unit.sha256.clone(),
-                artifact_id: unit.sha256.clone(),
+                sha256: info.sha256,
+                artifact_id: info.id,
+                bytes: info.size_bytes,
             })
             .collect();
-        if let Err(err) = units.iter().try_for_each(|unit| {
-            config
-                .artifacts
-                .put_bytes(&unit.bytes, format.mime())
-                .map(|_| ())
-                .map_err(|err| format!("artifact promotion failed: {err}"))
-        }) {
-            tracing::warn!(%err, "image-ops artifact promotion failed; inline fallback");
-            warnings.push(BUNDLE_WRITE_WARNING.to_owned());
-            return None;
-        }
         let byte_refs: Vec<&[u8]> = units.iter().map(|unit| unit.bytes.as_slice()).collect();
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let ops_inputs = crate::jobs::OpsBundleInputs {
             op: op_label(&req.command).to_owned(),
             command_sha256: sha256_hex(&command_sha256),
             request_id: req.request_id.clone(),
+            job_id: job_id.clone(),
             client: req.client.clone(),
             inputs: input_records.clone(),
             format,

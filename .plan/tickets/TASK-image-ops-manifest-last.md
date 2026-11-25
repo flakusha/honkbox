@@ -25,5 +25,12 @@ Resources: per-test job dirs; no shared GPU slot or fixed port
 
 - Structural tests only (manifest order, sha chain, last-write ordering,
   incomplete terminal state); no byte-equality claim across runs.
+
+## Verification Notes (2026-11-25)
+
+- `write_ops_bundle` now commits outputs → `command.json` → `ops.json` → `run.log` → `manifest.json` (last). The manifest pins ordered `{name, kind, artifact_id, sha256, bytes}` rows plus command hash, job/request identity, tool versions, warnings, outcome and elapsed time.
+- `OpsOutputRecord.bytes` and `OpsBundleInputs.job_id` carry the promoted registry size and job identity; `image_ops_settle.rs` promotes artifacts once and reuses the info.
+- `job_content.rs` adds named `publication_incomplete` (409) for artifact/ZIP requests against a terminal `ops.json` whose manifest is missing/invalid; `status.json` and symlink refusal are unchanged.
+- Gate run this turn: `cargo fmt --all -- --check` clean, `giwt plan check-links` clean. Product tests intentionally NOT run per operator instruction.
 - Partial outputs stay explicit; cancel between units writes no bundle,
   same as the existing route.

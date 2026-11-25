@@ -120,6 +120,37 @@ fn allowed_names(dir: &Path) -> Vec<(String, &'static str)> {
     allowed
 }
 
+/// A terminal `ops.json` with no readable, valid manifest is not a published
+/// bundle: artifact and ZIP requests get one named 409 instead of an empty
+/// allowlist that looks like success. `status.json` and `manifest.json` keep
+/// their existing responses, and a symlinked manifest is never followed.
+fn check_publication(dir: &Path, name: Option<&str>) -> Result<(), JobContentError> {
+    if matches!(name, Some("status.json" | "manifest.json")) {
+        return Ok(());
+    }
+    let manifest = dir.join("manifest.json");
+    let published = std::fs::symlink_metadata(&manifest).is_ok_and(|meta| meta.is_file())
+        && std::fs::read(&manifest).is_ok_and(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|value| {
+                value
+                    .get("artifacts")
+                    .is_some_and(serde_json::Value::is_array)
+            })
+        });
+    if published {
+        return Ok(());
+    }
+    let terminal = std::fs::read(dir.join("ops.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .is_some_and(|ops| ops.get("outcome").is_some_and(serde_json::Value::is_string));
+    if terminal {
+        Err(JobContentError::PublicationIncomplete)
+    } else {
+        Ok(())
+    }
+}
+
 /// Named rejection, rendered as an OpenAI-style envelope. Details that can
 /// carry host paths are logged server-side and never echoed to the caller.
 #[derive(Debug)]
@@ -130,6 +161,8 @@ pub(super) enum JobContentError {
     InvalidSignedUrl,
     /// `{name}` is unsafe or not listed in the bundle manifest: 400.
     InvalidName,
+    /// Terminal ops bundle with no readable, valid manifest: 409.
+    PublicationIncomplete,
     /// No data dir, no job dir, no file, or an unreadable job dir: 404.
     NotFound,
     /// Entry count or byte cap breached: 413.
@@ -144,6 +177,7 @@ impl fmt::Display for JobContentError {
             Self::InvalidSignedUrl => f.write_str("invalid or expired signed URL"),
             Self::InvalidId => f.write_str("job id must be a 26-character Crockford ULID"),
             Self::InvalidName => f.write_str("unknown job content name"),
+            Self::PublicationIncomplete => f.write_str("job bundle publication is incomplete"),
             Self::NotFound => f.write_str("job content not found"),
             Self::TooLarge(cap) => {
                 write!(
@@ -162,6 +196,7 @@ impl JobContentError {
             Self::InvalidSignedUrl => "invalid_signed_url",
             Self::InvalidId => "invalid_job_id",
             Self::InvalidName => "invalid_job_content_name",
+            Self::PublicationIncomplete => "publication_incomplete",
             Self::NotFound => "job_content_not_found",
             Self::TooLarge(_) => "job_content_too_large",
             Self::Storage(_) => "storage_unavailable",
@@ -172,6 +207,7 @@ impl JobContentError {
         match self {
             Self::InvalidSignedUrl => StatusCode::UNAUTHORIZED,
             Self::InvalidId | Self::InvalidName => StatusCode::BAD_REQUEST,
+            Self::PublicationIncomplete => StatusCode::CONFLICT,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -236,6 +272,7 @@ fn resolve_content(
     name: &str,
 ) -> Result<(PathBuf, &'static str, u64), JobContentError> {
     validate_content_name(name)?;
+    check_publication(dir, Some(name))?;
     // Keep the historical 404 for a symlinked or non-regular manifest: it is
     // never followed, neither for the request nor for the allowlist.
     if name == "manifest.json" {
@@ -336,6 +373,7 @@ pub(crate) async fn get_job_bundle(
 /// caps, then write in name order with invariant metadata. A file that grew
 /// past its recorded size is rejected rather than read past the cap.
 fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
+    check_publication(dir, None)?;
     let mut files = Vec::new();
     let mut total = 0u64;
     // Same closed allowlist as the single-file route: unlisted files — and
@@ -477,5 +515,57 @@ mod tests {
             content_type_for_name("unknown.bin"),
             "application/octet-stream"
         );
+    }
+
+    /// A terminal ops bundle without a readable manifest is never published:
+    /// artifacts and the ZIP get one named 409, while status.json and the
+    /// manifest request keep their historical responses. A present manifest
+    /// leaves the success path unchanged.
+    #[test]
+    fn publication_incomplete_without_manifest_but_success_with_it() {
+        let dir = honkbox_external_tools::scratch_dir("job-content-publication").expect("test dir");
+        std::fs::write(dir.join("ops.json"), r#"{"outcome":"done"}"#).expect("terminal ops record");
+        assert!(matches!(
+            check_publication(&dir, Some("op_00.png")),
+            Err(JobContentError::PublicationIncomplete)
+        ));
+        assert!(matches!(
+            check_publication(&dir, None),
+            Err(JobContentError::PublicationIncomplete)
+        ));
+        assert!(check_publication(&dir, Some("status.json")).is_ok());
+        assert!(check_publication(&dir, Some("manifest.json")).is_ok());
+
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"manifest":1,"artifacts":[{"name":"op_00.png"}]}"#,
+        )
+        .expect("manifest");
+        std::fs::write(dir.join("op_00.png"), [0_u8; 4]).expect("artifact");
+        assert!(check_publication(&dir, Some("op_00.png")).is_ok());
+        assert!(check_publication(&dir, None).is_ok());
+        let (path, mime, len) =
+            resolve_content(&dir, "op_00.png").expect("manifest-listed artifact");
+        assert_eq!(path, dir.join("op_00.png"));
+        assert_eq!(mime, "image/png");
+        assert_eq!(len, 4);
+        assert!(build_zip(&dir).is_ok());
+
+        // A symlinked manifest is still refused as a link, never followed.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(dir.join("manifest.json")).expect("unlink manifest");
+            std::os::unix::fs::symlink("/etc/passwd", dir.join("manifest.json"))
+                .expect("symlink manifest");
+            assert!(matches!(
+                check_publication(&dir, Some("op_00.png")),
+                Err(JobContentError::PublicationIncomplete)
+            ));
+            assert!(matches!(
+                resolve_content(&dir, "manifest.json"),
+                Err(JobContentError::NotFound)
+            ));
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

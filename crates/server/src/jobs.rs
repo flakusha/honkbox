@@ -337,6 +337,8 @@ pub struct OpsOutputRecord {
     /// Content-addressed id of the promoted bytes (stable after GC/name
     /// changes); the bundle file name alone is not a durable handle.
     pub artifact_id: String,
+    /// Size of the promoted artifact, from `Registry::put_bytes`.
+    pub bytes: u64,
 }
 
 /// Everything the image-ops bundle records about the command
@@ -352,6 +354,8 @@ pub struct OpsBundleInputs {
     pub command_sha256: String,
     /// The request's idempotency key, verbatim.
     pub request_id: String,
+    /// Registry job id (`jobs_registry`), copied into the bundle manifest.
+    pub job_id: String,
     /// Caller identity, verbatim (`None` = not supplied).
     pub client: Option<String>,
     /// Per-input provenance + digests, in order.
@@ -366,11 +370,50 @@ pub struct OpsBundleInputs {
 /// the bundle dir. Same atomic-write discipline as [`write_bundle_into`]
 /// (`.part` + fsync + rename) and the same GC lifecycle (`gc_jobs`).
 ///
-/// Layout: `command.json` (the bounded command — no payloads), one
-/// `op_XX.{ext}` file per output, `ops.json` (the sidecar: command hash,
+/// Layout: one `op_XX.{ext}` file per output, `command.json` (the bounded
+/// command — no payloads), `ops.json` (the sidecar: command hash,
 /// input/output hashes, `seed: null` — pixel ops are seedless, the null
 /// keeps the record shape uniform with generation bundles — tool version,
-/// attempts, outcome), and `run.log`.
+/// attempts, outcome), `run.log`, and `manifest.json` LAST. A bundle whose
+/// manifest is missing is never a published result.
+///
+/// Blender-style publication record for an image-ops bundle: ordered artifact
+/// rows with the digests of the exact bytes committed above.
+fn ops_manifest_record(
+    inputs: &OpsBundleInputs,
+    outputs: &[OpsOutputRecord],
+    tool: &serde_json::Value,
+    elapsed_ms: u64,
+) -> serde_json::Value {
+    let artifacts = outputs
+        .iter()
+        .map(|record| {
+            serde_json::json!({
+                "name": record.file,
+                "kind": "output",
+                "artifact_id": record.artifact_id,
+                "sha256": record.sha256,
+                "bytes": record.bytes,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "manifest": 1,
+        "job_id": inputs.job_id,
+        "request_id": inputs.request_id,
+        "command_sha256": inputs.command_sha256,
+        "op": inputs.op,
+        "op_version": env!("CARGO_PKG_VERSION"),
+        "tool": tool,
+        "inputs": inputs.inputs,
+        "annotations": inputs.annotations,
+        "artifacts": artifacts,
+        "warnings": [],
+        "outcome": "done",
+        "elapsed_ms": elapsed_ms,
+    })
+}
+
 pub fn write_ops_bundle(
     data_dir: &Path,
     inputs: &OpsBundleInputs,
@@ -404,6 +447,7 @@ pub fn write_ops_bundle(
     let sidecar = serde_json::json!({
         "command_sha256": inputs.command_sha256,
         "request_id": inputs.request_id,
+        "job_id": inputs.job_id,
         "op": inputs.op,
         "output_format": inputs.format.name(),
         "client": inputs.client,
@@ -423,6 +467,11 @@ pub fn write_ops_bundle(
         inputs.format.name(),
         inputs.client,
     );
+    // Artifacts first, sidecars after; the manifest is the LAST write so a
+    // partial bundle never looks published (same convention as Blender).
+    for (record, bytes) in outputs.iter().zip(output_bytes) {
+        write_atomic(&dir, &record.file, bytes)?;
+    }
     write_atomic(
         &dir,
         "command.json",
@@ -437,10 +486,15 @@ pub fn write_ops_bundle(
             .map_err(|e| format!("cannot encode ops.json: {e}"))?
             .as_bytes(),
     )?;
-    for (record, bytes) in outputs.iter().zip(output_bytes) {
-        write_atomic(&dir, &record.file, bytes)?;
-    }
     write_atomic(&dir, "run.log", log.as_bytes())?;
+    let manifest = ops_manifest_record(inputs, outputs, &tool, elapsed_ms);
+    write_atomic(
+        &dir,
+        "manifest.json",
+        serde_json::to_string_pretty(&manifest)
+            .map_err(|e| format!("cannot encode manifest.json: {e}"))?
+            .as_bytes(),
+    )?;
     Ok(dir)
 }
 
@@ -953,6 +1007,7 @@ mod tests {
             op: "resize".to_string(),
             command_sha256: "a".repeat(64),
             request_id: "req-1".to_string(),
+            job_id: "01JOB".to_string(),
             client: None,
             inputs: Vec::new(),
             format: honkbox_sd_core::OutputFormat::Png,
@@ -963,11 +1018,13 @@ mod tests {
                 file: "op_00.png".to_string(),
                 sha256: "b".repeat(64),
                 artifact_id: "a".repeat(64),
+                bytes: 1,
             },
             OpsOutputRecord {
                 file: "op_01.png".to_string(),
                 sha256: "c".repeat(64),
                 artifact_id: "b".repeat(64),
+                bytes: 2,
             },
         ];
         let one: [&[u8]; 1] = [&[1u8, 2, 3]];
@@ -985,6 +1042,100 @@ mod tests {
             serde_json::from_slice(&fs::read(dir.join("ops.json")).expect("sidecar"))
                 .expect("sidecar json");
         assert_eq!(side["outputs"].as_array().map_or(0, Vec::len), 2);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest as _, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// The manifest pins the exact ordered artifact chain and is committed
+    /// after every other bundle file (mtimes are non-decreasing in write
+    /// order; equal timestamps still satisfy the check).
+    #[test]
+    fn ops_manifest_pins_ordered_artifact_hashes_and_is_last() {
+        let root = fresh_root("ops-manifest");
+        let inputs = OpsBundleInputs {
+            op: "resize".to_string(),
+            command_sha256: "a".repeat(64),
+            request_id: "req-manifest".to_string(),
+            job_id: "01OPJOB".to_string(),
+            client: None,
+            inputs: vec![OpsInputRecord {
+                source: "data_uri".to_string(),
+                sha256: "d".repeat(64),
+                artifact_id: None,
+            }],
+            format: honkbox_sd_core::OutputFormat::Png,
+            annotations: vec![BundleAnnotation {
+                name: "source".to_string(),
+                value: serde_json::json!("debug"),
+            }],
+        };
+        let first: &[u8] = &[1, 2];
+        let second: &[u8] = &[3, 4, 5];
+        let outputs = [
+            OpsOutputRecord {
+                file: "op_00.png".to_string(),
+                sha256: sha256_hex(first),
+                artifact_id: sha256_hex(first),
+                bytes: first.len() as u64,
+            },
+            OpsOutputRecord {
+                file: "op_01.png".to_string(),
+                sha256: sha256_hex(second),
+                artifact_id: sha256_hex(second),
+                bytes: second.len() as u64,
+            },
+        ];
+        let dir = write_ops_bundle(&root, &inputs, &outputs, &[first, second], 12)
+            .expect("matched bundle");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
+        assert_eq!(manifest["manifest"], 1);
+        assert_eq!(manifest["job_id"], "01OPJOB");
+        assert_eq!(manifest["request_id"], "req-manifest");
+        assert_eq!(manifest["command_sha256"], "a".repeat(64));
+        assert_eq!(manifest["op"], "resize");
+        assert_eq!(manifest["outcome"], "done");
+        assert_eq!(manifest["elapsed_ms"], 12);
+        assert_eq!(manifest["warnings"].as_array().map_or(0, Vec::len), 0);
+        assert_eq!(manifest["tool"]["name"], "honkbox-image-ops");
+        assert_eq!(manifest["inputs"][0]["sha256"], "d".repeat(64));
+        assert_eq!(manifest["annotations"][0]["name"], "source");
+
+        let rows = manifest["artifacts"].as_array().expect("ordered artifacts");
+        assert_eq!(rows.len(), 2);
+        for (index, (row, bytes)) in rows.iter().zip([first, second]).enumerate() {
+            let digest = sha256_hex(bytes);
+            assert_eq!(row["name"], format!("op_{index:02}.png"));
+            assert_eq!(row["kind"], "output");
+            assert_eq!(row["sha256"], digest);
+            assert_eq!(row["artifact_id"], digest);
+            assert_eq!(row["bytes"], bytes.len() as u64);
+            let name = row["name"].as_str().expect("artifact name");
+            assert_eq!(
+                fs::read(dir.join(name)).expect("artifact bytes").as_slice(),
+                bytes
+            );
+        }
+
+        let modified = |name| {
+            fs::metadata(dir.join(name))
+                .expect("bundle file")
+                .modified()
+                .expect("mtime")
+        };
+        assert!(modified("op_01.png") >= modified("op_00.png"));
+        assert!(modified("command.json") >= modified("op_01.png"));
+        assert!(modified("ops.json") >= modified("command.json"));
+        assert!(modified("run.log") >= modified("ops.json"));
+        assert!(modified("manifest.json") >= modified("run.log"));
         fs::remove_dir_all(&root).ok();
     }
 }
