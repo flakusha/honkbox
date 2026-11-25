@@ -1,6 +1,7 @@
 # TASK: Blender terminal hardening
 
-Status: proposed
+Status: In Progress
+**Scope:** Terminal status, manifest-before-result, partial outputs and idempotency for Blender jobs
 Priority: P0
 Epic: epic-blender-assets
 Owner: unassigned
