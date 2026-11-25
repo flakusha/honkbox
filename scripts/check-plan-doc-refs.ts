@@ -109,11 +109,7 @@ for (const ticketFile of ticketFiles) {
 // legitimately describe a slice rather than the ticket.
 const STATUS_WORDS = ["done", "proposed", "in progress", "postponed", "blocked"];
 const ticketStatus = new Map<string, string>();
-
-  const header = readFileSync(resolve(ticketsDir, ticketFile), "utf8")
-    .split("\n")
-    .slice(0, 20)
-    .join("\n");
+for (const ticketFile of ticketFiles) {
   const header = readFileSync(resolve(ticketsDir, ticketFile), "utf8")
     .split("\n")
     .slice(0, 20)
@@ -132,7 +128,7 @@ const CLAIM_PATTERNS = [
 ];
 
 const statusDrift: string[] = [];
-  const text = readFileSync(resolve(epicsDir, epicFile), "utf8");
+for (const epicFile of epicFiles) {
   const text = readFileSync(resolve(epicsDir, epicFile), "utf8");
   const lines = text.split("\n");
   lines.forEach((line, index) => {
