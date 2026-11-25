@@ -1,7 +1,6 @@
 # TASK: Honor EXIF orientation on image inputs
 
-Status: in progress (focused bin tests green: 11 passed, 0 failed; full server suite not run in this lane)
-**Scope:** image-ops EXIF orientation honor
+Status: done (2026-11-25; image-ops scope; focused bin tests 11/11)
 Priority: P1
 Epic: epic-output-formats
 Owner: unassigned
