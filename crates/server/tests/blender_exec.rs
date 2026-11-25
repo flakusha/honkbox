@@ -10,6 +10,10 @@
 //! state; tests pass alone, in any order, and in parallel. `Fixture::drop`
 //! reclaims the root even on panic.
 #![cfg(unix)]
+// `routes` serves the `crate::routes::` seams the included sources use, and
+// `blender_exec` is additionally bound below so its `super::super::` seams
+// resolve to the test stand-ins. The dual binding is intentional.
+#![allow(clippy::duplicate_mod)]
 
 #[allow(dead_code)]
 #[path = "../src/admission.rs"]
@@ -47,6 +51,9 @@ mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+#[allow(dead_code)]
+#[path = "../src/routes.rs"]
+mod routes;
 #[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
