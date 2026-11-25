@@ -77,7 +77,6 @@ Implementing LoRA, hires, img2img/inpaint or ControlNet; changing recipe or
 sampler semantics; adding HTTP Ash selection; advertising family availability;
 returning a fake or silently uncontrolled image.
 
-// hint: Structural and logic conflict. Both design and behavior differ.
 
 ## Verification evidence (2026-11-24)
 

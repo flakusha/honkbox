@@ -89,7 +89,6 @@ rxing = { version = "0.9", default-features = false, features = [
 image = { workspace = true }
 
 [features]
-// hint: Structural and logic conflict. Both design and behavior differ.
 # Direct-Vulkan Ash SD backend: opt-in, shared by CLI `generate` and HTTP
 # `serve --sd-backend`; `experimental_ash_sd` derives from this one feature.
 ash-sd = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-sd"]
