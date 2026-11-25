@@ -6,7 +6,8 @@ Owner: unassigned
 Research: `.tmp/research/llm-runtime-memory-2026-11-25.md`,
 `.tmp/research/llm-support-local-roster-2026-11-24.md`,
 `.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
-`.tmp/research/ash-family-implementation-index-2026-11-25.md`
+`.tmp/research/ash-family-implementation-index-2026-11-25.md`,
+`.tmp/research/residency-kv-cache-memory-planning-2026-11-25.md`
 
 ## Scope
 

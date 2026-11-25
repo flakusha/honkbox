@@ -5,7 +5,7 @@ Priority: P1
 Owner: unassigned
 Acceptance: shared S1-S9 substrates have passing focused proofs before any family starts; each family proves only its named smallest slice; family diagnostics reuse readiness markers and never imply availability from a header.
 Verification: run each linked ticket’s exact focused commands with `--locked`, plus `giwt plan check-links`; real-checkpoint proofs remain opt-in, single-device, and unexecuted by the filing pass.
-Links: `.tmp/research/ash-family-implementation-index-2026-11-25.md`; `.tmp/research/ash-family-evidence-inventory-2026-11-25.md`; [TASK-ash-native-families-index.md](../tickets/TASK-ash-native-families-index.md).
+Links: `.tmp/research/ash-family-implementation-index-2026-11-25.md`; `.tmp/research/ash-family-evidence-inventory-2026-11-25.md`; `.tmp/research/ash-promotion-refresh-2026-11-25.md`; `.tmp/research/comfyui-rendering-techniques-ash-2026-11-24.md`; `.tmp/research/spectrum-comfy-kitchen-algo-approach-2026-11-23.md`; [TASK-ash-native-families-index.md](../tickets/TASK-ash-native-families-index.md).
 Resources: synthetic fixtures in unique `mktemp -d "$PWD/.tmp/ash-native-families.XXXXXX"` directories; opt-in GPU proofs use an exclusive single-device lease and user-supplied read-only checkpoints with recorded SHA-256 and license.
 
 ## Scope

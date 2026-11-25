@@ -6,7 +6,7 @@ Owner: unassigned
 Research: `.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
 `.tmp/research/loop-lore-godot-actionables.md`,
 `.tmp/research/dcc-closed-loop-honkbox-2026-11-25.md` (honkbox half; loop-lore half in
-`../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`)
+`../loop-lore/.tmp/research/honkbox-dcc-additional-processing-2026-11-25.md`), dormant loop-lore gap `TASK-honkbox-media-editing-offload` (deferred P3); MCP HOLD verdict `.tmp/research/mcp-pipeline-engine-2026-11-25.md` (evidence for the no-MCP non-goal; pipeline half only); own-vs-delegate boundary `.tmp/research/heavy-engine-honkbox-2026-11-25.md`
 
 ## Scope
 
