@@ -5,6 +5,7 @@ use std::path::Path;
 
 use axum::http::StatusCode;
 use honkbox_api_types::{ImageOpCommand, ImageOpInput};
+use image::ImageDecoder;
 
 use super::image_ops_dedup::{ImageOpSettled, sha256_hex};
 use super::image_ops_limits::{
@@ -301,20 +302,41 @@ pub(super) fn decode_admitted_input(
                 .map(crate::raster::RasterImage::into_dynamic_image)
                 .map_err(|e| bad(format!("cannot flatten ora: {e}")))
         }
-        _ => {
-            // Bounded decode: the reader-level strict caps stop
-            // decompression-bomb allocations before they happen; the pixel
-            // cap (the sniffed row's registry budget) is the honest reject
-            // line for oversized-but-bounded inputs.
-            let mut reader = image::ImageReader::new(std::io::Cursor::new(&admitted.raw));
-            reader.limits(image_decode_limits());
-            reader
-                .with_guessed_format()
-                .map_err(|e| bad(format!("cannot read image container: {e}")))?
-                .decode()
-                .map_err(|e| bad(format!("cannot decode image: {e}")))
-        }
+        _ => decode_flat_raster_upright(&admitted.raw),
     }
+}
+
+/// Bounded flat-raster decode with EXIF orientation applied: the result is
+/// the upright image a viewer shows, not the stored scan. The reader-level
+/// strict caps stop decompression-bomb allocations before they happen; the
+/// pixel cap (the sniffed row's registry budget) is applied by the reader
+/// limits for oversized-but-bounded inputs. Orientation reading is
+/// best-effort: a decoder that reports no orientation still yields
+/// unchanged pixels, so corrupt EXIF metadata never fails an otherwise
+/// decodable input.
+pub(super) fn decode_flat_raster_upright(
+    raw: &[u8],
+) -> Result<image::DynamicImage, ImageOpWorkError> {
+    let bad = |message: String| ImageOpWorkError::Bad {
+        message,
+        code: "invalid_image_op_inputs",
+    };
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(raw));
+    reader.limits(image_decode_limits());
+    let reader = reader
+        .with_guessed_format()
+        .map_err(|e| bad(format!("cannot read image container: {e}")))?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|e| bad(format!("cannot decode image: {e}")))?;
+    let orientation = decoder
+        .orientation()
+        .ok()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut decoded = image::DynamicImage::from_decoder(decoder)
+        .map_err(|e| bad(format!("cannot decode image: {e}")))?;
+    decoded.apply_orientation(orientation);
+    Ok(decoded)
 }
 
 /// Map linear EXR scene-referred floats to display-referred LDR pixels:

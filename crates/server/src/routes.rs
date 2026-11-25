@@ -538,3 +538,7 @@ mod tests_capabilities;
 #[cfg(test)]
 #[path = "routes/tests_behavior.rs"]
 mod tests_behavior;
+
+#[cfg(test)]
+#[path = "routes/tests_image_orientation.rs"]
+mod tests_image_orientation;
