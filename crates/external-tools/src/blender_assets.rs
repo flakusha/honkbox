@@ -418,7 +418,7 @@ pub fn run(
         AssetError::Failed(format!("cannot create {}: {e}", job.output_dir.display()))
     })?;
 
-    let scratch = scratch_dir()?;
+    let scratch = scratch_dir("blender-asset")?;
     let outcome = run_recipe(job, blender_bin, timeout, cancel, &scratch);
     let _ = std::fs::remove_dir_all(&scratch);
     let (manifest, bake) = outcome?;
@@ -872,18 +872,76 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AssetError> {
         .map_err(|e| AssetError::Failed(format!("cannot rename into {}: {e}", path.display())))
 }
 
-/// A unique scratch directory for one job's recipe files.
-fn scratch_dir() -> Result<PathBuf, AssetError> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let dir = std::env::temp_dir().join(format!(
-        "honkbox-blender-asset-{}-{stamp}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| AssetError::Failed(format!("cannot create {}: {e}", dir.display())))?;
-    Ok(dir)
+/// Machine-temp root for honkbox scratch: `$HONKBOX_TMP_ROOT` (or
+/// `$LOOP_LORE_TMP_ROOT`) when set and non-blank, else the process temp
+/// dir, with the `honkbox` app folder below it. Never a bare entry
+/// directly under the temp dir.
+fn tmp_root() -> PathBuf {
+    let base = std::env::var("HONKBOX_TMP_ROOT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("LOOP_LORE_TMP_ROOT")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("honkbox")
+}
+
+/// A unique scratch directory: `<root>/<subsystem>/<pid>-<nanos>`.
+///
+/// `subsystem` is one path segment (`blender-asset`, `bake`, `ext-addons`,
+/// `jobs-gc`, `jobs-recipe`, `log-rotate`, `log-base`, ...). The parents are
+/// created with mode `0700`; the leaf uses `create_dir` (fail-if-exists,
+/// a few nanos retries) so two processes can never share it. The caller
+/// owns cleanup.
+pub fn scratch_dir(subsystem: &str) -> Result<PathBuf, AssetError> {
+    let root = tmp_root();
+    let parent = root.join(subsystem);
+    std::fs::create_dir_all(&parent)
+        .map_err(|e| AssetError::Failed(format!("cannot create {}: {e}", parent.display())))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::Permissions::from_mode(0o700);
+        let _ = std::fs::set_permissions(&root, mode.clone());
+        let _ = std::fs::set_permissions(&parent, mode);
+    }
+    let pid = std::process::id();
+    for attempt in 0..8u32 {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let leaf = if attempt == 0 {
+            format!("{pid}-{stamp}")
+        } else {
+            format!("{pid}-{stamp}-{attempt}")
+        };
+        let dir = parent.join(leaf);
+        match std::fs::create_dir(&dir) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+                }
+                return Ok(dir);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(AssetError::Failed(format!(
+                    "cannot create {}: {e}",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    Err(AssetError::Failed(format!(
+        "cannot pick a unique name under {}",
+        parent.display()
+    )))
 }
 
 /// The progress events the recipe printed on stdout.
@@ -969,12 +1027,8 @@ mod tests {
     struct BakeTemp(PathBuf);
 
     impl BakeTemp {
-        fn new(tag: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("honkbox-bake-{}-{tag}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("scratch dir");
-            Self(dir)
+        fn new(_tag: &str) -> Self {
+            Self(scratch_dir("bake").expect("scratch dir"))
         }
     }
 

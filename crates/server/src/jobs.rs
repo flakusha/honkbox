@@ -623,6 +623,7 @@ fn dir_stats(dir: &Path) -> (SystemTime, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use honkbox_external_tools::scratch_dir;
 
     fn inputs() -> BundleInputs {
         BundleInputs {
@@ -665,12 +666,8 @@ mod tests {
             .expect("backdate");
     }
 
-    fn fresh_root(tag: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("honkbox-jobs-gc-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("test root");
-        root
+    fn fresh_root(_tag: &str) -> PathBuf {
+        scratch_dir("jobs-gc").expect("test root")
     }
 
     #[test]
@@ -693,13 +690,7 @@ mod tests {
             (honkbox_sd_core::OutputFormat::Jpeg, "final_00.jpg", "jpeg"),
             (honkbox_sd_core::OutputFormat::Webp, "final_00.webp", "webp"),
         ] {
-            let dir = std::env::temp_dir().join(format!(
-                "honkbox-jobs-fmt-{}-{}",
-                std::process::id(),
-                name
-            ));
-            let _ = fs::remove_dir_all(&dir);
-            fs::create_dir_all(&dir).expect("test dir");
+            let dir = scratch_dir("jobs-recipe").expect("test dir");
             let mut bundle = inputs();
             bundle.format = format;
             write_bundle_into(&dir, &bundle, &[0u8; 8], 7).expect("bundle");
@@ -714,9 +705,7 @@ mod tests {
 
     #[test]
     fn sidecar_records_requested_recipe() {
-        let dir = std::env::temp_dir().join(format!("honkbox-jobs-recipe-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
         let mut bundle = inputs();
         bundle.sampler = "dpm++2m".to_string();
         bundle.scheduler = "karras".to_string();
@@ -738,9 +727,7 @@ mod tests {
     /// stay explicit nulls (never absent, never fabricated) otherwise.
     #[test]
     fn sidecar_records_provenance() {
-        let dir = std::env::temp_dir().join(format!("honkbox-jobs-prov-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
 
         let mut bundle = inputs();
         bundle.model_sha256 = Some("a".repeat(64));
@@ -765,9 +752,7 @@ mod tests {
     /// and stay `[]`/`null` (not missing) for plain txt2img records.
     #[test]
     fn sidecar_records_loras_and_strength() {
-        let dir = std::env::temp_dir().join(format!("honkbox-jobs-lora-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
 
         let mut bundle = inputs();
         bundle.loras = vec![LoraRecord {
@@ -801,10 +786,7 @@ mod tests {
     /// when set (the recipe name + the pass actually applied).
     #[test]
     fn sidecar_records_recipe_and_hires() {
-        let dir =
-            std::env::temp_dir().join(format!("honkbox-jobs-recipe-hires-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
 
         let mut bundle = inputs();
         bundle.recipe = Some("sdxl".to_string());
@@ -835,9 +817,7 @@ mod tests {
 
     #[test]
     fn bundle_layout_exact() {
-        let dir = std::env::temp_dir().join(format!("honkbox-jobs-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
         write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).expect("bundle");
         let mut names: Vec<_> = fs::read_dir(&dir)
             .expect("ls")
@@ -946,9 +926,7 @@ mod tests {
     /// complete-looking bundle survived exactly this kind of crash.
     #[test]
     fn artifact_is_written_before_sidecars() {
-        let dir = std::env::temp_dir().join(format!("honkbox-jobs-order-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("test dir");
+        let dir = scratch_dir("jobs-recipe").expect("test dir");
         fs::create_dir(dir.join("final_00.png")).expect("artifact blocker dir");
         assert!(write_bundle_into(&dir, &inputs(), &[0u8; 8], 7).is_err());
         assert!(

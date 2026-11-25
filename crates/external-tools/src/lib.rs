@@ -41,7 +41,7 @@ pub use blender_assets::{
     AssetArtifact, AssetError, AssetJob, AssetManifest, AssetSource, AssetStage, BakeArtifact,
     BakeContract, BakeManifest, BakeMap, BakeSettings, BakeTarget, BakeType, MeshFormat, Primitive,
     ProgressEvent, RECIPE_VERSION, RecipeFiles, build_bake_manifest, build_manifest, plan_bake,
-    prepare, recipe_sha256, run as run_asset_job, write_bake_manifest,
+    prepare, recipe_sha256, run as run_asset_job, scratch_dir, write_bake_manifest,
 };
 pub use texture_postprocess::{
     ColorSpace, DEFAULT_TILE_SIZE, InputMap, MapRole, OiioTool, OrmPack, OutputMap,
