@@ -2,6 +2,20 @@
   "version": 2,
   "nodes": [
     {
+      "id": "BUG-ash-sd15-numerics",
+      "kind": "ticket",
+      "path": ".plan/tickets/BUG-ash-sd15-numerics.md",
+      "title": "Ash SD1.5 timestep and residual numerics",
+      "status": "done",
+      "srcRefs": [
+        "src/ggml-cpu/ops.cpp",
+        "src/model/common/block.hpp",
+        "src/timestep.rs",
+        "src/unet_real.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "BUG-attached-job-cancel-stalled-stream",
       "kind": "ticket",
       "path": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md",
@@ -101,11 +115,87 @@
       "related": []
     },
     {
+      "id": "FEAT-ash-embeddinggemma-2",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-embeddinggemma-2.md",
+      "title": "Ash embeddinggemma-2 text proof and gated Gemma 4 E4B decoder",
+      "status": "proposed",
+      "srcRefs": [
+        "src/checkpoint.rs",
+        "src/embed.rs",
+        "src/llm.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-ash-lfm25-text-decoder",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md",
+      "title": "Ash LFM2.5 dense text decoder proof",
+      "status": "proposed",
+      "srcRefs": [
+        "src/llm.rs",
+        "src/llm_attached.rs",
+        "src/models/lfm-base.cpp",
+        "src/models/lfm2.cpp"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-ash-moss-image-family",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-moss-image-family.md",
+      "title": "Ash MOSS-Image single-stream flow DiT",
+      "status": "proposed",
+      "srcRefs": [
+        "src/attention.rs",
+        "src/catalog.json",
+        "src/checkpoint.rs",
+        "src/core/ggml_extend.cpp",
+        "src/llm.rs",
+        "src/model.rs",
+        "src/model/diffusion/moss_image.hpp",
+        "src/pipeline/diffusion_engine.cpp",
+        "src/sampler.rs",
+        "src/tokenizer.rs",
+        "src/vae_real.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-ash-qwen35-dense",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-qwen35-dense.md",
+      "title": "Ash Qwen3.5 dense hybrid text proof",
+      "status": "proposed",
+      "srcRefs": [
+        "src/attention.rs",
+        "src/llm.rs",
+        "src/llm/qwen35.rs",
+        "src/model.rs",
+        "src/models/delta-net-base.cpp",
+        "src/models/qwen35.cpp"
+      ],
+      "related": []
+    },
+    {
+      "id": "FEAT-ash-sd2-spec",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-ash-sd2-spec.md",
+      "title": "Specify SD2-base and prove one Ash step",
+      "status": "proposed",
+      "srcRefs": [
+        "src/model_spec.rs",
+        "src/sd.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "FEAT-ash-vulkan-backend",
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-ash-vulkan-backend.md",
       "title": "Pure-Vulkan (`ash`) inference backend",
-      "status": "done",
+      "status": "in_progress",
       "srcRefs": [
         "src/lib.rs"
       ],
@@ -181,7 +271,7 @@
       "id": "FEAT-comfy-video-audio-templates",
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-comfy-video-audio-templates.md",
-      "title": "ComfyUI video-to-audio template family",
+      "title": "ComfyUI video and audio template family",
       "status": "proposed",
       "srcRefs": [],
       "related": []
@@ -190,9 +280,23 @@
       "id": "FEAT-comfyui-workflow-pipeline",
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md",
-      "title": "ComfyUI workflow pipelines",
+      "title": "ComfyUI workflow pipelines through typed slots",
       "status": "proposed",
-      "srcRefs": [],
+      "srcRefs": [
+        "src/apps.rs",
+        "src/artifacts.rs",
+        "src/config.rs",
+        "src/determinism.rs",
+        "src/jobs.rs",
+        "src/jobs_registry.rs",
+        "src/lib.rs",
+        "src/metrics.rs",
+        "src/routes.rs",
+        "src/routes/apps.rs",
+        "src/routes/blender_exec.rs",
+        "src/routes/capabilities.rs",
+        "src/routes/job_content.rs"
+      ],
       "related": []
     },
     {
@@ -318,6 +422,15 @@
       "related": []
     },
     {
+      "id": "FEAT-media-master-and-derived-artifacts",
+      "kind": "ticket",
+      "path": ".plan/tickets/FEAT-media-master-and-derived-artifacts.md",
+      "title": "Lossless media masters and derived final artifacts",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
       "id": "FEAT-model-modality-advertisement",
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-model-modality-advertisement.md",
@@ -433,7 +546,7 @@
       "id": "FEAT-video-output",
       "kind": "ticket",
       "path": ".plan/tickets/FEAT-video-output.md",
-      "title": "Video output (vendor-blocked)",
+      "title": "Video output (gated on current-pin spike)",
       "status": "postponed",
       "srcRefs": [],
       "related": []
@@ -459,18 +572,209 @@
       "related": []
     },
     {
+      "id": "TASK-ash-autoregressive-state",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-autoregressive-state.md",
+      "title": "Add Ash autoregressive state caches",
+      "status": "proposed",
+      "srcRefs": [
+        "src/attention.rs",
+        "src/llm.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-ash-backend-promote",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-ash-backend-promote.md",
-      "title": "Promote the ash Vulkan backend slices",
+      "title": "Make the Ash backend compile-reachable and HTTP-selectable",
+      "status": "in_progress",
+      "srcRefs": [
+        "src/main.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-decoder-ops",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-decoder-ops.md",
+      "title": "Add portable Ash decoder operations",
       "status": "proposed",
       "srcRefs": [
-        "src/gen/api-types.ts",
-        "src/gen/openapi.json",
-        "src/lib.rs",
-        "src/main.rs",
-        "src/sdxl.rs"
+        "src/compute.rs",
+        "src/mlp.rs",
+        "src/model.rs",
+        "src/norm.rs"
       ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-family-readiness-markers",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-family-readiness-markers.md",
+      "title": "Mark Ash family readiness without claiming availability",
+      "status": "proposed",
+      "srcRefs": [
+        "src/checkpoint_family.rs",
+        "src/main.rs",
+        "src/sd.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-flow-dit-substrate",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-flow-dit-substrate.md",
+      "title": "Ash single-stream flow-DiT substrate",
+      "status": "proposed",
+      "srcRefs": [
+        "src/attention.rs",
+        "src/model.rs",
+        "src/sampler.rs",
+        "src/timestep.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-gguf-dequant",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-gguf-dequant.md",
+      "title": "Add reference GGUF dequantization for the initial Ash dtype set",
+      "status": "proposed",
+      "srcRefs": [
+        "src/ggml-common.h",
+        "src/ggml-quants.c",
+        "src/ggml.c",
+        "src/matmul.rs",
+        "src/unet_checkpoint.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-gguf-reader",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-gguf-reader.md",
+      "title": "Add a strict shared GGUF metadata and tensor reader",
+      "status": "proposed",
+      "srcRefs": [
+        "src/checkpoint.rs",
+        "src/metadata.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-llm-evidence-integration",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-llm-evidence-integration.md",
+      "title": "Integrate measured Ash LLM evidence into the full AI cycle",
+      "status": "proposed",
+      "srcRefs": [
+        "src/compute.rs",
+        "src/lib.rs",
+        "src/llm.rs",
+        "src/main.rs",
+        "src/routes/chat.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-native-families-index",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-native-families-index.md",
+      "title": "Reconcile Ash native-family roster and readiness",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md",
+      "title": "Prove Qwen-Image-2.1 segment attention and prefix KV",
+      "status": "proposed",
+      "srcRefs": [
+        "src/attention.rs",
+        "src/config.rs",
+        "src/license_gate.rs",
+        "src/model/diffusion/qwen_image_2_1.hpp"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-rrdb-upscaler-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md",
+      "title": "Spike RRDB and PixelShuffle shapes on Ash",
+      "status": "proposed",
+      "srcRefs": [
+        "src/compute.rs",
+        "src/conv2d.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-sampling-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-sampling-contract.md",
+      "title": "Add Ash sampling and stop contract",
+      "status": "proposed",
+      "srcRefs": [
+        "src/backend.rs",
+        "src/lib.rs",
+        "src/llm.rs",
+        "src/model.rs",
+        "src/routes/openai_chat.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-tokenizer-framework",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-tokenizer-framework.md",
+      "title": "Build the shared Ash tokenizer framework",
+      "status": "proposed",
+      "srcRefs": [
+        "src/prompt.rs",
+        "src/sd.rs",
+        "src/tokenizer.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md",
+      "title": "Guard Ash conditioning at the pipeline boundary",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes/images_generate.rs",
+        "src/sd.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-vae-family-adapters",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-vae-family-adapters.md",
+      "title": "Ash VAE family adapters",
+      "status": "proposed",
+      "srcRefs": [
+        "src/checkpoint.rs",
+        "src/model/vae/auto_encoder_kl.hpp",
+        "src/model/vae/wan_vae.hpp",
+        "src/name_conversion.cpp",
+        "src/vae_real.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-ash-verification-gates",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-ash-verification-gates.md",
+      "title": "Restore Ash verification and provenance gates",
+      "status": "done",
+      "srcRefs": [],
       "related": []
     },
     {
@@ -634,8 +938,23 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-blender-bake-extended-maps.md",
       "title": "Blender bake extension (metallic/AO/height + thumbnail)",
-      "status": "done",
-      "srcRefs": [],
+      "status": "in_progress",
+      "srcRefs": [
+        "src/blender_asset.py",
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-blender-terminal-hardening",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-blender-terminal-hardening.md",
+      "title": "Blender terminal hardening",
+      "status": "proposed",
+      "srcRefs": [
+        "src/jobs_registry.rs",
+        "src/routes/blender_exec.rs"
+      ],
       "related": []
     },
     {
@@ -688,6 +1007,18 @@
       "related": []
     },
     {
+      "id": "TASK-capability-honesty-gate",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-capability-honesty-gate.md",
+      "title": "Capability honesty gate",
+      "status": "proposed",
+      "srcRefs": [
+        "src/lib.rs",
+        "src/routes.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-capability-signed-urls",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-capability-signed-urls.md",
@@ -731,7 +1062,9 @@
       "path": ".plan/tickets/TASK-comfy-custom-node-capability-gate.md",
       "title": "ComfyUI custom-node capability gating and operator policy note",
       "status": "proposed",
-      "srcRefs": [],
+      "srcRefs": [
+        "src/lib.rs"
+      ],
       "related": []
     },
     {
@@ -862,7 +1195,8 @@
       "title": "provider-neutral download options contract",
       "status": "proposed",
       "srcRefs": [
-        "src/downloads.rs"
+        "src/downloads.rs",
+        "src/lib.rs"
       ],
       "related": []
     },
@@ -880,8 +1214,11 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-exr-format-support.md",
       "title": "EXR format support in the artifact registry",
-      "status": "proposed",
-      "srcRefs": [],
+      "status": "in_progress",
+      "srcRefs": [
+        "src/formats.rs",
+        "src/routes/image_ops_exec.rs"
+      ],
       "related": []
     },
     {
@@ -1119,6 +1456,21 @@
       "related": []
     },
     {
+      "id": "TASK-inference-cache-correctness",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-inference-cache-correctness.md",
+      "title": "Inference cache identity and memory-demand correctness",
+      "status": "proposed",
+      "srcRefs": [
+        "src/backend.rs",
+        "src/determinism.rs",
+        "src/lib.rs",
+        "src/routes/images_generate.rs",
+        "src/swap.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-job-result-artifact-selection-metadata",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md",
@@ -1324,6 +1676,15 @@
       "related": []
     },
     {
+      "id": "TASK-model-provenance-contract",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-model-provenance-contract.md",
+      "title": "model identity and provenance contract",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
       "id": "TASK-multi-gpu-device-axis",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-multi-gpu-device-axis.md",
@@ -1382,7 +1743,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-ocr-tesseract-cli-engine.md",
       "title": "Tesseract CLI engine (external supervisor lane)",
-      "status": "proposed — BLOCKED on TASK-external-tool-registry + TASK-process-supervisor",
+      "status": "proposed",
       "srcRefs": [],
       "related": []
     },
@@ -1420,6 +1781,17 @@
       "title": "Per-consumer API scopes keyed by env name",
       "status": "done",
       "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-plan-index-generator",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-plan-index-generator.md",
+      "title": "Make plan indexes regenerate from honkbox sources",
+      "status": "proposed",
+      "srcRefs": [
+        "src/swap.rs"
+      ],
       "related": []
     },
     {
@@ -1519,9 +1891,11 @@
       "id": "TASK-render-critique-loop",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-render-critique-loop.md",
-      "title": "Render-critique loop fixture",
+      "title": "Fixed multi-view render and typed critique replay",
       "status": "proposed",
-      "srcRefs": [],
+      "srcRefs": [
+        "src/determinism.rs"
+      ],
       "related": []
     },
     {
@@ -1552,11 +1926,53 @@
       "related": []
     },
     {
+      "id": "TASK-salvo-dto-schema-bridge",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-dto-schema-bridge.md",
+      "title": "Bridge shared DTO schemas for salvo",
+      "status": "done",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-middleware-and-codegen",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-middleware-and-codegen.md",
+      "title": "Salvo middleware and codegen parity",
+      "status": "done",
+      "srcRefs": [
+        "src/salvo_middleware.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "TASK-salvo-migration-decision",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-salvo-migration-decision.md",
       "title": "Decide on salvo.rs as the server framework",
-      "status": "postponed",
+      "status": "done",
+      "srcRefs": [],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-migration-spike",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-migration-spike.md",
+      "title": "Salvo migration spike — one route, one test, one artifact",
+      "status": "done",
+      "srcRefs": [
+        "src/salvo_version.rs"
+      ],
+      "related": []
+    },
+    {
+      "id": "TASK-salvo-route-and-test-cutover",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-salvo-route-and-test-cutover.md",
+      "title": "Cut salvo routes and server tests over",
+      "status": "done",
       "srcRefs": [],
       "related": []
     },
@@ -1582,9 +1998,11 @@
       "id": "TASK-scene-spec-schema",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-scene-spec-schema.md",
-      "title": "Versioned scene-spec schema",
+      "title": "Versioned deterministic scene-spec schema",
       "status": "proposed",
-      "srcRefs": [],
+      "srcRefs": [
+        "src/determinism.rs"
+      ],
       "related": []
     },
     {
@@ -1774,7 +2192,7 @@
       "id": "TASK-video-ffi-spike",
       "kind": "ticket",
       "path": ".plan/tickets/TASK-video-ffi-spike.md",
-      "title": "Video FFI support spike",
+      "title": "Video FFI support spike (current pin)",
       "status": "proposed",
       "srcRefs": [],
       "related": []
@@ -1798,6 +2216,19 @@
       "related": []
     },
     {
+      "id": "TASK-vulkan-coopmat-baseline",
+      "kind": "ticket",
+      "path": ".plan/tickets/TASK-vulkan-coopmat-baseline.md",
+      "title": "Capability-gated RDNA3/RDNA4 Vulkan cooperative-matrix baseline",
+      "status": "proposed",
+      "srcRefs": [
+        "src/device.rs",
+        "src/ggml-vulkan/ggml-vulkan.cpp",
+        "src/llm.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "epic-3d-capture",
       "kind": "epic",
       "path": ".plan/epics/epic-3d-capture.md",
@@ -1807,11 +2238,20 @@
       "related": []
     },
     {
+      "id": "epic-ash-native-families",
+      "kind": "epic",
+      "path": ".plan/epics/epic-ash-native-families.md",
+      "title": "Ash native inference families",
+      "status": "proposed",
+      "srcRefs": [],
+      "related": []
+    },
+    {
       "id": "epic-audio-streaming",
       "kind": "epic",
       "path": ".plan/epics/epic-audio-streaming.md",
       "title": "Audio streaming and quality",
-      "status": "proposed",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1820,7 +2260,7 @@
       "kind": "epic",
       "path": ".plan/epics/epic-authn-authz.md",
       "title": "Authentication, authorization, and content credentials",
-      "status": "active",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1840,7 +2280,7 @@
       "title": "Blender asset workstream",
       "status": "in_progress",
       "srcRefs": [
-        "src/routes/blender"
+        "src/lib.rs"
       ],
       "related": []
     },
@@ -1858,7 +2298,7 @@
       "kind": "epic",
       "path": ".plan/epics/epic-comfyui-managed-runtime.md",
       "title": "Managed ComfyUI runtime and typed surface",
-      "status": "active (2026-11-24; runtime landed, workflow pipeline open)",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1876,7 +2316,7 @@
       "kind": "epic",
       "path": ".plan/epics/epic-docs-tooling.md",
       "title": "Docs tooling decisions",
-      "status": "proposed",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1947,8 +2387,8 @@
       "id": "epic-model-feedback",
       "kind": "epic",
       "path": ".plan/epics/epic-model-feedback.md",
-      "title": "Model pipeline and multimodal feedback loops",
-      "status": "proposed",
+      "title": "Model pipeline and deterministic multimodal feedback",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1962,11 +2402,22 @@
       "related": []
     },
     {
+      "id": "epic-salvo-migration",
+      "kind": "epic",
+      "path": ".plan/epics/epic-salvo-migration.md",
+      "title": "Incremental axum → salvo cutover",
+      "status": "in_progress",
+      "srcRefs": [
+        "src/lib.rs"
+      ],
+      "related": []
+    },
+    {
       "id": "epic-sd-native-backend",
       "kind": "epic",
       "path": ".plan/epics/epic-sd-native-backend.md",
       "title": "Native SD backend completeness",
-      "status": "proposed",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -1975,7 +2426,7 @@
       "kind": "epic",
       "path": ".plan/epics/epic-trust-safety.md",
       "title": "Trust and safety signals",
-      "status": "active",
+      "status": "in_progress",
       "srcRefs": [],
       "related": []
     },
@@ -2013,19 +2464,38 @@
       "owners": [
         "BUG-comfyui-readiness-probe",
         "FEAT-cli-app-manager",
+        "FEAT-comfyui-workflow-pipeline",
         "TASK-capabilities-golden-fixture"
       ]
     },
     {
       "path": "src/artifacts.rs",
       "owners": [
+        "FEAT-comfyui-workflow-pipeline",
         "TASK-job-result-artifact-selection-metadata"
+      ]
+    },
+    {
+      "path": "src/attention.rs",
+      "owners": [
+        "FEAT-ash-moss-image-family",
+        "FEAT-ash-qwen35-dense",
+        "TASK-ash-autoregressive-state",
+        "TASK-ash-flow-dit-substrate",
+        "TASK-ash-qwen-image21-attention-proof"
       ]
     },
     {
       "path": "src/audiocpp.rs",
       "owners": [
         "TASK-audiocpp-stt-provider"
+      ]
+    },
+    {
+      "path": "src/backend.rs",
+      "owners": [
+        "TASK-ash-sampling-contract",
+        "TASK-inference-cache-correctness"
       ]
     },
     {
@@ -2048,14 +2518,51 @@
       ]
     },
     {
+      "path": "src/blender_asset.py",
+      "owners": [
+        "TASK-blender-bake-extended-maps"
+      ]
+    },
+    {
       "path": "src/blender_assets.rs",
       "owners": [
         "FEAT-blender-asset-preflight"
       ]
     },
     {
+      "path": "src/catalog.json",
+      "owners": [
+        "FEAT-ash-moss-image-family"
+      ]
+    },
+    {
+      "path": "src/checkpoint.rs",
+      "owners": [
+        "FEAT-ash-embeddinggemma-2",
+        "FEAT-ash-moss-image-family",
+        "TASK-ash-gguf-reader",
+        "TASK-ash-vae-family-adapters"
+      ]
+    },
+    {
+      "path": "src/checkpoint_family.rs",
+      "owners": [
+        "TASK-ash-family-readiness-markers"
+      ]
+    },
+    {
+      "path": "src/compute.rs",
+      "owners": [
+        "TASK-ash-decoder-ops",
+        "TASK-ash-llm-evidence-integration",
+        "TASK-ash-rrdb-upscaler-spike"
+      ]
+    },
+    {
       "path": "src/config.rs",
       "owners": [
+        "FEAT-comfyui-workflow-pipeline",
+        "TASK-ash-qwen-image21-attention-proof",
         "TASK-llm-prompt-cache"
       ]
     },
@@ -2063,6 +2570,18 @@
       "path": "src/container.rs",
       "owners": [
         "TASK-container-safety"
+      ]
+    },
+    {
+      "path": "src/conv2d.rs",
+      "owners": [
+        "TASK-ash-rrdb-upscaler-spike"
+      ]
+    },
+    {
+      "path": "src/core/ggml_extend.cpp",
+      "owners": [
+        "FEAT-ash-moss-image-family"
       ]
     },
     {
@@ -2074,13 +2593,18 @@
     {
       "path": "src/determinism.rs",
       "owners": [
-        "TASK-determinism-contract"
+        "FEAT-comfyui-workflow-pipeline",
+        "TASK-determinism-contract",
+        "TASK-inference-cache-correctness",
+        "TASK-render-critique-loop",
+        "TASK-scene-spec-schema"
       ]
     },
     {
       "path": "src/device.rs",
       "owners": [
-        "TASK-device-selection-rank-review"
+        "TASK-device-selection-rank-review",
+        "TASK-vulkan-coopmat-baseline"
       ]
     },
     {
@@ -2089,6 +2613,12 @@
         "FEAT-download-provider-adapters",
         "TASK-download-options-contract",
         "TASK-support-doc-truth"
+      ]
+    },
+    {
+      "path": "src/embed.rs",
+      "owners": [
+        "FEAT-ash-embeddinggemma-2"
       ]
     },
     {
@@ -2107,6 +2637,7 @@
       "path": "src/formats.rs",
       "owners": [
         "FEAT-image-output-formats",
+        "TASK-exr-format-support",
         "TASK-format-registry",
         "TASK-model-format-validation",
         "TASK-svg-ora-support"
@@ -2120,22 +2651,45 @@
       ]
     },
     {
-      "path": "src/gen/api-types.ts",
-      "owners": [
-        "TASK-ash-backend-promote"
-      ]
-    },
-    {
       "path": "src/gen/openapi.json",
       "owners": [
-        "BUG-openapi-embeddings-unlisted",
-        "TASK-ash-backend-promote"
+        "BUG-openapi-embeddings-unlisted"
       ]
     },
     {
       "path": "src/generation/providers/comfyui",
       "owners": [
         "TASK-comfyui-serve-compat-spike"
+      ]
+    },
+    {
+      "path": "src/ggml-common.h",
+      "owners": [
+        "TASK-ash-gguf-dequant"
+      ]
+    },
+    {
+      "path": "src/ggml-cpu/ops.cpp",
+      "owners": [
+        "BUG-ash-sd15-numerics"
+      ]
+    },
+    {
+      "path": "src/ggml-quants.c",
+      "owners": [
+        "TASK-ash-gguf-dequant"
+      ]
+    },
+    {
+      "path": "src/ggml-vulkan/ggml-vulkan.cpp",
+      "owners": [
+        "TASK-vulkan-coopmat-baseline"
+      ]
+    },
+    {
+      "path": "src/ggml.c",
+      "owners": [
+        "TASK-ash-gguf-dequant"
       ]
     },
     {
@@ -2160,6 +2714,7 @@
       "path": "src/jobs.rs",
       "owners": [
         "BUG-fizgig-artifact-cap-and-gc",
+        "FEAT-comfyui-workflow-pipeline",
         "FEAT-sd-edit-loras",
         "TASK-determinism-contract",
         "TASK-generations-loras",
@@ -2170,6 +2725,8 @@
       "path": "src/jobs_registry.rs",
       "owners": [
         "FEAT-blender-job-route",
+        "FEAT-comfyui-workflow-pipeline",
+        "TASK-blender-terminal-hardening",
         "TASK-fizgig-admission-contract-tests",
         "TASK-images-edits-artifact-delivery-parity",
         "TASK-job-result-artifact-selection-metadata",
@@ -2183,25 +2740,42 @@
         "BUG-capabilities-rerank-flag-without-ranker",
         "FEAT-ash-vulkan-backend",
         "FEAT-blender-job-route",
+        "FEAT-comfyui-workflow-pipeline",
         "FEAT-image-output-formats",
         "FEAT-residency-control-plane",
         "FEAT-sd-edit-loras",
         "TASK-api-version-policy",
-        "TASK-ash-backend-promote",
+        "TASK-ash-llm-evidence-integration",
+        "TASK-ash-sampling-contract",
+        "TASK-ash-unsupported-conditioning-guards",
         "TASK-audio-resampler-quality",
         "TASK-audio-voices-loaded-backend-truth",
         "TASK-audiocpp-capabilities",
+        "TASK-blender-bake-extended-maps",
+        "TASK-capability-honesty-gate",
         "TASK-cheap-ops-spike",
+        "TASK-comfy-custom-node-capability-gate",
         "TASK-controlnet-rendering",
+        "TASK-download-options-contract",
         "TASK-face-detection-policy",
         "TASK-gpu-slot-audit-hook",
+        "TASK-inference-cache-correctness",
         "TASK-job-result-artifact-selection-metadata",
         "TASK-llm-tool-choice-contract",
         "TASK-llm-vision-default",
+        "TASK-salvo-dto-schema-bridge",
         "TASK-sd-base-model-tags",
         "TASK-support-doc-truth",
         "TASK-training-reservation-class",
-        "TASK-truthful-reserved-capability-rows"
+        "TASK-truthful-reserved-capability-rows",
+        "epic-blender-assets",
+        "epic-salvo-migration"
+      ]
+    },
+    {
+      "path": "src/license_gate.rs",
+      "owners": [
+        "TASK-ash-qwen-image21-attention-proof"
       ]
     },
     {
@@ -2211,9 +2785,29 @@
       ]
     },
     {
+      "path": "src/llm.rs",
+      "owners": [
+        "FEAT-ash-embeddinggemma-2",
+        "FEAT-ash-lfm25-text-decoder",
+        "FEAT-ash-moss-image-family",
+        "FEAT-ash-qwen35-dense",
+        "TASK-ash-autoregressive-state",
+        "TASK-ash-llm-evidence-integration",
+        "TASK-ash-sampling-contract",
+        "TASK-vulkan-coopmat-baseline"
+      ]
+    },
+    {
+      "path": "src/llm/qwen35.rs",
+      "owners": [
+        "FEAT-ash-qwen35-dense"
+      ]
+    },
+    {
       "path": "src/llm_attached.rs",
       "owners": [
-        "BUG-attached-job-cancel-stalled-stream"
+        "BUG-attached-job-cancel-stalled-stream",
+        "FEAT-ash-lfm25-text-decoder"
       ]
     },
     {
@@ -2221,7 +2815,15 @@
       "owners": [
         "BUG-fizgig-artifact-cap-and-gc",
         "TASK-ash-backend-promote",
+        "TASK-ash-family-readiness-markers",
+        "TASK-ash-llm-evidence-integration",
         "TASK-model-format-validation"
+      ]
+    },
+    {
+      "path": "src/matmul.rs",
+      "owners": [
+        "TASK-ash-gguf-dequant"
       ]
     },
     {
@@ -2232,17 +2834,112 @@
       ]
     },
     {
+      "path": "src/metadata.rs",
+      "owners": [
+        "TASK-ash-gguf-reader"
+      ]
+    },
+    {
       "path": "src/metrics.rs",
       "owners": [
         "FEAT-blender-job-route",
+        "FEAT-comfyui-workflow-pipeline",
         "TASK-llm-prompt-cache",
         "TASK-training-reservation-class"
+      ]
+    },
+    {
+      "path": "src/mlp.rs",
+      "owners": [
+        "TASK-ash-decoder-ops"
+      ]
+    },
+    {
+      "path": "src/model.rs",
+      "owners": [
+        "FEAT-ash-moss-image-family",
+        "FEAT-ash-qwen35-dense",
+        "TASK-ash-decoder-ops",
+        "TASK-ash-flow-dit-substrate",
+        "TASK-ash-sampling-contract"
+      ]
+    },
+    {
+      "path": "src/model/common/block.hpp",
+      "owners": [
+        "BUG-ash-sd15-numerics"
+      ]
+    },
+    {
+      "path": "src/model/diffusion/moss_image.hpp",
+      "owners": [
+        "FEAT-ash-moss-image-family"
+      ]
+    },
+    {
+      "path": "src/model/diffusion/qwen_image_2_1.hpp",
+      "owners": [
+        "TASK-ash-qwen-image21-attention-proof"
+      ]
+    },
+    {
+      "path": "src/model/vae/auto_encoder_kl.hpp",
+      "owners": [
+        "TASK-ash-vae-family-adapters"
+      ]
+    },
+    {
+      "path": "src/model/vae/wan_vae.hpp",
+      "owners": [
+        "TASK-ash-vae-family-adapters"
       ]
     },
     {
       "path": "src/model_formats.rs",
       "owners": [
         "TASK-model-format-validation"
+      ]
+    },
+    {
+      "path": "src/model_spec.rs",
+      "owners": [
+        "FEAT-ash-sd2-spec"
+      ]
+    },
+    {
+      "path": "src/models/delta-net-base.cpp",
+      "owners": [
+        "FEAT-ash-qwen35-dense"
+      ]
+    },
+    {
+      "path": "src/models/lfm-base.cpp",
+      "owners": [
+        "FEAT-ash-lfm25-text-decoder"
+      ]
+    },
+    {
+      "path": "src/models/lfm2.cpp",
+      "owners": [
+        "FEAT-ash-lfm25-text-decoder"
+      ]
+    },
+    {
+      "path": "src/models/qwen35.cpp",
+      "owners": [
+        "FEAT-ash-qwen35-dense"
+      ]
+    },
+    {
+      "path": "src/name_conversion.cpp",
+      "owners": [
+        "TASK-ash-vae-family-adapters"
+      ]
+    },
+    {
+      "path": "src/norm.rs",
+      "owners": [
+        "TASK-ash-decoder-ops"
       ]
     },
     {
@@ -2259,9 +2956,21 @@
       ]
     },
     {
+      "path": "src/pipeline/diffusion_engine.cpp",
+      "owners": [
+        "FEAT-ash-moss-image-family"
+      ]
+    },
+    {
       "path": "src/playground.ts",
       "owners": [
         "TASK-llm-vision-default"
+      ]
+    },
+    {
+      "path": "src/prompt.rs",
+      "owners": [
+        "TASK-ash-tokenizer-framework"
       ]
     },
     {
@@ -2276,9 +2985,11 @@
         "BUG-capabilities-rerank-flag-without-ranker",
         "BUG-openapi-embeddings-unlisted",
         "FEAT-blender-job-route",
+        "FEAT-comfyui-workflow-pipeline",
         "FEAT-residency-control-plane",
         "FEAT-sd-edit-loras",
         "TASK-audiocpp-capabilities",
+        "TASK-capability-honesty-gate",
         "TASK-controlnet-rendering",
         "TASK-generations-loras",
         "TASK-gpu-slot-audit-hook",
@@ -2291,6 +3002,7 @@
     {
       "path": "src/routes/apps.rs",
       "owners": [
+        "FEAT-comfyui-workflow-pipeline",
         "TASK-capabilities-golden-fixture"
       ]
     },
@@ -2307,12 +3019,6 @@
       ]
     },
     {
-      "path": "src/routes/blender",
-      "owners": [
-        "epic-blender-assets"
-      ]
-    },
-    {
       "path": "src/routes/blender.rs",
       "owners": [
         "FEAT-blender-job-route"
@@ -2322,6 +3028,8 @@
       "path": "src/routes/blender_exec.rs",
       "owners": [
         "FEAT-blender-job-route",
+        "FEAT-comfyui-workflow-pipeline",
+        "TASK-blender-terminal-hardening",
         "TASK-job-result-artifact-selection-metadata"
       ]
     },
@@ -2335,6 +3043,7 @@
       "path": "src/routes/capabilities.rs",
       "owners": [
         "BUG-capabilities-rerank-flag-without-ranker",
+        "FEAT-comfyui-workflow-pipeline",
         "FEAT-residency-control-plane",
         "TASK-audio-voices-loaded-backend-truth",
         "TASK-fizgig-probe-honesty"
@@ -2343,7 +3052,8 @@
     {
       "path": "src/routes/chat.rs",
       "owners": [
-        "BUG-attached-job-cancel-stalled-stream"
+        "BUG-attached-job-cancel-stalled-stream",
+        "TASK-ash-llm-evidence-integration"
       ]
     },
     {
@@ -2370,7 +3080,8 @@
     {
       "path": "src/routes/image_ops_exec.rs",
       "owners": [
-        "FEAT-image-output-formats"
+        "FEAT-image-output-formats",
+        "TASK-exr-format-support"
       ]
     },
     {
@@ -2383,6 +3094,8 @@
     {
       "path": "src/routes/images_generate.rs",
       "owners": [
+        "TASK-ash-unsupported-conditioning-guards",
+        "TASK-inference-cache-correctness",
         "TASK-job-result-artifact-selection-metadata"
       ]
     },
@@ -2395,6 +3108,7 @@
     {
       "path": "src/routes/job_content.rs",
       "owners": [
+        "FEAT-comfyui-workflow-pipeline",
         "FEAT-job-bundle-zip"
       ]
     },
@@ -2402,6 +3116,12 @@
       "path": "src/routes/models.rs",
       "owners": [
         "FEAT-residency-control-plane"
+      ]
+    },
+    {
+      "path": "src/routes/openai_chat.rs",
+      "owners": [
+        "TASK-ash-sampling-contract"
       ]
     },
     {
@@ -2448,9 +3168,31 @@
       ]
     },
     {
-      "path": "src/sdxl.rs",
+      "path": "src/salvo_middleware.rs",
       "owners": [
-        "TASK-ash-backend-promote"
+        "TASK-salvo-middleware-and-codegen"
+      ]
+    },
+    {
+      "path": "src/salvo_version.rs",
+      "owners": [
+        "TASK-salvo-migration-spike"
+      ]
+    },
+    {
+      "path": "src/sampler.rs",
+      "owners": [
+        "FEAT-ash-moss-image-family",
+        "TASK-ash-flow-dit-substrate"
+      ]
+    },
+    {
+      "path": "src/sd.rs",
+      "owners": [
+        "FEAT-ash-sd2-spec",
+        "TASK-ash-family-readiness-markers",
+        "TASK-ash-tokenizer-framework",
+        "TASK-ash-unsupported-conditioning-guards"
       ]
     },
     {
@@ -2469,7 +3211,23 @@
       "path": "src/swap.rs",
       "owners": [
         "FEAT-residency-control-plane",
-        "TASK-llm-prompt-cache"
+        "TASK-inference-cache-correctness",
+        "TASK-llm-prompt-cache",
+        "TASK-plan-index-generator"
+      ]
+    },
+    {
+      "path": "src/timestep.rs",
+      "owners": [
+        "BUG-ash-sd15-numerics",
+        "TASK-ash-flow-dit-substrate"
+      ]
+    },
+    {
+      "path": "src/tokenizer.rs",
+      "owners": [
+        "FEAT-ash-moss-image-family",
+        "TASK-ash-tokenizer-framework"
       ]
     },
     {
@@ -2480,13 +3238,52 @@
       ]
     },
     {
+      "path": "src/unet_checkpoint.rs",
+      "owners": [
+        "TASK-ash-gguf-dequant"
+      ]
+    },
+    {
+      "path": "src/unet_real.rs",
+      "owners": [
+        "BUG-ash-sd15-numerics"
+      ]
+    },
+    {
       "path": "src/vad.rs",
       "owners": [
         "TASK-audiocpp-vad-decision"
       ]
+    },
+    {
+      "path": "src/vae_real.rs",
+      "owners": [
+        "FEAT-ash-moss-image-family",
+        "TASK-ash-vae-family-adapters"
+      ]
     }
   ],
   "edges": [
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "produces",
+      "to": "src/ggml-cpu/ops.cpp"
+    },
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "produces",
+      "to": "src/model/common/block.hpp"
+    },
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "produces",
+      "to": "src/timestep.rs"
+    },
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "produces",
+      "to": "src/unet_real.rs"
+    },
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "produces",
@@ -2593,6 +3390,136 @@
       "to": "src/routes/openapi.rs"
     },
     {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "produces",
+      "to": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "produces",
+      "to": "src/embed.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "produces",
+      "to": "src/llm_attached.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "produces",
+      "to": "src/models/lfm-base.cpp"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "produces",
+      "to": "src/models/lfm2.cpp"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/attention.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/catalog.json"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/core/ggml_extend.cpp"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/model/diffusion/moss_image.hpp"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/pipeline/diffusion_engine.cpp"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/sampler.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/tokenizer.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "produces",
+      "to": "src/vae_real.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/attention.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/llm/qwen35.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/models/delta-net-base.cpp"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "produces",
+      "to": "src/models/qwen35.cpp"
+    },
+    {
+      "from": "FEAT-ash-sd2-spec",
+      "kind": "produces",
+      "to": "src/model_spec.rs"
+    },
+    {
+      "from": "FEAT-ash-sd2-spec",
+      "kind": "produces",
+      "to": "src/sd.rs"
+    },
+    {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "produces",
       "to": "src/lib.rs"
@@ -2641,6 +3568,71 @@
       "from": "FEAT-cli-app-manager",
       "kind": "produces",
       "to": "src/apps.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/apps.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/artifacts.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/config.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/determinism.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/jobs.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/metrics.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/routes/apps.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "produces",
+      "to": "src/routes/job_content.rs"
     },
     {
       "from": "FEAT-download-provider-adapters",
@@ -2738,19 +3730,14 @@
       "to": "src/lib.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-autoregressive-state",
       "kind": "produces",
-      "to": "src/gen/api-types.ts"
+      "to": "src/attention.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-autoregressive-state",
       "kind": "produces",
-      "to": "src/gen/openapi.json"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "produces",
-      "to": "src/lib.rs"
+      "to": "src/llm.rs"
     },
     {
       "from": "TASK-ash-backend-promote",
@@ -2758,9 +3745,229 @@
       "to": "src/main.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-decoder-ops",
       "kind": "produces",
-      "to": "src/sdxl.rs"
+      "to": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "produces",
+      "to": "src/mlp.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "produces",
+      "to": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "produces",
+      "to": "src/norm.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "produces",
+      "to": "src/checkpoint_family.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "produces",
+      "to": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "produces",
+      "to": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "produces",
+      "to": "src/attention.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "produces",
+      "to": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "produces",
+      "to": "src/sampler.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "produces",
+      "to": "src/timestep.rs"
+    },
+    {
+      "from": "TASK-ash-gguf-dequant",
+      "kind": "produces",
+      "to": "src/ggml-common.h"
+    },
+    {
+      "from": "TASK-ash-gguf-dequant",
+      "kind": "produces",
+      "to": "src/ggml-quants.c"
+    },
+    {
+      "from": "TASK-ash-gguf-dequant",
+      "kind": "produces",
+      "to": "src/ggml.c"
+    },
+    {
+      "from": "TASK-ash-gguf-dequant",
+      "kind": "produces",
+      "to": "src/matmul.rs"
+    },
+    {
+      "from": "TASK-ash-gguf-dequant",
+      "kind": "produces",
+      "to": "src/unet_checkpoint.rs"
+    },
+    {
+      "from": "TASK-ash-gguf-reader",
+      "kind": "produces",
+      "to": "src/checkpoint.rs"
+    },
+    {
+      "from": "TASK-ash-gguf-reader",
+      "kind": "produces",
+      "to": "src/metadata.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "produces",
+      "to": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "produces",
+      "to": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "produces",
+      "to": "src/routes/chat.rs"
+    },
+    {
+      "from": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "produces",
+      "to": "src/attention.rs"
+    },
+    {
+      "from": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "produces",
+      "to": "src/config.rs"
+    },
+    {
+      "from": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "produces",
+      "to": "src/license_gate.rs"
+    },
+    {
+      "from": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "produces",
+      "to": "src/model/diffusion/qwen_image_2_1.hpp"
+    },
+    {
+      "from": "TASK-ash-rrdb-upscaler-spike",
+      "kind": "produces",
+      "to": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-rrdb-upscaler-spike",
+      "kind": "produces",
+      "to": "src/conv2d.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "produces",
+      "to": "src/backend.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "produces",
+      "to": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "produces",
+      "to": "src/routes/openai_chat.rs"
+    },
+    {
+      "from": "TASK-ash-tokenizer-framework",
+      "kind": "produces",
+      "to": "src/prompt.rs"
+    },
+    {
+      "from": "TASK-ash-tokenizer-framework",
+      "kind": "produces",
+      "to": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-tokenizer-framework",
+      "kind": "produces",
+      "to": "src/tokenizer.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "produces",
+      "to": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "produces",
+      "to": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "produces",
+      "to": "src/checkpoint.rs"
+    },
+    {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "produces",
+      "to": "src/model/vae/auto_encoder_kl.hpp"
+    },
+    {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "produces",
+      "to": "src/model/vae/wan_vae.hpp"
+    },
+    {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "produces",
+      "to": "src/name_conversion.cpp"
+    },
+    {
+      "from": "TASK-ash-vae-family-adapters",
+      "kind": "produces",
+      "to": "src/vae_real.rs"
     },
     {
       "from": "TASK-audio-resampler-quality",
@@ -2833,6 +4040,26 @@
       "to": "src/blender_addons.rs"
     },
     {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "produces",
+      "to": "src/blender_asset.py"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "produces",
+      "to": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "produces",
+      "to": "src/routes/blender_exec.rs"
+    },
+    {
       "from": "TASK-capabilities-golden-fixture",
       "kind": "produces",
       "to": "src/apps.rs"
@@ -2848,7 +4075,22 @@
       "to": "src/routes/apps.rs"
     },
     {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "produces",
+      "to": "src/routes.rs"
+    },
+    {
       "from": "TASK-cheap-ops-spike",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
       "kind": "produces",
       "to": "src/lib.rs"
     },
@@ -2896,6 +4138,21 @@
       "from": "TASK-download-options-contract",
       "kind": "produces",
       "to": "src/downloads.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "produces",
+      "to": "src/formats.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "produces",
+      "to": "src/routes/image_ops_exec.rs"
     },
     {
       "from": "TASK-external-api-catalog-links",
@@ -2986,6 +4243,31 @@
       "from": "TASK-images-edits-artifact-delivery-parity",
       "kind": "produces",
       "to": "src/routes/images_inputs.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "produces",
+      "to": "src/backend.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "produces",
+      "to": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "produces",
+      "to": "src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "produces",
+      "to": "src/swap.rs"
     },
     {
       "from": "TASK-job-result-artifact-selection-metadata",
@@ -3083,6 +4365,11 @@
       "to": "src/model_formats.rs"
     },
     {
+      "from": "TASK-plan-index-generator",
+      "kind": "produces",
+      "to": "src/swap.rs"
+    },
+    {
       "from": "TASK-process-supervisor",
       "kind": "produces",
       "to": "src/routes.rs"
@@ -3091,6 +4378,31 @@
       "from": "TASK-process-supervisor",
       "kind": "produces",
       "to": "src/supervisor.rs"
+    },
+    {
+      "from": "TASK-render-critique-loop",
+      "kind": "produces",
+      "to": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-middleware-and-codegen",
+      "kind": "produces",
+      "to": "src/salvo_middleware.rs"
+    },
+    {
+      "from": "TASK-salvo-migration-spike",
+      "kind": "produces",
+      "to": "src/salvo_version.rs"
+    },
+    {
+      "from": "TASK-scene-spec-schema",
+      "kind": "produces",
+      "to": "src/determinism.rs"
     },
     {
       "from": "TASK-sd-base-model-tags",
@@ -3168,15 +4480,47 @@
       "to": "src/routes.rs"
     },
     {
+      "from": "TASK-vulkan-coopmat-baseline",
+      "kind": "produces",
+      "to": "src/device.rs"
+    },
+    {
+      "from": "TASK-vulkan-coopmat-baseline",
+      "kind": "produces",
+      "to": "src/ggml-vulkan/ggml-vulkan.cpp"
+    },
+    {
+      "from": "TASK-vulkan-coopmat-baseline",
+      "kind": "produces",
+      "to": "src/llm.rs"
+    },
+    {
       "from": "epic-blender-assets",
       "kind": "produces",
-      "to": "src/routes/blender"
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "epic-salvo-migration",
+      "kind": "produces",
+      "to": "src/lib.rs"
+    },
+    {
+      "from": "BUG-ash-sd15-numerics",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/timestep.rs"
     },
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
       "to": "BUG-capabilities-rerank-flag-without-ranker",
       "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-ash-lfm25-text-decoder",
+      "via": "src/llm_attached.rs"
     },
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
@@ -3188,6 +4532,12 @@
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
       "to": "FEAT-blender-job-route",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
       "via": "src/lib.rs"
     },
     {
@@ -3217,7 +4567,19 @@
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs; src/routes/chat.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -3241,13 +4603,37 @@
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
       "via": "src/lib.rs"
     },
     {
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -3260,6 +4646,12 @@
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -3278,6 +4670,12 @@
       "from": "BUG-attached-job-cancel-stalled-stream",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -3305,6 +4703,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-attached-job-cancel-stalled-stream",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
       "to": "BUG-openapi-embeddings-unlisted",
@@ -3321,6 +4731,12 @@
       "kind": "sibling",
       "to": "FEAT-blender-job-route",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
     },
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
@@ -3355,7 +4771,19 @@
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -3379,7 +4807,25 @@
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
       "via": "src/lib.rs"
     },
     {
@@ -3387,6 +4833,12 @@
       "kind": "sibling",
       "to": "TASK-controlnet-rendering",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
     },
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
@@ -3415,6 +4867,12 @@
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
       "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
       "via": "src/lib.rs"
     },
@@ -3435,6 +4893,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "BUG-capabilities-rerank-flag-without-ranker",
@@ -3467,9 +4931,27 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "BUG-capabilities-rerank-flag-without-ranker",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "BUG-comfyui-readiness-probe",
       "kind": "sibling",
       "to": "FEAT-cli-app-manager",
+      "via": "src/apps.rs"
+    },
+    {
+      "from": "BUG-comfyui-readiness-probe",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
       "via": "src/apps.rs"
     },
     {
@@ -3487,6 +4969,12 @@
     {
       "from": "BUG-fizgig-artifact-cap-and-gc",
       "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
+      "via": "src/jobs.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
       "to": "FEAT-sd-edit-loras",
       "via": "src/jobs.rs"
     },
@@ -3494,6 +4982,18 @@
       "from": "BUG-fizgig-artifact-cap-and-gc",
       "kind": "sibling",
       "to": "TASK-ash-backend-promote",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-ash-family-readiness-markers",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "BUG-fizgig-artifact-cap-and-gc",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
       "via": "src/main.rs"
     },
     {
@@ -3541,6 +5041,12 @@
     {
       "from": "BUG-openapi-embeddings-unlisted",
       "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "BUG-openapi-embeddings-unlisted",
+      "kind": "sibling",
       "to": "FEAT-residency-control-plane",
       "via": "src/routes.rs"
     },
@@ -3553,13 +5059,13 @@
     {
       "from": "BUG-openapi-embeddings-unlisted",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
-      "via": "src/gen/openapi.json"
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/routes.rs"
     },
     {
       "from": "BUG-openapi-embeddings-unlisted",
       "kind": "sibling",
-      "to": "TASK-audiocpp-capabilities",
+      "to": "TASK-capability-honesty-gate",
       "via": "src/routes.rs"
     },
     {
@@ -3605,9 +5111,231 @@
       "via": "src/routes.rs"
     },
     {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "FEAT-ash-lfm25-text-decoder",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "FEAT-ash-moss-image-family",
+      "via": "src/checkpoint.rs; src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "FEAT-ash-qwen35-dense",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-ash-autoregressive-state",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-ash-gguf-reader",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-ash-vae-family-adapters",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-embeddinggemma-2",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "FEAT-ash-moss-image-family",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "FEAT-ash-qwen35-dense",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "TASK-ash-autoregressive-state",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-lfm25-text-decoder",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "FEAT-ash-qwen35-dense",
+      "via": "src/attention.rs; src/llm.rs; src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-autoregressive-state",
+      "via": "src/attention.rs; src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-decoder-ops",
+      "via": "src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/attention.rs; src/model.rs; src/sampler.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-gguf-reader",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-qwen-image21-attention-proof",
+      "via": "src/attention.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/llm.rs; src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-tokenizer-framework",
+      "via": "src/tokenizer.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-ash-vae-family-adapters",
+      "via": "src/checkpoint.rs; src/vae_real.rs"
+    },
+    {
+      "from": "FEAT-ash-moss-image-family",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-autoregressive-state",
+      "via": "src/attention.rs; src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-decoder-ops",
+      "via": "src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/attention.rs; src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-qwen-image21-attention-proof",
+      "via": "src/attention.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/llm.rs; src/model.rs"
+    },
+    {
+      "from": "FEAT-ash-qwen35-dense",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "FEAT-ash-sd2-spec",
+      "kind": "sibling",
+      "to": "TASK-ash-family-readiness-markers",
+      "via": "src/sd.rs"
+    },
+    {
+      "from": "FEAT-ash-sd2-spec",
+      "kind": "sibling",
+      "to": "TASK-ash-tokenizer-framework",
+      "via": "src/sd.rs"
+    },
+    {
+      "from": "FEAT-ash-sd2-spec",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/sd.rs"
+    },
+    {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
       "to": "FEAT-blender-job-route",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
       "via": "src/lib.rs"
     },
     {
@@ -3637,7 +5365,19 @@
     {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -3661,13 +5401,37 @@
     {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
       "via": "src/lib.rs"
     },
     {
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -3680,6 +5444,12 @@
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -3698,6 +5468,12 @@
       "from": "FEAT-ash-vulkan-backend",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -3725,6 +5501,24 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-ash-vulkan-backend",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
+      "via": "src/jobs_registry.rs; src/lib.rs; src/metrics.rs; src/routes.rs; src/routes/blender_exec.rs"
+    },
+    {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
       "to": "FEAT-image-output-formats",
@@ -3751,7 +5545,19 @@
     {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -3775,7 +5581,31 @@
     {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-blender-terminal-hardening",
+      "via": "src/jobs_registry.rs; src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
       "via": "src/lib.rs"
     },
     {
@@ -3783,6 +5613,12 @@
       "kind": "sibling",
       "to": "TASK-controlnet-rendering",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-blender-job-route",
@@ -3817,6 +5653,12 @@
     {
       "from": "FEAT-blender-job-route",
       "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
       "via": "src/jobs_registry.rs; src/lib.rs; src/routes/blender_exec.rs"
     },
@@ -3843,6 +5685,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-blender-job-route",
@@ -3875,10 +5723,286 @@
       "via": "src/jobs_registry.rs; src/lib.rs; src/routes.rs"
     },
     {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-blender-job-route",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-cli-app-manager",
+      "kind": "sibling",
+      "to": "FEAT-comfyui-workflow-pipeline",
+      "via": "src/apps.rs"
+    },
+    {
       "from": "FEAT-cli-app-manager",
       "kind": "sibling",
       "to": "TASK-capabilities-golden-fixture",
       "via": "src/apps.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "FEAT-image-output-formats",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "FEAT-job-bundle-zip",
+      "via": "src/routes/job_content.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "FEAT-residency-control-plane",
+      "via": "src/lib.rs; src/routes.rs; src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "FEAT-sd-edit-loras",
+      "via": "src/jobs.rs; src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-api-version-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-ash-qwen-image21-attention-proof",
+      "via": "src/config.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs; src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-blender-terminal-hardening",
+      "via": "src/jobs_registry.rs; src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-capabilities-golden-fixture",
+      "via": "src/apps.rs; src/routes/apps.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-determinism-contract",
+      "via": "src/determinism.rs; src/jobs.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-fizgig-admission-contract-tests",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-fizgig-probe-honesty",
+      "via": "src/routes/capabilities.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/jobs.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-images-edits-artifact-delivery-parity",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/determinism.rs; src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/artifacts.rs; src/jobs.rs; src/jobs_registry.rs; src/lib.rs; src/routes/blender_exec.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-prompt-cache",
+      "via": "src/config.rs; src/metrics.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-render-critique-loop",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-scene-spec-schema",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs; src/metrics.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs; src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-comfyui-workflow-pipeline",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-download-provider-adapters",
@@ -3919,7 +6043,19 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -3943,7 +6079,25 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
       "via": "src/lib.rs"
     },
     {
@@ -3951,6 +6105,18 @@
       "kind": "sibling",
       "to": "TASK-controlnet-rendering",
       "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-exr-format-support",
+      "via": "src/formats.rs; src/routes/image_ops_exec.rs"
     },
     {
       "from": "FEAT-image-output-formats",
@@ -3968,6 +6134,12 @@
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -3997,6 +6169,12 @@
     {
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
       "to": "TASK-sd-base-model-tags",
       "via": "src/lib.rs"
     },
@@ -4022,6 +6200,18 @@
       "from": "FEAT-image-output-formats",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-image-output-formats",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     },
     {
@@ -4051,7 +6241,19 @@
     {
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -4075,7 +6277,25 @@
     {
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
       "via": "src/lib.rs"
     },
     {
@@ -4083,6 +6303,12 @@
       "kind": "sibling",
       "to": "TASK-controlnet-rendering",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-residency-control-plane",
@@ -4107,6 +6333,12 @@
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs; src/swap.rs"
     },
     {
       "from": "FEAT-residency-control-plane",
@@ -4135,8 +6367,20 @@
     {
       "from": "FEAT-residency-control-plane",
       "kind": "sibling",
+      "to": "TASK-plan-index-generator",
+      "via": "src/swap.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-residency-control-plane",
@@ -4169,6 +6413,18 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-residency-control-plane",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
       "to": "TASK-api-version-policy",
@@ -4177,7 +6433,19 @@
     {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -4201,7 +6469,25 @@
     {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
       "via": "src/lib.rs"
     },
     {
@@ -4215,6 +6501,12 @@
       "kind": "sibling",
       "to": "TASK-determinism-contract",
       "via": "src/jobs.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-sd-edit-loras",
@@ -4233,6 +6525,12 @@
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
     },
     {
       "from": "FEAT-sd-edit-loras",
@@ -4261,6 +6559,12 @@
     {
       "from": "FEAT-sd-edit-loras",
       "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
       "to": "TASK-sd-base-model-tags",
       "via": "src/lib.rs"
     },
@@ -4289,9 +6593,33 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "FEAT-sd-edit-loras",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-api-version-policy",
       "kind": "sibling",
-      "to": "TASK-ash-backend-promote",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
       "via": "src/lib.rs"
     },
     {
@@ -4315,13 +6643,37 @@
     {
       "from": "TASK-api-version-policy",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
       "via": "src/lib.rs"
     },
     {
       "from": "TASK-api-version-policy",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -4334,6 +6686,12 @@
       "from": "TASK-api-version-policy",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -4352,6 +6710,12 @@
       "from": "TASK-api-version-policy",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -4379,64 +6743,58 @@
       "via": "src/lib.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-api-version-policy",
       "kind": "sibling",
-      "to": "TASK-audio-resampler-quality",
+      "to": "epic-blender-assets",
       "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-api-version-policy",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-autoregressive-state",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/attention.rs"
+    },
+    {
+      "from": "TASK-ash-autoregressive-state",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-autoregressive-state",
+      "kind": "sibling",
+      "to": "TASK-ash-qwen-image21-attention-proof",
+      "via": "src/attention.rs"
+    },
+    {
+      "from": "TASK-ash-autoregressive-state",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-autoregressive-state",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
     },
     {
       "from": "TASK-ash-backend-promote",
       "kind": "sibling",
-      "to": "TASK-audio-voices-loaded-backend-truth",
-      "via": "src/lib.rs"
+      "to": "TASK-ash-family-readiness-markers",
+      "via": "src/main.rs"
     },
     {
       "from": "TASK-ash-backend-promote",
       "kind": "sibling",
-      "to": "TASK-audiocpp-capabilities",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-cheap-ops-spike",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-controlnet-rendering",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-face-detection-policy",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-gpu-slot-audit-hook",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-job-result-artifact-selection-metadata",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-llm-tool-choice-contract",
-      "via": "src/lib.rs"
-    },
-    {
-      "from": "TASK-ash-backend-promote",
-      "kind": "sibling",
-      "to": "TASK-llm-vision-default",
-      "via": "src/lib.rs"
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/main.rs"
     },
     {
       "from": "TASK-ash-backend-promote",
@@ -4445,27 +6803,519 @@
       "via": "src/main.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-decoder-ops",
+      "kind": "sibling",
+      "to": "TASK-ash-flow-dit-substrate",
+      "via": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "sibling",
+      "to": "TASK-ash-rrdb-upscaler-spike",
+      "via": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-decoder-ops",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "sibling",
+      "to": "TASK-ash-llm-evidence-integration",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "sibling",
+      "to": "TASK-ash-tokenizer-framework",
+      "via": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-family-readiness-markers",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "sibling",
+      "to": "TASK-ash-qwen-image21-attention-proof",
+      "via": "src/attention.rs"
+    },
+    {
+      "from": "TASK-ash-flow-dit-substrate",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/model.rs"
+    },
+    {
+      "from": "TASK-ash-gguf-reader",
+      "kind": "sibling",
+      "to": "TASK-ash-vae-family-adapters",
+      "via": "src/checkpoint.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-ash-rrdb-upscaler-spike",
+      "via": "src/compute.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-ash-sampling-contract",
+      "via": "src/lib.rs; src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/main.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-sd-base-model-tags",
       "via": "src/lib.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-support-doc-truth",
       "via": "src/lib.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-training-reservation-class",
       "via": "src/lib.rs"
     },
     {
-      "from": "TASK-ash-backend-promote",
+      "from": "TASK-ash-llm-evidence-integration",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-llm-evidence-integration",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-qwen-image21-attention-proof",
+      "kind": "sibling",
+      "to": "TASK-llm-prompt-cache",
+      "via": "src/config.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/backend.rs; src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/llm.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-sampling-contract",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-tokenizer-framework",
+      "kind": "sibling",
+      "to": "TASK-ash-unsupported-conditioning-guards",
+      "via": "src/sd.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-audio-resampler-quality",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-audio-voices-loaded-backend-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-audiocpp-capabilities",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs; src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs; src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-ash-unsupported-conditioning-guards",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     },
     {
@@ -4483,13 +7333,37 @@
     {
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
       "via": "src/lib.rs"
     },
     {
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -4502,6 +7376,12 @@
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -4525,6 +7405,12 @@
     {
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
       "to": "TASK-sd-base-model-tags",
       "via": "src/lib.rs"
     },
@@ -4544,6 +7430,18 @@
       "from": "TASK-audio-resampler-quality",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-resampler-quality",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     },
     {
@@ -4561,13 +7459,37 @@
     {
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
       "via": "src/lib.rs"
     },
     {
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -4591,6 +7513,12 @@
     {
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
       "via": "src/lib.rs"
     },
@@ -4604,6 +7532,12 @@
       "from": "TASK-audio-voices-loaded-backend-truth",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -4631,6 +7565,30 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audio-voices-loaded-backend-truth",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-blender-bake-extended-maps",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
       "from": "TASK-audiocpp-capabilities",
       "kind": "sibling",
       "to": "TASK-cheap-ops-spike",
@@ -4639,8 +7597,20 @@
     {
       "from": "TASK-audiocpp-capabilities",
       "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
       "to": "TASK-controlnet-rendering",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-audiocpp-capabilities",
@@ -4659,6 +7629,12 @@
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-audiocpp-capabilities",
@@ -4683,6 +7659,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-audiocpp-capabilities",
@@ -4715,9 +7697,285 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-audiocpp-capabilities",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-capability-honesty-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-bake-extended-maps",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "sibling",
+      "to": "TASK-fizgig-admission-contract-tests",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "sibling",
+      "to": "TASK-images-edits-artifact-delivery-parity",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/jobs_registry.rs; src/routes/blender_exec.rs"
+    },
+    {
+      "from": "TASK-blender-terminal-hardening",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/jobs_registry.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-cheap-ops-spike",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-generations-loras",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-process-supervisor",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-capability-honesty-gate",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-comfy-custom-node-capability-gate",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
       "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
       "via": "src/lib.rs"
     },
     {
@@ -4730,6 +7988,12 @@
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -4748,6 +8012,12 @@
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -4772,6 +8042,108 @@
       "from": "TASK-cheap-ops-spike",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-cheap-ops-spike",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-controlnet-rendering",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-comfy-custom-node-capability-gate",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     },
     {
@@ -4783,6 +8155,12 @@
     {
       "from": "TASK-controlnet-rendering",
       "kind": "sibling",
+      "to": "TASK-download-options-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
       "to": "TASK-face-detection-policy",
       "via": "src/lib.rs"
     },
@@ -4797,6 +8175,12 @@
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
       "via": "src/lib.rs; src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-controlnet-rendering",
@@ -4821,6 +8205,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-controlnet-rendering",
@@ -4853,6 +8243,18 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-controlnet-rendering",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-determinism-contract",
       "kind": "sibling",
       "to": "TASK-generations-loras",
@@ -4861,19 +8263,139 @@
     {
       "from": "TASK-determinism-contract",
       "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
       "via": "src/jobs.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "sibling",
+      "to": "TASK-render-critique-loop",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-determinism-contract",
+      "kind": "sibling",
+      "to": "TASK-scene-spec-schema",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-device-selection-rank-review",
+      "kind": "sibling",
+      "to": "TASK-vulkan-coopmat-baseline",
+      "via": "src/device.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-face-detection-policy",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-download-options-contract",
       "kind": "sibling",
       "to": "TASK-support-doc-truth",
-      "via": "src/downloads.rs"
+      "via": "src/downloads.rs; src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-download-options-contract",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "sibling",
+      "to": "TASK-format-registry",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "sibling",
+      "to": "TASK-model-format-validation",
+      "via": "src/formats.rs"
+    },
+    {
+      "from": "TASK-exr-format-support",
+      "kind": "sibling",
+      "to": "TASK-svg-ora-support",
+      "via": "src/formats.rs"
     },
     {
       "from": "TASK-face-detection-policy",
       "kind": "sibling",
       "to": "TASK-gpu-slot-audit-hook",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs"
     },
     {
@@ -4892,6 +8414,12 @@
       "from": "TASK-face-detection-policy",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -4916,6 +8444,18 @@
       "from": "TASK-face-detection-policy",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-face-detection-policy",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     },
     {
@@ -4993,6 +8533,12 @@
     {
       "from": "TASK-gpu-slot-audit-hook",
       "kind": "sibling",
+      "to": "TASK-inference-cache-correctness",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
       "via": "src/lib.rs"
     },
@@ -5013,6 +8559,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-gpu-slot-audit-hook",
@@ -5045,6 +8597,18 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-gpu-slot-audit-hook",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-images-edits-artifact-delivery-parity",
       "kind": "sibling",
       "to": "TASK-job-result-artifact-selection-metadata",
@@ -5063,6 +8627,90 @@
       "via": "src/jobs_registry.rs"
     },
     {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-job-result-artifact-selection-metadata",
+      "via": "src/lib.rs; src/routes/images_generate.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-prompt-cache",
+      "via": "src/swap.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-tool-choice-contract",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-plan-index-generator",
+      "via": "src/swap.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-render-critique-loop",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-scene-spec-schema",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-inference-cache-correctness",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-job-result-artifact-selection-metadata",
       "kind": "sibling",
       "to": "TASK-llm-tool-choice-contract",
@@ -5072,6 +8720,12 @@
       "from": "TASK-job-result-artifact-selection-metadata",
       "kind": "sibling",
       "to": "TASK-llm-vision-default",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
       "via": "src/lib.rs"
     },
     {
@@ -5099,6 +8753,24 @@
       "via": "src/jobs_registry.rs; src/lib.rs"
     },
     {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-job-result-artifact-selection-metadata",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-prompt-cache",
+      "kind": "sibling",
+      "to": "TASK-plan-index-generator",
+      "via": "src/swap.rs"
+    },
+    {
       "from": "TASK-llm-prompt-cache",
       "kind": "sibling",
       "to": "TASK-training-reservation-class",
@@ -5115,6 +8787,12 @@
       "kind": "sibling",
       "to": "TASK-process-supervisor",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-llm-tool-choice-contract",
@@ -5147,6 +8825,24 @@
       "via": "src/lib.rs; src/routes.rs"
     },
     {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-tool-choice-contract",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "TASK-salvo-dto-schema-bridge",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-llm-vision-default",
       "kind": "sibling",
       "to": "TASK-sd-base-model-tags",
@@ -5171,6 +8867,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-llm-vision-default",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-model-format-validation",
       "kind": "sibling",
       "to": "TASK-svg-ora-support",
@@ -5187,6 +8895,48 @@
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
       "via": "src/routes.rs"
+    },
+    {
+      "from": "TASK-render-critique-loop",
+      "kind": "sibling",
+      "to": "TASK-scene-spec-schema",
+      "via": "src/determinism.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "TASK-sd-base-model-tags",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "TASK-support-doc-truth",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "TASK-training-reservation-class",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-salvo-dto-schema-bridge",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
     },
     {
       "from": "TASK-sd-base-model-tags",
@@ -5207,6 +8957,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-sd-base-model-tags",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-support-doc-truth",
       "kind": "sibling",
       "to": "TASK-training-reservation-class",
@@ -5219,6 +8981,18 @@
       "via": "src/lib.rs"
     },
     {
+      "from": "TASK-support-doc-truth",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-support-doc-truth",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
       "from": "TASK-svg-ora-support",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
@@ -5228,6 +9002,36 @@
       "from": "TASK-training-reservation-class",
       "kind": "sibling",
       "to": "TASK-truthful-reserved-capability-rows",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-training-reservation-class",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-training-reservation-class",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-truthful-reserved-capability-rows",
+      "kind": "sibling",
+      "to": "epic-blender-assets",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "TASK-truthful-reserved-capability-rows",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
+      "via": "src/lib.rs"
+    },
+    {
+      "from": "epic-blender-assets",
+      "kind": "sibling",
+      "to": "epic-salvo-migration",
       "via": "src/lib.rs"
     }
   ]

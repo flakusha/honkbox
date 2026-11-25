@@ -6,13 +6,14 @@
 > Auto-generated from `.plan/epics/`. Do not edit manually.
 > Regenerate with `giwt plan gen-docs`.
 
-**Total:** 23 epics
+**Total:** 25 epics
 
 ## Summary
 
 | Status | Title | Priority | Effort | Tasks | File |
 | ------ | ----- | -------- | ------ | ----- | ---- |
 | Unknown | 3D capture and splat viewing | Unknown | Unknown | 0 | [epic-3d-capture.md](/.plan/epics/epic-3d-capture.md) |
+| Unknown | Ash native inference families | Unknown | Unknown | 0 | [epic-ash-native-families.md](/.plan/epics/epic-ash-native-families.md) |
 | Unknown | Audio streaming and quality | Unknown | Unknown | 0 | [epic-audio-streaming.md](/.plan/epics/epic-audio-streaming.md) |
 | Unknown | Binary formats and containers | Unknown | Unknown | 0 | [epic-binary-formats.md](/.plan/epics/epic-binary-formats.md) |
 | Unknown | Blender asset workstream | Unknown | Unknown | 0 | [epic-blender-assets.md](/.plan/epics/epic-blender-assets.md) |
@@ -24,11 +25,12 @@
 | Unknown | Full AI cycle | Unknown | Unknown | 0 | [epic-full-ai-cycle.md](/.plan/epics/epic-full-ai-cycle.md) |
 | Unknown | Game-engine export bundles | Unknown | Unknown | 0 | [epic-game-engine-export.md](/.plan/epics/epic-game-engine-export.md) |
 | Unknown | GIMP/Krita editor integration | Unknown | Unknown | 0 | [epic-editor-integration.md](/.plan/epics/epic-editor-integration.md) |
+| Unknown | Incremental axum → salvo cutover | Unknown | Unknown | 0 | [epic-salvo-migration.md](/.plan/epics/epic-salvo-migration.md) |
 | Unknown | LLM surface expansion | Unknown | Unknown | 0 | [epic-llm-expansion.md](/.plan/epics/epic-llm-expansion.md) |
 | Unknown | Managed ComfyUI runtime and typed surface | Unknown | Unknown | 0 | [epic-comfyui-managed-runtime.md](/.plan/epics/epic-comfyui-managed-runtime.md) |
 | Unknown | Media timeline interchange | Unknown | Unknown | 0 | [epic-media-timeline.md](/.plan/epics/epic-media-timeline.md) |
 | Unknown | Mesh integration and external routing | Unknown | Unknown | 0 | [epic-mesh-integration.md](/.plan/epics/epic-mesh-integration.md) |
-| Unknown | Model pipeline and multimodal feedback loops | Unknown | Unknown | 0 | [epic-model-feedback.md](/.plan/epics/epic-model-feedback.md) |
+| Unknown | Model pipeline and deterministic multimodal feedback | Unknown | Unknown | 0 | [epic-model-feedback.md](/.plan/epics/epic-model-feedback.md) |
 | Unknown | Native SD backend completeness | Unknown | Unknown | 0 | [epic-sd-native-backend.md](/.plan/epics/epic-sd-native-backend.md) |
 | Unknown | Output formats and bounded payloads | Unknown | Unknown | 0 | [epic-output-formats.md](/.plan/epics/epic-output-formats.md) |
 | Unknown | Truthful capabilities and version contract | Unknown | Unknown | 0 | [epic-capabilities-contract.md](/.plan/epics/epic-capabilities-contract.md) |
@@ -47,6 +49,14 @@
 - **Effort:** Unknown
 - **Type:** Unknown
 - **File:** `.plan/epics/epic-3d-capture.md`
+
+### Ash native inference families
+
+- **Status:** Unknown
+- **Priority:** Unknown
+- **Effort:** Unknown
+- **Type:** Unknown
+- **File:** `.plan/epics/epic-ash-native-families.md`
 
 ### Audio streaming and quality
 
@@ -136,6 +146,14 @@
 - **Type:** Unknown
 - **File:** `.plan/epics/epic-editor-integration.md`
 
+### Incremental axum → salvo cutover
+
+- **Status:** Unknown
+- **Priority:** Unknown
+- **Effort:** Unknown
+- **Type:** Unknown
+- **File:** `.plan/epics/epic-salvo-migration.md`
+
 ### LLM surface expansion
 
 - **Status:** Unknown
@@ -168,7 +186,7 @@
 - **Type:** Unknown
 - **File:** `.plan/epics/epic-mesh-integration.md`
 
-### Model pipeline and multimodal feedback loops
+### Model pipeline and deterministic multimodal feedback
 
 - **Status:** Unknown
 - **Priority:** Unknown

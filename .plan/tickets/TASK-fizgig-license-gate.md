@@ -13,7 +13,7 @@ Verification: license/fixture tests in `crates/server/tests/licenses.rs`,
 `bun run deny`, `bun run spdx`
 Links: `product-licenses-include-vs-api-2026-11-20.md` §1-4,
 `.tmp/research/fizgig-training-python-sidecar-2026-11-22.md` §4.6,
-Fizgig `docs/THIRD_PARTY_NOTICES.md`
+https://github.com/shootthesound/Fizgig/blob/e0514d66bba4a7cc2c03eaf5b16a8e9fe9985d1/docs/THIRD_PARTY_NOTICES.md
 Resources: TBD at implementation
 
 ## Change

@@ -6,7 +6,7 @@ Epic: epic-video-support
 Owner: unassigned
 Acceptance: a support probe and one short low-resolution clip run from a license-cleared local H3 or LTX checkpoint on stable-diffusion.cpp `5dcfa79`; no HTTP route, DTO, job kind or capability change.
 Verification: `cargo test --locked -p honkbox-sd-core --features video video_ffi_spike -- --ignored --nocapture`, `bun run test:core`, `bun run deny`
-Links: `.tmp/research/native-video-backend-refresh-2026-11-25.md`; pinned `docs/models/minimax_h3.md` and `docs/models/ltx2.md` at `5dcfa79801213f23e27b3e83617350ebb8ea93aa`
+Links: `.tmp/research/native-video-backend-refresh-2026-11-25.md`; upstream stable-diffusion.cpp docs at `5dcfa79801213f23e27b3e83617350ebb8ea93aa`: https://raw.githubusercontent.com/leejet/stable-diffusion.cpp/5dcfa79801213f23e27b3e83617350ebb8ea93aa/docs/models/minimax_h3.md and https://raw.githubusercontent.com/leejet/stable-diffusion.cpp/5dcfa79801213f23e27b3e83617350ebb8ea93aa/docs/models/ltx2.md
 Resources: one operator-supplied local component set; exclusive GPU lease; per-run output directory; no CI downloads or weight bundling
 
 ## Verified starting point

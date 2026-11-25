@@ -10,19 +10,59 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-capabilities-golden-fixture.md"
     }
   ],
   "src/artifacts.rs": [
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    }
+  ],
+  "src/attention.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-autoregressive-state.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md"
     }
   ],
   "src/audiocpp.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-audiocpp-stt-provider.md"
+    }
+  ],
+  "src/backend.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-sampling-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-inference-cache-correctness.md"
     }
   ],
   "src/backends.rs": [
@@ -47,13 +87,71 @@
       "source": ".plan/tickets/TASK-blender-addon-capability-probe.md"
     }
   ],
+  "src/blender_asset.py": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-bake-extended-maps.md"
+    }
+  ],
   "src/blender_assets.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-blender-asset-preflight.md"
     }
   ],
+  "src/catalog.json": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    }
+  ],
+  "src/checkpoint.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-embeddinggemma-2.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-reader.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
+    }
+  ],
+  "src/checkpoint_family.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-family-readiness-markers.md"
+    }
+  ],
+  "src/compute.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-decoder-ops.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md"
+    }
+  ],
   "src/config.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md"
+    },
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-prompt-cache.md"
@@ -65,6 +163,18 @@
       "source": ".plan/tickets/TASK-container-safety.md"
     }
   ],
+  "src/conv2d.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md"
+    }
+  ],
+  "src/core/ggml_extend.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    }
+  ],
   "src/db.rs": [
     {
       "kind": "ticket",
@@ -74,13 +184,33 @@
   "src/determinism.rs": [
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-determinism-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-inference-cache-correctness.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-render-critique-loop.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-scene-spec-schema.md"
     }
   ],
   "src/device.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-device-selection-rank-review.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-vulkan-coopmat-baseline.md"
     }
   ],
   "src/downloads.rs": [
@@ -95,6 +225,12 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-support-doc-truth.md"
+    }
+  ],
+  "src/embed.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-embeddinggemma-2.md"
     }
   ],
   "src/fizgig/families/cache.py": [
@@ -113,6 +249,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-image-output-formats.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-exr-format-support.md"
     },
     {
       "kind": "ticket",
@@ -137,26 +277,46 @@
       "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
     }
   ],
-  "src/gen/api-types.ts": [
-    {
-      "kind": "ticket",
-      "source": ".plan/tickets/TASK-ash-backend-promote.md"
-    }
-  ],
   "src/gen/openapi.json": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-openapi-embeddings-unlisted.md"
-    },
-    {
-      "kind": "ticket",
-      "source": ".plan/tickets/TASK-ash-backend-promote.md"
     }
   ],
   "src/generation/providers/comfyui": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-comfyui-serve-compat-spike.md"
+    }
+  ],
+  "src/ggml-common.h": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
+    }
+  ],
+  "src/ggml-cpu/ops.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-ash-sd15-numerics.md"
+    }
+  ],
+  "src/ggml-quants.c": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
+    }
+  ],
+  "src/ggml-vulkan/ggml-vulkan.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-vulkan-coopmat-baseline.md"
+    }
+  ],
+  "src/ggml.c": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
     }
   ],
   "src/image-edit/providers/honkbox-provider.ts": [
@@ -184,6 +344,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/FEAT-sd-edit-loras.md"
     },
     {
@@ -206,6 +370,14 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-terminal-hardening.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-fizgig-admission-contract-tests.md"
     },
     {
@@ -223,6 +395,14 @@
   ],
   "src/lib.rs": [
     {
+      "kind": "epic",
+      "source": ".plan/epics/epic-blender-assets.md"
+    },
+    {
+      "kind": "epic",
+      "source": ".plan/epics/epic-salvo-migration.md"
+    },
+    {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
     },
@@ -237,6 +417,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
     },
     {
       "kind": "ticket",
@@ -256,7 +440,15 @@
     },
     {
       "kind": "ticket",
-      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+      "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-sampling-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md"
     },
     {
       "kind": "ticket",
@@ -272,11 +464,27 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-bake-extended-maps.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capability-honesty-gate.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-cheap-ops-spike.md"
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-comfy-custom-node-capability-gate.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-controlnet-rendering.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-download-options-contract.md"
     },
     {
       "kind": "ticket",
@@ -285,6 +493,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-gpu-slot-audit-hook.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-inference-cache-correctness.md"
     },
     {
       "kind": "ticket",
@@ -297,6 +509,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-vision-default.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-salvo-dto-schema-bridge.md"
     },
     {
       "kind": "ticket",
@@ -315,16 +531,66 @@
       "source": ".plan/tickets/TASK-truthful-reserved-capability-rows.md"
     }
   ],
+  "src/license_gate.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md"
+    }
+  ],
   "src/llama_server.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llama-server-attach.md"
     }
   ],
+  "src/llm.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-embeddinggemma-2.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-autoregressive-state.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-sampling-contract.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-vulkan-coopmat-baseline.md"
+    }
+  ],
+  "src/llm/qwen35.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    }
+  ],
   "src/llm_attached.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md"
     }
   ],
   "src/main.rs": [
@@ -338,7 +604,21 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-family-readiness-markers.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-model-format-validation.md"
+    }
+  ],
+  "src/matmul.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
     }
   ],
   "src/memory/rerank.ts": [
@@ -351,10 +631,20 @@
       "source": ".plan/tickets/FEAT-rerank-endpoint.md"
     }
   ],
+  "src/metadata.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-reader.md"
+    }
+  ],
   "src/metrics.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
     },
     {
       "kind": "ticket",
@@ -365,10 +655,110 @@
       "source": ".plan/tickets/TASK-training-reservation-class.md"
     }
   ],
+  "src/mlp.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-decoder-ops.md"
+    }
+  ],
+  "src/model.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-decoder-ops.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-sampling-contract.md"
+    }
+  ],
+  "src/model/common/block.hpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-ash-sd15-numerics.md"
+    }
+  ],
+  "src/model/diffusion/moss_image.hpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    }
+  ],
+  "src/model/diffusion/qwen_image_2_1.hpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md"
+    }
+  ],
+  "src/model/vae/auto_encoder_kl.hpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
+    }
+  ],
+  "src/model/vae/wan_vae.hpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
+    }
+  ],
   "src/model_formats.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-model-format-validation.md"
+    }
+  ],
+  "src/model_spec.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-sd2-spec.md"
+    }
+  ],
+  "src/models/delta-net-base.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    }
+  ],
+  "src/models/lfm-base.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md"
+    }
+  ],
+  "src/models/lfm2.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md"
+    }
+  ],
+  "src/models/qwen35.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-qwen35-dense.md"
+    }
+  ],
+  "src/name_conversion.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
+    }
+  ],
+  "src/norm.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-decoder-ops.md"
     }
   ],
   "src/nsfw.rs": [
@@ -387,10 +777,22 @@
       "source": ".plan/tickets/TASK-svg-ora-support.md"
     }
   ],
+  "src/pipeline/diffusion_engine.cpp": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    }
+  ],
   "src/playground.ts": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-vision-default.md"
+    }
+  ],
+  "src/prompt.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-tokenizer-framework.md"
     }
   ],
   "src/raster.rs": [
@@ -414,6 +816,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/FEAT-residency-control-plane.md"
     },
     {
@@ -423,6 +829,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-audiocpp-capabilities.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capability-honesty-gate.md"
     },
     {
       "kind": "ticket",
@@ -456,6 +866,10 @@
   "src/routes/apps.rs": [
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-capabilities-golden-fixture.md"
     }
   ],
@@ -471,12 +885,6 @@
       "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
     }
   ],
-  "src/routes/blender": [
-    {
-      "kind": "epic",
-      "source": ".plan/epics/epic-blender-assets.md"
-    }
-  ],
   "src/routes/blender.rs": [
     {
       "kind": "ticket",
@@ -487,6 +895,14 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-blender-terminal-hardening.md"
     },
     {
       "kind": "ticket",
@@ -506,6 +922,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/FEAT-residency-control-plane.md"
     },
     {
@@ -521,6 +941,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-attached-job-cancel-stalled-stream.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
     }
   ],
   "src/routes/fizgig.rs": [
@@ -557,6 +981,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-image-output-formats.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-exr-format-support.md"
     }
   ],
   "src/routes/images_edit.rs": [
@@ -572,6 +1000,14 @@
   "src/routes/images_generate.rs": [
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-inference-cache-correctness.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
     }
   ],
@@ -584,6 +1020,10 @@
   "src/routes/job_content.rs": [
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-comfyui-workflow-pipeline.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/FEAT-job-bundle-zip.md"
     }
   ],
@@ -591,6 +1031,12 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    }
+  ],
+  "src/routes/openai_chat.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-sampling-contract.md"
     }
   ],
   "src/routes/openai_constraints.rs": [
@@ -639,10 +1085,44 @@
       "source": ".plan/tickets/BUG-capabilities-rerank-flag-without-ranker.md"
     }
   ],
-  "src/sdxl.rs": [
+  "src/salvo_middleware.rs": [
     {
       "kind": "ticket",
-      "source": ".plan/tickets/TASK-ash-backend-promote.md"
+      "source": ".plan/tickets/TASK-salvo-middleware-and-codegen.md"
+    }
+  ],
+  "src/salvo_version.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-salvo-migration-spike.md"
+    }
+  ],
+  "src/sampler.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md"
+    }
+  ],
+  "src/sd.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-sd2-spec.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-family-readiness-markers.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-tokenizer-framework.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md"
     }
   ],
   "src/supervisor.rs": [
@@ -664,7 +1144,35 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-inference-cache-correctness.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-prompt-cache.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-plan-index-generator.md"
+    }
+  ],
+  "src/timestep.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-ash-sd15-numerics.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md"
+    }
+  ],
+  "src/tokenizer.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-tokenizer-framework.md"
     }
   ],
   "src/tts.rs": [
@@ -677,10 +1185,32 @@
       "source": ".plan/tickets/TASK-audiocpp-tts-provider.md"
     }
   ],
+  "src/unet_checkpoint.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
+    }
+  ],
+  "src/unet_real.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/BUG-ash-sd15-numerics.md"
+    }
+  ],
   "src/vad.rs": [
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-audiocpp-vad-decision.md"
+    }
+  ],
+  "src/vae_real.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-moss-image-family.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
     }
   ]
 }

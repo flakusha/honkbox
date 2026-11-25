@@ -72,8 +72,11 @@ or blocked-with-details.
   builds untested (CPU validated); winner-ggml identity in the real
   honkbox-server link unmeasured until a provider build exists (run `nm`
   once at provider time); per-family weight-license diligence via upstream
-  `docs/model_licenses.md` at enablement time; the binding exposes its OWN
-  capi.h ABI over upstream internals (not upstream's `audiocpp.h`) — pin the
+  audio.cpp `docs/model_licenses.md` at
+  https://github.com/0xShug0/audio.cpp/blob/61c7838baf1f7f34769b5b7bd369c0d78edf9535/docs/model_licenses.md
+  at enablement time; the binding exposes its OWN capi.h ABI over upstream
+  internals (not upstream's `audiocpp.h`) — pin the binding crate, not just
+  upstream.
   binding crate, not just upstream.
 
 **Gate released**: the six P2/P3 audio.cpp tickets may proceed per the §8

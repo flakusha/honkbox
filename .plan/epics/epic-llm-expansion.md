@@ -5,24 +5,26 @@ Priority: P1
 Owner: unassigned
 Research: `.tmp/research/llm-runtime-memory-2026-11-25.md`,
 `.tmp/research/llm-support-local-roster-2026-11-24.md`,
-`.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`
+`.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
+`.tmp/research/ash-family-implementation-index-2026-11-25.md`
 
 ## Scope
 
 Refine the already-implemented OpenAI-shaped chat/completions surface: make
-cache identity and memory demand correct before adding persistent prompt-state
-reuse, make `llm-vision` an honest default after CI parity, and remove silent
-tool-choice surprises. Retrieval/rerank stays in `FEAT-rag-pipeline.md`; no MCP
-surface.
+cache identity and memory demand correct before persistent prompt-state reuse.
+Vision defaulting and tool-choice fidelity are landed. Native Ash LLM families
+belong to `epic-ash-native-families.md`; retrieval/rerank stays in
+`FEAT-rag-pipeline.md`, and this epic adds no MCP surface.
 
 ## Ordered dependencies
 
 1. `TASK-inference-cache-correctness.md` (P0, open): verified weight +
    tokenizer/template/projector identity before cache lookup, safe same-path
    replacement, and weight/working-memory split on the existing ledger.
-2. `TASK-llm-vision-default.md` (P0): depends on projector identity and parity;
-   vision advertising must match the linked build and discovered mmproj bytes.
-3. `TASK-llm-tool-choice-contract.md` (P2): document/align tool-choice fidelity.
+2. `TASK-llm-vision-default.md` (P0, done): advertising matches the linked
+   build and discovered mmproj bytes.
+3. `TASK-llm-tool-choice-contract.md` (P2, done): tool-choice fidelity is
+   documented and aligned.
 4. `TASK-remote-vision-url-fetch.md` (P2): opt-in SSRF-safe image URL fetch.
 5. Persistent prefix/KV reuse follow-up to `TASK-llm-prompt-cache.md` (P2, not
    filed): depends on item 1 plus measured long-prefix workloads and bounded KV
@@ -34,10 +36,10 @@ surface.
 
 - `TASK-inference-cache-correctness.md` — identity, replacement safety, and
   demand split (P0, proposed).
-- `TASK-llm-vision-default.md` — feature default + stale docs (P0).
+- `TASK-llm-vision-default.md` — feature default + stale docs (P0, done).
 - `TASK-llm-prompt-cache.md` — bounded per-slug context/KV knobs and resident
   hit/miss metrics (P1, done); no cross-request KV/prefix cache shipped.
-- `TASK-llm-tool-choice-contract.md` — document/align tool-choice fidelity (P2).
+- `TASK-llm-tool-choice-contract.md` — documented tool-choice fidelity (P2, done).
 - `TASK-remote-vision-url-fetch.md` — opt-in SSRF-safe image URL fetch (P2).
 - `TASK-llm-speculative-decoding-spike.md` — draftless `ngram-mod` spike (P2).
 - `FEAT-llama-server-client-backend.md` — opt-in backend for an attached,
@@ -56,6 +58,9 @@ surface.
 - [FACT] The residency ledger already has byte/thread demand fields, but LLM
   routes currently claim a slot with zero bytes. The KV clamp covers KV only,
   not weights or total working memory.
+- [FACT] Native Ash LLM families and their shared GGUF/decoder/state/sampling
+  substrate are owned by `epic-ash-native-families.md`. Its autoregressive
+  state is pipeline KV/recurrent state, not a second response cache.
 - [UNKNOWN] No honkbox prefix-cache hit rate, memory saving, or latency benefit
   has been measured.
 - This planning pass ran no tests, builds, linters, or git commands.

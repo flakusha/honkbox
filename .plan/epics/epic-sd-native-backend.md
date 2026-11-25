@@ -5,7 +5,8 @@ Priority: P0
 Owner: unassigned
 Research: `.tmp/research/model-support-sdxl-krea2-2026-11-24.md`,
 `.tmp/research/native-video-backend-refresh-2026-11-25.md`,
-`.tmp/research/ash-promotion-refresh-2026-11-25.md`
+`.tmp/research/ash-promotion-refresh-2026-11-25.md`,
+`.tmp/research/ash-family-implementation-index-2026-11-25.md`
 
 ## Scope
 
@@ -25,8 +26,8 @@ it proves the current pin before any video surface is admitted.
   `FEAT-sd-edit-loras.md`, `TASK-sd-inpaint-mask-semantics.md`, and
   `TASK-sd-base-model-tags.md` are done.
 - `FEAT-ash-vulkan-backend.md` is in progress at crate scope. Reduced SD1.5
-  generation, SD2 header/spec acceptance and SDXL inspection exist; master CLI
-  source is not manifest-reachable and HTTP selection/capability truth remain open.
+  generation, SD2 header/spec acceptance and SDXL inspection exist; Ash promotion
+  is in progress and none of these implies full-family execution.
 - The pinned vendor header/source exposes video frames/audio/fps and H3/LTX
   families; the high-level Rust wrapper and honkbox routes remain image-only.
 
@@ -37,12 +38,12 @@ it proves the current pin before any video surface is admitted.
 - `FEAT-sd-edit-loras.md` — P1, done.
 - `TASK-sd-inpaint-mask-semantics.md` — P1, done 2026-11-24.
 - `TASK-sd-base-model-tags.md` — P2, done 2026-11-24.
-- `BUG-ash-sd15-numerics.md` — P0, proposed; canonical timestep layout and
-  ResBlock timestep activation before any Ash promotion.
-- `TASK-ash-verification-gates.md` — P1, proposed; restore package/CI/hook
-  commands and gate shader provenance.
-- `TASK-ash-backend-promote.md` — P0, proposed; compile-reachable shared CLI/HTTP
-  constructor and truthful capability output.
+- `BUG-ash-sd15-numerics.md` — P0, done; canonical timestep layout and
+  ResBlock timestep activation fixed before Ash promotion.
+- `TASK-ash-verification-gates.md` — P1, done; package/CI/hook commands and
+  shader provenance gates restored.
+- `TASK-ash-backend-promote.md` — P0, in progress; compile-reachable shared
+  CLI/HTTP constructor and truthful capability output.
 - `TASK-ash-unsupported-conditioning-guards.md` — P1, proposed; typed refusal at
   the direct pipeline boundary, reusing the landed route error code.
 - `FEAT-ash-sd2-spec.md` — P1, proposed; source-cited SD2 spec plus one synthetic
@@ -56,11 +57,18 @@ it proves the current pin before any video surface is admitted.
 - `FEAT-video-output.md` — P3, postponed until the spike proves one named family
   on the current pin.
 
+## Family track
+
+`epic-ash-native-families.md` owns shared GGUF/decoder/state and flow-DiT/VAE
+substrates plus MOSS-Image, LFM, Gemma and Qwen family proofs. This epic keeps
+SD1.5/SD2/SDXL correctness, Ash selection and native-video evidence; family
+tickets link back here without duplicating promotion or readiness scope.
+
 ## Dependency order
 
 1. Keep landed image completeness independent.
-2. Fix Ash SD1.5 numerics and restore verification/provenance gates; then make
-   Ash compile-reachable and capability-truthful. Guard unsupported conditioning
+2. SD1.5 numerics and verification/provenance gates are done; finish Ash
+   compile reachability and capability truth. Guard unsupported conditioning
    and mark family execution scope without advertising availability.
 3. Prove SD2 one-step numerics and the RRDB/PixelShuffle spike as separate,
    bounded evidence; neither implies full-family support.
@@ -87,4 +95,5 @@ and, separately, one license-cleared local video fixture. No CI model downloads.
 
 Bundling third-party weights, IP-Adapter/PhotoMaker embedding, byte-level
 cross-GPU equality, a stable-diffusion.cpp vendor bump, full SD2/SDXL generation,
-Ash LLM, or any video route/capability flag before the current-pin spike succeeds.
+Ash LLM family execution (owned by `epic-ash-native-families.md`), or any video
+route/capability flag before the current-pin spike succeeds.
