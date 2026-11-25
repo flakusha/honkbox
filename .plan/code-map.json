@@ -857,6 +857,12 @@
       "source": ".plan/tickets/TASK-llm-vision-default.md"
     }
   ],
+  "src/presets.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-negative-prompt-preset-library.md"
+    }
+  ],
   "src/prompt.rs": [
     {
       "kind": "ticket",

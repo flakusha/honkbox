@@ -1,6 +1,6 @@
 # TASK: Versioned prompt/style preset library
 
-Status: In Progress
+Status: Done
 **Scope:** Versioned negative-prompt/style preset library + X-Honkbox-Preset composition
 Priority: P2
 Epic: epic-llm-expansion
@@ -37,3 +37,5 @@ Preset editor UI, remote preset sync, per-user presets.
 - Gate run this turn: `cargo fmt --all` clean, `giwt plan check-links`
   clean. Product tests and `codegen:check` were not run under the
   no-build instruction.
+
+**Resolved:** 2026-11-25 registry-driven close: git issue 7e6abca (registry tip: 682d2ef Konstantin Fedotov Close issue)
