@@ -11,7 +11,7 @@ Resources: per-test output dirs; no shared encode cache
 
 ## Change
 
-- No in-tree WebP EXIF writer exists (`image@0.25` WebP encoder is lossless-only, no EXIF path). Options: new crate, or manual VP8X/EXIF chunk assembly.
+- `image@0.25` already exposes an in-tree EXIF write path (`ImageEncoder::set_exif_metadata`: `jpeg/encoder.rs:757`, `webp/encoder.rs:101-104` via `image-webp`). Spike a round-trip fixture first; new crate or manual VP8X assembly only if the in-tree path proves lossy.
 - Parked behind the PNG tickets; file as P3, close as wont-do with rationale if the dep cost exceeds the interop value.
 
 ## Acceptance detail

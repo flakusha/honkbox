@@ -1168,6 +1168,19 @@
     "source": ".plan/tickets/TASK-ash-gguf-reader.md",
     "status": "proposed"
   },
+  "TASK-ASH-LAVAPIPE-CI": {
+    "hash": "pending",
+    "extid": "TASK-ASH-LAVAPIPE-CI",
+    "type": "TASK",
+    "title": "Lavapipe CPU-Vulkan correctness job plus bless-then-read rule",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-lavapipe-ci.md",
+    "status": "proposed"
+  },
   "TASK-ASH-LLM-EVIDENCE-INTEGRATION": {
     "hash": "pending",
     "extid": "TASK-ASH-LLM-EVIDENCE-INTEGRATION",
@@ -2844,6 +2857,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-otio-sidecar.md",
+    "status": "proposed"
+  },
+  "TASK-PARITY-RECIPE-RNG-GUARD": {
+    "hash": "pending",
+    "extid": "TASK-PARITY-RECIPE-RNG-GUARD",
+    "type": "TASK",
+    "title": "Parity recipe table (SD1.5 first) plus RNG-mode guard",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-parity-recipe-rng-guard.md",
     "status": "proposed"
   },
   "TASK-PER-CONSUMER-API-SCOPES": {
