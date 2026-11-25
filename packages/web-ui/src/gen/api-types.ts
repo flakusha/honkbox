@@ -1825,6 +1825,14 @@ export type Capabilities = {
    */
   licenses: LicenseCapability | null;
   /**
+   * Enforced Blender job bounds (`POST /v1/jobs/blender`): the input-byte
+   * cap, the output-byte cap and the wall-clock timeout bounds the route
+   * enforces. Read from the route’s own constants, so the advertisement
+   * cannot drift from the enforcement. Additive optional field per the
+   * version policy above.
+   */
+  blender_limits: BlenderLimitsCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1832,6 +1840,24 @@ export type Capabilities = {
    * Where the model catalog lives.
    */
   models: string;
+};
+export type BlenderLimitsCapability = {
+  /**
+   * Largest mesh the route hands to Blender, in bytes.
+   */
+  max_input_bytes: bigint;
+  /**
+   * Largest artifact set a job may produce, in bytes.
+   */
+  max_output_bytes: bigint;
+  /**
+   * Wall-clock bound applied when the request names no timeout, in seconds.
+   */
+  default_timeout_secs: bigint;
+  /**
+   * Largest wall-clock bound a request may ask for, in seconds.
+   */
+  max_timeout_secs: bigint;
 };
 export type LicenseCapability = {
   /**

@@ -3322,6 +3322,42 @@
         },
         "additionalProperties": false
       },
+      "BlenderLimitsCapability": {
+        "type": "object",
+        "description": "Enforced Blender job bounds (`Capabilities::blender_limits`): the byte\nand timeout caps the `POST /v1/jobs/blender` route enforces. Every value\nis read from the route’s own constants, so the advertisement cannot\ndrift from the enforcement.",
+        "required": [
+          "max_input_bytes",
+          "max_output_bytes",
+          "default_timeout_secs",
+          "max_timeout_secs"
+        ],
+        "properties": {
+          "default_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wall-clock bound applied when the request names no timeout, in seconds.",
+            "minimum": 0
+          },
+          "max_input_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest mesh the route hands to Blender, in bytes.",
+            "minimum": 0
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest artifact set a job may produce, in bytes.",
+            "minimum": 0
+          },
+          "max_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest wall-clock bound a request may ask for, in seconds.",
+            "minimum": 0
+          }
+        }
+      },
       "BlenderMeshFormat": {
         "type": "string",
         "description": "The mesh formats a Blender job can read.",
@@ -3585,6 +3621,17 @@
           "auth": {
             "$ref": "#/components/schemas/AuthCapabilities",
             "description": "Auth mode in effect (`\"none\"` or `\"bearer\"`); the key VALUE is never\nexposed."
+          },
+          "blender_limits": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BlenderLimitsCapability",
+                "description": "Enforced Blender job bounds (`POST /v1/jobs/blender`): the input-byte\ncap, the output-byte cap and the wall-clock timeout bounds the route\nenforces. Read from the route’s own constants, so the advertisement\ncannot drift from the enforcement. Additive optional field per the\nversion policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "external_tools": {
             "oneOf": [
