@@ -144,7 +144,7 @@ async fn post_blender_job(req: &mut Request, depot: &mut Depot, res: &mut Respon
     };
     respond(
         res,
-        blender::post_blender_job(State(config(depot)), body).await,
+        blender::post_blender_job(State(config(depot)), req.headers().clone(), body).await,
     )
     .await;
 }

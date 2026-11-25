@@ -12,25 +12,30 @@
 //! is resolved from the artifact store by id, and an artifact id IS the
 //! content digest — a wrong digest is rejected before any process starts.
 
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use axum::{
     Json,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{
     BlenderJobAccepted, BlenderJobRequest, BlenderLimitsCapability, BlenderStage, OpenAiError,
 };
 use honkbox_external_tools::{AssetStage, MeshFormat, recipe_sha256};
+use tokio::sync::OnceCell;
+
+use crate::determinism::canonical_hash;
 
 use super::AppConfig;
 use super::blender_stages::{map_stage, mesh_format};
 use super::chat_prep::{admit_then_register, with_job_id};
 use super::external_tools::blender_engine;
+use super::middleware::consumer_id;
 use super::openai_constraints::openai_error_response;
 
 /// The largest mesh the route hands to Blender (bytes).
@@ -42,6 +47,11 @@ pub const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// The job's wall-clock bounds (seconds).
 pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 pub const MAX_TIMEOUT_SECS: u64 = 3600;
+
+/// The largest accepted `Idempotency-Key` header (characters).
+const IDEMPOTENCY_KEY_MAX_CHARS: usize = 128;
+/// Remembered submissions before oldest-first eviction.
+const BLENDER_DEDUP_MAX_ENTRIES: usize = 256;
 
 /// The enforced Blender job bounds, as advertised in
 /// `GET /v1/capabilities`. The capability document reads THIS, so the
@@ -60,6 +70,103 @@ const DEFAULT_PREFIX: &str = "output";
 
 /// A named rejection: status, message, error code.
 pub(super) type Rejection = (StatusCode, String, &'static str);
+
+/// A settled Blender submission: the exact response the first attempt
+/// answered (202 body and `X-Job-Id` already stamped). Failures are marked
+/// so their entry can be forgotten and a genuine retry can run.
+#[derive(Clone)]
+struct BlenderSettled {
+    succeeded: bool,
+    response: Response,
+}
+
+impl From<Result<BlenderJobAccepted, Response>> for BlenderSettled {
+    fn from(result: Result<BlenderJobAccepted, Response>) -> Self {
+        match result {
+            Ok(accepted) => {
+                let job_id = accepted.job_id.clone();
+                let response = with_job_id(
+                    (StatusCode::ACCEPTED, Json(accepted)).into_response(),
+                    &job_id,
+                );
+                Self {
+                    succeeded: true,
+                    response,
+                }
+            }
+            Err(response) => Self {
+                succeeded: false,
+                response,
+            },
+        }
+    }
+}
+
+/// One remembered submission. Concurrent same-key callers await the same
+/// `OnceCell`, so the first submission executes exactly once.
+struct BlenderDedupEntry {
+    command_hash: String,
+    outcome: OnceCell<BlenderSettled>,
+}
+
+/// Process-local Blender idempotency ledger: (consumer, `Idempotency-Key`) to
+/// entry, bounded at 256 entries with oldest-first eviction.
+#[derive(Default)]
+struct BlenderDedup {
+    map: HashMap<(String, String), Arc<BlenderDedupEntry>>,
+    order: VecDeque<(String, String)>,
+}
+
+/// Outcome of [`BlenderDedup::reserve`].
+enum BlenderReservation {
+    /// Fresh key: this caller executes and settles the entry.
+    Execute(Arc<BlenderDedupEntry>),
+    /// Same consumer + key + command hash: replay the first response.
+    Replay(Arc<BlenderDedupEntry>),
+    /// Same consumer + key with a different command hash.
+    Conflict,
+}
+
+impl BlenderDedup {
+    fn reserve(&mut self, consumer: &str, key: &str, command_hash: String) -> BlenderReservation {
+        let key = (consumer.to_owned(), key.to_owned());
+        if let Some(entry) = self.map.get(&key) {
+            return if entry.command_hash == command_hash {
+                BlenderReservation::Replay(Arc::clone(entry))
+            } else {
+                BlenderReservation::Conflict
+            };
+        }
+        let entry = Arc::new(BlenderDedupEntry {
+            command_hash,
+            outcome: OnceCell::new(),
+        });
+        self.map.insert(key.clone(), Arc::clone(&entry));
+        self.order.push_back(key);
+        self.trim();
+        BlenderReservation::Execute(entry)
+    }
+
+    /// Forget a failed attempt so a genuine retry re-executes.
+    fn forget(&mut self, consumer: &str, key: &str) {
+        let key = (consumer.to_owned(), key.to_owned());
+        self.map.remove(&key);
+        self.order.retain(|old| old != &key);
+    }
+
+    fn trim(&mut self) {
+        while self.map.len() > BLENDER_DEDUP_MAX_ENTRIES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.map.remove(&oldest);
+        }
+    }
+}
+
+/// The Blender idempotency ledger (process-global, like the job registry).
+static BLENDER_DEDUP: LazyLock<Mutex<BlenderDedup>> =
+    LazyLock::new(|| Mutex::new(BlenderDedup::default()));
 
 /// Everything one accepted job needs: the recipe's stages (with every
 /// artifact path resolved) and the path-free echo the manifest records.
@@ -112,6 +219,7 @@ pub(super) struct JobPlan {
 )]
 pub(crate) async fn post_blender_job(
     State(config): State<AppConfig>,
+    headers: HeaderMap,
     body: Result<Json<BlenderJobRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let req = match body {
@@ -124,6 +232,77 @@ pub(crate) async fn post_blender_job(
             );
         }
     };
+    let idempotency_key = match headers.get("Idempotency-Key") {
+        Some(value) => match value
+            .to_str()
+            .ok()
+            .filter(|key| (1..=IDEMPOTENCY_KEY_MAX_CHARS).contains(&key.chars().count()))
+        {
+            Some(key) => Some(key.to_owned()),
+            None => {
+                return openai_error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Idempotency-Key must be 1..={IDEMPOTENCY_KEY_MAX_CHARS} characters"),
+                    Some("blender_idempotency_key_invalid"),
+                );
+            }
+        },
+        None => None,
+    };
+    if let Some(key) = idempotency_key {
+        let consumer = consumer_id(&headers);
+        let command_hash =
+            canonical_hash(&serde_json::to_value(&req).unwrap_or(serde_json::Value::Null));
+        let reserved = {
+            // std mutex, no await inside: reserve-or-conflict is decided here.
+            let mut dedup = BLENDER_DEDUP
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            dedup.reserve(&consumer, &key, command_hash)
+        };
+        let (entry, is_replay) = match reserved {
+            BlenderReservation::Conflict => {
+                return openai_error_response(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "Idempotency-Key {:?} was already used with a different request — retries must resend the identical request; use a fresh key for different work",
+                        key
+                    ),
+                    Some("blender_idempotency_conflict"),
+                );
+            }
+            BlenderReservation::Execute(entry) => (entry, false),
+            BlenderReservation::Replay(entry) => (entry, true),
+        };
+        // Single flight: every same-key caller awaits the one execution and
+        // replays its exact response.
+        let settled = entry
+            .outcome
+            .get_or_init(|| {
+                let cfg = config.clone();
+                let req = req.clone();
+                async move { BlenderSettled::from(execute_blender_job(cfg, req).await) }
+            })
+            .await;
+        if !is_replay && !settled.succeeded {
+            // A failed attempt is forgotten: a genuine retry can run.
+            let mut dedup = BLENDER_DEDUP
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            dedup.forget(&consumer, &key);
+        }
+        return settled.response.clone();
+    }
+    BlenderSettled::from(execute_blender_job(config, req).await).response
+}
+
+/// Validate and execute one Blender job. Shared by fresh submissions and the
+/// single-flight replay path; conversion stamps the response envelope once.
+#[allow(clippy::result_large_err)] // axum Response is a fixed-size request-path type
+async fn execute_blender_job(
+    config: AppConfig,
+    req: BlenderJobRequest,
+) -> Result<BlenderJobAccepted, Response> {
     let Some(data_dir) = config.data_dir.clone() else {
         return openai_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -174,15 +353,11 @@ pub(crate) async fn post_blender_job(
     }
     let token = guard.token().clone();
     super::blender_exec::start(plan, bundle, engine.binary, token, lease, guard);
-    let accepted = BlenderJobAccepted {
-        job_id: job_id.clone(),
+    Ok(BlenderJobAccepted {
+        job_id,
         status: "queued".to_string(),
         bundle: Some(bundle_id),
-    };
-    with_job_id(
-        (StatusCode::ACCEPTED, Json(accepted)).into_response(),
-        &job_id,
-    )
+    })
 }
 
 /// The engine gate: no Blender installed is a 501, a version or a recipe
@@ -423,5 +598,101 @@ mod tests {
     #[test]
     fn an_unstored_mesh_is_a_404() {
         assert_eq!(code(&request()), "blender_input_not_found");
+    }
+
+    fn accepted(job_id: &str) -> BlenderJobAccepted {
+        BlenderJobAccepted {
+            job_id: job_id.to_owned(),
+            status: "queued".to_owned(),
+            bundle: Some("bundle".to_owned()),
+        }
+    }
+
+    fn settled(accepted: BlenderJobAccepted) -> BlenderSettled {
+        BlenderSettled::from(Ok::<_, Response>(accepted))
+    }
+
+    #[test]
+    fn ledger_replays_the_first_response() {
+        let mut ledger = BlenderDedup::default();
+        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
+            BlenderReservation::Execute(entry) => entry,
+            _ => panic!("a fresh key must execute"),
+        };
+        assert!(entry.outcome.set(settled(accepted("job-1"))).is_ok());
+        match ledger.reserve("consumer", "key", "hash".to_owned()) {
+            BlenderReservation::Replay(entry) => {
+                let replayed = entry.outcome.get().expect("settled");
+                assert!(replayed.succeeded);
+                assert_eq!(replayed.response.status(), StatusCode::ACCEPTED);
+                assert_eq!(
+                    replayed
+                        .response
+                        .headers()
+                        .get("X-Job-Id")
+                        .unwrap()
+                        .to_str()
+                        .unwrap(),
+                    "job-1"
+                );
+            }
+            _ => panic!("same consumer, key and command must replay"),
+        }
+    }
+
+    #[test]
+    fn ledger_names_a_changed_command_as_a_conflict() {
+        let mut ledger = BlenderDedup::default();
+        assert!(matches!(
+            ledger.reserve("consumer", "key", "first".to_owned()),
+            BlenderReservation::Execute(_)
+        ));
+        assert!(matches!(
+            ledger.reserve("consumer", "key", "second".to_owned()),
+            BlenderReservation::Conflict
+        ));
+        assert!(matches!(
+            ledger.reserve("other", "key", "second".to_owned()),
+            BlenderReservation::Execute(_)
+        ));
+    }
+
+    #[test]
+    fn ledger_forgets_a_failed_attempt() {
+        let mut ledger = BlenderDedup::default();
+        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
+            BlenderReservation::Execute(entry) => entry,
+            _ => panic!("a fresh key must execute"),
+        };
+        let failed = BlenderSettled::from(Err(openai_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "boom".to_owned(),
+            None,
+        )));
+        assert!(!failed.succeeded);
+        assert!(entry.outcome.set(failed).is_ok());
+        ledger.forget("consumer", "key");
+        match ledger.reserve("consumer", "key", "hash".to_owned()) {
+            BlenderReservation::Execute(fresh) => {
+                assert!(fresh.outcome.get().is_none());
+            }
+            _ => panic!("a failed attempt must be retriable"),
+        }
+    }
+
+    #[test]
+    fn ledger_evicts_oldest_at_256_entries() {
+        let mut ledger = BlenderDedup::default();
+        for i in 0..=BLENDER_DEDUP_MAX_ENTRIES {
+            assert!(matches!(
+                ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()),
+                BlenderReservation::Execute(_)
+            ));
+        }
+        assert_eq!(ledger.map.len(), BLENDER_DEDUP_MAX_ENTRIES);
+        assert!(matches!(
+            ledger.reserve("consumer", "key-0", "hash".to_owned()),
+            BlenderReservation::Execute(_)
+        ));
     }
 }

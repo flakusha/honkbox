@@ -30,3 +30,9 @@ Resources: per-test temp data dirs; stub Blender recipe; no shared GPU slot; one
 
 - New engine SDK, build, MCP, or second orchestration.
 - Byte-identical pixels across Blender versions/hardware.
+
+## Verification Notes (2026-11-25)
+
+- Terminal ordering, partial-output suppression and write-error propagation already hold in `crates/server/src/routes/blender_exec.rs` (`publish`:276-306, `stage_and_publish`:312-417, `publish_terminal`:485-490) and are pinned by `crates/server/tests/blender_exec.rs` fault-injection tests. `job_content::allowed_names` always permits `status.json` (`:82-85`), so failed/cancelled jobs are fetchable without a manifest.
+- Added header-based idempotency: `Idempotency-Key` (1..=128 chars) scoped by `consumer_id`, canonical request hash, 256-entry oldest-first ledger, `OnceCell` single-flight, named `blender_idempotency_conflict` on changed command, and forget-on-failure. Same response body and `X-Job-Id` are replayed. Axum and Salvo wrappers both pass headers; no DTO/OpenAPI change.
+- Gate run this turn: `cargo fmt --all -- --check` clean, `giwt plan check-links` clean. Product tests intentionally NOT run per operator instruction; run `cargo test --locked -p honkbox-server --test blender_jobs --test blender_exec` before final promotion.
