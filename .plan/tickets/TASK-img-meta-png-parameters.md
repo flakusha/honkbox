@@ -1,6 +1,7 @@
 # TASK: Embed A1111-style parameters chunk on PNG outputs
 
-Status: proposed
+Status: In Progress
+**Scope:** Emit A1111 parameters and ComfyUI recipe text chunks on PNG outputs
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned
