@@ -25,9 +25,9 @@ it proves the current pin before any video surface is admitted.
 - `TASK-sd-controlnet-execution.md`, `TASK-sd-ffi-cancel.md`,
   `FEAT-sd-edit-loras.md`, `TASK-sd-inpaint-mask-semantics.md`, and
   `TASK-sd-base-model-tags.md` are done.
-- `FEAT-ash-vulkan-backend.md` is in progress at crate scope. Reduced SD1.5
-  generation, SD2 header/spec acceptance and SDXL inspection exist; Ash promotion
-  is in progress and none of these implies full-family execution.
+- `FEAT-ash-vulkan-backend.md` is done at the promoted crate/server scope.
+ Reduced SD1.5 generation, SD2 header/spec acceptance and SDXL inspection exist;
+ none of these implies full-family execution.
 - The pinned vendor header/source exposes video frames/audio/fps and H3/LTX
   families; the high-level Rust wrapper and honkbox routes remain image-only.
 
@@ -42,8 +42,8 @@ it proves the current pin before any video surface is admitted.
   ResBlock timestep activation fixed before Ash promotion.
 - `TASK-ash-verification-gates.md` — P1, done; package/CI/hook commands and
   shader provenance gates restored.
-- `TASK-ash-backend-promote.md` — P0, in progress; compile-reachable shared
-  CLI/HTTP constructor and truthful capability output.
+- `TASK-ash-backend-promote.md` — P0, done; compile-reachable shared
+ CLI/HTTP constructor and truthful capability output.
 - `TASK-ash-unsupported-conditioning-guards.md` — P1, proposed; typed refusal at
   the direct pipeline boundary, reusing the landed route error code.
 - `FEAT-ash-sd2-spec.md` — P1, proposed; source-cited SD2 spec plus one synthetic
@@ -67,9 +67,9 @@ tickets link back here without duplicating promotion or readiness scope.
 ## Dependency order
 
 1. Keep landed image completeness independent.
-2. SD1.5 numerics and verification/provenance gates are done; finish Ash
-   compile reachability and capability truth. Guard unsupported conditioning
-   and mark family execution scope without advertising availability.
+2. SD1.5 numerics, verification/provenance gates, and Ash compile reachability
+ and capability truth are done. Guard unsupported conditioning and mark family
+ execution scope without advertising availability.
 3. Prove SD2 one-step numerics and the RRDB/PixelShuffle spike as separate,
    bounded evidence; neither implies full-family support.
 4. Complete the license-gated current-pin video FFI spike.
