@@ -11,6 +11,8 @@ use crate::device::VulkanDevice;
 use honkbox_llm_worker::{ChatRequest, ChatResponse, LlmError, LlmPipeline};
 use std::sync::Arc;
 
+pub mod state;
+
 /// Why the direct-Vulkan chat path cannot serve a request yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotYet;

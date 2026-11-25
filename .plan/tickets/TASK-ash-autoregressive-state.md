@@ -1,6 +1,6 @@
 # TASK: Add Ash autoregressive state caches
 
-Status: proposed
+Status: done
 Priority: P1
 Epic: epic-ash-native-families
 Owner: unassigned
@@ -73,17 +73,17 @@ Resources: generated tiny tensors only; unique `.tmp/ash-state.*` test directori
 
 ## Acceptance criteria
 
-- [ ] KV tests cover equal and grouped query/KV heads, invalid ratios, append,
+- [x] KV tests cover equal and grouped query/KV heads, invalid ratios, append,
       context limits, sliding eviction and absolute-position preservation.
-- [ ] Causal, sliding and packed masks prevent future-token, out-of-window and
+- [x] Causal, sliding and packed masks prevent future-token, out-of-window and
       cross-segment leakage; malformed/all-masked rows fail by name.
-- [ ] Synthetic KV and recurrent tests prove prefill/decode equivalence at token
+- [x] Synthetic KV and recurrent tests prove prefill/decode equivalence at token
       and chunk boundaries, including rewind by snapshot or exact replay.
-- [ ] Two interleaved sequences remain isolated through append, rewind, copy and
+- [x] Two interleaved sequences remain isolated through append, rewind, copy and
       clear; copied buffers do not alias.
-- [ ] Cancellation at every boundary prevents later commits, returns
+- [x] Cancellation at every boundary prevents later commits, returns
       `LlmError::Cancelled` at the worker seam and releases all state.
-- [ ] State byte accounting includes KV, recurrent state, positions and scratch;
+- [x] State byte accounting includes KV, recurrent state, positions and scratch;
       no second cache, family graph, speculative decoder or multi-GPU path exists.
 
 ## Verification
@@ -106,6 +106,13 @@ bun run spdx
 The ignored Vulkan test uses generated tensors, asserts the selected physical
 device name, and runs alone on an idle one-device host. No command is run by the
 filing pass.
+
+## Evidence 2026-11-25
+
+- **[FACT]** CPU gate: 7 tests pass, 1 named-Vulkan proof ignored; full `honkbox-ash-backend` suite also passes 157 unit tests and 23 integration tests, with 2 unrelated/proof tests ignored.
+- **[FACT]** Named Vulkan gate: `HONKBOX_ASH_TEST_DEVICE='AMD Radeon RX 7900 XTX'` under `flock`; GQA attention output matches CPU within 1e-4.
+- **[FACT]** `bun run spdx`: REUSE 601/601 files licensed, 19 Ash shaders with provenance.
+- **[FACT]** `cargo clippy` reports no findings in `llm/state`; unrelated pre-existing crate lint debt remains outside this slice.
 
 ## Non-goals
 
