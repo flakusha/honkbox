@@ -119,7 +119,7 @@ async fn post_image_ops(req: &mut Request, depot: &mut Depot, res: &mut Response
     };
     respond(
         res,
-        image_ops_route::post_image_ops(State(config(depot)), body).await,
+        image_ops_route::post_image_ops(State(config(depot)), req.headers().clone(), body).await,
     )
     .await;
 }

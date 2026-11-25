@@ -161,8 +161,11 @@ pub(super) fn check_matting_inputs(admitted: &[AdmittedOpInput]) -> Result<(), I
 /// One admitted image-op input: the resolved bytes, the registry row that
 /// identified them, and the bookkeeping the sidecar records.
 pub(super) struct AdmittedOpInput {
-    /// Where the input came from (`data_uri` / `artifact:<bundle>/<index>`).
+    /// Where the input came from (`data_uri`, `artifact:<bundle>/<index>`,
+    /// or `artifact_id:<id>`).
     pub(super) source: String,
+    /// The content-addressed id when the input came from the registry.
+    pub(super) artifact_id: Option<String>,
     /// The raw container bytes.
     pub(super) raw: Vec<u8>,
     /// The registry row that identified the container; its budget drives
@@ -181,13 +184,14 @@ pub(super) struct AdmittedOpInput {
 pub(super) fn admit_op_inputs(
     inputs: &[ImageOpInput],
     data_dir: Option<&Path>,
+    registry: &crate::artifacts::Registry,
 ) -> Result<Vec<AdmittedOpInput>, ImageOpWorkError> {
     let mut admitted = Vec::with_capacity(inputs.len());
     for input in inputs {
-        let (source, declared, raw) = match input {
+        let (source, declared, raw, artifact_id) = match input {
             ImageOpInput::DataUri(uri) => {
                 let (declared, bytes) = decode_data_uri(uri)?;
-                (String::from("data_uri"), Some(declared), bytes)
+                (String::from("data_uri"), Some(declared), bytes, None)
             }
             ImageOpInput::Artifact(artifact) => {
                 let Some(dir) = data_dir else {
@@ -201,11 +205,40 @@ pub(super) fn admit_op_inputs(
                     format!("artifact:{}/{}", artifact.bundle, artifact.index),
                     None,
                     read_artifact(dir, artifact)?,
+                    None,
+                )
+            }
+            ImageOpInput::ArtifactId { artifact_id } => {
+                let Some(_dir) = data_dir else {
+                    return Err(ImageOpWorkError::Bad {
+                        message: "artifact inputs need a configured data dir (this server keeps no job bundles)"
+                            .to_owned(),
+                        code: "invalid_image_op_inputs",
+                    });
+                };
+                // stored_blob applies the registry's central id normalizer;
+                // no ad-hoc hex validation here.
+                let Some((path, _)) = registry.stored_blob(artifact_id) else {
+                    return Err(ImageOpWorkError::Bad {
+                        message: format!("artifact id {artifact_id:?} is not stored"),
+                        code: "invalid_image_op_inputs",
+                    });
+                };
+                let bytes = std::fs::read(&path).map_err(|e| ImageOpWorkError::Bad {
+                    message: format!("cannot read artifact {artifact_id:?}: {e}"),
+                    code: "invalid_image_op_inputs",
+                })?;
+                (
+                    format!("artifact_id:{artifact_id}"),
+                    None,
+                    bytes,
+                    Some(artifact_id.clone()),
                 )
             }
         };
         // Container authority is the registry magic (see `admit_op_input`):
-        // the sniffed format wins, declarations must agree with it.
+        // the sniffed format wins, declarations must agree with it. The
+        // ArtifactId path lands here too — SVG/ORA safety is never skipped.
         let row = admit_op_input(&raw, declared)?;
         let sha256 = sha256_hex(&raw);
         check_admitted_container(row, &raw)?;
@@ -214,6 +247,7 @@ pub(super) fn admit_op_inputs(
             raw,
             row,
             sha256,
+            artifact_id,
         });
     }
     Ok(admitted)
@@ -467,6 +501,7 @@ pub(super) fn run_image_op_units(
         records.push(crate::jobs::OpsInputRecord {
             source: admitted.source.clone(),
             sha256: admitted.sha256.clone(),
+            artifact_id: admitted.artifact_id.clone(),
         });
         outputs.push(ImageOpUnitOutput {
             sha256: sha256_hex(&bytes),

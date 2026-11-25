@@ -16,6 +16,61 @@ use super::image_ops_exec::{
     run_image_op_units, settled_without_job,
 };
 
+/// Bundle-write failure is one explicit, ADVISORY outcome: completed pixels
+/// stay in the response, this warning is returned, and no stable handles are
+/// advertised. Never a failed op.
+const BUNDLE_WRITE_WARNING: &str =
+    "job bundle could not be written; artifact inputs will not resolve";
+
+/// Persist explicit stable references next to `ops.json`: input digests and
+/// artifact ids, output content-addressed ids and digests. Both sides
+/// resolve after a restart without any in-memory ledger.
+fn write_artifact_records(
+    dir: &std::path::Path,
+    bundle: &str,
+    inputs: &[crate::jobs::OpsInputRecord],
+    outputs: &[crate::jobs::OpsOutputRecord],
+) -> Result<(), String> {
+    let input_ids = inputs
+        .iter()
+        .map(|record| {
+            let artifact_id = record
+                .artifact_id
+                .clone()
+                .unwrap_or_else(|| format!("sha256:{}", record.sha256));
+            serde_json::json!({
+                "source": &record.source,
+                "artifact_id": artifact_id,
+                "sha256": &record.sha256,
+            })
+        })
+        .collect::<Vec<_>>();
+    let output_ids = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            serde_json::json!({
+                "index": index,
+                "artifact_id": &record.artifact_id,
+                "file": &record.file,
+                "sha256": &record.sha256,
+            })
+        })
+        .collect::<Vec<_>>();
+    let sidecar = serde_json::json!({
+        "bundle": bundle,
+        "inputs": input_ids,
+        "outputs": output_ids,
+    });
+    crate::jobs::write_atomic(
+        dir,
+        "artifacts.json",
+        serde_json::to_string_pretty(&sidecar)
+            .map_err(|err| format!("cannot encode artifacts.json: {err}"))?
+            .as_bytes(),
+    )
+}
+
 /// Map the blocking-pool work outcome onto units or a settleable failure:
 /// cancel → 409 between units, bad input → named 400, work/join failure →
 /// 500. Every failure stamps the job id so the replay keeps `X-Job-Id`
@@ -114,6 +169,7 @@ async fn run_matting_sidecar(
         records.push(crate::jobs::OpsInputRecord {
             source: input.source.clone(),
             sha256: input.sha256.clone(),
+            artifact_id: input.artifact_id.clone(),
         });
         outputs.push(ImageOpUnitOutput {
             sha256: sha256_hex(&bytes),
@@ -125,7 +181,8 @@ async fn run_matting_sidecar(
 
 /// Execute one image-op command: register the job, acquire CPU admission,
 /// run the units on the blocking pool (cancel checked between inputs),
-/// write the bundle (best-effort, like generation), and build the response.
+/// write the bundle (ADVISORY on failure: complete outputs still return
+/// with a warning and no stable handles), and build the response.
 /// NEVER returns without a settleable outcome — every failure path returns
 /// the exact error the caller must replay.
 #[allow(clippy::too_many_lines)] // one linear execution: admit, register, run, settle
@@ -142,18 +199,18 @@ pub(super) async fn execute_image_op(
     // registry never sees it.
     let inputs = req.inputs.clone();
     let data_dir = config.data_dir.clone();
-    let admitted =
-        match tokio::task::spawn_blocking(move || admit_op_inputs(&inputs, data_dir.as_deref()))
-            .await
-        {
-            Ok(Ok(admitted)) => admitted,
-            Ok(Err(err)) => return settled_without_job(err),
-            Err(join) => {
-                return image_op_pre_admission_join_failure(format!(
-                    "image-op worker failed: {join}"
-                ));
-            }
-        };
+    let registry = config.artifacts.clone();
+    let admitted = match tokio::task::spawn_blocking(move || {
+        admit_op_inputs(&inputs, data_dir.as_deref(), &registry)
+    })
+    .await
+    {
+        Ok(Ok(admitted)) => admitted,
+        Ok(Err(err)) => return settled_without_job(err),
+        Err(join) => {
+            return image_op_pre_admission_join_failure(format!("image-op worker failed: {join}"));
+        }
+    };
     // Matting pre-admission: PNG-only input is a named 400 and an
     // unconfigured sidecar is an honest 501 — both with NO job, like the
     // other pre-admission rejections above.
@@ -255,8 +312,9 @@ pub(super) async fn execute_image_op(
             Err(settled) => return *settled,
         }
     };
-    // Bundle (best-effort, exactly like generation: a bundle write failure
-    // never discards completed work — the response gains a warning).
+    // Bundle (ADVISORY on failure): promote each output to a content-addressed
+    // blob first, then write the bundle with stable ids recorded next to the
+    // bytes. Promotion dedups by sha256, so retries never duplicate storage.
     let mut warnings: Vec<String> = Vec::new();
     let bundle = config.data_dir.as_deref().and_then(|data_dir| {
         let output_records: Vec<crate::jobs::OpsOutputRecord> = units
@@ -265,8 +323,20 @@ pub(super) async fn execute_image_op(
             .map(|(i, unit)| crate::jobs::OpsOutputRecord {
                 file: format!("op_{i:02}.{}", format.extension()),
                 sha256: unit.sha256.clone(),
+                artifact_id: unit.sha256.clone(),
             })
             .collect();
+        if let Err(err) = units.iter().try_for_each(|unit| {
+            config
+                .artifacts
+                .put_bytes(&unit.bytes, format.mime())
+                .map(|_| ())
+                .map_err(|err| format!("artifact promotion failed: {err}"))
+        }) {
+            tracing::warn!(%err, "image-ops artifact promotion failed; inline fallback");
+            warnings.push(BUNDLE_WRITE_WARNING.to_owned());
+            return None;
+        }
         let byte_refs: Vec<&[u8]> = units.iter().map(|unit| unit.bytes.as_slice()).collect();
         let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let ops_inputs = crate::jobs::OpsBundleInputs {
@@ -274,30 +344,41 @@ pub(super) async fn execute_image_op(
             command_sha256: sha256_hex(&command_sha256),
             request_id: req.request_id.clone(),
             client: req.client.clone(),
-            inputs: input_records,
+            inputs: input_records.clone(),
             format,
         };
-        match crate::jobs::write_ops_bundle(
+        let written = crate::jobs::write_ops_bundle(
             data_dir,
             &ops_inputs,
             &output_records,
             &byte_refs,
             elapsed_ms,
-        ) {
-            Ok(dir) => Some(
-                dir.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            ),
+        )
+        .and_then(|dir| {
+            let bundle = dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            write_artifact_records(&dir, &bundle, &input_records, &output_records).map(|()| bundle)
+        });
+        match written {
+            Ok(bundle) => Some(bundle),
             Err(err) => {
                 tracing::warn!(%err, "image-ops bundle write failed; response still complete");
-                warnings.push(
-                    "job bundle could not be written; artifact inputs will not resolve".to_owned(),
-                );
+                warnings.push(BUNDLE_WRITE_WARNING.to_owned());
                 None
             }
         }
     });
+    // No bundle means base64 is the only handle: say so instead of implying
+    // a stable reference the client could later feed back as an artifact id.
+    if bundle.is_none()
+        && !warnings
+            .iter()
+            .any(|warning| warning == BUNDLE_WRITE_WARNING)
+    {
+        warnings.push("no job bundle: outputs are inline base64 only".to_owned());
+    }
     let created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -306,13 +387,16 @@ pub(super) async fn execute_image_op(
             created,
             job_id: job.id().to_owned(),
             request_id: req.request_id.clone(),
-            bundle,
+            bundle: bundle.clone(),
             outputs: units
                 .iter()
                 .map(|unit| ImageOpOutput {
                     b64_json: base64::engine::general_purpose::STANDARD.encode(&unit.bytes),
                     sha256: unit.sha256.clone(),
                     format: format.name().to_owned(),
+                    // The promoted blob id IS the sha256 of these bytes;
+                    // returned only when a bundle was actually written.
+                    artifact_id: bundle.as_ref().map(|_| unit.sha256.clone()),
                 })
                 .collect(),
             warnings: (!warnings.is_empty()).then_some(warnings),

@@ -1708,9 +1708,10 @@ pub enum ImageOpCommand {
     Matting,
 }
 
-/// One input image for `POST /v1/image-ops`: a data URI or a prior job
-/// bundle's artifact — never a filesystem path, `file://` URL, or remote
-/// URL (there is no fetch, so no SSRF surface by construction).
+/// One input image for `POST /v1/image-ops`: a data URI, a prior job
+/// bundle's artifact, or a promoted content-addressed artifact id — never
+/// a filesystem path, `file://` URL, or remote URL (there is no fetch, so
+/// no SSRF surface by construction).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageOpInput {
@@ -1720,6 +1721,13 @@ pub enum ImageOpInput {
     DataUri(String),
     /// A prior bundle's output artifact (see [`ImageOpArtifact`]).
     Artifact(ImageOpArtifact),
+    /// A promoted output's `artifact_id` from a prior `ImageOpOutput`.
+    /// Resolved through the artifact registry's id normalizer and the same
+    /// container-safety admission gate as every other input.
+    ArtifactId {
+        /// The promoted content-addressed id (64 lowercase hex chars).
+        artifact_id: String,
+    },
 }
 
 /// An artifact input: one output file of a finished job bundle written by
@@ -1740,10 +1748,13 @@ pub struct ImageOpArtifact {
 /// out-of-range params, oversized batches, and malformed inputs are named
 /// 400s — defaults never silently repair an explicit request.
 ///
-/// `request_id` deduplicates retries: the same `request_id` with the same
-/// canonical command replays the first job's response (same job id, same
-/// bundle, no double execution); the same `request_id` with a DIFFERENT
-/// command is a named 400 conflict.
+/// `request_id` deduplicates retries for one authenticated consumer: the
+/// dedup key is (consumer scope env name, `request_id`) with the canonical
+/// command hash checked separately (command + inputs + output format +
+/// compression; the self-declared `client` and `request_id` are excluded).
+/// The same consumer resending the same command replays the first job's
+/// response; a different command under the same key is a named 400, and a
+/// different consumer never replays this one's work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageOpRequest {
@@ -1776,12 +1787,18 @@ pub struct ImageOpRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, TS, ToSchema)]
 pub struct ImageOpOutput {
     /// The produced image bytes (in the requested `output_format`),
-    /// base64-encoded.
+    /// base64-encoded. Inline fallback for clients that cannot read the
+    /// artifact store; prefer [`ImageOpOutput::artifact_id`] when present.
     pub b64_json: String,
     /// SHA-256 hex digest of the produced bytes (determinism checks).
     pub sha256: String,
     /// Container actually produced (`png` | `jpeg` | `webp`).
     pub format: String,
+    /// Stable artifact-store id of these bytes, when promotion succeeded.
+    /// Feed it back as [`ImageOpInput::ArtifactId`] after a restart; the
+    /// bundle's `ops.json` sidecar records the same id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
 }
 
 /// `POST /v1/image-ops` response: one output per input, in order, plus the
@@ -1797,13 +1814,17 @@ pub struct ImageOpResponse {
     /// The request's idempotency key, verbatim.
     pub request_id: String,
     /// Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle
-    /// artifact inputs reference. Absent when the server runs without a
-    /// data dir (bundles are disabled).
+    /// legacy [`ImageOpArtifact`] inputs reference. Absent when the server
+    /// runs without a data dir or the bundle write failed; durable outputs
+    /// are addressed by [`ImageOpOutput::artifact_id`] instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bundle: Option<String>,
     /// One entry per input, in order.
     pub outputs: Vec<ImageOpOutput>,
-    /// Advisory notes; omitted when empty.
+    /// Advisory notes; omitted when empty. A failed bundle write is
+    /// ADVISORY, never a failed op: the outputs stay complete and this
+    /// carries the documented warning, while `bundle` and output artifact
+    /// handles are absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<String>>,
 }
@@ -2629,7 +2650,9 @@ pub struct JobEvent {
 pub struct BlenderJobRequest {
     /// The mesh the job works on.
     pub input: BlenderJobInput,
-    /// The stages to run, in execution order.
+    /// Tagged `{ "op": ... }` records in execution order — the only wire
+    /// shape. Array/tuple stages and internal recipe stage names are not
+    /// accepted; an unknown `op` is a named 400.
     pub stages: Vec<BlenderStage>,
     /// Job-wide parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2715,8 +2738,11 @@ pub struct BlenderOutput {
     pub max_bytes: u64,
 }
 
-/// One stage of a Blender job, in execution order. The vocabulary is
-/// closed: the recipe knows exactly these stages.
+/// One stage of a Blender job, in execution order, as a tagged record
+/// (`{ "op": "uv_unpack", "margin": … }`). The vocabulary is closed: these
+/// snake_case `op` tags are the only wire names — internal Rust variant
+/// names and array/tuple shapes are never part of this contract. An
+/// unknown `op` is rejected as a named 400 at the route.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum BlenderStage {
@@ -2762,6 +2788,13 @@ pub enum BlenderStage {
         /// The square resolution of each view (16..=1024).
         resolution: u32,
     },
+    /// Emit one thumbnail still plus one still per turntable view.
+    Thumbnail {
+        /// How many views to render (1..=8).
+        frames: u32,
+        /// The square resolution of each view (16..=1024).
+        resolution: u32,
+    },
 }
 
 /// The maps a bake can produce.
@@ -2774,6 +2807,12 @@ pub enum BlenderBakeMap {
     Normal,
     /// The roughness map.
     Roughness,
+    /// The metalness map (linear).
+    Metallic,
+    /// The ambient-occlusion map (linear).
+    Ao,
+    /// The height/displacement map (linear).
+    Height,
 }
 
 /// 202 acceptance body (`POST /v1/jobs/blender`).

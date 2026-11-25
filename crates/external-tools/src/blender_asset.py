@@ -33,6 +33,9 @@ BAKE_TYPES = {
     "color": "DIFFUSE",
     "normal": "NORMAL",
     "roughness": "ROUGHNESS",
+    "metallic": "METALLIC",
+    "ao": "AO",
+    "height": "DISPLACEMENT",
 }
 
 
@@ -288,12 +291,16 @@ def bounds_of(obj):
     return center, max(extent.length / 2.0, 1e-3)
 
 
-def render_turntable(obj, frames, resolution, output_dir, prefix):
+def render_turntable(
+    obj, frames, resolution, output_dir, prefix,
+    frame_kind="turntable", strip_kind="turntable", keep_frames=False,
+):
     """Render `frames` views around the object and tile them into one image.
 
     The turntable ships as ONE still (a horizontal strip of the views): the
     workspace has no animated webp encoder, and a strip shows every angle a
-    consumer needs to judge the mesh.
+    consumer needs to judge the mesh. Returns (strip path, frame paths);
+    thumbnail keeps the frames, turntable deletes them.
     """
     import numpy as np
 
@@ -339,11 +346,11 @@ def render_turntable(obj, frames, resolution, output_dir, prefix):
         )
         light.location = light_pos
         light.rotation_euler = (center - light_pos).to_track_quat("-Z", "Y").to_euler()
-        path = os.path.join(output_dir, "%s_turntable_%02d.png" % (prefix, index))
+        path = os.path.join(output_dir, "%s_%s_%02d.png" % (prefix, frame_kind, index))
         scene.render.filepath = path
         bpy.ops.render.render(write_still=True)
         frame_paths.append(path)
-    strip_path = os.path.join(output_dir, "%s_turntable.png" % prefix)
+    strip_path = os.path.join(output_dir, "%s_%s.png" % (prefix, strip_kind))
     images = [bpy.data.images.load(path) for path in frame_paths]
     width, height = images[0].size
     strip = np.zeros((height, width * len(images), 4), dtype=np.float32)
@@ -357,23 +364,43 @@ def render_turntable(obj, frames, resolution, output_dir, prefix):
     out.filepath_raw = strip_path
     out.file_format = "PNG"
     out.save()
-    for path in frame_paths:
-        os.remove(path)
-    return strip_path
+    if not keep_frames:
+        for path in frame_paths:
+            os.remove(path)
+    return strip_path, frame_paths
 
 
 def stage_turntable(obj, op, job):
     """Render the turntable preview of the current object."""
     frames = max(1, int(op.get("frames", 4)))
     resolution = max(16, int(op.get("resolution", 256)))
-    path = render_turntable(
+    strip, _frame_paths = render_turntable(
         obj,
         frames,
         resolution,
         job["output_dir"],
         job.get("prefix", "honkbox_asset"),
     )
-    return [{"path": path, "kind": "preview"}]
+    return [{"path": strip, "kind": "preview"}]
+
+
+def stage_thumbnail(obj, op, job):
+    """Render one thumbnail still plus every individual view."""
+    frames = max(1, int(op.get("frames", 4)))
+    resolution = max(16, int(op.get("resolution", 256)))
+    strip, frame_paths = render_turntable(
+        obj,
+        frames,
+        resolution,
+        job["output_dir"],
+        job.get("prefix", "honkbox_asset"),
+        frame_kind="thumbnail",
+        strip_kind="thumbnail",
+        keep_frames=True,
+    )
+    return [{"path": strip, "kind": "thumbnail"}] + [
+        {"path": path, "kind": "thumbnail"} for path in frame_paths
+    ]
 
 
 def apply_stage(obj, op, job, artifacts, warnings):
@@ -395,6 +422,8 @@ def apply_stage(obj, op, job, artifacts, warnings):
         return stage_export_glb(obj, op, job)
     if stage == "turntable":
         return stage_turntable(obj, op, job)
+    if stage == "thumbnail":
+        return stage_thumbnail(obj, op, job)
     raise RecipeError("unknown stage: %s" % stage)
 
 

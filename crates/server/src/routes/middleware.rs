@@ -3,7 +3,7 @@ use std::{collections::HashMap, time::Instant};
 use axum::{
     Json,
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -11,6 +11,7 @@ use axum::{
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 
 use super::AppConfig;
+use super::image_ops_dedup::sha256_hex;
 use super::runtime_config;
 
 /// Bearer auth middleware (REQ-7). `route_layer` runs ONLY for matched
@@ -160,6 +161,26 @@ pub(crate) fn is_signed_content_request(req: &Request) -> bool {
     })
 }
 
+/// One lookup in the scope layer: `(env NAME, allowed)` for a matching key.
+/// The name is safe to hand out; the key value never leaves this function.
+fn scoped_key_match<'a>(
+    key: Option<&str>,
+    scope_map: &'a [(String, Vec<String>)],
+    required: &str,
+) -> Option<(&'a str, bool)> {
+    let key = key?;
+    for (env_name, scopes) in scope_map {
+        let expected = env_var(env_name).filter(|value| !value.is_empty());
+        if matches!((expected, key), (Some(e), p) if constant_time_eq(e.as_bytes(), p.as_bytes())) {
+            return Some((
+                env_name,
+                scopes.iter().any(|scope| scope.as_str() == required),
+            ));
+        }
+    }
+    None
+}
+
 /// `Some(allowed)` when the presented key belongs to a configured scoped env
 /// name; `None` when it is not a scoped consumer (legacy or unknown key).
 pub(crate) fn scoped_key_verdict(
@@ -167,14 +188,35 @@ pub(crate) fn scoped_key_verdict(
     scope_map: &[(String, Vec<String>)],
     required: &str,
 ) -> Option<bool> {
-    let key = key?;
-    for (env_name, scopes) in scope_map {
-        let expected = env_var(env_name).filter(|value| !value.is_empty());
-        if matches!((expected, key), (Some(e), p) if constant_time_eq(e.as_bytes(), p.as_bytes())) {
-            return Some(scopes.iter().any(|scope| scope.as_str() == required));
+    scoped_key_match(key, scope_map, required).map(|(_, allowed)| allowed)
+}
+
+/// Stable idempotency consumer for `POST /v1/image-ops`: the matched scope's
+/// env NAME when scopes are configured (never a credential), otherwise the
+/// sha256 of the presented bearer key. Both the axum and Salvo stacks call
+/// this one handler, so the namespace is identical on both. No header at
+/// all (auth-off dev/test) shares a single anonymous consumer.
+pub(crate) fn consumer_id(headers: &HeaderMap) -> String {
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    let (enabled, scope_map) = runtime_config::scope_facts();
+    if enabled && !scope_map.is_empty() {
+        if let Some((env_name, _)) = scoped_key_match(presented, &scope_map, "write") {
+            return env_name.to_owned();
         }
     }
-    None
+    presented.map_or_else(
+        || sha256_hex(b"anonymous"),
+        |key| sha256_hex(key.as_bytes()),
+    )
 }
 
 /// `POST /v1/content-urls` mints a signed READ credential, so a scoped

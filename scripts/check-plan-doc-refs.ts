@@ -51,7 +51,7 @@ let tmpRefs = 0;
 for (const file of walk(planDir)) {
   const text = readFileSync(file, "utf8");
   for (const match of text.matchAll(/`([^`\n]+)`/g)) {
-    const path = match[1].trim().split(/[:#]/)[0];
+    const path = match[1]!.trim().split(/[:#]/)[0];
     if (!path || /[\s*{}[\]<>]/.test(path)) continue;
     if (path.startsWith(".tmp/")) {
       tmpRefs++;
@@ -83,7 +83,7 @@ let orphanTicketRefs = 0;
 for (const epicFile of epicFiles) {
   const text = readFileSync(resolve(epicsDir, epicFile), "utf8");
   for (const match of text.matchAll(/`([A-Z]+-[a-z0-9-]+\.md)`/g)) {
-    if (!ticketFiles.includes(match[1])) orphanTicketRefs++;
+    if (!ticketFiles.includes(match[1]!)) orphanTicketRefs++;
   }
 }
 

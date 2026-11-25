@@ -1,6 +1,8 @@
-//! Image-op idempotency ledger: `request_id` -> settled outcome, bounded on
-//! entries AND retained bytes, so retries replay byte-identically while
-//! memory stays capped.
+//! Image-op idempotency ledger: (authenticated consumer, `request_id`) →
+//! settled outcome, bounded on entries AND retained bytes, so retries replay
+//! byte-identically while memory stays capped. The caller supplies the
+//! consumer from the shared scope layer (env NAME, or a bearer-key digest
+//! for legacy unscoped keys); raw credentials never enter the ledger.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -25,7 +27,8 @@ pub(super) struct ImageOpSettled {
 /// One remembered image-op submission: the canonical command hash it
 /// answered and the replayable outcome. Same-hash losers of a same-key
 /// race await the cell (single execution, identical replay); a different
-/// hash under the same `request_id` is a conflict, never silent execution.
+/// command hash under the same consumer + `request_id` is a conflict, never
+/// silent execution.
 pub(super) struct ImageOpDedupEntry {
     command_sha256: [u8; 32],
     /// Approximate retained size of the settled response (set only for
@@ -37,33 +40,37 @@ pub(super) struct ImageOpDedupEntry {
     pub(super) outcome: OnceCell<ImageOpSettled>,
 }
 
-/// The image-op idempotency ledger: `request_id` → entry, bounded on
-/// entries AND retained bytes (oldest-first eviction).
+/// The image-op idempotency ledger: (consumer, `request_id`) → entry,
+/// bounded on entries AND retained bytes (oldest-first eviction).
 #[derive(Default)]
 pub(super) struct ImageOpDedup {
-    map: HashMap<String, Arc<ImageOpDedupEntry>>,
-    /// Insertion order for oldest-first eviction (stale ids tolerated).
-    order: VecDeque<String>,
+    map: HashMap<(String, String), Arc<ImageOpDedupEntry>>,
+    /// Insertion order for oldest-first eviction (stale keys tolerated).
+    order: VecDeque<(String, String)>,
 }
 
 /// Outcome of [`ImageOpDedup::reserve`].
 pub(super) enum ImageOpReservation {
     /// Fresh key: this caller participates in the single-flight cell.
     Execute(Arc<ImageOpDedupEntry>),
-    /// Same key + same canonical command: replay the first outcome.
+    /// Same consumer + key + same canonical command: replay the first outcome.
     Replay(Arc<ImageOpDedupEntry>),
-    /// Same key with a DIFFERENT command: a named 400, never execution.
+    /// Same consumer + key with a DIFFERENT command: a named 400, never execution.
     Conflict,
 }
 
 impl ImageOpDedup {
-    /// Reserve `request_id` for `command_sha256`.
+    /// Reserve `(consumer, request_id)` for `command_sha256`. The consumer is
+    /// the bearer digest resolved at the route, never a caller-controlled
+    /// string, so an identical id from another consumer executes afresh.
     pub(super) fn reserve(
         &mut self,
+        consumer: &str,
         request_id: &str,
         command_sha256: [u8; 32],
     ) -> ImageOpReservation {
-        if let Some(entry) = self.map.get(request_id) {
+        let key = (consumer.to_owned(), request_id.to_owned());
+        if let Some(entry) = self.map.get(&key) {
             return if entry.command_sha256 == command_sha256 {
                 ImageOpReservation::Replay(Arc::clone(entry))
             } else {
@@ -75,15 +82,16 @@ impl ImageOpDedup {
             retained_bytes: const { std::sync::atomic::AtomicUsize::new(0) },
             outcome: OnceCell::new(),
         });
-        self.map.insert(request_id.to_owned(), Arc::clone(&entry));
-        self.order.push_back(request_id.to_owned());
+        self.map.insert(key.clone(), Arc::clone(&entry));
+        self.order.push_back(key);
         self.trim();
         ImageOpReservation::Execute(entry)
     }
 
     /// Record the retained size of a settled SUCCESS (bounded cache).
-    pub(super) fn remember(&mut self, request_id: &str, retained_bytes: usize) {
-        if let Some(entry) = self.map.get(request_id) {
+    pub(super) fn remember(&mut self, consumer: &str, request_id: &str, retained_bytes: usize) {
+        let key = (consumer.to_owned(), request_id.to_owned());
+        if let Some(entry) = self.map.get(&key) {
             entry
                 .retained_bytes
                 .store(retained_bytes, std::sync::atomic::Ordering::Relaxed);
@@ -92,8 +100,9 @@ impl ImageOpDedup {
     }
 
     /// Forget an entry (a FAILED attempt): a genuine retry re-executes.
-    pub(super) fn forget(&mut self, request_id: &str) {
-        self.map.remove(request_id);
+    pub(super) fn forget(&mut self, consumer: &str, request_id: &str) {
+        self.map
+            .remove(&(consumer.to_owned(), request_id.to_owned()));
     }
 
     /// Evict oldest-first while over either budget.

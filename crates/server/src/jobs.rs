@@ -312,14 +312,19 @@ pub fn write_bundle_into(
 }
 
 /// One recorded input of an image-ops job bundle (sidecar record): where
-/// the bytes came from and what they hashed to. Data-URI payloads are
-/// recorded by DIGEST only — no payload bytes ever land in a sidecar.
+/// the bytes came from, what they hashed to, and — for registry-backed
+/// inputs — the stable artifact id. Data-URI payloads are recorded by DIGEST
+/// only; no payload bytes ever land in a sidecar.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OpsInputRecord {
-    /// Provenance label: `"data_uri"` or `"artifact:<bundle>/<index>"`.
+    /// Provenance label: `"data_uri"`, `"artifact:<bundle>/<index>"`, or
+    /// `"artifact_id:<id>"`.
     pub source: String,
     /// SHA-256 hex digest of the decoded input bytes.
     pub sha256: String,
+    /// The resolved artifact id when the input came from the registry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
 }
 
 /// One recorded output of an image-ops job bundle (sidecar record).
@@ -329,6 +334,9 @@ pub struct OpsOutputRecord {
     pub file: String,
     /// SHA-256 hex digest of the file bytes.
     pub sha256: String,
+    /// Content-addressed id of the promoted bytes (stable after GC/name
+    /// changes); the bundle file name alone is not a durable handle.
+    pub artifact_id: String,
 }
 
 /// Everything the image-ops bundle records about the command
@@ -972,10 +980,12 @@ mod tests {
             OpsOutputRecord {
                 file: "op_00.png".to_string(),
                 sha256: "b".repeat(64),
+                artifact_id: "a".repeat(64),
             },
             OpsOutputRecord {
                 file: "op_01.png".to_string(),
                 sha256: "c".repeat(64),
+                artifact_id: "b".repeat(64),
             },
         ];
         let one: [&[u8]; 1] = [&[1u8, 2, 3]];

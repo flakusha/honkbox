@@ -8,7 +8,7 @@
 use axum::{
     Json,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use honkbox_api_types::{ImageOpCommand, ImageOpRequest, ImageOpResponse, OpenAiError};
@@ -19,6 +19,7 @@ use super::image_ops_limits::{IMAGE_OP_ID_MAX_CHARS, IMAGE_OP_MAX_INPUTS};
 use super::image_ops_params::validate_image_op_params;
 use super::image_ops_settle::execute_image_op;
 use super::images_inputs::{parse_output_compression, parse_output_format};
+use super::middleware::consumer_id;
 use super::openai_constraints::openai_error_response;
 use super::{AppConfig, chat_prep::with_job_id};
 
@@ -127,6 +128,7 @@ pub(super) fn validate_image_op_request(
 )]
 pub(crate) async fn post_image_ops(
     State(config): State<AppConfig>,
+    headers: HeaderMap,
     body: Result<Json<ImageOpRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let req = match body {
@@ -147,18 +149,25 @@ pub(crate) async fn post_image_ops(
             return openai_error_response(status, message, code);
         }
     };
-    // Canonical command hash (the idempotency key's command half): hash the
-    // RE-SERIALIZED request — field order is fixed by the DTO, so two wire
-    // spellings of the same command collapse into one dedup key while any
-    // actual difference (params, inputs, format, …) produces a new hash.
+    // Canonical command hash: command + inputs + output container/quality
+    // only. Self-declared `client` and `request_id` are deliberately excluded
+    // so changing a label on a retry still replays the first execution.
+    let canonical = serde_json::json!({
+        "command": &req.command,
+        "inputs": &req.inputs,
+        "output_format": &req.output_format,
+        "output_compression": &req.output_compression,
+    });
     let command_sha256: [u8; 32] =
-        Sha256::digest(serde_json::to_vec(&req).unwrap_or_default()).into();
+        Sha256::digest(serde_json::to_vec(&canonical).unwrap_or_default()).into();
+    // Identity comes from the shared scope layer: env name or bearer digest.
+    let consumer = consumer_id(&headers);
     let reserved = {
         // std mutex, no await inside: reserve-or-conflict is decided here.
         let mut dedup = IMAGE_OP_DEDUP
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match dedup.reserve(&req.request_id, command_sha256) {
+        match dedup.reserve(&consumer, &req.request_id, command_sha256) {
             ImageOpReservation::Conflict => {
                 return openai_error_response(
                     StatusCode::BAD_REQUEST,
@@ -203,9 +212,9 @@ pub(crate) async fn post_image_ops(
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if settled.response.is_ok() {
-            dedup.remember(&req.request_id, retained);
+            dedup.remember(&consumer, &req.request_id, retained);
         } else {
-            dedup.forget(&req.request_id);
+            dedup.forget(&consumer, &req.request_id);
         }
     }
     let response = match &settled.response {

@@ -811,7 +811,14 @@ export type ImageOpRotate = {
    */
   degrees: number;
 };
-export type ImageOpInput = { "data_uri": string; } | { "artifact": ImageOpArtifact; };
+export type ImageOpInput = { "data_uri": string; } | { "artifact": ImageOpArtifact; } | {
+  "artifact_id": {
+    /**
+     * The promoted content-addressed id (64 lowercase hex chars).
+     */
+    artifact_id: string;
+  };
+};
 export type ImageOpArtifact = {
   /**
    * Bundle id (ULID string, exactly as a prior response reported it).
@@ -859,7 +866,8 @@ export type ImageOpRequest = {
 export type ImageOpOutput = {
   /**
    * The produced image bytes (in the requested `output_format`),
-   * base64-encoded.
+   * base64-encoded. Inline fallback for clients that cannot read the
+   * artifact store; prefer [`ImageOpOutput::artifact_id`] when present.
    */
   b64_json: string;
   /**
@@ -870,6 +878,12 @@ export type ImageOpOutput = {
    * Container actually produced (`png` | `jpeg` | `webp`).
    */
   format: string;
+  /**
+   * Stable artifact-store id of these bytes, when promotion succeeded.
+   * Feed it back as [`ImageOpInput::ArtifactId`] after a restart; the
+   * bundle's `ops.json` sidecar records the same id.
+   */
+  artifact_id?: string | null;
 };
 export type ImageOpResponse = {
   /**
@@ -887,8 +901,9 @@ export type ImageOpResponse = {
   request_id: string;
   /**
    * Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle
-   * artifact inputs reference. Absent when the server runs without a
-   * data dir (bundles are disabled).
+   * legacy [`ImageOpArtifact`] inputs reference. Absent when the server
+   * runs without a data dir or the bundle write failed; durable outputs
+   * are addressed by [`ImageOpOutput::artifact_id`] instead.
    */
   bundle: string | null;
   /**
@@ -896,7 +911,10 @@ export type ImageOpResponse = {
    */
   outputs: Array<ImageOpOutput>;
   /**
-   * Advisory notes; omitted when empty.
+   * Advisory notes; omitted when empty. A failed bundle write is
+   * ADVISORY, never a failed op: the outputs stay complete and this
+   * carries the documented warning, while `bundle` and output artifact
+   * handles are absent.
    */
   warnings: Array<string> | null;
 };
@@ -2294,7 +2312,9 @@ export type BlenderJobRequest = {
    */
   input: BlenderJobInput;
   /**
-   * The stages to run, in execution order.
+   * Tagged `{ "op": ... }` records in execution order — the only wire
+   * shape. Array/tuple stages and internal recipe stage names are not
+   * accepted; an unknown `op` is a named 400.
    */
   stages: Array<BlenderStage>;
   /**
@@ -2430,8 +2450,19 @@ export type BlenderStage =
      * The square resolution of each view (16..=1024).
      */
     resolution: number;
+  }
+  | {
+    "op": "thumbnail";
+    /**
+     * How many views to render (1..=8).
+     */
+    frames: number;
+    /**
+     * The square resolution of each view (16..=1024).
+     */
+    resolution: number;
   };
-export type BlenderBakeMap = "color" | "normal" | "roughness";
+export type BlenderBakeMap = "color" | "normal" | "roughness" | "metallic" | "ao" | "height";
 export type BlenderJobAccepted = {
   /**
    * Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the

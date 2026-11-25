@@ -186,15 +186,26 @@ async fn image_ops(app: Router, body: Value) -> (StatusCode, axum::http::HeaderM
 
 /// The raw image-op request; the caller owns `OP_LOCK`.
 async fn post_image_ops(app: Router, body: Value) -> (StatusCode, axum::http::HeaderMap, Value) {
+    post_image_ops_with_auth(app, body, None).await
+}
+
+/// Same submission with an explicit `Authorization` value. The route digests
+/// this header into the dedup consumer even with bearer auth off, so a test
+/// can assert consumer isolation without provisioning credentials.
+async fn post_image_ops_with_auth(
+    app: Router,
+    body: Value,
+    auth: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/v1/image-ops")
+        .header("content-type", "application/json");
+    if let Some(auth) = auth {
+        builder = builder.header("authorization", auth);
+    }
     let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/image-ops")
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
+        .oneshot(builder.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -205,6 +216,16 @@ async fn post_image_ops(app: Router, body: Value) -> (StatusCode, axum::http::He
     let parsed =
         serde_json::from_slice(&bytes).unwrap_or_else(|err| panic!("response not JSON: {err}"));
     (status, headers, parsed)
+}
+
+/// Consumer-scoped submission (takes `OP_LOCK` like `image_ops`).
+async fn image_ops_with_auth(
+    app: Router,
+    body: Value,
+    auth: &str,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    let _op = OP_LOCK.lock().await;
+    post_image_ops_with_auth(app, body, Some(auth)).await
 }
 
 fn resize_request(request_id: &str, width: u32, height: u32, inputs: &Value) -> Value {
@@ -357,7 +378,11 @@ async fn idempotent_retry_replays_first_response() {
     let request = resize_request("idem-1", 2, 2, &one_input(4, 4));
     let (status, _, first) = image_ops(app.clone(), request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{first}");
-    let (replay_status, _, replay) = image_ops(app, request).await;
+    // `client` is a label, not part of the command: relabelling a retry
+    // still replays instead of conflicting.
+    let mut relabeled = request.clone();
+    relabeled["client"] = json!("plugin/1.0");
+    let (replay_status, _, replay) = image_ops(app, relabeled).await;
     assert_eq!(replay_status, StatusCode::OK, "{replay}");
     assert_eq!(replay, first, "replay is byte-identical (parsed)");
     assert_eq!(replay["job_id"], first["job_id"], "same job id");
@@ -1296,4 +1321,208 @@ async fn matting_without_sidecar_is_501_matching_capabilities() {
     assert_eq!(body["error"]["code"], "matting_unavailable");
     let (_, _, doc) = send_get(app, "/v1/capabilities").await;
     assert_eq!(doc["image_ops"]["matting_available"], false, "{doc}");
+}
+
+/// Idempotency is scoped to the authenticated consumer: a replay and a
+/// conflicting command are judged within one bearer identity, and an
+/// identical request under a second identity executes as fresh work.
+#[tokio::test]
+async fn dedup_is_scoped_by_authenticated_consumer() {
+    let data_dir = fresh_data_dir("consumer-scope");
+    let app = app_with(Some(&data_dir));
+    let request = resize_request("consumer-scope-1", 2, 2, &one_input(4, 4));
+    let (status, _, first) =
+        image_ops_with_auth(app.clone(), request.clone(), "Bearer alpha-key").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, _, replay) =
+        image_ops_with_auth(app.clone(), request.clone(), "Bearer alpha-key").await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(replay, first, "same consumer replays byte-identically");
+
+    let (status, _, conflict) = image_ops_with_auth(
+        app.clone(),
+        json!({
+            "command": "grayscale",
+            "inputs": one_input(4, 4),
+            "request_id": "consumer-scope-1",
+        }),
+        "Bearer alpha-key",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{conflict}");
+    assert_eq!(
+        conflict["error"]["code"], "image_op_request_id_conflict",
+        "{conflict}"
+    );
+
+    let (status, _, other) = image_ops_with_auth(app, request, "Bearer beta-key").await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    assert_ne!(
+        other["job_id"].as_str().unwrap(),
+        first["job_id"].as_str().unwrap(),
+        "another consumer never replays this one's job"
+    );
+    assert_ne!(
+        other["bundle"].as_str().unwrap(),
+        first["bundle"].as_str().unwrap()
+    );
+    assert_eq!(
+        bundle_count(&data_dir),
+        2,
+        "neither replay nor conflict ran"
+    );
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// Bundle inputs/outputs are addressable after a process restart: the
+/// response's artifact handle feeds the next op, and both bundles' sidecars
+/// record the resolved ids and digests.
+#[tokio::test]
+async fn bundle_artifacts_resolve_after_restart() {
+    let data_dir = fresh_data_dir("artifact-restart");
+    let app = app_with(Some(&data_dir));
+    let (status, _, first) = image_ops(
+        app.clone(),
+        resize_request("artifact-restart-1", 3, 3, &one_input(4, 4)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let bundle = first["bundle"].as_str().unwrap().to_owned();
+    let first_hash = first["outputs"][0]["sha256"].as_str().unwrap().to_owned();
+    assert_eq!(
+        first["outputs"][0]["artifact_id"].as_str().unwrap(),
+        first_hash,
+        "{first}"
+    );
+    let first_dir = data_dir.join("jobs").join(&bundle);
+    let first_refs = bundle_json(&first_dir, "artifacts.json");
+    assert_eq!(
+        first_refs["outputs"][0]["artifact_id"], first_hash,
+        "{first_refs}"
+    );
+
+    // Rebuild the router over the same data dir: no in-memory reference to
+    // the first execution survives.
+    drop(app);
+    let app = app_with(Some(&data_dir));
+    let (status, _, second) = image_ops(
+        app,
+        json!({
+            "command": "grayscale",
+            "inputs": [{"artifact_id": {"artifact_id": &first_hash}}],
+            "request_id": "artifact-restart-2",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let second_bundle = second["bundle"].as_str().unwrap().to_owned();
+    let second_dir = data_dir.join("jobs").join(&second_bundle);
+    let ops = bundle_json(&second_dir, "ops.json");
+    assert_eq!(
+        ops["inputs"][0]["source"],
+        format!("artifact_id:{first_hash}"),
+        "{ops}"
+    );
+    assert_eq!(ops["inputs"][0]["sha256"], first_hash, "{ops}");
+    let refs = bundle_json(&second_dir, "artifacts.json");
+    assert_eq!(refs["bundle"].as_str().unwrap(), second_bundle, "{refs}");
+    assert_eq!(
+        refs["inputs"][0]["artifact_id"].as_str().unwrap(),
+        first_hash,
+        "{refs}"
+    );
+    assert_eq!(refs["inputs"][0]["sha256"], first_hash, "{refs}");
+    assert_eq!(refs["outputs"][0]["index"], 0, "{refs}");
+    assert_eq!(
+        refs["outputs"][0]["artifact_id"], second["outputs"][0]["sha256"],
+        "the promoted blob id is the output digest: {refs}"
+    );
+    assert_eq!(
+        refs["outputs"][0]["sha256"], second["outputs"][0]["sha256"],
+        "{refs}"
+    );
+    assert_eq!(
+        second["outputs"][0]["artifact_id"], second["outputs"][0]["sha256"],
+        "{second}"
+    );
+    let (bytes, width, height) = decoded_png(&second["outputs"][0]);
+    assert_eq!((width, height), (3, 3), "the referenced pixels were reused");
+    assert_eq!(
+        hex(&sha2::Sha256::digest(&bytes)),
+        second["outputs"][0]["sha256"].as_str().unwrap(),
+        "decoded artifact bytes match this response's digest"
+    );
+    std::fs::remove_dir_all(&data_dir).ok();
+}
+
+/// One explicit contract for bundle-write failure: ADVISORY. Pixels stay
+/// complete, the single documented warning explains missing handles, and no
+/// bundle is advertised. A data dir that is a regular file forces the write
+/// to fail deterministically.
+#[tokio::test]
+async fn bundle_write_failure_is_advisory_with_one_named_warning() {
+    let path = std::env::temp_dir().join(format!("honkbox-ops-no-dir-{}", ulid::Ulid::new()));
+    std::fs::write(&path, b"a file, not a directory").expect("blocking file");
+    let (status, _, body) = image_ops(
+        app_with(Some(&path)),
+        resize_request("bundle-write-failure-1", 2, 2, &one_input(4, 4)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, width, height) = decoded_png(&body["outputs"][0]);
+    assert_eq!((width, height), (2, 2), "completed pixels survive");
+    assert!(body["bundle"].is_null(), "{body}");
+    assert!(body["outputs"][0]["artifact_id"].is_null(), "{body}");
+    assert_eq!(
+        body["warnings"].as_array().unwrap().len(),
+        1,
+        "one explicit warning: {body}"
+    );
+    assert_eq!(
+        body["warnings"][0].as_str().unwrap(),
+        "job bundle could not be written; artifact inputs will not resolve",
+        "{body}"
+    );
+    assert!(!path.join("jobs").exists());
+    std::fs::remove_file(&path).ok();
+}
+
+/// Public Blender stages are tagged records only; an unknown `op` is a
+/// named 400 at the route before any job is admitted.
+#[tokio::test]
+async fn unknown_blender_stage_op_is_a_named_400() {
+    let data_dir = fresh_data_dir("blender-unknown-op");
+    let response = app_with(Some(&data_dir))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/jobs/blender")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "stages": [{"op": "not_a_public_op"}],
+                        "input": {"asset_id": "a".repeat(64), "format": "glb", "sha256": "a".repeat(64)},
+                        "engine": {"blender_version": "4.5.15", "script_version": "a".repeat(64)},
+                        "output": {"format": "glb", "max_bytes": 1_048_576},
+                        "params": {"seed": 7},
+                        "manifest": 1,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["code"], "blender_request_invalid", "{body}");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown variant"),
+        "{body}"
+    );
+    std::fs::remove_dir_all(&data_dir).ok();
 }

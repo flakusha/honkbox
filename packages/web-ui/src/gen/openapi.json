@@ -144,7 +144,7 @@
     "/comfyui/start": {
       "post": {
         "tags": [],
-        "summary": "Calling `/comfyui` starts ComfyUI, llama-swap style: convenience alias for\n`POST /v1/apps/comfyui/start`. Same branches, same DTO, `/comfyui` voice.",
+        "summary": "Calling `/comfyui` starts `ComfyUI`, llama-swap style: convenience alias for\n`POST /v1/apps/comfyui/start`. Same branches, same DTO, `/comfyui` voice.",
         "operationId": "post_comfyui_start",
         "responses": {
           "200": {
@@ -2999,7 +2999,10 @@
         "enum": [
           "color",
           "normal",
-          "roughness"
+          "roughness",
+          "metallic",
+          "ao",
+          "height"
         ]
       },
       "BlenderEngine": {
@@ -3314,7 +3317,7 @@
             "items": {
               "$ref": "#/components/schemas/BlenderStage"
             },
-            "description": "The stages to run, in execution order."
+            "description": "Tagged `{ \"op\": ... }` records in execution order — the only wire\nshape. Array/tuple stages and internal recipe stage names are not\naccepted; an unknown `op` is a named 400."
           }
         },
         "additionalProperties": false
@@ -3528,9 +3531,38 @@
                 "minimum": 0
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Emit one thumbnail still plus one still per turntable view.",
+            "required": [
+              "frames",
+              "resolution",
+              "op"
+            ],
+            "properties": {
+              "frames": {
+                "type": "integer",
+                "format": "int32",
+                "description": "How many views to render (1..=8).",
+                "minimum": 0
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "thumbnail"
+                ]
+              },
+              "resolution": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The square resolution of each view (16..=1024).",
+                "minimum": 0
+              }
+            }
           }
         ],
-        "description": "One stage of a Blender job, in execution order. The vocabulary is\nclosed: the recipe knows exactly these stages."
+        "description": "One stage of a Blender job, in execution order, as a tagged record\n(`{ \"op\": \"uv_unpack\", \"margin\": … }`). The vocabulary is closed: these\nsnake_case `op` tags are the only wire names — internal Rust variant\nnames and array/tuple shapes are never part of this contract. An\nunknown `op` is rejected as a named 400 at the route."
       },
       "Capabilities": {
         "type": "object",
@@ -5298,9 +5330,31 @@
                 "description": "A prior bundle's output artifact (see [`ImageOpArtifact`])."
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "A promoted output's `artifact_id` from a prior `ImageOpOutput`.\nResolved through the artifact registry's id normalizer and the same\ncontainer-safety admission gate as every other input.",
+            "required": [
+              "artifact_id"
+            ],
+            "properties": {
+              "artifact_id": {
+                "type": "object",
+                "description": "A promoted output's `artifact_id` from a prior `ImageOpOutput`.\nResolved through the artifact registry's id normalizer and the same\ncontainer-safety admission gate as every other input.",
+                "required": [
+                  "artifact_id"
+                ],
+                "properties": {
+                  "artifact_id": {
+                    "type": "string",
+                    "description": "The promoted content-addressed id (64 lowercase hex chars)."
+                  }
+                }
+              }
+            }
           }
         ],
-        "description": "One input image for `POST /v1/image-ops`: a data URI or a prior job\nbundle's artifact — never a filesystem path, `file://` URL, or remote\nURL (there is no fetch, so no SSRF surface by construction)."
+        "description": "One input image for `POST /v1/image-ops`: a data URI, a prior job\nbundle's artifact, or a promoted content-addressed artifact id — never\na filesystem path, `file://` URL, or remote URL (there is no fetch, so\nno SSRF surface by construction)."
       },
       "ImageOpKind": {
         "type": "string",
@@ -5323,9 +5377,16 @@
           "format"
         ],
         "properties": {
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable artifact-store id of these bytes, when promotion succeeded.\nFeed it back as [`ImageOpInput::ArtifactId`] after a restart; the\nbundle's `ops.json` sidecar records the same id."
+          },
           "b64_json": {
             "type": "string",
-            "description": "The produced image bytes (in the requested `output_format`),\nbase64-encoded."
+            "description": "The produced image bytes (in the requested `output_format`),\nbase64-encoded. Inline fallback for clients that cannot read the\nartifact store; prefer [`ImageOpOutput::artifact_id`] when present."
           },
           "format": {
             "type": "string",
@@ -5339,7 +5400,7 @@
       },
       "ImageOpRequest": {
         "type": "object",
-        "description": "`POST /v1/image-ops` request (epic-editor-integration). Bounds are\nreject-not-clamp everywhere: unknown fields (`deny_unknown_fields`),\nout-of-range params, oversized batches, and malformed inputs are named\n400s — defaults never silently repair an explicit request.\n\n`request_id` deduplicates retries: the same `request_id` with the same\ncanonical command replays the first job's response (same job id, same\nbundle, no double execution); the same `request_id` with a DIFFERENT\ncommand is a named 400 conflict.",
+        "description": "`POST /v1/image-ops` request (epic-editor-integration). Bounds are\nreject-not-clamp everywhere: unknown fields (`deny_unknown_fields`),\nout-of-range params, oversized batches, and malformed inputs are named\n400s — defaults never silently repair an explicit request.\n\n`request_id` deduplicates retries for one authenticated consumer: the\ndedup key is (consumer scope env name, `request_id`) with the canonical\ncommand hash checked separately (command + inputs + output format +\ncompression; the self-declared `client` and `request_id` are excluded).\nThe same consumer resending the same command replays the first job's\nresponse; a different command under the same key is a named 400, and a\ndifferent consumer never replays this one's work.",
         "required": [
           "command",
           "inputs",
@@ -5419,7 +5480,7 @@
               "string",
               "null"
             ],
-            "description": "Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle\nartifact inputs reference. Absent when the server runs without a\ndata dir (bundles are disabled)."
+            "description": "Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the handle\nlegacy [`ImageOpArtifact`] inputs reference. Absent when the server\nruns without a data dir or the bundle write failed; durable outputs\nare addressed by [`ImageOpOutput::artifact_id`] instead."
           },
           "created": {
             "type": "integer",
@@ -5450,7 +5511,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Advisory notes; omitted when empty."
+            "description": "Advisory notes; omitted when empty. A failed bundle write is\nADVISORY, never a failed op: the outputs stay complete and this\ncarries the documented warning, while `bundle` and output artifact\nhandles are absent."
           }
         }
       },
