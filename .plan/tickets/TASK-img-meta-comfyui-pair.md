@@ -1,7 +1,6 @@
 # TASK: ComfyUI prompt/workflow metadata pair
 
-Status: In Progress
-**Scope:** Emit scoped ComfyUI prompt/workflow text and ingest upload recipe text
+Status: blocked
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned

@@ -33,7 +33,7 @@ byte-identical for identical inputs.
 | `src/downloads.rs` | `FEAT-download-provider-adapters`, `TASK-download-options-contract`, `TASK-support-doc-truth` |
 | `src/formats.rs` | `FEAT-image-output-formats`, `TASK-exr-format-support`, `TASK-format-registry`, `TASK-model-format-validation`, `TASK-svg-ora-support` |
 | `src/gen` | `FEAT-jobs-snapshot-artifact-ids-and-frame-metadata`, `TASK-job-result-artifact-selection-metadata` |
-| `src/image_metadata.rs` | `TASK-content-record-provenance`, `TASK-img-meta-comfyui-pair`, `TASK-img-meta-png-parameters` |
+| `src/image_metadata.rs` | `TASK-content-record-provenance`, `TASK-img-meta-comfyui-pair`, `TASK-img-meta-png-parameters`, `TASK-img-meta-webp-exif` |
 | `src/jobs.rs` | `BUG-fizgig-artifact-cap-and-gc`, `FEAT-comfyui-workflow-pipeline`, `FEAT-sd-edit-loras`, `TASK-determinism-contract`, `TASK-generations-loras`, `TASK-job-result-artifact-selection-metadata` |
 | `src/jobs_registry.rs` | `FEAT-blender-job-route`, `FEAT-comfyui-workflow-pipeline`, `TASK-blender-terminal-hardening`, `TASK-fizgig-admission-contract-tests`, `TASK-images-edits-artifact-delivery-parity`, `TASK-job-result-artifact-selection-metadata`, `TASK-truthful-reserved-capability-rows` |
 | `src/lib.rs` | `BUG-attached-job-cancel-stalled-stream`, `BUG-capabilities-rerank-flag-without-ranker`, `FEAT-ash-vulkan-backend`, `FEAT-blender-job-route`, `FEAT-comfyui-workflow-pipeline`, `FEAT-image-output-formats`, `FEAT-residency-control-plane`, `FEAT-sd-edit-loras`, `TASK-api-version-policy`, `TASK-ash-llm-evidence-integration`, `TASK-ash-sampling-contract`, `TASK-ash-unsupported-conditioning-guards`, `TASK-audio-resampler-quality`, `TASK-audio-residency-contention-policy`, `TASK-audio-voices-loaded-backend-truth`, `TASK-audiocpp-capabilities`, `TASK-blender-bake-extended-maps`, `TASK-capability-honesty-gate`, `TASK-cheap-ops-spike`, `TASK-comfy-custom-node-capability-gate`, `TASK-controlnet-rendering`, `TASK-download-options-contract`, `TASK-face-detection-policy`, `TASK-gpu-slot-audit-hook`, `TASK-inference-cache-correctness`, `TASK-job-result-artifact-selection-metadata`, `TASK-llm-kv-spill-policy`, `TASK-llm-load-plan-admission`, `TASK-llm-moe-tier-offload`, `TASK-llm-speculative-model-draft`, `TASK-llm-tool-choice-contract`, `TASK-llm-vision-default`, `TASK-llm-vision-ingest-contract`, `TASK-salvo-dto-schema-bridge`, `TASK-sd-base-model-tags`, `TASK-support-doc-truth`, `TASK-training-reservation-class`, `TASK-truthful-reserved-capability-rows`, `epic-blender-assets`, `epic-salvo-migration` |
@@ -54,7 +54,7 @@ byte-identical for identical inputs.
 | `src/routes/fizgig_run.rs` | `BUG-fizgig-artifact-cap-and-gc`, `BUG-fizgig-family-model-resolution`, `TASK-fizgig-admission-contract-tests` |
 | `src/routes/image_ops_exec.rs` | `FEAT-image-output-formats`, `TASK-exr-format-support`, `TASK-img-meta-exif-orientation` |
 | `src/routes/images_edit.rs` | `TASK-images-edits-artifact-delivery-parity`, `TASK-sd-inpaint-mask-semantics` |
-| `src/routes/images_generate.rs` | `TASK-ash-unsupported-conditioning-guards`, `TASK-img-meta-exif-orientation`, `TASK-inference-cache-correctness`, `TASK-job-result-artifact-selection-metadata` |
+| `src/routes/images_generate.rs` | `TASK-ash-unsupported-conditioning-guards`, `TASK-inference-cache-correctness`, `TASK-job-result-artifact-selection-metadata` |
 | `src/routes/job_content.rs` | `FEAT-comfyui-workflow-pipeline`, `FEAT-job-bundle-zip` |
 | `src/routes/python_sidecar.rs` | `FEAT-fizgig-lora-training-jobs`, `TASK-fizgig-cli-probe` |
 | `src/sampler.rs` | `FEAT-ash-moss-image-family`, `TASK-ash-diffusion-scheduler-host`, `TASK-ash-flow-dit-substrate` |
@@ -282,8 +282,8 @@ byte-identical for identical inputs.
 | `TASK-images-edits-artifact-delivery-parity` | produces | `src/routes/images_inputs.rs` | - | - |
 | `TASK-img-meta-comfyui-pair` | produces | `src/image_metadata.rs` | - | - |
 | `TASK-img-meta-exif-orientation` | produces | `src/routes/image_ops_exec.rs` | - | - |
-| `TASK-img-meta-exif-orientation` | produces | `src/routes/images_generate.rs` | - | - |
 | `TASK-img-meta-png-parameters` | produces | `src/image_metadata.rs` | - | - |
+| `TASK-img-meta-webp-exif` | produces | `src/image_metadata.rs` | - | - |
 | `TASK-inference-cache-correctness` | produces | `src/backend.rs` | - | - |
 | `TASK-inference-cache-correctness` | produces | `src/determinism.rs` | - | - |
 | `TASK-inference-cache-correctness` | produces | `src/lib.rs` | - | - |
@@ -881,7 +881,6 @@ byte-identical for identical inputs.
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-download-options-contract` | `src/lib.rs` | - |
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-face-detection-policy` | `src/lib.rs` | - |
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-gpu-slot-audit-hook` | `src/lib.rs` | - |
-| `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-img-meta-exif-orientation` | `src/routes/images_generate.rs` | - |
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-inference-cache-correctness` | `src/lib.rs; src/routes/images_generate.rs` | - |
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-job-result-artifact-selection-metadata` | `src/lib.rs; src/routes/images_generate.rs` | - |
 | `TASK-ash-unsupported-conditioning-guards` | sibling | `TASK-llm-kv-spill-policy` | `src/lib.rs` | - |
@@ -1103,6 +1102,7 @@ byte-identical for identical inputs.
 | `TASK-container-safety` | sibling | `TASK-svg-ora-support` | `src/ora.rs` | - |
 | `TASK-content-record-provenance` | sibling | `TASK-img-meta-comfyui-pair` | `src/image_metadata.rs` | - |
 | `TASK-content-record-provenance` | sibling | `TASK-img-meta-png-parameters` | `src/image_metadata.rs` | - |
+| `TASK-content-record-provenance` | sibling | `TASK-img-meta-webp-exif` | `src/image_metadata.rs` | - |
 | `TASK-controlnet-rendering` | sibling | `TASK-download-options-contract` | `src/lib.rs` | - |
 | `TASK-controlnet-rendering` | sibling | `TASK-face-detection-policy` | `src/lib.rs` | - |
 | `TASK-controlnet-rendering` | sibling | `TASK-generations-loras` | `src/routes.rs` | - |
@@ -1204,8 +1204,8 @@ byte-identical for identical inputs.
 | `TASK-images-edits-artifact-delivery-parity` | sibling | `TASK-sd-inpaint-mask-semantics` | `src/routes/images_edit.rs` | - |
 | `TASK-images-edits-artifact-delivery-parity` | sibling | `TASK-truthful-reserved-capability-rows` | `src/jobs_registry.rs` | - |
 | `TASK-img-meta-comfyui-pair` | sibling | `TASK-img-meta-png-parameters` | `src/image_metadata.rs` | - |
-| `TASK-img-meta-exif-orientation` | sibling | `TASK-inference-cache-correctness` | `src/routes/images_generate.rs` | - |
-| `TASK-img-meta-exif-orientation` | sibling | `TASK-job-result-artifact-selection-metadata` | `src/routes/images_generate.rs` | - |
+| `TASK-img-meta-comfyui-pair` | sibling | `TASK-img-meta-webp-exif` | `src/image_metadata.rs` | - |
+| `TASK-img-meta-png-parameters` | sibling | `TASK-img-meta-webp-exif` | `src/image_metadata.rs` | - |
 | `TASK-inference-cache-correctness` | sibling | `TASK-job-result-artifact-selection-metadata` | `src/lib.rs; src/routes/images_generate.rs` | - |
 | `TASK-inference-cache-correctness` | sibling | `TASK-llm-constrained-output-eval` | `src/backend.rs` | - |
 | `TASK-inference-cache-correctness` | sibling | `TASK-llm-kv-spill-policy` | `src/lib.rs` | - |

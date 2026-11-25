@@ -1040,7 +1040,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-blender-terminal-hardening.md",
       "title": "Blender terminal hardening",
-      "status": "proposed",
+      "status": "in_progress",
       "srcRefs": [
         "src/jobs_registry.rs",
         "src/routes/blender_exec.rs"
@@ -1563,7 +1563,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-img-meta-comfyui-pair.md",
       "title": "ComfyUI prompt/workflow metadata pair",
-      "status": "proposed",
+      "status": "blocked",
       "srcRefs": [
         "src/image_metadata.rs"
       ],
@@ -1574,10 +1574,9 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-img-meta-exif-orientation.md",
       "title": "Honor EXIF orientation on image inputs",
-      "status": "proposed",
+      "status": "in_progress",
       "srcRefs": [
-        "src/routes/image_ops_exec.rs",
-        "src/routes/images_generate.rs"
+        "src/routes/image_ops_exec.rs"
       ],
       "related": []
     },
@@ -1606,8 +1605,10 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-img-meta-webp-exif.md",
       "title": "WebP EXIF workflow/prompt write path",
-      "status": "proposed",
-      "srcRefs": [],
+      "status": "done",
+      "srcRefs": [
+        "src/image_metadata.rs"
+      ],
       "related": []
     },
     {
@@ -2954,7 +2955,8 @@
       "owners": [
         "TASK-content-record-provenance",
         "TASK-img-meta-comfyui-pair",
-        "TASK-img-meta-png-parameters"
+        "TASK-img-meta-png-parameters",
+        "TASK-img-meta-webp-exif"
       ]
     },
     {
@@ -3363,7 +3365,6 @@
       "path": "src/routes/images_generate.rs",
       "owners": [
         "TASK-ash-unsupported-conditioning-guards",
-        "TASK-img-meta-exif-orientation",
         "TASK-inference-cache-correctness",
         "TASK-job-result-artifact-selection-metadata"
       ]
@@ -4620,12 +4621,12 @@
       "to": "src/routes/image_ops_exec.rs"
     },
     {
-      "from": "TASK-img-meta-exif-orientation",
+      "from": "TASK-img-meta-png-parameters",
       "kind": "produces",
-      "to": "src/routes/images_generate.rs"
+      "to": "src/image_metadata.rs"
     },
     {
-      "from": "TASK-img-meta-png-parameters",
+      "from": "TASK-img-meta-webp-exif",
       "kind": "produces",
       "to": "src/image_metadata.rs"
     },
@@ -8155,12 +8156,6 @@
     {
       "from": "TASK-ash-unsupported-conditioning-guards",
       "kind": "sibling",
-      "to": "TASK-img-meta-exif-orientation",
-      "via": "src/routes/images_generate.rs"
-    },
-    {
-      "from": "TASK-ash-unsupported-conditioning-guards",
-      "kind": "sibling",
       "to": "TASK-inference-cache-correctness",
       "via": "src/lib.rs; src/routes/images_generate.rs"
     },
@@ -9485,6 +9480,12 @@
       "via": "src/image_metadata.rs"
     },
     {
+      "from": "TASK-content-record-provenance",
+      "kind": "sibling",
+      "to": "TASK-img-meta-webp-exif",
+      "via": "src/image_metadata.rs"
+    },
+    {
       "from": "TASK-controlnet-rendering",
       "kind": "sibling",
       "to": "TASK-download-options-contract",
@@ -10091,16 +10092,16 @@
       "via": "src/image_metadata.rs"
     },
     {
-      "from": "TASK-img-meta-exif-orientation",
+      "from": "TASK-img-meta-comfyui-pair",
       "kind": "sibling",
-      "to": "TASK-inference-cache-correctness",
-      "via": "src/routes/images_generate.rs"
+      "to": "TASK-img-meta-webp-exif",
+      "via": "src/image_metadata.rs"
     },
     {
-      "from": "TASK-img-meta-exif-orientation",
+      "from": "TASK-img-meta-png-parameters",
       "kind": "sibling",
-      "to": "TASK-job-result-artifact-selection-metadata",
-      "via": "src/routes/images_generate.rs"
+      "to": "TASK-img-meta-webp-exif",
+      "via": "src/image_metadata.rs"
     },
     {
       "from": "TASK-inference-cache-correctness",
