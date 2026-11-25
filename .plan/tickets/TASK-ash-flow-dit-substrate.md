@@ -1,9 +1,9 @@
 # TASK: Ash single-stream flow-DiT substrate
 
-Status: proposed
+Status: done
 Priority: P1
 Epic: epic-ash-native-families
-Owner: unassigned
+Owner: ash-flow-dit-substrate-2026-11-25
 Acceptance: synthetic CPU/Vulkan tests prove one single-stream DiT block, patch embed, AdaLN, per-attention QK norm, 2D/3D positions, timestep conditioning and flow prediction/step/scheduling, including identity controls and pre-dispatch shape failures; no image family executes.
 Verification: `cargo test --locked -p honkbox-ash-backend --features ash-sd --lib flow_dit_substrate -- --test-threads=1`, `HONKBOX_ASH_REQUIRE_VULKAN=1 cargo test --locked -p honkbox-ash-backend --features ash-sd --test flow_dit_substrate_parity -- --test-threads=1 --nocapture`, `bun run spdx`.
 Links: `.tmp/research/ash-family-implementation-index-2026-11-25.md` §4 S7 and §6; `.tmp/research/ash-moss-image-implementation-candidate-2026-11-25.md` §§4–6; `.tmp/research/ash-qwen-image21-implementation-candidate-2026-11-25.md` §§4–5; `crates/ash-backend/src/model.rs`; `crates/ash-backend/src/attention.rs`; `crates/ash-backend/src/timestep.rs`; `crates/ash-backend/src/sampler.rs`; `TASK-ash-decoder-ops.md`.
@@ -37,12 +37,20 @@ Resources: deterministic tiny synthetic tensors; unique temp dirs per test with 
 
 ## Acceptance criteria
 
-- [ ] CPU golden tests cover patch flatten/projection, six-way AdaLN, per-attention QK norm, 2D/3D axis isolation, flow-sigma embedding, one complete block and two scheduler steps.
-- [ ] Synthetic Vulkan output matches the independent F32 CPU reference within absolute error `1e-4`; required-Vulkan mode fails rather than silently skipping when no usable device exists.
-- [ ] Identity controls pass: patch-size-1 identity projection round-trips tokens; zero positions do not rotate; zero Q/K yields uniform attention; zero output projections/gates preserve residual inputs; zero velocity leaves the latent unchanged.
-- [ ] Scheduler tests prove the declared shift equation, monotonic descent, terminal sigma zero, exact one-step Euler arithmetic and rejection of non-finite, increasing or malformed grids.
-- [ ] Wrong token counts, patch divisibility, Q/K widths, axis splits, conditioning widths, mask lengths and sigma ranges fail before any device dispatch.
-- [ ] Results describe one synthetic shared block and scheduler only. They do not claim MOSS/Qwen execution, model quality, latency, VRAM fit or family availability.
+- [x] CPU golden tests cover patch flatten/projection, six-way AdaLN, per-attention QK norm, 2D/3D axis isolation, flow-sigma embedding, one complete block and two scheduler steps.
+- [x] Synthetic Vulkan output matches the independent F32 CPU reference within absolute error `1e-4`; required-Vulkan mode fails rather than silently skipping when no usable device exists.
+- [x] Identity controls pass: patch-size-1 identity projection round-trips tokens; zero positions do not rotate; zero Q/K yields uniform attention; zero output projections/gates preserve residual inputs; zero velocity leaves the latent unchanged.
+- [x] Scheduler tests prove the declared shift equation, monotonic descent, terminal sigma zero, exact one-step Euler arithmetic and rejection of non-finite, increasing or malformed grids.
+- [x] Wrong token counts, patch divisibility, Q/K widths, axis splits, conditioning widths, mask lengths and sigma ranges fail before any device dispatch.
+- [x] Results describe one synthetic shared block and scheduler only. They do not claim MOSS/Qwen execution, model quality, latency, VRAM fit or family availability.
+
+## Verification evidence (2026-11-25)
+
+- `cargo test --locked -p honkbox-ash-backend --features ash-sd --lib flow_dit_substrate -- --test-threads=1` → 23 passed, 179 filtered out.
+- `HONKBOX_ASH_REQUIRE_VULKAN=1 cargo test --locked -p honkbox-ash-backend --features ash-sd --test flow_dit_substrate_parity -- --test-threads=1 --nocapture` → 3 passed; the test takes an exclusive file lock before device selection and prints the selected device.
+- `bun run spdx` → REUSE 609/609 licensed; 19 ash shaders carry provenance.
+- Narrow `cargo clippy --locked -p honkbox-ash-backend --features ash-sd --all-targets -- -D warnings` reported no findings in `src/dit/**` or the new parity test; the command still fails on pre-existing sibling findings in `checkpoint/gguf*.rs`, `decoder_ops*.rs` and `tokenizer.rs` owned by other lanes.
+- XDG/state save format (read-only): `resolve_data_dir` chain is flag > `HONKBOX_DATA_DIR` > XDG default; `write_bundle_into` emits one `final_00.<ext>` plus one `final_00.json`. This worktree has no duplicate sidecar.
 
 ## Verification
 

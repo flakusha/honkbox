@@ -18,7 +18,7 @@
 //! - [`compute`]: [`compute::ElementwiseAdd`] and the shared [`compute::Kernel`].
 //! - [`matmul`]: [`matmul::MatMul`], row-major GEMM on the same scaffold.
 //! - [`model`]: [`model::Op`] vocabulary and [`model::ModelSpec`] validation.
-//! - [`decoder_ops_gpu`]: RMSNorm/QK norm, RoPE, SwiGLU and causal ShortConv.
+//! - [`decoder_ops_gpu`]: RMSNorm/QK norm, `RoPE`, `SwiGLU` and causal `ShortConv`.
 //! - [`softmax`]: [`softmax::Softmax`], stable row-wise normalization.
 //! - [`attention`]: [`attention::Attention`], scaled dot-product attention.
 //! - [`norm`]: [`norm::LayerNorm`], affine row-wise normalization.
@@ -40,7 +40,7 @@
 //!   header → tensor slot map; payload bytes are read on demand.
 //! - [`checkpoint::GgufMap`], the strict GGUF v2/v3 metadata and tensor reader
 //!   on the same lookup/on-demand read contract; [`checkpoint::decode_gguf_tensor`]
-//!   converts F32/F16/BF16/Q4_K payloads to flat f32 on the CPU.
+//!   converts `F32/F16/BF16/Q4_K` payloads to flat f32 on the CPU.
 //! - [`embedding`]: [`embedding::TextEncoder`], token + positional embedding
 //!   gather and sum over caller-supplied tables (no tokenizer assets yet).
 //! - [`mlp`]: [`mlp::FeedForward`], GELU activation and a two-matrix MLP block.
@@ -232,6 +232,8 @@ pub mod ddim_sampler;
 pub mod decoder_ops_gpu;
 #[cfg(feature = "ash-compute")]
 pub mod device;
+#[cfg(feature = "ash-compute")]
+pub mod dit;
 #[cfg(feature = "ash-compute")]
 pub mod embedding;
 #[cfg(feature = "ash-compute")]
