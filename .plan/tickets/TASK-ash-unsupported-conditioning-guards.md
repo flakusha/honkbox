@@ -1,6 +1,6 @@
 # TASK: Guard Ash conditioning at the pipeline boundary
 
-Status: proposed
+Status: done (2026-11-26; guard already landed on this branch; ash + sd-core gates pass, server test target blocked upstream)
 Priority: P1
 Epic: epic-sd-native-backend
 Owner: unassigned
@@ -81,3 +81,9 @@ returning a fake or silently uncontrolled image.
 ## Verification evidence (2026-11-24)
 
 `reject_unhonored_conditioning` (`crates/server/src/routes/images_generate.rs:79-104`) returns `conditioning_unsupported` for `ash-sd` on `hires_fix`, `loras` and image inputs. The generate route calls it before cache/admission (`images_generate.rs:368`); the edits route calls it with `image_inputs=true` (`images_edit.rs:342`). `crates/server/tests/images.rs::ash_backend_refuses_unhonored_conditioning` covers hires/loras and `crates/server/tests/edits.rs::ash_backend_refuses_image_inputs` covers image/mask. ControlNet keeps its own guard. `ImagesGenerationRequest` has no `init_image`/`mask_image` fields: those inputs belong to `/v1/images/edits`, where they are already guarded.
+
+## Verification evidence (2026-11-26)
+
+- `cargo test --locked -p honkbox-ash-backend --features ash-sd conditioning_guard`: 1 passed.
+- `cargo test --locked -p honkbox-sd-core`: 26 passed, 1 ignored.
+- `cargo test --locked -p honkbox-server conditioning_unsupported`: blocked before execution by master-owned test-harness compile errors in `routes/blender.rs`, `routes/presets.rs` and `image_ops_settle.rs`. The production mapping and `tests/images.rs::conditioning_unsupported_from_pipeline_maps_to_501` are present; re-run this command after the upstream harness compiles.
