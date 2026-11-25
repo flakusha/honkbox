@@ -1,6 +1,6 @@
 # TASK: Ash VAE family adapters
 
-Status: proposed
+Status: in progress
 Priority: P2
 Epic: epic-ash-native-families
 Owner: unassigned
