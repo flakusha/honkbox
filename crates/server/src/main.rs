@@ -1043,7 +1043,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let vae = vae.as_deref().map(|s| resolve_model(&found, s));
     let _lease = or_exit(honkbox_residency::global().try_reserve());
     #[cfg(not(feature = "ash-sd"))]
-    let clip_vocab_dir = None;
+    let clip_vocab_dir: Option<&std::path::Path> = None;
     // CLI and HTTP both select through the one constructor in `backends`.
     let pipeline = backends::make_sd(
         backend,
