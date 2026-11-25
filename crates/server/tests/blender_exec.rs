@@ -156,8 +156,10 @@ mod harness {
             pub(crate) stderr_truncated: bool,
         }
 
-        pub(crate) fn run(_spec: Spec) -> Result<RunOutcome, String> {
-            Err("the process supervisor is not used in publication tests".to_owned())
+        pub(crate) fn run(_spec: Spec) -> Result<RunOutcome, std::io::Error> {
+            Err(std::io::Error::other(
+                "the process supervisor is not used in publication tests",
+            ))
         }
     }
 
