@@ -885,8 +885,7 @@ fn tmp_root() -> PathBuf {
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+        .map_or_else(std::env::temp_dir, PathBuf::from);
     base.join("honkbox")
 }
 
@@ -929,7 +928,7 @@ pub fn scratch_dir(subsystem: &str) -> Result<PathBuf, AssetError> {
                 }
                 return Ok(dir);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => {
                 return Err(AssetError::Failed(format!(
                     "cannot create {}: {e}",
