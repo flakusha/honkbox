@@ -1130,10 +1130,6 @@ fn chat(args: ChatArgs, config: Option<PathBuf>, data_dir_flag: Option<PathBuf>)
     let found = match llm_backend {
         LlmBackend::Stub | LlmBackend::Attached => Vec::new(),
         LlmBackend::LlamaCpp => scan_models(cfg),
-        // Direct-Vulkan placeholder needs no registry model: device
-        // selection happens inside `make_llm` (loud exit-1 on failure).
-        #[cfg(feature = "ash-llm")]
-        LlmBackend::AshLlm => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_llm(
@@ -1197,10 +1193,6 @@ fn transcribe(args: TranscribeArgs, config: Option<PathBuf>, data_dir_flag: Opti
         // nothing); the engine's own registry validates the family at load.
         SttBackend::Stub | SttBackend::AudioCpp => Vec::new(),
         SttBackend::Whisper => scan_models(cfg),
-        // Direct-Vulkan placeholder needs no registry model: device
-        // selection happens inside `make_stt` (loud exit-1 on failure).
-        #[cfg(feature = "ash-stt")]
-        SttBackend::AshStt => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_stt(
@@ -1267,10 +1259,6 @@ fn synthesize(args: SynthesizeArgs, config: Option<PathBuf>, data_dir_flag: Opti
     let found = match tts_backend {
         TtsBackend::Stub => Vec::new(),
         TtsBackend::Kokoro => scan_models(cfg),
-        // Direct-Vulkan placeholder needs no registry model: device
-        // selection happens inside `make_tts` (loud exit-1 on failure).
-        #[cfg(feature = "ash-tts")]
-        TtsBackend::AshTts => Vec::new(),
     };
     let resolve = |slug: &str| resolve_model(&found, slug);
     let pipe = backends::make_tts(tts_backend, Some(model.as_str()), &resolve);

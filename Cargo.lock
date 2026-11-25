@@ -2650,6 +2650,7 @@ dependencies = [
  "glob",
  "home",
  "honkbox-api-types",
+ "honkbox-ash-backend",
  "honkbox-audio-worker",
  "honkbox-external-tools",
  "honkbox-llm-worker",
