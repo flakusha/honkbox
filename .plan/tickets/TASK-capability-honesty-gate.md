@@ -40,6 +40,12 @@ Note: `TASK-blender-terminal-hardening` is in flight in `tree/fix-blender-termin
 Landing: agreement/blender/workflow/OIIO behavior landed through `feat/p0-dcc-honesty-fastwins` (`80cd121` `test(ext-tools): empty object_info never claims Workflow`, an ancestor of master).
 Verification commands were not run in this lane (docs-only lane, no cargo build); the code and test lines above were read directly on master `0b89706`.
 
+## Verification Notes (2026-11-25)
+
+- Implemented the caps delta: `BlenderLimitsCapability` on `Capabilities` (`crates/api-types/src/lib.rs`), route-sourced `blender::limits()` (`crates/server/src/routes/blender.rs`), payload wiring (`routes/capabilities.rs`), and OpenAPI schema registration (`routes/openapi.rs`).
+- Drift test: `crates/server/tests/capabilities.rs::blender_limits_match_enforced_route_bounds` compares all four advertised values with `blender::limits()` and rejects a poly-count field.
+- Verified 2026-11-25: `cargo test --locked -p honkbox-api-types export_ts` 1 pass; OpenAPI regenerated from the locally built server (64 mounted routes covered); `cargo test --locked -p honkbox-server --test capabilities` 199 pass, 0 fail; `bun run typecheck` clean; `bun test --isolate` 46 pass; `cargo fmt --all -- --check` clean.
+
 ## Non-goals
 
 - New capability rows for FreeCAD/MuseScore/REAPER/Natron/QGIS/Scribus (gated on H-ADD1–H-ADD6 preconditions).
