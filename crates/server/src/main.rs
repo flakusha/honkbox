@@ -1044,12 +1044,14 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let _lease = or_exit(honkbox_residency::global().try_reserve());
     #[cfg(not(feature = "ash-sd"))]
     let clip_vocab_dir: Option<&std::path::Path> = None;
+    #[cfg(feature = "ash-sd")]
+    let clip_vocab_dir = clip_vocab_dir.as_deref();
     // CLI and HTTP both select through the one constructor in `backends`.
     let pipeline = backends::make_sd(
         backend,
         Some(&model),
         &|slug| resolve_model(&found, slug),
-        clip_vocab_dir.as_deref(),
+        clip_vocab_dir,
     );
     let img = or_exit(pipeline.generate(
         &honkbox_sd_core::Txt2ImgRequest {
