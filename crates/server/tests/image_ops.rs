@@ -1514,6 +1514,10 @@ async fn unknown_blender_stage_op_is_a_named_400() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        response.headers().get("x-job-id").is_none(),
+        "no job is registered before the op vocabulary check"
+    );
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["error"]["code"], "blender_request_invalid", "{body}");
