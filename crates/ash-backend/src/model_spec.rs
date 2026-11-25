@@ -63,15 +63,21 @@ pub struct TimestepKeys<'a> {
     pub linear2: ConvKeys<'a>,
 }
 
-/// Mid-block cross-attention names. SD 1.5 has no Q/K/V biases; `to_out.0` has one.
+/// Mid-block cross-attention projection weights and biases.
 #[derive(Debug, Clone, Copy)]
 pub struct CrossKeys<'a> {
     /// Query projection weight.
     pub q: &'a str,
+    /// Query projection bias.
+    pub qb: &'a str,
     /// Key projection weight.
     pub k: &'a str,
+    /// Key projection bias.
+    pub kb: &'a str,
     /// Value projection weight.
     pub v: &'a str,
+    /// Value projection bias.
+    pub vb: &'a str,
     /// Output projection weight and bias.
     pub out: ConvKeys<'a>,
 }
@@ -198,8 +204,11 @@ pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
         }
     }
     weight_key("cross q", spec.cross.q, &mut out);
+    weight_key("cross q bias", spec.cross.qb, &mut out);
     weight_key("cross k", spec.cross.k, &mut out);
+    weight_key("cross k bias", spec.cross.kb, &mut out);
     weight_key("cross v", spec.cross.v, &mut out);
+    weight_key("cross v bias", spec.cross.vb, &mut out);
     conv_keys("cross out", spec.cross.out, &mut out);
     for (index, keys) in spec.projections.iter().enumerate() {
         conv_keys(&format!("projection {index}"), *keys, &mut out);
@@ -376,8 +385,11 @@ static MID_RESNETS: [ResnetKeys<'static>; 2] = [
 
 static CROSS: CrossKeys<'static> = CrossKeys {
     q: "middle_block.1.transformer_blocks.0.attn2.to_q.weight",
+    qb: "middle_block.1.transformer_blocks.0.attn2.to_q.bias",
     k: "middle_block.1.transformer_blocks.0.attn2.to_k.weight",
+    kb: "middle_block.1.transformer_blocks.0.attn2.to_k.bias",
     v: "middle_block.1.transformer_blocks.0.attn2.to_v.weight",
+    vb: "middle_block.1.transformer_blocks.0.attn2.to_v.bias",
     out: ConvKeys {
         weight: "middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
         bias: "middle_block.1.transformer_blocks.0.attn2.to_out.0.bias",
@@ -517,6 +529,9 @@ mod tests {
         for key in [
             "down_blocks.0.resnets.0.emb_layers.1.bias",
             "input_blocks.4.0.skip_connection.weight",
+            "middle_block.1.transformer_blocks.0.attn2.to_q.bias",
+            "middle_block.1.transformer_blocks.0.attn2.to_k.bias",
+            "middle_block.1.transformer_blocks.0.attn2.to_v.bias",
             "middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
             "output_blocks.10.0.skip_connection.weight",
             "time_embedding.linear_2.bias",

@@ -800,6 +800,13 @@ fn unet_fixture() -> Fixture {
     seed += 1;
     push_tensor(
         &mut tensors,
+        format!("{attention}to_q.bias"),
+        vec![1280],
+        seed,
+    );
+    seed += 1;
+    push_tensor(
+        &mut tensors,
         format!("{attention}to_k.weight"),
         vec![1280, 768],
         seed,
@@ -807,8 +814,22 @@ fn unet_fixture() -> Fixture {
     seed += 1;
     push_tensor(
         &mut tensors,
+        format!("{attention}to_k.bias"),
+        vec![1280],
+        seed,
+    );
+    seed += 1;
+    push_tensor(
+        &mut tensors,
         format!("{attention}to_v.weight"),
         vec![1280, 768],
+        seed,
+    );
+    seed += 1;
+    push_tensor(
+        &mut tensors,
+        format!("{attention}to_v.bias"),
+        vec![1280],
         seed,
     );
     seed += 1;
@@ -1052,38 +1073,47 @@ fn cpu_cross_attention(
 ) -> Vec<f32> {
     let prefix = format!("{UNET_ROOT}middle_block.1.transformer_blocks.0.attn2.");
     let tokens = hidden.len() / 1280;
-    let query = cpu_matmul(
-        hidden,
-        &cpu_transpose(
-            &f32_tensor(map, path, &format!("{prefix}to_q.weight"), &[1280, 1280]),
+    let query = cpu_broadcast(
+        &cpu_matmul(
+            hidden,
+            &cpu_transpose(
+                &f32_tensor(map, path, &format!("{prefix}to_q.weight"), &[1280, 1280]),
+                1280,
+                1280,
+            ),
+            tokens,
             1280,
             1280,
         ),
-        tokens,
-        1280,
-        1280,
+        &f32_tensor(map, path, &format!("{prefix}to_q.bias"), &[1280]),
     );
-    let key = cpu_matmul(
-        context,
-        &cpu_transpose(
-            &f32_tensor(map, path, &format!("{prefix}to_k.weight"), &[1280, 768]),
-            1280,
+    let key = cpu_broadcast(
+        &cpu_matmul(
+            context,
+            &cpu_transpose(
+                &f32_tensor(map, path, &format!("{prefix}to_k.weight"), &[1280, 768]),
+                1280,
+                768,
+            ),
+            77,
             768,
+            1280,
         ),
-        77,
-        768,
-        1280,
+        &f32_tensor(map, path, &format!("{prefix}to_k.bias"), &[1280]),
     );
-    let value = cpu_matmul(
-        context,
-        &cpu_transpose(
-            &f32_tensor(map, path, &format!("{prefix}to_v.weight"), &[1280, 768]),
-            1280,
+    let value = cpu_broadcast(
+        &cpu_matmul(
+            context,
+            &cpu_transpose(
+                &f32_tensor(map, path, &format!("{prefix}to_v.weight"), &[1280, 768]),
+                1280,
+                768,
+            ),
+            77,
             768,
+            1280,
         ),
-        77,
-        768,
-        1280,
+        &f32_tensor(map, path, &format!("{prefix}to_v.bias"), &[1280]),
     );
     let attended = cpu_attention(&query, &key, &value, tokens, 77, 1280, 8, None);
     let projected = cpu_matmul(

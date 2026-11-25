@@ -69,8 +69,11 @@ pub const REQUIRED: &[&str] = &[
     TIME_EMBED_2_BIAS,
     SELF_ATTN_Q,
     CROSS_ATTN_Q,
+    CROSS_ATTN_Q_BIAS,
     CROSS_ATTN_K,
+    CROSS_ATTN_K_BIAS,
     CROSS_ATTN_V,
+    CROSS_ATTN_V_BIAS,
     CROSS_ATTN_OUT,
     VAE_DECODER_IN,
     VAE_DECODER_OUT,
@@ -199,7 +202,8 @@ mod tests {
             .iter()
             .map(|name| (*name, "F32", vec![2usize, 2]))
             .collect();
-        let (path, map) = checkpoint(&entries, &[0u8; 208]);
+        let payload_len = REQUIRED.len() * 4 * size_of::<f32>();
+        let (path, map) = checkpoint(&entries, &vec![0u8; payload_len]);
         let report = audit(&map);
         assert!(report.is_ready(), "{report:?}");
         std::fs::remove_file(path).expect("cleanup");
@@ -215,7 +219,9 @@ mod tests {
             .map(|name| (*name, "F32", vec![2usize, 2]))
             .collect();
         one_f64[0].1 = "F64";
-        let (path, map) = checkpoint(&one_f64, &[0u8; 224]);
+        let payload_len =
+            REQUIRED.len() * 4 * size_of::<f32>() + 4 * (size_of::<f64>() - size_of::<f32>());
+        let (path, map) = checkpoint(&one_f64, &vec![0u8; payload_len]);
         let report = audit(&map);
         assert_eq!(report.unconvertible, vec![REQUIRED[0]]);
         assert!(!report.is_ready());

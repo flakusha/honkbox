@@ -19,6 +19,7 @@ use crate::{
     device::VulkanDevice,
     group_norm::{GroupNorm, GroupNormShape},
     matmul::MatMul,
+    sd15_keys::load_fused_kv_bias,
     silu::Silu,
     timestep::sinusoidal,
     unet_checkpoint::load_tensor,
@@ -71,10 +72,12 @@ struct ResnetWeights {
 
 /// Cross-attention projections. `wq`/`wo` are transposed for `MatMul`;
 /// `wkv` stays `[2·dim, context_dim]` because `FusedQkv` transposes it
-/// internally (K rows then V rows).
+/// internally (K rows then V rows). `bkv` follows the same K-then-V order.
 struct CrossWeights {
     wq: Vec<f32>,
+    bq: Vec<f32>,
     wkv: Vec<f32>,
+    bkv: Vec<f32>,
     wo: Vec<f32>,
     bo: Vec<f32>,
 }
@@ -323,12 +326,21 @@ fn load_cross(map: &CheckpointMap, path: &Path) -> io::Result<CrossWeights> {
         &key("to_out.0.weight"),
         &[TIME_CHANNELS, TIME_CHANNELS],
     )?;
-    // Original SD1.5 has no Q/K/V biases; only `to_out.0` carries one.
+    let qb = load_tensor(map, path, &key("to_q.bias"), &[TIME_CHANNELS])?;
+    let bkv = load_fused_kv_bias(
+        map,
+        path,
+        &key("to_k.bias"),
+        &key("to_v.bias"),
+        TIME_CHANNELS,
+    )?;
     let mut wkv = k;
     wkv.extend_from_slice(&v);
     Ok(CrossWeights {
         wq: transpose_2d(&q, TIME_CHANNELS, TIME_CHANNELS),
+        bq: qb,
         wkv,
+        bkv,
         wo: transpose_2d(&out, TIME_CHANNELS, TIME_CHANNELS),
         bo: load_tensor(map, path, &key("to_out.0.bias"), &[TIME_CHANNELS])?,
     })
@@ -599,8 +611,9 @@ impl UnetReal {
                 wo: &weights.cross.wo,
             },
             &CrossAttentionBias {
+                bq: Some(&weights.cross.bq),
+                bkv: Some(&weights.cross.bkv),
                 bo: Some(&weights.cross.bo),
-                ..CrossAttentionBias::default()
             },
             CrossAttentionShape {
                 query_rows: tokens,
