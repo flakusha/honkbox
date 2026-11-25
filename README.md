@@ -16,10 +16,10 @@ API.
   `libclang` (bindgen), Vulkan headers + `glslc` + SPIR-V headers
   (Debian/Ubuntu: `cmake clang libvulkan-dev glslang-tools spirv-headers`).
 - `LIBCLANG_PATH`: export ONE working value in every shell before any cargo/bun
-  command. If the default LLVM mis-generates (`_IO_FILE` size errors), point
-  it at another installed LLVM.
-- Multi-GPU Vulkan: sd.cpp uses device 0 unless `GGML_VK_VISIBLE_DEVICES` names
-  the dGPU index (e.g. `1`).
+  command, using the newest installed LLVM library directory; bindgen and native
+  rebuilds depend on it. See [configuration](docs/guide/configuration.md#native-build-environment).
+- Multi-GPU Vulkan can select the wrong GPU or fail with context-lost; see the
+  [Vulkan caveat](docs/guide/media-capabilities.md#multi-gpu-vulkan).
 - Windows/macOS CI builds use `--no-default-features` (CPU-only sd.cpp; needs
   `cmake` + LLVM for libclang, no Vulkan SDK).
 
@@ -49,14 +49,11 @@ bun run install:local       # vendor sync + web build + release build, then inst
 honkbox serve               # via ~/.local/bin/honkbox
 ```
 
-Release set (loop-lore 1.0.0): `install:local` builds with
-`--features release` (ocr-ocrs + audio-vad + audio-cpp; llm-vision,
-vulkan, and barcode are default-on), so ONE command yields every
-`/v1/capabilities` flag. Dev builds stay lean
-(`cargo build -p honkbox-server` skips the heavy audio.cpp CMake build).
-Installer flags: `--prefix DIR`, `--bindir DIR` (absolute paths), `--dry-run`,
-`--no-build`, `--force`; `bun run uninstall:local` removes the link
-(`--purge` also removes the prefix, never the state dir).
+`install:local` builds the release feature set and installs the binary plus a
+command link. See [local install](docs/guide/configuration.md#local-install) for
+layout, relocation, installer flags, Windows fallback, and uninstall rules, and
+[release feature flags](docs/guide/media-capabilities.md#release-feature-flags)
+for the `/v1/capabilities` values.
 
 ## Scripts
 
@@ -65,7 +62,7 @@ Installer flags: `--prefix DIR`, `--bindir DIR` (absolute paths), `--dry-run`,
 | `dev`           | Vite + server together                              |
 | `build`         | Full build (vendor + web + server)                  |
 | `install:local` | Release build + install under XDG data dir + `~/.local/bin` link |
-| `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen + docs gates |
+| `check`         | format + lint + typecheck + lint:rs + gpu-slot audit + codegen + hooks + docs gates |
 | `test`          | `bun test` + `cargo test` workspace                 |
 | `ci`            | `check` + `test` + `build`                          |
 
@@ -75,6 +72,10 @@ Full list with flags lives in [`package.json`](package.json) `scripts`.
 
 - `crates/api-types` — shared DTOs only (serde + ts-rs + utoipa derives).
 - `crates/sd-core` — `SdPipeline` impl, samplers/schedulers.
+- `crates/llm-worker` — llama-cpp sessions, GGUF load, token streaming.
+- `crates/audio-worker` — whisper STT, Kokoro TTS, Silero VAD.
+- `crates/recognition-worker` — barcode and OCR recognition pipelines.
+- `crates/external-tools` — Blender/ComfyUI discovery probes; probed once at startup, `GET /v1/external-tools`.
 - `crates/server` — Axum REST+SSE binary, clap CLI, queue, embedded UI.
 - `crates/registry` — model-dir scan, weight metadata, SQLite catalog cache.
 - `crates/residency` — VRAM ledger + tier presets, `/v1/memory` backing types.
@@ -88,7 +89,7 @@ See [`AGENTS.md`](AGENTS.md) for the authoritative repository contract.
 
 - [Configuration](docs/guide/configuration.md) — data dir, model roots, env overrides, auth, logs
 - [Operations](docs/guide/operations.md) — jobs, cancel, SSE events, GPU topology, ComfyUI surface
-- [Media capabilities](docs/guide/media-capabilities.md) — ControlNet, vision chat, audio formats
+- [Media capabilities](docs/guide/media-capabilities.md) — ControlNet, vision chat, audio formats, release flags, Vulkan caveats
 - [Migrating from sd-rip](docs/guide/migrating.md) — moving state to the new layout
 - [Docs shipping review](docs/meta/docs-shipping.md) — why plain `.md` is canonical (vs Pages/VitePress)
 - [Docs index](docs/README.md) — authority order, structure, sources

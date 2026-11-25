@@ -7,9 +7,10 @@ no new dependencies, no CI gates beyond the link check. See
 
 ## Authority
 
-`AGENTS.md` > `.plan/` > `src/` > `docs/`. Current behavior is what `src/` does.
-Anything here that disagrees with `AGENTS.md` or `src/` is wrong or aspirational
-and must be marked as such.
+`AGENTS.md` > current repository code > README > epics > tickets > docs.
+Here, README means `.plan/README.md`. Current behavior is what the code does;
+ticket status is a claim to verify. Anything here that disagrees with a
+higher-authority source is wrong or aspirational and must be marked as such.
 
 ## Contents
 
@@ -62,6 +63,7 @@ flows into the served `GET /v1/openapi.json`.
 
 ## Tooling
 
-`bun run docs:check` (`scripts/docs-links.ts`) verifies every relative link in
-`README.md` + `docs/**/*.md` resolves; it runs inside `bun run check`.
-dprint handles TS and JSON only — Markdown formatting is not gated.
+`bun run docs:check` (`scripts/docs-links.ts`) verifies relative file targets in
+`README.md` + `docs/**/*.md`; it runs inside `bun run check` and the CI `Rustdoc`
+job. Anchor fragments, external URLs, and links inside `.plan/` are outside its
+scope. dprint handles TS and JSON only — Markdown formatting is not gated.

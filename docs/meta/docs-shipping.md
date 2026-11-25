@@ -2,7 +2,8 @@
 
 Decision: **plain `.md` in-repo is canonical**; generated API references stay
 generated and linked, never copied. Revisit a site only when docs outgrow
-single-page reading or need search.
+single-page reading or need search. See
+[`TASK-docs-site-decision.md`](../../.plan/tickets/TASK-docs-site-decision.md).
 
 ## Views compared
 
@@ -27,8 +28,10 @@ single-page reading or need search.
 ## Generation support in this branch
 
 - `bun run docs:check` — relative-link gate over `README.md` + `docs/**/*.md`
-  (`scripts/docs-links.ts`): every relative link target must exist. Wired into
-  `bun run check`.
+  (`scripts/docs-links.ts`): every relative file target must exist. Wired into
+  `bun run check` and the CI `Rustdoc` job. Anchor fragments, external URLs, and
+  links inside `.plan/` are outside its scope; see
+  [`TASK-markdown-gate-decision.md`](../../.plan/tickets/TASK-markdown-gate-decision.md).
 - `bun run docs:api:check` (existing) — generated TypeDoc HTML exists where the
   server serves it and carries source doc comments.
 - `bun run codegen:check` (existing) — `packages/web-ui/src/gen/` fresh vs
