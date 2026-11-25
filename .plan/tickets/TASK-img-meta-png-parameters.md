@@ -1,7 +1,7 @@
 # TASK: Embed A1111-style parameters chunk on PNG outputs
 
 Status: In Progress
-**Scope:** Emit A1111 parameters and ComfyUI recipe text chunks on PNG outputs
+**Scope:** Emit the A1111 `parameters` tEXt chunk on PNG outputs
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned
@@ -19,3 +19,10 @@ Resources: per-test output dirs; no shared encode cache
 ## Acceptance detail
 
 - Same job re-run produces byte-identical PNG (fixed chunk order, no wall-clock text); `parameters` chunk absent when no params exist; the existing record/XMP chunks and their order stay stable.
+
+## Verification Notes (2026-11-25)
+
+- Implemented in `crates/server/src/image_metadata.rs`: `png_parameters()` derives prompt/negative prompt/seed/model/dimensions from the canonical record; `png_plaintext()` writes one `tEXt` chunk; `embed_png()` emits record → parameters → XMP and skips the chunk when no recipe facts exist.
+- Inline tests: `png_parameters_chunk_is_deterministic_and_ordered` (chunk order, byte-identical repeat embed, unchanged pixels) and `png_parameters_chunk_is_absent_without_recipe_facts`.
+- Sibling ticket `TASK-img-meta-comfyui-pair.md` stays `proposed`; its emit/ingest pair is a separate slice.
+- Verified 2026-11-25: `cargo test --locked -p honkbox-server --bin honkbox image_metadata` 12 pass, 0 fail (after `cargo clean -p honkbox-api-types` to clear the shared-target artifact collision); `cargo fmt --all -- --check` clean.

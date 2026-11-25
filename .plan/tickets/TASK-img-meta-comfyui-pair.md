@@ -1,7 +1,6 @@
 # TASK: ComfyUI prompt/workflow metadata pair
 
-Status: In Progress
-**Scope:** Emit A1111 parameters and ComfyUI recipe text chunks on PNG outputs
+Status: proposed
 Priority: P2
 Epic: epic-output-formats
 Owner: unassigned
