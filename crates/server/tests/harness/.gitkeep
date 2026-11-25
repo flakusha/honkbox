@@ -1,0 +1,1 @@
+# Keeps tests/harness/ present for rustfmt path resolution.

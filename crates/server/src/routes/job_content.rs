@@ -74,6 +74,52 @@ pub(super) fn content_type_for_name(name: &str) -> &'static str {
     }
 }
 
+/// The closed allowlist for one bundle. The terminal record is ALWAYS
+/// reachable: a failed job has no manifest, but still owes a fetchable
+/// status. `manifest.json` and its named artifacts are added only when a
+/// regular manifest exists. Both the single-file route and the ZIP use this
+/// one builder, so neither can bypass the other's view of the bundle.
+fn allowed_names(dir: &Path) -> Vec<(String, &'static str)> {
+    let mut allowed = vec![
+        ("status.json".to_owned(), "application/json"),
+        ("manifest.json".to_owned(), "application/json"),
+    ];
+    let manifest_path = dir.join("manifest.json");
+    // A symlink (or other non-regular file) is never followed to build the
+    // list: a manifest pointing outside the bundle must not widen it.
+    if !std::fs::symlink_metadata(&manifest_path).is_ok_and(|meta| meta.is_file()) {
+        return allowed;
+    }
+    let Ok(bytes) = std::fs::read(&manifest_path) else {
+        return allowed;
+    };
+    let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return allowed;
+    };
+    let Some(artifacts) = manifest
+        .get("artifacts")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return allowed;
+    };
+    for entry in artifacts {
+        let Some(candidate) = entry.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        // One poisoned name must not hide the terminal record or any other
+        // artifact, and a duplicate must not produce two ZIP entries.
+        if validate_content_name(candidate).is_err()
+            || allowed
+                .iter()
+                .any(|(existing, _)| existing.as_str() == candidate)
+        {
+            continue;
+        }
+        allowed.push((candidate.to_owned(), content_type_for_name(candidate)));
+    }
+    allowed
+}
+
 /// Named rejection, rendered as an OpenAI-style envelope. Details that can
 /// carry host paths are logged server-side and never echoed to the caller.
 #[derive(Debug)]
@@ -181,40 +227,29 @@ fn check_signed(
     Ok(())
 }
 
-/// Resolve a requested name against the bundle's manifest. `manifest.json`
-/// is always allowed; every other name must appear in `artifacts[].name`.
-/// Names are validated before any path is built, and symlinks are never
-/// followed: only a regular file can be served. Runs on the blocking pool.
+/// Resolve a requested name against the shared bundle allowlist: the
+/// terminal record is always allowed, a manifest and its artifacts only
+/// when a regular manifest exists. Names are validated before any path is
+/// built, and symlinks are never followed. Runs on the blocking pool.
 fn resolve_content(
     dir: &Path,
     name: &str,
 ) -> Result<(PathBuf, &'static str, u64), JobContentError> {
     validate_content_name(name)?;
-    let manifest_path = dir.join("manifest.json");
-    // Never follow a symlink (or read a non-regular file): a manifest that
-    // points outside the bundle must not leak its bytes.
-    let manifest_meta =
-        std::fs::symlink_metadata(&manifest_path).map_err(|_| JobContentError::NotFound)?;
-    if !manifest_meta.is_file() {
-        return Err(JobContentError::NotFound);
-    }
-    let bytes = std::fs::read(&manifest_path).map_err(|_| JobContentError::NotFound)?;
-    let manifest: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|err| JobContentError::Storage(format!("bad bundle manifest: {err}")))?;
-    let mut allowed: Vec<(&str, &'static str)> = vec![("manifest.json", "application/json")];
-    if let Some(artifacts) = manifest.get("artifacts").and_then(|value| value.as_array()) {
-        for entry in artifacts {
-            let Some(candidate) = entry.get("name").and_then(|value| value.as_str()) else {
-                continue;
-            };
-            // One poisoned name must not make every other name unreachable.
-            if validate_content_name(candidate).is_err() {
-                continue;
-            }
-            allowed.push((candidate, content_type_for_name(candidate)));
+    // Keep the historical 404 for a symlinked or non-regular manifest: it is
+    // never followed, neither for the request nor for the allowlist.
+    if name == "manifest.json" {
+        let meta =
+            std::fs::symlink_metadata(dir.join(name)).map_err(|_| JobContentError::NotFound)?;
+        if !meta.is_file() {
+            return Err(JobContentError::NotFound);
         }
     }
-    let Some((_, content_type)) = allowed.iter().find(|(allowed, _)| *allowed == name) else {
+    let allowed = allowed_names(dir);
+    let Some((_, content_type)) = allowed
+        .iter()
+        .find(|(candidate, _)| candidate.as_str() == name)
+    else {
         return Err(JobContentError::InvalidName);
     };
     let path = dir.join(name);
@@ -297,37 +332,30 @@ pub(crate) async fn get_job_bundle(
     response
 }
 
-/// Collect top-level regular files, apply the caps, then write them in name
-/// order with invariant metadata. A file that grew past its recorded size is
-/// rejected rather than read past the cap.
+/// Collect the same closed allowlist the single-file route uses, apply the
+/// caps, then write in name order with invariant metadata. A file that grew
+/// past its recorded size is rejected rather than read past the cap.
 fn build_zip(dir: &Path) -> Result<Vec<u8>, JobContentError> {
     let mut files = Vec::new();
     let mut total = 0u64;
-    let entries = std::fs::read_dir(dir).map_err(|_| JobContentError::NotFound)?;
-    for entry in entries {
-        let entry = entry.map_err(|_| JobContentError::NotFound)?;
-        let Ok(kind) = entry.file_type() else {
+    // Same closed allowlist as the single-file route: unlisted files — and
+    // a stale manifest's artifacts — cannot ride along in the ZIP.
+    for (name, _) in allowed_names(dir) {
+        let path = dir.join(&name);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
             continue;
         };
-        // Directories (including nested ones), symlinks and special files
-        // are skipped: the archive is a flat snapshot of this directory.
-        if !kind.is_file() {
+        if !meta.is_file() {
             continue;
         }
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        let size = entry
-            .metadata()
-            .map_err(|_| JobContentError::NotFound)?
-            .len();
+        let size = meta.len();
         total = total
             .checked_add(size)
             .ok_or(JobContentError::TooLarge(MAX_UNCOMPRESSED_BYTES))?;
         if total > MAX_UNCOMPRESSED_BYTES || files.len() >= MAX_ZIP_ENTRIES {
             return Err(JobContentError::TooLarge(MAX_UNCOMPRESSED_BYTES));
         }
-        files.push((name, entry.path(), size));
+        files.push((name, path, size));
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
 

@@ -3,9 +3,11 @@
 //! The route validated the request; this module owns the PROCESS: the
 //! recipe files are written into the job's staging directory, Blender runs
 //! under the process supervisor (its own process group, a wall-clock bound,
-//! a group-wide teardown) and the artifacts are committed into the job
-//! bundle the way every other bundle is written (`.part` + fsync +
-//! rename).
+//! a group-wide teardown) and the whole output bundle is assembled in a
+//! FRESH directory via `.part` + fsync + rename. One directory swap publishes
+//! every artifact and `manifest.json` together; the terminal record is then
+//! written LAST into the bundle with the same atomic helper, so `done` can
+//! never appear without a complete manifest behind it.
 //!
 //! Cancel is a STAGE-BOUNDARY cancel: the recipe checks a marker file
 //! between stages, so a cancel never interrupts a bake mid-flight. The
@@ -73,7 +75,7 @@ mod unix {
 
     /// What one run produced.
     #[allow(clippy::large_enum_variant)] // the manifest is the normal outcome
-    enum Outcome {
+    pub(crate) enum Outcome {
         /// The recipe finished; the manifest describes what it wrote.
         Done(AssetManifest),
         /// The job was cancelled at a stage boundary.
@@ -93,15 +95,20 @@ mod unix {
         lease: GpuLease,
     ) {
         let staging = bundle.join(".staging");
-        let (status, error) = match execute(&plan, &staging, &binary, &token, lease) {
-            Outcome::Done(manifest) => match commit(&plan, &bundle, &manifest) {
-                Ok(()) => ("done", None),
-                Err(err) => ("failed", Some(err)),
-            },
-            Outcome::Cancelled => ("cancelled", None),
-            Outcome::Failed(err) => ("failed", Some(err)),
-        };
-        let _ = write_status(&bundle, status, error.as_deref());
+        // Reconcile at exec start: a reused bundle must not keep an old
+        // manifest, terminal record or artifact beside the new outputs.
+        if let Err(err) = clear_bundle(&bundle).and_then(|()| {
+            std::fs::create_dir_all(&bundle)
+                .map_err(|e| format!("cannot create bundle {}: {e}", bundle.display()))
+        }) {
+            publish(&plan, &bundle, Outcome::Failed(err), |_| Ok(()));
+            return;
+        }
+        let outcome = execute(&plan, &staging, &binary, &token, lease);
+        // Publication owns the terminal record: every outcome leaves one,
+        // and the terminal record is the last file written.
+        publish(&plan, &bundle, outcome, |_| Ok(()));
+        // Publication only returns once the terminal record is durable.
         let _ = std::fs::remove_dir_all(&staging);
     }
 
@@ -194,10 +201,121 @@ mod unix {
         }
     }
 
-    /// Copy the artifacts into the bundle and write the manifest. The byte
-    /// cap is checked BEFORE anything is copied: an oversized result never
-    /// lands in the bundle.
-    fn commit(plan: &JobPlan, bundle: &Path, manifest: &AssetManifest) -> Result<(), String> {
+    /// One ordered promotion checkpoint. Production passes a no-op; the
+    /// integration tests fail at each step to prove no success can leak.
+    #[allow(dead_code)] // variants are constructed by fault-injection tests
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum PublishStep {
+        /// Before promoting artifact `index`.
+        Artifact(usize),
+        /// Before writing the success manifest.
+        Manifest,
+        /// Before writing the terminal record into the staged bundle.
+        Terminal,
+        /// Before the directory swap that publishes the bundle.
+        Publish,
+    }
+
+    /// One artifact's registry identity, retained until the whole bundle is
+    /// durable: `job_result` must never precede the terminal commit.
+    struct Promoted {
+        id: String,
+        sha256: String,
+        size: u64,
+        name: String,
+        kind: String,
+        index: u32,
+        primary: bool,
+    }
+
+    /// Reconcile a bundle before reuse: no previous manifest, terminal
+    /// record or artifacts survive into the new run.
+    fn clear_bundle(bundle: &Path) -> Result<(), String> {
+        match std::fs::symlink_metadata(bundle) {
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(bundle)
+                .map_err(|e| format!("cannot clear bundle {}: {e}", bundle.display())),
+            Ok(_) => std::fs::remove_file(bundle)
+                .map_err(|e| format!("cannot clear bundle {}: {e}", bundle.display())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("cannot inspect bundle {}: {err}", bundle.display())),
+        }
+    }
+
+    /// Publish a fully staged bundle in one rename: artifacts and manifest
+    /// become visible together. The caller writes the terminal record into
+    /// the bundle LAST, so `done` never outruns a complete manifest.
+    fn publish_bundle(staged: &Path, bundle: &Path) -> Result<(), String> {
+        clear_bundle(bundle)?;
+        if let Some(parent) = bundle.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create bundle parent {}: {e}", parent.display()))?;
+        }
+        sync_dir(staged);
+        std::fs::rename(staged, bundle)
+            .map_err(|e| format!("cannot publish bundle {}: {e}", bundle.display()))?;
+        if let Some(parent) = bundle.parent() {
+            sync_dir(parent);
+        }
+        Ok(())
+    }
+
+    /// Best-effort fsync of directory entries, matching the file fsync of
+    /// `jobs::write_atomic`.
+    fn sync_dir(dir: &Path) {
+        if let Ok(file) = std::fs::File::open(dir) {
+            let _ = file.sync_all();
+        }
+    }
+
+    /// A fresh, never-reused staging directory beside the bundle (same
+    /// filesystem, so the final publish is one rename).
+    fn fresh_stage_dir(bundle: &Path) -> PathBuf {
+        bundle.with_file_name(format!(".publish-{}", ulid::Ulid::new()))
+    }
+
+    /// Commit one terminal outcome. Success is staged in a FRESH directory
+    /// and published by a single rename; every failure leaves only a failed
+    /// (or cancelled) terminal record, never a success manifest.
+    pub(crate) fn publish(
+        plan: &JobPlan,
+        bundle: &Path,
+        outcome: Outcome,
+        mut checkpoint: impl FnMut(PublishStep) -> Result<(), String>,
+    ) {
+        let staged = fresh_stage_dir(bundle);
+        // A background task has no caller to return to: a failed terminal
+        // write is reported, never silently dropped. If the failed record
+        // cannot be written either, storage itself is unwritable and no
+        // terminal record can exist.
+        let terminal = match outcome {
+            Outcome::Done(manifest) => {
+                match stage_and_publish(plan, &staged, bundle, &manifest, &mut checkpoint) {
+                    Ok(()) => Ok(()),
+                    Err(err) => publish_terminal(bundle, "failed", Some(&err)),
+                }
+            }
+            Outcome::Cancelled => publish_terminal(bundle, "cancelled", None),
+            Outcome::Failed(err) => publish_terminal(bundle, "failed", Some(&err)),
+        };
+        if let Err(err) = terminal {
+            tracing::warn!(error = %err, "cannot write the job terminal record");
+        }
+        // On success the rename consumed `staged`; on every other path it
+        // holds partial outputs that must never be mistaken for a bundle.
+        let _ = std::fs::remove_dir_all(&staged);
+    }
+
+    /// Promote every artifact and then the manifest into a staged bundle,
+    /// swap the whole directory into place, then write the terminal record
+    /// LAST. The byte cap is checked BEFORE anything is staged: an oversized
+    /// result never lands in the bundle.
+    fn stage_and_publish(
+        plan: &JobPlan,
+        staged: &Path,
+        bundle: &Path,
+        manifest: &AssetManifest,
+        checkpoint: &mut impl FnMut(PublishStep) -> Result<(), String>,
+    ) -> Result<(), String> {
         let total: u64 = manifest
             .artifacts
             .iter()
@@ -209,7 +327,8 @@ mod unix {
                 plan.max_output_bytes
             ));
         }
-        let mut artifacts = Vec::with_capacity(manifest.artifacts.len());
+        std::fs::create_dir_all(staged)
+            .map_err(|e| format!("cannot create staging dir {}: {e}", staged.display()))?;
         // One winner for the whole job, chosen before any frame is emitted:
         // the first `model`, falling back to index 0 when a recipe has none.
         let primary_index = manifest
@@ -217,7 +336,10 @@ mod unix {
             .iter()
             .position(|artifact| artifact.kind == "model")
             .unwrap_or(0);
+        let mut promoted = Vec::with_capacity(manifest.artifacts.len());
+        let mut rows = Vec::with_capacity(manifest.artifacts.len());
         for (index, artifact) in manifest.artifacts.iter().enumerate() {
+            checkpoint(PublishStep::Artifact(index))?;
             let name = artifact
                 .path
                 .file_name()
@@ -232,11 +354,11 @@ mod unix {
             let (name, bytes, content_type) = if artifact.kind == "preview" {
                 let webp = to_webp(&artifact.path)?;
                 let name = format!("{}.webp", name.trim_end_matches(".png"));
-                crate::jobs::write_atomic(bundle, &name, &webp)?;
+                crate::jobs::write_atomic(staged, &name, &webp)?;
                 (name, webp, "image/webp")
             } else {
-                crate::jobs::copy_file_atomic(bundle, &name, &artifact.path)?;
-                let bytes = std::fs::read(bundle.join(&name))
+                crate::jobs::copy_file_atomic(staged, &name, &artifact.path)?;
+                let bytes = std::fs::read(staged.join(&name))
                     .map_err(|err| format!("cannot read committed {name}: {err}"))?;
                 let content_type = content_type_for_name(&name);
                 (name, bytes, content_type)
@@ -245,19 +367,16 @@ mod unix {
                 .artifacts
                 .put_bytes(&bytes, content_type)
                 .map_err(|err| format!("cannot promote {name}: {err}"))?;
-            crate::jobs_registry::global().emit_result(
-                &plan.job_id,
-                &info.id,
-                &info.sha256,
-                info.size_bytes,
-                crate::jobs_registry::ArtifactFrameMeta {
-                    name: &name,
-                    kind: &artifact.kind,
-                    index: u32::try_from(index).unwrap_or(u32::MAX),
-                    primary: index == primary_index,
-                },
-            );
-            artifacts.push(json!({
+            promoted.push(Promoted {
+                id: info.id.clone(),
+                sha256: info.sha256.clone(),
+                size: info.size_bytes,
+                name: name.clone(),
+                kind: artifact.kind.clone(),
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                primary: index == primary_index,
+            });
+            rows.push(json!({
                 "name": name,
                 "kind": artifact.kind,
                 "bytes": bytes.len(),
@@ -266,10 +385,36 @@ mod unix {
             }));
         }
         // The bundle manifest is path-free: the bundle's own file names,
-        // never the staging paths the recipe wrote.
-        let bytes = serde_json::to_vec_pretty(&manifest_record(plan, manifest, &artifacts))
+        // never the staging paths the recipe wrote. It is written after
+        // every artifact is durable, so a partial stage carries no manifest.
+        checkpoint(PublishStep::Manifest)?;
+        let bytes = serde_json::to_vec_pretty(&manifest_record(plan, manifest, &rows))
             .map_err(|err| format!("cannot encode the manifest: {err}"))?;
-        crate::jobs::write_atomic(bundle, "manifest.json", &bytes)
+        crate::jobs::write_atomic(staged, "manifest.json", &bytes)?;
+        checkpoint(PublishStep::Publish)?;
+        // Artifacts and manifest become visible together in one rename.
+        publish_bundle(staged, bundle)?;
+        // The terminal record is the universal commit marker and the LAST
+        // write, so `done` can never outrun a complete manifest. Its error
+        // propagates: a terminal failure then gets its own failed record.
+        checkpoint(PublishStep::Terminal)?;
+        write_terminal(bundle, "done", None)?;
+        // Only now, with the whole bundle durable, are artifacts announced.
+        for row in &promoted {
+            crate::jobs_registry::global().emit_result(
+                &plan.job_id,
+                &row.id,
+                &row.sha256,
+                row.size,
+                crate::jobs_registry::ArtifactFrameMeta {
+                    name: &row.name,
+                    kind: &row.kind,
+                    index: row.index,
+                    primary: row.primary,
+                },
+            );
+        }
+        Ok(())
     }
 
     /// The bundle manifest record — the shape `manifest.json` carries. This
@@ -321,16 +466,27 @@ mod unix {
         Ok(out)
     }
 
-    /// The job's terminal state. The registry is a liveness view, so the
-    /// outcome has to land in the bundle.
-    fn write_status(bundle: &Path, status: &str, error: Option<&str>) -> Result<(), String> {
+    /// Write the universal terminal record via the shared atomic helper.
+    /// This is the LAST write on every path; its error propagates to the
+    /// publication caller.
+    fn write_terminal(bundle: &Path, status: &str, error: Option<&str>) -> Result<(), String> {
         let mut record = json!({ "status": status });
         if let Some(error) = error {
             record["error"] = json!(error);
         }
         let bytes = serde_json::to_vec_pretty(&record)
-            .map_err(|err| format!("cannot encode the status: {err}"))?;
+            .map_err(|err| format!("cannot encode the terminal record: {err}"))?;
         crate::jobs::write_atomic(bundle, "status.json", &bytes)
+    }
+
+    /// Reconcile the bundle and leave ONLY a durable terminal record. A
+    /// previous manifest and its artifacts are removed first, so a failed
+    /// rerun cannot expose stale success metadata.
+    fn publish_terminal(bundle: &Path, status: &str, error: Option<&str>) -> Result<(), String> {
+        clear_bundle(bundle)?;
+        std::fs::create_dir_all(bundle)
+            .map_err(|err| format!("cannot create bundle {}: {err}", bundle.display()))?;
+        write_terminal(bundle, status, error)
     }
 
     /// The last lines of Blender's own message.
@@ -432,8 +588,8 @@ mod unix {
                     event: "done".to_owned(),
                 }],
             };
-            // The artifact row exactly as commit() emits it for this
-            // manifest: the bundle name, the byte count, the bundle digest.
+            // The artifact row exactly as stage_and_publish() emits it:
+            // the bundle name, the byte count, the bundle digest.
             let artifacts = vec![json!({
                 "name": "output.glb",
                 "kind": "model",
@@ -481,6 +637,15 @@ mod unix {
             );
         }
 
+        /// Reclaims a unique test root even when an assertion panics.
+        struct TempRoot(PathBuf);
+
+        impl Drop for TempRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
         fn test_manifest(artifacts: Vec<AssetArtifact>) -> AssetManifest {
             AssetManifest {
                 manifest: 1,
@@ -504,12 +669,14 @@ mod unix {
         }
 
         /// A real multi-artifact bundle: each committed output emits one
-        /// result frame, the first `model` is the only primary (even though
-        /// it is not index 0), and the live snapshot agrees with manifest.json.
+        /// result frame AFTER the whole bundle is durable, the first
+        /// `model` is the only primary, and the live snapshot agrees with
+        /// the published manifest and terminal record.
         #[test]
         fn multi_artifact_commit_emits_one_primary_matching_manifest() {
             let root =
                 std::env::temp_dir().join(format!("honkbox-blender-meta-{}", ulid::Ulid::new()));
+            let _root_cleanup = TempRoot(root.clone());
             let staging = root.join("staging");
             let bundle = root.join("bundle");
             std::fs::create_dir_all(&staging).expect("staging dir");
@@ -550,7 +717,13 @@ mod unix {
                 artifacts: Arc::new(crate::artifacts::Registry::new(Some(root.clone()), 10_000)),
                 job_id: guard.id().to_owned(),
             };
-            commit(&plan, &bundle, &manifest).expect("commit bundle");
+            publish(&plan, &bundle, Outcome::Done(manifest), |_| Ok(()));
+
+            let terminal: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(bundle.join("status.json")).expect("terminal record"),
+            )
+            .expect("terminal json");
+            assert_eq!(terminal["status"], "done");
 
             let mut frames: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok())
                 .filter(|event| event.event == JobEventType::Result && event.id == guard.id())
@@ -602,7 +775,16 @@ mod unix {
             );
 
             drop(guard);
-            std::fs::remove_dir_all(&root).ok();
         }
     }
+}
+
+/// Test-only access to the publication seam. The integration test drives
+/// the exact production path with fault injection at each promotion step.
+#[cfg(all(test, unix))]
+pub(crate) mod test_support {
+    // Used by the integration-test binary; the unit-test build reaches
+    // these items through `super::*` instead.
+    #[allow(unused_imports)]
+    pub(crate) use super::unix::{Outcome, PublishStep, publish};
 }

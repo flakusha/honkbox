@@ -169,9 +169,11 @@ fn assert_no_host_path(body: &[u8], root: &Path) {
 async fn zip_bytes_are_deterministic_across_runs() {
     let root_a = tmp_dir("zip-a");
     let root_b = tmp_dir("zip-b");
+    let manifest =
+        br#"{"manifest":1,"artifacts":[{"name":"output.glb"},{"name":"output_turntable.webp"}]}"#;
     let files: &[(&str, &[u8])] = &[
         ("output.glb", b"glb-bytes"),
-        ("manifest.json", br#"{"manifest":1}"#),
+        ("manifest.json", manifest),
         ("output_turntable.webp", b"webp-bytes"),
     ];
     bundle(&root_a, ID_A, files);
@@ -260,6 +262,68 @@ async fn content_route_serves_only_allowlisted_names() {
         assert_eq!(code(&body), "invalid_job_content_name");
         assert_no_host_path(&body, &root);
     }
+}
+
+/// A failed job has no manifest: its terminal record is still fetchable,
+/// and the ZIP contains that record alone — no stale artifact rides along.
+#[tokio::test]
+async fn failed_job_exposes_only_its_terminal_record() {
+    let root = tmp_dir("failed-status");
+    let status = br#"{"status":"failed","error":"boom"}"#;
+    bundle(
+        &root,
+        ID_A,
+        &[("status.json", status), ("stale.glb", b"leftover")],
+    );
+    let app = app_with(Some(root.clone()));
+    let (code, _, body) = get(app.clone(), &format!("/v1/jobs/{ID_A}/content/status.json")).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body, status.as_slice());
+    let (code, _, _) = get(
+        app.clone(),
+        &format!("/v1/jobs/{ID_A}/content/manifest.json"),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, _, body) = get(app, &format!("/v1/jobs/{ID_A}/bundle.zip")).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_no_host_path(&body, &root);
+    let mut archive = zip::ZipArchive::new(Cursor::new(body)).expect("zip archive");
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).expect("zip entry").name().to_owned())
+        .collect();
+    assert_eq!(names, vec!["status.json"]);
+}
+
+/// The ZIP uses the same closed allowlist as the single-file route: an
+/// unlisted file is invisible even though it sits in the bundle directory.
+#[tokio::test]
+async fn zip_never_includes_unlisted_files() {
+    let root = tmp_dir("zip-allowlist");
+    bundle(
+        &root,
+        ID_A,
+        &[
+            (
+                "manifest.json",
+                br#"{"manifest":1,"artifacts":[{"name":"output.glb"}]}"#,
+            ),
+            ("output.glb", b"glb"),
+            ("secret.txt", b"secret"),
+        ],
+    );
+    let (status, _, body) = get(
+        app_with(Some(root.clone())),
+        &format!("/v1/jobs/{ID_A}/bundle.zip"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_no_host_path(&body, &root);
+    let mut archive = zip::ZipArchive::new(Cursor::new(body)).expect("zip archive");
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).expect("zip entry").name().to_owned())
+        .collect();
+    assert_eq!(names, vec!["manifest.json", "output.glb"]);
 }
 
 #[tokio::test]
