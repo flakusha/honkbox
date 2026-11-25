@@ -1,6 +1,6 @@
 # TASK: Honor EXIF orientation on image inputs
 
-Status: in progress (code + fixtures landed on `fix/img-exif-orientation`; bin-test re-run blocked by shared-target stale test-profile server unit — see FIXED intercom note)
+Status: in progress (focused bin tests green: 11 passed, 0 failed; full server suite not run in this lane)
 **Scope:** image-ops EXIF orientation honor
 Priority: P1
 Epic: epic-output-formats
@@ -19,4 +19,4 @@ Resources: per-test fixture dirs; no shared image cache
 
 ## Acceptance detail
 
-- In-tree fixture set (`routes/tests_image_orientation.rs`): 3×2 asymmetric JPEG + spliced APP1 EXIF; orientations 1–8 covered with hand-written pixel expectations (not derived via `apply_orientation`), plus corrupt-EXIF-best-effort and lossless WebP orientation-6 cases.
+- In-tree fixture set (`routes/tests_image_orientation.rs`): 3×2 asymmetric JPEG + spliced APP1 EXIF — orientations 1, 2 (flip-H), 3 (180°, full-image expectation), 4 (flip-V), 5 (transpose D(x,y)=S(y,x)), 6 (90° CW), 7 (transverse D(x,y)=S(W-1-y,H-1-x)), 8 (90° CCW), all with hand-written pixel expectations (never derived via `apply_orientation`); plus a no-EXIF unchanged case, a corrupt-EXIF best-effort case, and a lossless WebP orientation-6 case. Focused bin target: 11 passed, 0 failed.

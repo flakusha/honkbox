@@ -122,6 +122,43 @@ fn orientation_3_rotates_180() {
     }
 }
 
+/// Orientation 5: transpose (flip about the main diagonal): D(x,y)=S(y,x);
+/// dimensions swap to 2×3 and the source's top-left pixel stays at (0,0).
+#[test]
+fn orientation_5_transposes() {
+    let raw = jpeg_with_exif_orientation(encode_source_jpeg(), 5);
+    let decoded = decode_upright(&raw);
+    assert_eq!((decoded.width(), decoded.height()), (2, 3));
+    assert_top_left_at(&decoded, 0, 0);
+    // The off-diagonal pixels distinguish a transpose from a no-transform:
+    // D(1,0)=S(0,1) and D(0,1)=S(1,0).
+    for (x, y, sx, sy) in [(1u32, 0u32, 0u32, 1u32), (0u32, 1u32, 1u32, 0u32)] {
+        let expected = source_pixel(sx, sy);
+        let got = decoded.get_pixel(x, y);
+        assert!(
+            (0..3).all(|c| i32::abs(i32::from(got.0[c]) - i32::from(expected.0[c])) <= 8),
+            "transpose D({x},{y}) expected S({sx},{sy}) {expected:?}, got {got:?}"
+        );
+    }
+}
+
+/// Orientation 7: transverse — D(x,y)=S(W-1-y,H-1-x); dimensions swap to 2×3
+/// and the source's top-left pixel lands at the bottom-right corner (1,2).
+#[test]
+fn orientation_7_is_transverse() {
+    let raw = jpeg_with_exif_orientation(encode_source_jpeg(), 7);
+    let decoded = decode_upright(&raw);
+    assert_eq!((decoded.width(), decoded.height()), (2, 3));
+    assert_top_left_at(&decoded, 1, 2);
+    // D(0,0)=S(W-1-0,H-1-0)=S(2,1): the source's bottom-right pixel.
+    let expected = source_pixel(2, 1);
+    let got = decoded.get_pixel(0, 0);
+    assert!(
+        (0..3).all(|c| i32::abs(i32::from(got.0[c]) - i32::from(expected.0[c])) <= 8),
+        "transverse D(0,0) expected S(2,1) {expected:?}, got {got:?}"
+    );
+}
+
 /// Orientation 6: rotate 90° clockwise; 3×2 stored becomes 2×3 upright with
 /// the source's top-left pixel at the top-right corner.
 #[test]

@@ -245,10 +245,10 @@ pub(super) fn admit_op_inputs(
         check_admitted_container(row, &raw)?;
         admitted.push(AdmittedOpInput {
             source,
+            artifact_id,
             raw,
             row,
             sha256,
-            artifact_id,
         });
     }
     Ok(admitted)
@@ -333,10 +333,10 @@ pub(super) fn decode_flat_raster_upright(
         .orientation()
         .ok()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut decoded = image::DynamicImage::from_decoder(decoder)
+    let mut upright = image::DynamicImage::from_decoder(decoder)
         .map_err(|e| bad(format!("cannot decode image: {e}")))?;
-    decoded.apply_orientation(orientation);
-    Ok(decoded)
+    upright.apply_orientation(orientation);
+    Ok(upright)
 }
 
 /// Map linear EXR scene-referred floats to display-referred LDR pixels:
