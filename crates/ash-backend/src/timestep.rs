@@ -28,23 +28,25 @@ fn word(value: usize) -> Result<f32, VkError> {
     Ok(f32::from(converted))
 }
 
-/// CLIP-style sinusoidal frequencies: even slots are cos, odd slots sin.
+/// Diffusers-style sinusoidal table: `cos(freq_0..freq_half)` followed by
+/// `sin(freq_0..freq_half)`; odd widths end in one zero slot.
 pub fn sinusoidal(timestep: usize, dim: usize, max_period: usize) -> Result<Vec<f32>, VkError> {
     if dim == 0 || max_period == 0 {
         return Err(VkError::Device(
             "timestep: embedding width and max period must be positive".into(),
         ));
     }
-    let width = word(dim)?;
+    let half = dim / 2;
+    let half_width = word(half)?;
     let period = word(max_period)?;
     let step = word(timestep)?;
     let log_period = period.ln();
     let mut out = vec![0.0_f32; dim];
-    for index in 0..dim / 2 {
-        let exponent = -2.0 * word(index)? * log_period / width;
+    for index in 0..half {
+        let exponent = -2.0 * word(index)? * log_period / half_width;
         let angle = step * exponent.exp();
-        out[2 * index] = angle.cos();
-        out[2 * index + 1] = angle.sin();
+        out[index] = angle.cos();
+        out[half + index] = angle.sin();
     }
     Ok(out)
 }
@@ -96,11 +98,39 @@ mod tests {
     fn sinusoidal_layout_and_rejections() {
         let values = sinusoidal(0, 6, 10_000).expect("table");
         assert_eq!(values.len(), 6);
-        assert_eq!(values[0], 1.0);
-        assert_eq!(values[1], 0.0);
-        assert!(values[2].abs() <= 1.0 && values[3].abs() <= 1.0);
+        assert_eq!(&values[..3], &[1.0, 1.0, 1.0]);
+        assert_eq!(&values[3..], &[0.0, 0.0, 0.0]);
         assert!(sinusoidal(5, 0, 10_000).is_err());
         assert!(sinusoidal(5, 4, 0).is_err());
+    }
+
+    #[test]
+    fn sinusoidal_matches_canonical_half_split() {
+        let as_f32 = |value: usize| f32::from(u16::try_from(value).expect("value fits u16"));
+        let reference = |dim: usize, timestep: usize, max_period: usize| -> Vec<f32> {
+            let half = dim / 2;
+            let mut expected = vec![0.0_f32; dim];
+            for index in 0..half {
+                let exponent = -2.0 * as_f32(index) / as_f32(half);
+                let angle = as_f32(timestep) * as_f32(max_period).powf(exponent);
+                expected[index] = angle.cos();
+                expected[half + index] = angle.sin();
+            }
+            expected
+        };
+        for dim in [6, 5] {
+            let actual = sinusoidal(7, dim, 100).expect("table");
+            let expected = reference(dim, 7, 100);
+            for (slot, (got, want)) in actual.iter().zip(&expected).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-5,
+                    "dim {dim} slot {slot}: got {got}, want {want}"
+                );
+            }
+            if dim % 2 == 1 {
+                assert_eq!(actual[dim - 1], 0.0);
+            }
+        }
     }
 
     #[test]

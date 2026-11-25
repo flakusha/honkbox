@@ -17,6 +17,7 @@ fn main() {
         ("shaders/cfg_guidance.comp", "cfg_guidance.spv"),
         ("shaders/embedding_gather.comp", "embedding_gather.spv"),
         ("shaders/gelu.comp", "gelu.spv"),
+        ("shaders/gelu_quick.comp", "gelu_quick.spv"),
         ("shaders/transpose.comp", "transpose.spv"),
     ];
     for (source, _) in shaders {

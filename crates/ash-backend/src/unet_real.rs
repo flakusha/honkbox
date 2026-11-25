@@ -33,8 +33,8 @@ const TIME_DIM: usize = 320;
 const TIME_CHANNELS: usize = 1280;
 const CONTEXT_ROWS: usize = 77;
 const CONTEXT_DIM: usize = 768;
-/// SD 1.5 `UNet` cross-attention heads (`1280 / 8 = 160` per head).
-const CROSS_HEADS: usize = 8;
+/// SD 1.5 cross-attention uses `head_dim` 64: 1280 / 64 = 20 heads.
+const CROSS_HEADS: usize = TIME_CHANNELS / 64;
 const GROUPS: usize = 32;
 const EPS: f32 = 1e-5;
 const UPSAMPLE: usize = 8;
@@ -473,9 +473,10 @@ impl UnetReal {
             &weights.conv1.bias,
             conv_shape(in_c, out_c, height, width, height, width, 3, 1),
         )?;
+        let time = self.silu.run(time)?;
         let projected = self
             .matmul
-            .run(time, &weights.time.weight, 1, TIME_CHANNELS, out_c)?;
+            .run(&time, &weights.time.weight, 1, TIME_CHANNELS, out_c)?;
         let projected = self.add.run_broadcast(&projected, &weights.time.bias)?;
         out = self.add.run_broadcast(&out, &projected)?;
         out = match &weights.shortcut {
@@ -680,5 +681,78 @@ mod tests {
                 1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 3.0, 3.0, 4.0, 4.0
             ]
         );
+    }
+
+    #[test]
+    fn mid_cross_attention_heads_derive_from_channel_width() {
+        assert_eq!(CROSS_HEADS, TIME_CHANNELS / 64);
+        assert_eq!(CROSS_HEADS, 20);
+    }
+
+    #[test]
+    fn resblock_time_projection_matches_silu_then_linear() {
+        let device = match VulkanDevice::headless() {
+            Ok(device) => Arc::new(device),
+            Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => {
+                eprintln!("skipping: no usable Vulkan environment");
+                return;
+            }
+            Err(e) => panic!("vulkan api failed: {e:?}"),
+        };
+        let unet = UnetReal::new(device).expect("pipelines");
+        let channels = GROUPS;
+        let as_f32 = |value: usize| f32::from(u16::try_from(value).expect("value fits u16"));
+        let time: Vec<f32> = (0..TIME_CHANNELS)
+            .map(|i| as_f32(i % 17) * 0.25 - 2.0)
+            .collect();
+        let weight: Vec<f32> = (0..TIME_CHANNELS * channels)
+            .map(|i| as_f32(i % 11) * 0.1 - 0.5)
+            .collect();
+        let bias: Vec<f32> = (0..channels).map(|c| as_f32(c) * 0.05 - 0.5).collect();
+        let norm = || NormWeights {
+            gamma: vec![1.0; channels],
+            beta: vec![0.0; channels],
+        };
+        let conv = || ConvWeights {
+            weight: vec![0.0; channels * channels * 9],
+            bias: vec![0.0; channels],
+        };
+        let weights = ResnetWeights {
+            norm1: norm(),
+            conv1: conv(),
+            time: LinearWeights {
+                weight: weight.clone(),
+                bias: bias.clone(),
+            },
+            norm2: norm(),
+            conv2: conv(),
+            shortcut: None,
+        };
+        let expected: Vec<f32> = (0..channels)
+            .map(|c| {
+                (0..TIME_CHANNELS)
+                    .map(|i| {
+                        let x = time[i];
+                        (x / (1.0 + (-x).exp())) * weight[i * channels + c]
+                    })
+                    .sum::<f32>()
+                    + bias[c]
+            })
+            .collect();
+        let actual = unet
+            .resnet(
+                &vec![0.0; channels],
+                &time,
+                &weights,
+                channels,
+                channels,
+                1,
+                1,
+            )
+            .expect("resnet");
+        assert_eq!(actual.len(), channels);
+        for (got, want) in actual.iter().zip(&expected) {
+            assert!((got - want).abs() < 1e-3, "got {got}, want {want}");
+        }
     }
 }

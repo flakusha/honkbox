@@ -51,6 +51,16 @@ impl TextConditioning {
         })
     }
 
+    /// Conditional token states.
+    pub fn positive(&self) -> &[f32] {
+        &self.positive
+    }
+
+    /// Unconditional token states.
+    pub fn negative(&self) -> &[f32] {
+        &self.negative
+    }
+
     /// Number of tokens in each embedding.
     pub fn tokens(&self) -> usize {
         self.tokens
@@ -59,11 +69,6 @@ impl TextConditioning {
     /// Per-token embedding width.
     pub fn dim(&self) -> usize {
         self.dim
-    }
-
-    /// Apply classifier-free guidance to this conditioning.
-    pub fn guided(&self, guidance: &Cfg, scale: f32) -> Result<Vec<f32>, VkError> {
-        guidance.run(&self.positive, &self.negative, scale)
     }
 }
 
@@ -90,9 +95,9 @@ impl Cfg {
         scale: f32,
     ) -> Result<Vec<f32>, VkError> {
         let invalid = || {
-            VkError::Device("cfg: non-empty vectors of equal length and scale >= 1 required".into())
+            VkError::Device("cfg: non-empty vectors of equal length and scale > 0 required".into())
         };
-        if !scale.is_finite() || scale < 1.0 {
+        if !scale.is_finite() || scale <= 0.0 {
             return Err(invalid());
         }
         if conditional.is_empty() || conditional.len() != unconditional.len() {
@@ -191,10 +196,25 @@ mod tests {
     }
 
     #[test]
+    fn cfg_fractional_scale_matches_cpu_reference() {
+        let Some(device) = device() else { return };
+        let guidance = Cfg::new(device).expect("pipeline");
+        let cond = [1.0_f32, -2.0, 0.5, 0.25];
+        let uncond = [0.25_f32, 1.0, -0.5, -0.75];
+        let scale = 0.25_f32;
+        let expected = cpu_guidance(&cond, &uncond, scale);
+        let actual = guidance.run(&cond, &uncond, scale).expect("cfg");
+        for (got, want) in actual.iter().zip(&expected) {
+            assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
     fn cfg_rejects_bad_scales_and_shapes() {
         let Some(device) = device() else { return };
         let guidance = Cfg::new(device).expect("pipeline");
-        assert!(guidance.run(&[0.1], &[0.2], 0.5).is_err());
+        assert!(guidance.run(&[0.1], &[0.2], 0.0).is_err());
+        assert!(guidance.run(&[0.1], &[0.2], -1.0).is_err());
         assert!(guidance.run(&[0.1], &[0.2], f32::NAN).is_err());
         assert!(guidance.run(&[], &[], 7.0).is_err());
         assert!(guidance.run(&[0.1], &[], 7.0).is_err());

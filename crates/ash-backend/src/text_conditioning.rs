@@ -1,33 +1,32 @@
-//! Encoder hidden states → classifier-free guidance over every token.
+//! Encoder hidden states → separate conditional/unconditional token states.
 //!
-//! Cross-attention consumes `tokens × dim` states, so guidance is applied
-//! element-wise rather than to a mean-pooled vector. No EOS projection head:
-//! add one when a checkpoint's text tower requires it.
+//! Cross-attention consumes `tokens × dim` states; the two prompt towers stay
+//! distinct so the sampler can guide each `UNet` epsilon prediction instead of
+//! blending embeddings. No EOS projection head: add one when a checkpoint's
+//! text tower requires it.
 
 use crate::{
     VkError,
-    conditioning::{Cfg, TextConditioning},
+    conditioning::TextConditioning,
     device::VulkanDevice,
     text_encoder::{ClipPooling, ClipTextEncoder, ClipTextEncoderWeights},
 };
 use std::sync::Arc;
 
-/// Positive/negative text towers and the guidance blend over their output.
+/// Positive/negative text towers; both token-state sets stay separate.
 pub struct TextConditioner {
     encoder: ClipTextEncoder,
-    guidance: Cfg,
 }
 
 impl TextConditioner {
-    /// `layers` encoder blocks with `heads` attention heads plus the CFG pipeline.
+    /// `layers` encoder blocks with `heads` attention heads.
     pub fn new(device: Arc<VulkanDevice>, layers: usize, heads: usize) -> Result<Self, VkError> {
         Ok(Self {
-            encoder: ClipTextEncoder::new(Arc::clone(&device), layers, heads)?,
-            guidance: Cfg::new(device)?,
+            encoder: ClipTextEncoder::new(device, layers, heads)?,
         })
     }
 
-    /// Encode positive and negative token ID sequences and blend them.
+    /// Encode positive and negative token ID sequences without blending them.
     ///
     /// Tokenization stays with the caller so this module never touches asset
     /// files or mixes `io::Error` into the Vulkan error path.
@@ -38,8 +37,7 @@ impl TextConditioner {
         weights: &ClipTextEncoderWeights<'_>,
         vocab: usize,
         dim: usize,
-        scale: f32,
-    ) -> Result<Vec<f32>, VkError> {
+    ) -> Result<TextConditioning, VkError> {
         let positive = self
             .encoder
             .run_with_bias(positive_ids, weights, vocab, dim)?;
@@ -47,12 +45,10 @@ impl TextConditioner {
             .encoder
             .run_with_bias(negative_ids, weights, vocab, dim)?;
         let tokens = positive_ids.len();
-        TextConditioning::new(positive, negative, tokens, dim)?.guided(&self.guidance, scale)
+        TextConditioning::new(positive, negative, tokens, dim)
     }
 
-    /// Encode and pool the EOS hidden state, then apply CFG to the single
-    /// `dim`-wide conditioning vector used by the `UNet`.
-    #[allow(clippy::too_many_arguments)] // mirrors condition(): ids + weights + shape + scale
+    /// Encode and pool the EOS hidden state for both prompts, unblended.
     pub fn condition_pooled(
         &self,
         positive_ids: &[u32],
@@ -61,15 +57,14 @@ impl TextConditioner {
         vocab: usize,
         dim: usize,
         pooling: &ClipPooling<'_>,
-        scale: f32,
-    ) -> Result<Vec<f32>, VkError> {
+    ) -> Result<TextConditioning, VkError> {
         let positive = self
             .encoder
             .run_pooled(positive_ids, weights, vocab, dim, pooling)?;
         let negative = self
             .encoder
             .run_pooled(negative_ids, weights, vocab, dim, pooling)?;
-        TextConditioning::new(positive, negative, 1, dim)?.guided(&self.guidance, scale)
+        TextConditioning::new(positive, negative, 1, dim)
     }
 }
 
@@ -99,8 +94,28 @@ mod tests {
             .collect()
     }
 
+    #[allow(clippy::cast_precision_loss)] // test dims are tiny
+    fn final_norm(rows: &[f32], dim: usize, gamma: &[f32], beta: &[f32], eps: f32) -> Vec<f32> {
+        let cols = dim as f32;
+        rows.chunks(dim)
+            .flat_map(|row| {
+                let mean = row.iter().sum::<f32>() / cols;
+                let variance = row.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / cols;
+                let scale = 1.0 / (variance + eps).sqrt();
+                (0..dim).map(move |d| (row[d] - mean) * scale * gamma[d] + beta[d])
+            })
+            .collect()
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (got, want) in actual.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
+        }
+    }
+
     #[test]
-    fn scale_one_returns_positive_token_states() {
+    fn condition_keeps_both_normalized_token_sets() {
         let Some(device) = device() else { return };
         let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let (dim, vocab) = (2usize, 3usize);
@@ -108,73 +123,105 @@ mod tests {
         let negative = [2u32, 1];
         let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let positions = [0.01_f32, 0.02, 0.03, 0.04];
+        let norm = [1.0_f32, 1.0];
+        let zero = [0.0_f32, 0.0];
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
             biases: Vec::new(),
             ffn_hidden: dim,
+            final_norm_gamma: &norm,
+            final_norm_beta: &zero,
+            final_norm_eps: 1e-5,
         };
         let actual = conditioner
-            .condition(&positive, &negative, &weights, vocab, dim, 1.0)
+            .condition(&positive, &negative, &weights, vocab, dim)
             .expect("condition");
-        let expected = embedded(&positive, &tokens, &positions, dim);
-        assert_eq!(actual.len(), positive.len() * dim);
-        for (got, want) in actual.iter().zip(&expected) {
-            assert!((got - want).abs() < 1e-5, "got {got}, want {want}");
-        }
-    }
-
-    #[test]
-    fn guidance_scale_is_applied_per_token() {
-        let Some(device) = device() else { return };
-        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
-        let (dim, vocab) = (2usize, 3usize);
-        let positive = [1u32];
-        let negative = [2u32];
-        let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
-        let positions = [0.01_f32, 0.02];
-        let weights = ClipTextEncoderWeights {
-            token_table: &tokens,
-            position_table: &positions,
-            layers: Vec::new(),
-            biases: Vec::new(),
-            ffn_hidden: dim,
-        };
-        let cond = embedded(&positive, &tokens, &positions, dim);
-        let uncond = embedded(&negative, &tokens, &positions, dim);
-        let scale = 2.5_f32;
-        let expected: Vec<f32> = cond
-            .iter()
-            .zip(&uncond)
-            .map(|(c, u)| u + scale * (c - u))
-            .collect();
-        let actual = conditioner
-            .condition(&positive, &negative, &weights, vocab, dim, scale)
-            .expect("condition");
-        for (got, want) in actual.iter().zip(&expected) {
-            assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
-        }
-        assert!(
-            conditioner
-                .condition(&positive, &negative, &weights, vocab, dim, 0.5)
-                .is_err()
+        assert_eq!((actual.tokens(), actual.dim()), (positive.len(), dim));
+        assert_close(
+            actual.positive(),
+            &final_norm(
+                &embedded(&positive, &tokens, &positions, dim),
+                dim,
+                &norm,
+                &zero,
+                1e-5,
+            ),
+        );
+        assert_close(
+            actual.negative(),
+            &final_norm(
+                &embedded(&negative, &tokens, &positions, dim),
+                dim,
+                &norm,
+                &zero,
+                1e-5,
+            ),
         );
     }
 
     #[test]
-    fn pooled_conditioning_blends_one_vector_per_prompt() {
+    fn condition_does_not_blend_positive_and_negative_states() {
+        let Some(device) = device() else { return };
+        let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
+        let (dim, vocab) = (3usize, 3usize);
+        let positive = [1u32];
+        let negative = [2u32];
+        let tokens = [0.1_f32, 0.2, 0.3, 0.9, 0.1, 0.6, 0.7, 0.8, 0.2];
+        let positions = [0.01_f32, 0.02, 0.03];
+        let norm = [1.0_f32; 3];
+        let zero = [0.0_f32; 3];
+        let weights = ClipTextEncoderWeights {
+            token_table: &tokens,
+            position_table: &positions,
+            layers: Vec::new(),
+            biases: Vec::new(),
+            ffn_hidden: dim,
+            final_norm_gamma: &norm,
+            final_norm_beta: &zero,
+            final_norm_eps: 1e-5,
+        };
+        let actual = conditioner
+            .condition(&positive, &negative, &weights, vocab, dim)
+            .expect("condition");
+        let cond = final_norm(
+            &embedded(&positive, &tokens, &positions, dim),
+            dim,
+            &norm,
+            &zero,
+            1e-5,
+        );
+        let uncond = final_norm(
+            &embedded(&negative, &tokens, &positions, dim),
+            dim,
+            &norm,
+            &zero,
+            1e-5,
+        );
+        assert_ne!(actual.positive(), actual.negative());
+        assert_close(actual.positive(), &cond);
+        assert_close(actual.negative(), &uncond);
+    }
+
+    #[test]
+    fn pooled_conditioning_returns_both_eos_states() {
         let Some(device) = device() else { return };
         let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let (dim, vocab, eos) = (2usize, 3usize, 2u32);
         let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let positions = [0.01_f32, 0.02, 0.03, 0.04];
+        let norm = [1.0_f32, 1.0];
+        let zero = [0.0_f32, 0.0];
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
             biases: Vec::new(),
             ffn_hidden: dim,
+            final_norm_gamma: &norm,
+            final_norm_beta: &zero,
+            final_norm_eps: 1e-5,
         };
         let pooling = ClipPooling {
             gamma: &[1.0_f32, 1.0],
@@ -183,17 +230,14 @@ mod tests {
             eos,
         };
         let actual = conditioner
-            .condition_pooled(&[1, eos], &[eos], &weights, vocab, dim, &pooling, 1.0)
+            .condition_pooled(&[1, eos], &[eos], &weights, vocab, dim, &pooling)
             .expect("pooled condition");
-        assert_eq!(actual.len(), dim);
-        // EOS token row after the final layer norm; scale 1 keeps positive.
+        assert_eq!(actual.tokens(), 1);
+        // EOS token row after the CLIP final layer norm.
         let row = [0.53_f32, 0.64];
-        let mean = 0.585_f32;
-        let variance = f32::midpoint((row[0] - mean).powi(2), (row[1] - mean).powi(2));
-        for (got, value) in actual.iter().zip(&row) {
-            let want = (*value - mean) / (variance + pooling.eps).sqrt();
-            assert!((got - want).abs() < 1e-3, "got {got}, want {want}");
-        }
+        let expected = final_norm(&row, dim, &norm, &zero, 1e-5);
+        assert_close(actual.positive(), &expected);
+        assert_close(actual.negative(), &expected);
     }
 
     #[test]
@@ -202,16 +246,21 @@ mod tests {
         let conditioner = TextConditioner::new(device, 0, 1).expect("conditioner");
         let tokens = [0.1_f32, 0.2, 0.3, 0.4, 0.5, 0.6];
         let positions = [0.01_f32, 0.02, 0.03, 0.04];
+        let norm = [1.0_f32, 1.0];
+        let zero = [0.0_f32, 0.0];
         let weights = ClipTextEncoderWeights {
             token_table: &tokens,
             position_table: &positions,
             layers: Vec::new(),
             biases: Vec::new(),
             ffn_hidden: 2,
+            final_norm_gamma: &norm,
+            final_norm_beta: &zero,
+            final_norm_eps: 1e-5,
         };
         assert!(
             conditioner
-                .condition(&[1, 2], &[2], &weights, 3, 2, 7.5)
+                .condition(&[1, 2], &[2], &weights, 3, 2)
                 .is_err()
         );
     }

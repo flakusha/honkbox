@@ -9,7 +9,7 @@ use crate::{
     compute::ElementwiseAdd,
     device::VulkanDevice,
     matmul::MatMul,
-    mlp::FeedForward,
+    mlp::{Activation, FeedForward},
     norm::LayerNorm,
     transpose::Transpose,
 };
@@ -30,13 +30,13 @@ pub struct TransformerWeights<'a> {
     pub w1: &'a [f32],
     /// `[hidden, dim]` MLP contraction.
     pub w2: &'a [f32],
-    /// Post-attention layer-norm gain.
+    /// Pre-attention layer-norm gain.
     pub norm1_gamma: &'a [f32],
-    /// Post-attention layer-norm bias.
+    /// Pre-attention layer-norm bias.
     pub norm1_beta: &'a [f32],
-    /// Post-MLP layer-norm gain.
+    /// Pre-MLP layer-norm gain.
     pub norm2_gamma: &'a [f32],
-    /// Post-MLP layer-norm bias.
+    /// Pre-MLP layer-norm bias.
     pub norm2_beta: &'a [f32],
     /// Layer-norm epsilon.
     pub eps: f32,
@@ -59,7 +59,7 @@ pub struct TransformerBias<'a> {
     pub b2: Option<&'a [f32]>,
 }
 
-/// Pre-attention norm + attention + residual + MLP + residual + final norm.
+/// Pre-LN encoder block: norm → Q/K/V → attention → residual → norm → MLP → residual.
 pub struct TransformerBlock {
     heads: usize,
     query: MatMul,
@@ -107,6 +107,22 @@ impl TransformerBlock {
         dim: usize,
         hidden: usize,
     ) -> Result<Vec<f32>, VkError> {
+        self.run_with_bias_masked(input, weights, bias, None, seq, dim, hidden)
+    }
+
+    /// Run one block with an optional row-major `seq × seq` additive mask.
+    // The additive mask is one optional seam; a wrapper struct would be more code.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_with_bias_masked(
+        &self,
+        input: &[f32],
+        weights: &TransformerWeights<'_>,
+        bias: &TransformerBias<'_>,
+        mask: Option<&[f32]>,
+        seq: usize,
+        dim: usize,
+        hidden: usize,
+    ) -> Result<Vec<f32>, VkError> {
         if dim == 0 || !dim.is_multiple_of(self.heads) {
             return Err(VkError::Device(
                 "transformer: dim must be positive and divisible by heads".into(),
@@ -119,11 +135,19 @@ impl TransformerBlock {
                 _ => Ok(values),
             }
         };
-        let q = add_bias(self.query.run(input, weights.wq, seq, dim, dim)?, bias.bq)?;
-        let k = add_bias(self.key.run(input, weights.wk, seq, dim, dim)?, bias.bk)?;
+        let h1 = self.norm1.run(
+            input,
+            seq,
+            dim,
+            weights.norm1_gamma,
+            weights.norm1_beta,
+            weights.eps,
+        )?;
+        let q = add_bias(self.query.run(&h1, weights.wq, seq, dim, dim)?, bias.bq)?;
+        let k = add_bias(self.key.run(&h1, weights.wk, seq, dim, dim)?, bias.bk)?;
         let k_t = self.transpose.run(&k, seq, dim)?;
-        let v = add_bias(self.value.run(input, weights.wv, seq, dim, dim)?, bias.bv)?;
-        let attended = self.attention.run(
+        let v = add_bias(self.value.run(&h1, weights.wv, seq, dim, dim)?, bias.bv)?;
+        let attended = self.attention.run_masked(
             &q,
             &k_t,
             &v,
@@ -134,22 +158,23 @@ impl TransformerBlock {
                 value_dim: head_dim,
                 heads: self.heads,
             },
+            mask,
         )?;
         let projected = add_bias(
             self.output.run(&attended, weights.wo, seq, dim, dim)?,
             bias.bo,
         )?;
         let residual = self.add.run(input, &projected)?;
-        let normed = self.norm1.run(
+        let h2 = self.norm2.run(
             &residual,
             seq,
             dim,
-            weights.norm1_gamma,
-            weights.norm1_beta,
+            weights.norm2_gamma,
+            weights.norm2_beta,
             weights.eps,
         )?;
-        let fed = self.feed_forward.run_with_bias(
-            &normed,
+        let fed = self.feed_forward.run_with_bias_activation(
+            &h2,
             weights.w1,
             bias.b1.unwrap_or(&[]),
             weights.w2,
@@ -157,16 +182,9 @@ impl TransformerBlock {
             seq,
             dim,
             hidden,
+            Activation::QuickGelu,
         )?;
-        let residual2 = self.add.run(&normed, &fed)?;
-        self.norm2.run(
-            &residual2,
-            seq,
-            dim,
-            weights.norm2_gamma,
-            weights.norm2_beta,
-            weights.eps,
-        )
+        self.add.run(&residual, &fed)
     }
 
     /// Run one encoder block over `seq × dim` row-major tokens.
@@ -193,7 +211,13 @@ impl TransformerBlock {
 mod tests {
     use super::*;
 
-    fn cpu_layer_norm(values: &[f32], cols: usize, eps: f32) -> Vec<f32> {
+    fn cpu_layer_norm(
+        values: &[f32],
+        cols: usize,
+        gamma: &[f32],
+        beta: &[f32],
+        eps: f32,
+    ) -> Vec<f32> {
         let count = f32::from(u16::try_from(cols).expect("test cols"));
         values
             .chunks(cols)
@@ -201,10 +225,15 @@ mod tests {
                 let mean = row.iter().sum::<f32>() / count;
                 let variance = row.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / count;
                 row.iter()
-                    .map(|x| (x - mean) / (variance + eps).sqrt())
+                    .enumerate()
+                    .map(|(i, x)| (x - mean) / (variance + eps).sqrt() * gamma[i] + beta[i])
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    fn cpu_quick_gelu(x: f32) -> f32 {
+        x / (1.0 + (-1.702 * x).exp())
     }
 
     #[test]
@@ -236,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn block_matches_cpu_reference() {
+    fn block_matches_pre_ln_cpu_reference() {
         let device = match VulkanDevice::headless() {
             Ok(device) => Arc::new(device),
             Err(VkError::Loader(_) | VkError::NoDevices | VkError::NoComputeQueue) => {
@@ -250,8 +279,10 @@ mod tests {
         let identity = [1.0_f32, 0.0, 0.0, 1.0];
         let w1 = [0.1_f32, 0.2, -0.3, 0.4, 0.5, -0.6];
         let w2 = [0.7_f32, -0.2, 0.3, 0.1, -0.1, 0.4];
-        let ones = [1.0_f32, 1.0];
-        let zeros = [0.0_f32, 0.0];
+        let norm1_gamma = [1.5_f32, 0.5];
+        let norm1_beta = [0.1_f32, -0.1];
+        let norm2_gamma = [0.7_f32, 1.3];
+        let norm2_beta = [-0.2_f32, 0.3];
         let weights = TransformerWeights {
             wq: &identity,
             wk: &identity,
@@ -259,38 +290,41 @@ mod tests {
             wo: &identity,
             w1: &w1,
             w2: &w2,
-            norm1_gamma: &ones,
-            norm1_beta: &zeros,
-            norm2_gamma: &ones,
-            norm2_beta: &zeros,
+            norm1_gamma: &norm1_gamma,
+            norm1_beta: &norm1_beta,
+            norm2_gamma: &norm2_gamma,
+            norm2_beta: &norm2_beta,
             eps,
         };
 
+        // Pre-LN: both attention and MLP read normalized states, and the
+        // second norm is applied before the MLP, never after the residual.
+        let h1 = cpu_layer_norm(&input, dim, &norm1_gamma, &norm1_beta, eps);
         let scale = 1.0 / f32::from(u16::try_from(dim).expect("test dim")).sqrt();
         let mut attended: Vec<f32> = Vec::with_capacity(seq * dim);
         for row in 0..seq {
             let scores: Vec<f32> = (0..seq)
                 .map(|col| {
                     (0..dim)
-                        .map(|d| input[row * dim + d] * input[col * dim + d])
+                        .map(|d| h1[row * dim + d] * h1[col * dim + d])
                         .sum::<f32>()
                         * scale
                 })
                 .collect();
             let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let weights_row: Vec<f32> = scores.iter().map(|s| (s - max).exp()).collect();
-            let total: f32 = weights_row.iter().sum();
+            let probabilities: Vec<f32> = scores.iter().map(|s| (s - max).exp()).collect();
+            let total: f32 = probabilities.iter().sum();
             for d in 0..dim {
                 attended.push(
                     (0..seq)
-                        .map(|col| weights_row[col] / total * input[col * dim + d])
+                        .map(|col| probabilities[col] / total * h1[col * dim + d])
                         .sum(),
                 );
             }
         }
         let residual: Vec<f32> = input.iter().zip(&attended).map(|(a, b)| a + b).collect();
-        let normed = cpu_layer_norm(&residual, dim, eps);
-        let expanded: Vec<f32> = normed
+        let h2 = cpu_layer_norm(&residual, dim, &norm2_gamma, &norm2_beta, eps);
+        let expanded: Vec<f32> = h2
             .chunks(dim)
             .flat_map(|row| {
                 (0..hidden)
@@ -301,19 +335,13 @@ mod tests {
         let fed: Vec<f32> = expanded
             .chunks(hidden)
             .flat_map(|row| {
-                let activated: Vec<f32> = row
-                    .iter()
-                    .map(|x| {
-                        0.5 * x * (1.0 + (0.797_884_6_f32 * (x + 0.044_715_f32 * x * x * x)).tanh())
-                    })
-                    .collect();
+                let activated: Vec<f32> = row.iter().map(|x| cpu_quick_gelu(*x)).collect();
                 (0..dim)
                     .map(|d| (0..hidden).map(|h| activated[h] * w2[h * dim + d]).sum())
                     .collect::<Vec<_>>()
             })
             .collect();
-        let residual2: Vec<f32> = normed.iter().zip(&fed).map(|(a, b)| a + b).collect();
-        let expected = cpu_layer_norm(&residual2, dim, eps);
+        let expected: Vec<f32> = residual.iter().zip(&fed).map(|(a, b)| a + b).collect();
 
         let block = TransformerBlock::new(device, 1).expect("pipeline");
         let actual = block

@@ -1,9 +1,10 @@
-//! `SdPipeline` impl for the direct-Vulkan path: skeleton only.
+//! `SdPipeline` impl for the direct-Vulkan path.
 //!
 //! [`AshSdPipeline`] validates the request, device and checkpoint container
-//! before sampling. Actual diffusion kernels are still missing, so
-//! [`SdPipeline::generate`] stops with a named sampling error rather than
-//! returning a fake image. The shortcut [`honkbox_sd_core::SdCppPipeline`]
+//! before sampling, then runs two `UNet` passes per step (conditional and
+//! unconditional) and blends their epsilon predictions with CFG. Only the
+//! built-in DDIM/discrete schedule is implemented; other sampler or scheduler
+//! requests are refused by name. The shortcut [`honkbox_sd_core::SdCppPipeline`]
 //! stays the default backend; callers swap the constructor, never the call
 //! sites.
 
@@ -12,6 +13,7 @@ use crate::{
     checkpoint::CheckpointMap,
     checkpoint_family::{self, CheckpointFamily},
     clip_checkpoint::{ClipTensors, SD15_CLIP},
+    conditioning::Cfg,
     ddim_sampler::DdimSampler,
     device::{CapacityRequirements, VulkanDevice},
     model::{ModelSpec, Op},
@@ -24,7 +26,7 @@ use crate::{
     unet_real::{UnetReal, UnetRealWeights},
     vae_real::{VaeReal, VaeRealWeights},
 };
-use honkbox_sd_core::{GeneratedImage, MAX_EDGE, SdError, SdPipeline, Txt2ImgRequest};
+use honkbox_sd_core::{GeneratedImage, MAX_EDGE, Scheduler, SdError, SdPipeline, Txt2ImgRequest};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -194,6 +196,38 @@ fn backend_error(message: impl std::fmt::Display) -> SdError {
     SdError::Backend(format!("ash-sd: {message}"))
 }
 
+/// Refuse sampler/scheduler overrides the DDIM path cannot honor.
+///
+/// `None` keeps the built-in recipe; an explicit discrete scheduler names the
+/// implemented schedule. `steps` is untouched and still drives [`schedule`].
+fn validate_sampling_request(req: &Txt2ImgRequest) -> Result<(), SdError> {
+    if let Some(sampler) = req.sampler {
+        return Err(backend_error(format!(
+            "sampler '{}' is unsupported; only the DDIM path is implemented",
+            sampler.name()
+        )));
+    }
+    if let Some(scheduler) = req.scheduler
+        && scheduler != Scheduler::Discrete
+    {
+        return Err(backend_error(format!(
+            "scheduler '{}' is unsupported; only the discrete DDIM schedule is implemented",
+            scheduler.name()
+        )));
+    }
+    Ok(())
+}
+
+/// Blend the two per-step `UNet` predictions using the existing CFG kernel.
+fn guided_epsilon(
+    guidance: &Cfg,
+    conditional: &[f32],
+    unconditional: &[f32],
+    scale: f32,
+) -> Result<Vec<f32>, VkError> {
+    guidance.run(conditional, unconditional, scale)
+}
+
 /// Read the checkpoint's alpha schedule, or derive the SD 1.5 scaled-linear
 /// fallback. ponytail: one host-side table; add other schedulers when a model
 /// family declares one.
@@ -298,6 +332,7 @@ impl SdPipeline for AshSdPipeline {
         if cancel.load(Ordering::Acquire) {
             return Err(SdError::Cancelled);
         }
+        validate_sampling_request(req)?;
         SD_SPEC.validate(&self.device.info).map_err(|e| {
             SdError::Backend(format!(
                 "{}: device cannot host model: {e}",
@@ -346,14 +381,7 @@ impl SdPipeline for AshSdPipeline {
                 .map_err(|e| backend_error(format!("text encoder: {e}")))?;
         let scale = req.cfg_scale.unwrap_or(DEFAULT_CFG);
         let context = conditioner
-            .condition(
-                &positive,
-                &negative,
-                &clip.weights(),
-                CLIP_VOCAB,
-                CLIP_DIM,
-                scale,
-            )
+            .condition(&positive, &negative, &clip.weights(), CLIP_VOCAB, CLIP_DIM)
             .map_err(|e| backend_error(format!("conditioning: {e}")))?;
         if cancel.load(Ordering::Acquire) {
             return Err(SdError::Cancelled);
@@ -366,6 +394,8 @@ impl SdPipeline for AshSdPipeline {
             .map_err(|e| backend_error(format!("vae: {e}")))?;
         let sampler = DdimSampler::new(Arc::clone(&self.device))
             .map_err(|e| backend_error(format!("sampler: {e}")))?;
+        let guidance =
+            Cfg::new(Arc::clone(&self.device)).map_err(|e| backend_error(format!("cfg: {e}")))?;
         let alphas = alphas_cumprod(&map, &self.model_path)?;
         let (timesteps, cumprod) = schedule(req.steps, &alphas)?;
         let noise = seeded_uniform_noise(LATENT_CHANNELS * latent_height * latent_width, req.seed)
@@ -376,7 +406,9 @@ impl SdPipeline for AshSdPipeline {
                     return Err(VkError::Device(CANCELLED.into()));
                 }
                 let timestep = timesteps[index];
-                unet.predict(current, timestep, &context, &unet_weights)
+                let cond = unet.predict(current, timestep, context.positive(), &unet_weights)?;
+                let uncond = unet.predict(current, timestep, context.negative(), &unet_weights)?;
+                guided_epsilon(&guidance, &cond, &uncond, scale)
             })
             .map_err(|e| {
                 if matches!(&e, VkError::Device(message) if message == CANCELLED) {
@@ -408,6 +440,7 @@ mod tests {
     use super::*;
     use crate::VkError;
     use crate::model_spec::tensor_keys;
+    use honkbox_sd_core::Sampler;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -556,6 +589,46 @@ mod tests {
             controlnet_strength: None,
             control_type: None,
         }
+    }
+
+    #[test]
+    fn epsilon_guidance_matches_cpu_reference() {
+        let Some(device) = device() else { return };
+        let guidance = Cfg::new(device).expect("cfg pipeline");
+        let cond = [0.5_f32, -1.0, 0.25, 0.75, -0.5, 0.125, 1.5, -0.25];
+        let uncond = [-0.2_f32, 0.3, 0.9, -0.4, 0.1, -0.75, 0.35, 0.6];
+        let scale = 7.5_f32;
+        let expected: Vec<f32> = cond
+            .iter()
+            .zip(&uncond)
+            .map(|(c, u)| u + scale * (c - u))
+            .collect();
+        let actual = guided_epsilon(&guidance, &cond, &uncond, scale).expect("guided eps");
+        assert_eq!(actual.len(), cond.len());
+        for (got, want) in actual.iter().zip(&expected) {
+            assert!((got - want).abs() < 1e-4, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn sampling_request_refuses_overrides_by_name() {
+        let mut req = request(64, 64);
+        assert_eq!(validate_sampling_request(&req), Ok(()));
+        req.scheduler = Some(Scheduler::Discrete);
+        assert_eq!(validate_sampling_request(&req), Ok(()));
+
+        req.sampler = Some(Sampler::Euler);
+        assert!(
+            matches!(validate_sampling_request(&req), Err(SdError::Backend(msg)) if msg.contains("euler") && msg.contains("DDIM")),
+            "unsupported sampler must be named"
+        );
+        req.sampler = None;
+        req.scheduler = Some(Scheduler::Karras);
+        assert!(
+            matches!(validate_sampling_request(&req), Err(SdError::Backend(msg)) if msg.contains("karras") && msg.contains("DDIM")),
+            "unsupported scheduler must be named"
+        );
+        assert_eq!(req.steps, 4);
     }
 
     fn device() -> Option<Arc<VulkanDevice>> {

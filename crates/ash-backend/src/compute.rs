@@ -34,6 +34,8 @@ pub(crate) static CFG_GUIDANCE_SPIRV: &[u8] =
 pub(crate) static EMBEDDING_GATHER_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/embedding_gather.spv"));
 pub(crate) static GELU_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gelu.spv"));
+pub(crate) static QUICK_GELU_SPIRV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/gelu_quick.spv"));
 pub(crate) static TRANSPOSE_SPIRV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/transpose.spv"));
 

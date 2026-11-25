@@ -2,8 +2,8 @@
 //!
 //! Checkpoints store linear weights `[out, in]`; the local matmuls expect
 //! `[in, out]`, so matrices are transposed once at load time. Linear biases
-//! and the final layer norm are loaded too, feeding the bias-aware encoder and
-//! EOS pooling path.
+//! and the final layer norm are loaded too: the latter feeds the encoder’s
+//! all-token final norm, the former the bias-aware blocks and EOS pooling view.
 
 use crate::{
     checkpoint::CheckpointMap,
@@ -339,6 +339,9 @@ impl ClipTensors {
             layers: blocks,
             biases,
             ffn_hidden: self.ffn_hidden,
+            final_norm_gamma: &self.final_norm_gain,
+            final_norm_beta: &self.final_norm_bias,
+            final_norm_eps: self.eps,
         }
     }
 
@@ -490,6 +493,9 @@ mod tests {
         // transpose: [0.0,0.2,0.4, 0.1,0.3,0.5].
         assert_eq!(layer.w1[1], 0.2);
         assert_eq!(layer.w1[2], 0.4);
+        assert_eq!(weights.final_norm_gamma, tensors.final_norm_gain);
+        assert_eq!(weights.final_norm_beta, tensors.final_norm_bias);
+        assert_eq!(weights.final_norm_eps, 1e-5);
     }
 
     #[test]

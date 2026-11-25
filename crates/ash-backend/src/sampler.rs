@@ -114,21 +114,50 @@ impl DdimStep {
     }
 }
 
-/// Deterministic initial latent, derived only from a seed and an index.
+/// Deterministic Gaussian `N(0, 1)` latent noise, derived only from a seed
+/// and an index.
 ///
-/// ponytail: uniform `[-1, 1]` rather than `N(0, 1)`; add Box-Muller when a
-/// real sampler consumes it and requires Gaussian noise.
+/// Box-Muller transform over `splitmix64` hashes: two hashes per pair give two
+/// uniforms in `(0, 1)`, which map to two independent standard normals.
+#[cfg(feature = "ash-sd")]
+#[allow(clippy::cast_precision_loss)] // u32 -> f64 is exact; hash bits only
+#[allow(clippy::cast_possible_truncation)] // f32 is the pipeline tensor format
+pub fn seeded_gaussian_noise(len: usize, seed: u64) -> Result<Vec<f32>, VkError> {
+    let mut noise = Vec::with_capacity(len);
+    let mut pair = 0u64;
+    while noise.len() < len {
+        let u1 = uniform01(splitmix64(seed ^ pair.wrapping_mul(2)));
+        let u2 = uniform01(splitmix64(seed ^ pair.wrapping_mul(2).wrapping_add(1)));
+        let radius = (-2.0 * u1.ln()).sqrt();
+        let angle = std::f64::consts::TAU * u2;
+        noise.push((radius * angle.cos()) as f32);
+        if noise.len() < len {
+            noise.push((radius * angle.sin()) as f32);
+        }
+        pair += 1;
+    }
+    if noise.iter().any(|v| !v.is_finite()) {
+        return Err(VkError::Device("latent noise: non-finite sample".into()));
+    }
+    Ok(noise)
+}
+
+/// Uniform in `(0, 1)` from a 64-bit hash: 32 random bits plus a half-unit
+/// offset, so `ln` never sees zero.
+#[cfg(feature = "ash-sd")]
+#[allow(clippy::cast_precision_loss)] // u32 -> f64 is exact
+fn uniform01(hash: u64) -> f64 {
+    const INV_2_POW_32: f64 = 1.0 / 4_294_967_296.0;
+    let bits = u32::try_from(hash >> 32).expect("shifted hash fits u32");
+    (f64::from(bits) + 0.5) * INV_2_POW_32
+}
+
+/// Alias for the pre-Gaussian name, kept for the existing `sd.rs` call site.
+///
+/// ponytail: delete once `sd.rs` calls `seeded_gaussian_noise` directly.
 #[cfg(feature = "ash-sd")]
 pub fn seeded_uniform_noise(len: usize, seed: u64) -> Result<Vec<f32>, VkError> {
-    let count = u64::try_from(len)
-        .map_err(|_| VkError::Device("latent noise: length exceeds u64".into()))?;
-    (0..count)
-        .map(|index| {
-            let hash = splitmix64(seed ^ index);
-            let bits = u32::try_from(hash >> 32).expect("shifted hash fits u32");
-            Ok(f32::from_bits(0x3f80_0000 | (bits & 0x7f_ffff)) - 1.0)
-        })
-        .collect()
+    seeded_gaussian_noise(len, seed)
 }
 
 #[cfg(test)]
@@ -170,13 +199,30 @@ mod tests {
 
     #[cfg(feature = "ash-sd")]
     #[test]
-    fn seeded_noise_is_reproducible_and_seed_sensitive() {
-        let first = seeded_uniform_noise(96, 42).expect("noise");
-        let again = seeded_uniform_noise(96, 42).expect("noise");
-        let other = seeded_uniform_noise(96, 43).expect("noise");
-        assert_eq!(first, again);
-        assert_ne!(first, other);
-        assert!(first.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
+    fn seeded_uniform_noise_is_standard_normal() {
+        const N: usize = 4096;
+        const SEED: u64 = 42;
+        let n = f64::from(u32::try_from(N).expect("sample count fits u32"));
+        let noise = seeded_uniform_noise(N, SEED).expect("noise");
+        assert_eq!(noise, seeded_uniform_noise(N, SEED).expect("noise"));
+        assert_ne!(noise, seeded_uniform_noise(N, SEED + 1).expect("noise"));
+        assert!(noise.iter().all(|v| v.is_finite()));
+
+        let mean = noise.iter().map(|v| f64::from(*v)).sum::<f64>() / n;
+        let variance = noise
+            .iter()
+            .map(|v| {
+                let d = f64::from(*v) - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / n;
+        // P(|N(0, 1)| > 0.99) ~ 0.32; uniform noise has almost no tail here.
+        let tail_count = noise.iter().filter(|v| f64::from(**v).abs() > 0.99).count();
+        let tail = f64::from(u32::try_from(tail_count).expect("tail count fits u32")) / n;
+        assert!(mean.abs() < 0.05, "mean {mean}");
+        assert!((0.8..1.2).contains(&variance), "variance {variance}");
+        assert!((0.28..0.37).contains(&tail), "tail {tail}");
     }
 
     #[test]
