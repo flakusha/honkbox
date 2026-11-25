@@ -1040,7 +1040,7 @@
       "kind": "ticket",
       "path": ".plan/tickets/TASK-blender-terminal-hardening.md",
       "title": "Blender terminal hardening",
-      "status": "in_progress",
+      "status": "blocked",
       "srcRefs": [
         "src/jobs_registry.rs",
         "src/routes/blender_exec.rs"
