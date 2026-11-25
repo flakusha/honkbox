@@ -1,6 +1,7 @@
 # TASK: Honor EXIF orientation on image inputs
 
-Status: proposed
+Status: In Progress
+**Scope:** image-ops EXIF orientation honor
 Priority: P1
 Epic: epic-output-formats
 Owner: unassigned
