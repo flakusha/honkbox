@@ -1080,10 +1080,6 @@
     },
     {
       "kind": "ticket",
-      "source": ".plan/tickets/TASK-img-meta-exif-orientation.md"
-    },
-    {
-      "kind": "ticket",
       "source": ".plan/tickets/TASK-inference-cache-correctness.md"
     },
     {
