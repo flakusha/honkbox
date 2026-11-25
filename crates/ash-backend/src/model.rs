@@ -5,6 +5,9 @@
 //! shared. Checkpoint tensor names live in [`crate::model_spec`]; this module
 //! only declares the compute passes a device must admit.
 
+#[path = "decoder_ops.rs"]
+pub mod decoder_ops;
+
 use crate::{
     VkError,
     device::{CapacityRequirements, PhysicalDeviceInfo},
@@ -41,17 +44,29 @@ pub enum Op {
     Gelu,
     /// Row/column transpose of a f32 matrix.
     Transpose,
+    /// Row-wise RMS normalization with a per-column gain.
+    RmsNorm,
+    /// Half-split rotary position embedding over `[rows, heads, head_dim]`.
+    Rope,
+    /// Elementwise `silu(gate) * up` gated activation.
+    SwiGlu,
+    /// Per-head RMS normalization of Q/K heads.
+    QkNorm,
+    /// One-shot depthwise causal short convolution.
+    ShortConv,
 }
 
 impl Op {
     /// Static floor for this pass; per-call shapes are checked again in `run`.
     pub fn requirements(self) -> CapacityRequirements {
         match self {
-            Self::ElementwiseAdd | Self::Silu | Self::Gelu => CapacityRequirements {
-                workgroup_count: [1, 1, 1],
-                storage_range: 4, // length uniform
-                ..CapacityRequirements::default()
-            },
+            Self::ElementwiseAdd | Self::Silu | Self::Gelu | Self::SwiGlu => {
+                CapacityRequirements {
+                    workgroup_count: [1, 1, 1],
+                    storage_range: 4, // length uniform
+                    ..CapacityRequirements::default()
+                }
+            }
             Self::MatMul
             | Self::Attention
             | Self::LayerNorm
@@ -60,6 +75,13 @@ impl Op {
                 CapacityRequirements {
                     workgroup_count: [1, 1, 1],
                     storage_range: 12, // shape/param buffer
+                    ..CapacityRequirements::default()
+                }
+            }
+            Self::RmsNorm | Self::QkNorm | Self::Rope | Self::ShortConv => {
+                CapacityRequirements {
+                    workgroup_count: [1, 1, 1],
+                    storage_range: 24, // up to six shape/parameter u32s
                     ..CapacityRequirements::default()
                 }
             }
@@ -119,12 +141,27 @@ mod tests {
         name: "mixed",
         ops: &[Op::ElementwiseAdd, Op::MatMul],
     };
+    const DECODER_OPS: ModelSpec = ModelSpec {
+        name: "decoder",
+        ops: &[Op::RmsNorm, Op::Rope, Op::SwiGlu, Op::QkNorm, Op::ShortConv],
+    };
 
     #[test]
     fn ops_declare_their_static_floor() {
         assert_eq!(Op::ElementwiseAdd.requirements().storage_range, 4);
         assert_eq!(Op::MatMul.requirements().storage_range, 12);
         assert_eq!(Op::Softmax.requirements().storage_range, 8);
+    }
+
+    #[test]
+    fn decoder_ops_declare_their_static_floor() {
+        for &op in DECODER_OPS.ops {
+            let requirements = op.requirements();
+            assert!(requirements.storage_range >= 4, "{op:?} needs parameters");
+            assert_eq!(requirements.workgroup_count, [1, 1, 1]);
+        }
+        let dev = fake_info(DeviceType::Cpu, 1 << 30, 1, true);
+        assert_eq!(DECODER_OPS.validate(&dev), Ok(()));
     }
 
     #[test]

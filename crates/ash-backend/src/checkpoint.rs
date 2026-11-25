@@ -1,4 +1,4 @@
-//! Strict safetensors header reader: checkpoint key → tensor slot map.
+//! Strict checkpoint header readers: metadata, tensor names and byte ranges.
 //!
 //! The catalog already probes headers leniently for metadata; inference needs
 //! the opposite — names, shapes and byte ranges that are safe to read before
@@ -10,6 +10,10 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+
+mod gguf;
+
+pub use gguf::{GgufMap, GgufTensor, GgufType, GgufValue};
 
 /// Safetensors header cap, same bound as the catalog probe.
 const MAX_HEADER: u64 = 16 * 1024 * 1024;

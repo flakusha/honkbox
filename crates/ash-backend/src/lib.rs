@@ -35,6 +35,8 @@
 //!   positive/negative text embeddings (no prompt→embedding faking).
 //! - [`checkpoint`]: [`checkpoint::CheckpointMap`], a strict safetensors
 //!   header → tensor slot map; payload bytes are read on demand.
+//! - [`checkpoint::GgufMap`], the strict GGUF v2/v3 metadata and tensor reader
+//!   on the same lookup/on-demand read contract; no dequantization or tokenizer.
 //! - [`embedding`]: [`embedding::TextEncoder`], token + positional embedding
 //!   gather and sum over caller-supplied tables (no tokenizer assets yet).
 //! - [`mlp`]: [`mlp::FeedForward`], GELU activation and a two-matrix MLP block.

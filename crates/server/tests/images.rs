@@ -819,6 +819,49 @@ async fn ash_backend_refuses_unhonored_conditioning() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// Pipeline that refuses conditioning at its own boundary instead of at the
+/// route guard; the configured backend ID is not `ash-sd`, so the route guard
+/// cannot answer before this error reaches the failure conversion.
+struct TypedConditioningSd(&'static str);
+
+impl honkbox_sd_core::SdPipeline for TypedConditioningSd {
+    fn generate(
+        &self,
+        _req: &honkbox_sd_core::Txt2ImgRequest,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<honkbox_sd_core::GeneratedImage, honkbox_sd_core::SdError> {
+        Err(honkbox_sd_core::SdError::UnsupportedConditioning {
+            field: self.0.to_owned(),
+        })
+    }
+
+    fn backend_id(&self) -> &'static str {
+        "fake-typed-conditioning"
+    }
+}
+
+#[tokio::test]
+async fn conditioning_unsupported_from_pipeline_maps_to_501() {
+    let _slot = SLOT_LOCK.lock().await;
+    for field in ["loras", "hires_fix", "init_image", "control_net"] {
+        let app = app_with_sd(
+            catalog_with(&[sd_entry("comfy:f.safetensors")]),
+            None,
+            Arc::new(TypedConditioningSd(field)),
+        );
+        let request = json!({"prompt": "hi", "size": "8x8"});
+        let (status, body) = images(app, request.clone()).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{field}: {body}");
+        assert_eq!(body["error"]["code"], "conditioning_unsupported", "{body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(field)),
+            "{body}"
+        );
+    }
+}
+
 /// An accepted hires-fix pass renders and lands in the bundle sidecar with
 /// the target it will produce. The stub backend ignores the pass (its
 /// pixels are a pure seed function), so the returned PNG stays at the base

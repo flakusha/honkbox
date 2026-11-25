@@ -185,7 +185,7 @@ struct GenerateArgs {
     format: Format,
     /// Which pipeline samples the image (`sd-cpp` decodes the real checkpoint).
     #[arg(long, value_enum, default_value = "sd-cpp")]
-    backend: Backend,
+    backend: SdBackend,
     /// Text-encoder slug from `models show` (new archs: Qwen-VL-class file).
     #[arg(long)]
     clip: Option<String>,
@@ -214,16 +214,6 @@ impl From<Format> for honkbox_sd_core::OutputFormat {
             Format::Webp => Self::Webp,
         }
     }
-}
-
-/// `generate` backends: instant stub pixels or the real sd.cpp pipeline.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum Backend {
-    Stub,
-    SdCpp,
-    /// Direct-Vulkan pipeline sampling a real SD 1.5 checkpoint.
-    #[cfg(feature = "ash-sd")]
-    AshSd,
 }
 
 /// `chat` flags: one prompt through the chat pipeline.
@@ -674,7 +664,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         &resolve,
     );
     let tts = backends::make_tts(tts_backend, tts_model.as_deref(), &resolve);
-    let sd = backends::make_sd(sd_backend, sd_model.as_deref(), &resolve);
+    let sd = backends::make_sd(sd_backend, sd_model.as_deref(), &resolve, None);
     let swap = build_swap_manager(
         &swap_cfg,
         llm_backend,
@@ -989,7 +979,8 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         "honkbox generate model={model} seed={seed} steps={steps} size={size} backend={backend:?}"
     );
     #[cfg(feature = "vulkan")]
-    if matches!(backend, Backend::SdCpp) && std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_none() {
+    if matches!(backend, SdBackend::SdCpp) && std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_none()
+    {
         eprintln!(
             "hint: GGML_VK_VISIBLE_DEVICES unset — sd.cpp uses Vulkan device 0 (on multi-GPU boxes this may be the iGPU: slow, and 1024² aborts with context-lost; export the dGPU index, e.g. 1)"
         );
@@ -1002,26 +993,19 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         tts_dirs: cfg.tts_dirs,
         ocr_dirs: cfg.ocr_dirs,
     });
-    let model_path = resolve_model(&found, &model);
     // Optional split-file inputs: same registry, unknown slug is a loud exit-1.
     let clip = clip.as_deref().map(|s| resolve_model(&found, s));
     let vae = vae.as_deref().map(|s| resolve_model(&found, s));
     let _lease = or_exit(honkbox_residency::global().try_reserve());
-    let pipeline: Box<dyn honkbox_sd_core::SdPipeline> = match backend {
-        Backend::Stub => Box::new(honkbox_sd_core::StubPipeline),
-        Backend::SdCpp => Box::new(honkbox_sd_core::SdCppPipeline::new(model_path)),
-        #[cfg(feature = "ash-sd")]
-        Backend::AshSd => {
-            let device = Arc::new(or_exit(
-                honkbox_ash_backend::device::VulkanDevice::headless(),
-            ));
-            Box::new(honkbox_ash_backend::sd::AshSdPipeline::new_with_vocab_dir(
-                device,
-                model_path,
-                clip_vocab_dir,
-            ))
-        }
-    };
+    #[cfg(not(feature = "ash-sd"))]
+    let clip_vocab_dir = None;
+    // CLI and HTTP both select through the one constructor in `backends`.
+    let pipeline = backends::make_sd(
+        backend,
+        &model,
+        &|slug| resolve_model(&found, slug),
+        clip_vocab_dir,
+    );
     let img = or_exit(pipeline.generate(
         &honkbox_sd_core::Txt2ImgRequest {
             prompt: prompt.clone(),

@@ -60,8 +60,8 @@ tiny-skia = { workspace = true }
 # OCR text-layer extraction (FEAT-ocr-ingest): pure-Rust MIT parser over
 # in-memory PDF bytes. No rasterizer, no Python, no foreign build.
 pdf-extract = "0.12.1"
-# CLI-only direct-Vulkan SD backend: `generate --backend ash-sd` stays opt-in;
-# HTTP selection remains stub/sd-cpp until TASK-ash-backend-promote lands.
+# Direct-Vulkan SD backend, shared by CLI `generate` and HTTP
+# `serve --sd-backend` through one `backends::make_sd` constructor.
 honkbox-ash-backend = { path = "../ash-backend", optional = true }
 
 [dev-dependencies]
@@ -89,10 +89,8 @@ rxing = { version = "0.9", default-features = false, features = [
 image = { workspace = true }
 
 [features]
-# Gate for the experimental ash SD backend (ReviewedModules-Crates.md §4).
-# Empty until the first experimental code lands, then forwards to sd-core/ash-backend.
-experimental-ash-sd = []
-# CLI-only Ash SD path (no HTTP promotion, no capability advertisement).
+# Direct-Vulkan Ash SD backend: opt-in, shared by CLI `generate` and HTTP
+# `serve --sd-backend`; `experimental_ash_sd` derives from this one feature.
 ash-sd = ["dep:honkbox-ash-backend", "honkbox-ash-backend/ash-sd"]
 # Vulkan execution for the sd-cpp backend (honkbox-sd-core/vulkan → diffusion-rs/vulkan → SD_VULKAN=ON).
 # Default-on: `--backend sd-cpp` (itself the default) is only a fast default on Vulkan.

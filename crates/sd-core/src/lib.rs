@@ -414,6 +414,12 @@ pub enum SdError {
     Encode(String),
     /// Real-backend failure (config build, `gen_img`, file IO).
     Backend(String),
+    /// Conditioning requested by the caller that this pipeline ignores.
+    /// Refusing it avoids returning an image rendered without what was asked.
+    UnsupportedConditioning {
+        /// Name of the first unsupported request field.
+        field: String,
+    },
     /// A cancel was requested through [`SdPipeline::generate`]'s cancel
     /// flag before or during sampling: the generation stopped early and
     /// there is NO image (never a partial or "normal" render).
@@ -428,6 +434,12 @@ impl fmt::Display for SdError {
             }
             Self::Encode(e) => write!(f, "png encode failed: {e}"),
             Self::Backend(e) => write!(f, "sd-cpp backend failed: {e}"),
+            Self::UnsupportedConditioning { field } => {
+                write!(
+                    f,
+                    "conditioning field '{field}' is not supported by this pipeline"
+                )
+            }
             Self::Cancelled => write!(f, "generation cancelled before completion"),
         }
     }

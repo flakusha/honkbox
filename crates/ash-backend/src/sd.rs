@@ -218,6 +218,32 @@ fn validate_sampling_request(req: &Txt2ImgRequest) -> Result<(), SdError> {
     Ok(())
 }
 
+/// Refuse conditioning the reduced SD1.5 path ignores, before any device
+/// work. Precedence is fixed so a multi-field request always names the same
+/// first field.
+fn reject_unsupported_conditioning(req: &Txt2ImgRequest) -> Result<(), SdError> {
+    let fields = [
+        ("hires_fix", req.hires.is_some()),
+        (
+            "loras",
+            req.loras.as_ref().is_some_and(|loras| !loras.is_empty()),
+        ),
+        ("init_image", req.init_image.is_some()),
+        ("mask_image", req.mask_image.is_some()),
+        ("strength", req.strength.is_some()),
+        ("control_net", req.control_net.is_some()),
+        ("control_image", req.control_image.is_some()),
+        ("controlnet_strength", req.controlnet_strength.is_some()),
+        ("control_type", req.control_type.is_some()),
+    ];
+    if let Some((field, _)) = fields.into_iter().find(|(_, present)| *present) {
+        return Err(SdError::UnsupportedConditioning {
+            field: field.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Blend the two per-step `UNet` predictions using the existing CFG kernel.
 fn guided_epsilon(
     guidance: &Cfg,
@@ -322,6 +348,7 @@ impl SdPipeline for AshSdPipeline {
         req: &Txt2ImgRequest,
         cancel: &AtomicBool,
     ) -> Result<GeneratedImage, SdError> {
+        reject_unsupported_conditioning(req)?;
         let edge = req.width.max(req.height);
         if edge > MAX_EDGE {
             return Err(SdError::TooLarge { edge });
@@ -629,6 +656,73 @@ mod tests {
             "unsupported scheduler must be named"
         );
         assert_eq!(req.steps, 4);
+    }
+
+    #[test]
+    fn conditioning_guard_names_every_unsupported_field() {
+        let mut lora = request(64, 64);
+        lora.loras = Some(vec![honkbox_sd_core::LoraRef {
+            path: PathBuf::from("adapter.safetensors"),
+            strength: 0.5,
+        }]);
+        let mut hires = request(64, 64);
+        hires.hires = Some(honkbox_sd_core::HiresFix {
+            scale: 1.5,
+            target: None,
+            denoising_strength: 0.5,
+        });
+        let mut init = request(64, 64);
+        init.init_image = Some(PathBuf::from("init.png"));
+        let mut mask = request(64, 64);
+        mask.mask_image = Some(PathBuf::from("mask.png"));
+        let mut denoise = request(64, 64);
+        denoise.strength = Some(0.5);
+        let mut control_net = request(64, 64);
+        control_net.control_net = Some(PathBuf::from("control.safetensors"));
+        let mut control_image = request(64, 64);
+        control_image.control_image = Some(vec![0]);
+        let mut control_strength = request(64, 64);
+        control_strength.controlnet_strength = Some(0.5);
+        let mut control_type = request(64, 64);
+        control_type.control_type = Some(honkbox_sd_core::sd_control_type_t::SD_CONTROL_TYPE_NONE);
+
+        let cases = [
+            (&lora, "loras"),
+            (&hires, "hires_fix"),
+            (&init, "init_image"),
+            (&mask, "mask_image"),
+            (&denoise, "strength"),
+            (&control_net, "control_net"),
+            (&control_image, "control_image"),
+            (&control_strength, "controlnet_strength"),
+            (&control_type, "control_type"),
+        ];
+        for (req, field) in cases {
+            let err = reject_unsupported_conditioning(req)
+                .expect_err("unsupported conditioning must be refused");
+            assert_eq!(
+                err,
+                SdError::UnsupportedConditioning {
+                    field: field.to_owned()
+                },
+                "{field} must be named"
+            );
+            assert!(err.to_string().contains(field), "{field}: {err}");
+        }
+        assert_eq!(reject_unsupported_conditioning(&request(64, 64)), Ok(()));
+        let mut empty_loras = request(64, 64);
+        empty_loras.loras = Some(Vec::new());
+        assert_eq!(reject_unsupported_conditioning(&empty_loras), Ok(()));
+
+        // Two ignored fields name the first one in fixed precedence.
+        let mut both = hires;
+        both.loras = lora.loras.clone();
+        assert_eq!(
+            reject_unsupported_conditioning(&both),
+            Err(SdError::UnsupportedConditioning {
+                field: "hires_fix".to_owned()
+            })
+        );
     }
 
     fn device() -> Option<Arc<VulkanDevice>> {

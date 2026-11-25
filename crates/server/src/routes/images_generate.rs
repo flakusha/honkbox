@@ -157,6 +157,37 @@ pub(super) enum GenerateFailure {
     Failed(String),
 }
 
+/// Generation-route failure: the shared `GenerateFailure` has no case for
+/// conditioning a pipeline refuses, so this typed form keeps that answer out
+/// of the generic 500 path without changing the edit-route contract.
+pub(super) enum GenerationFailure {
+    Cancelled,
+    Failed(String),
+    UnsupportedConditioning(String),
+}
+
+impl GenerationFailure {
+    fn from_sd_error(err: honkbox_sd_core::SdError) -> Self {
+        match err {
+            honkbox_sd_core::SdError::Cancelled => Self::Cancelled,
+            honkbox_sd_core::SdError::UnsupportedConditioning { field } => {
+                Self::UnsupportedConditioning(field)
+            }
+            other => Self::Failed(other.to_string()),
+        }
+    }
+
+    /// Keeps the edit-route wrapper's `GenerateFailure` signature intact.
+    fn into_generate_failure(self) -> GenerateFailure {
+        match self {
+            Self::Cancelled => GenerateFailure::Cancelled,
+            Self::Failed(message) | Self::UnsupportedConditioning(message) => {
+                GenerateFailure::Failed(message)
+            }
+        }
+    }
+}
+
 /// One fresh engine-stop flag per image. The job token is the cross-image
 /// cancel state; a flag left set by image 1 must never be inherited by
 /// image 2 before it starts.
@@ -207,6 +238,21 @@ pub(super) async fn generate_image_bytes(
     cancel: Arc<AtomicBool>,
     token: tokio_util::sync::CancellationToken,
 ) -> Result<Vec<u8>, GenerateFailure> {
+    generate_image_bytes_typed(pipeline, txt2img, format, compression, cancel, token)
+        .await
+        .map_err(GenerationFailure::into_generate_failure)
+}
+
+/// Typed variant for the generation route: a named conditioning refusal must
+/// reach the route as 501, not collapse into `GenerateFailure::Failed`.
+pub(super) async fn generate_image_bytes_typed(
+    pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
+    txt2img: honkbox_sd_core::Txt2ImgRequest,
+    format: honkbox_sd_core::OutputFormat,
+    compression: Option<u8>,
+    cancel: Arc<AtomicBool>,
+    token: tokio_util::sync::CancellationToken,
+) -> Result<Vec<u8>, GenerationFailure> {
     generate_image_bytes_inner(pipeline, txt2img, format, compression, cancel, token, None).await
 }
 
@@ -222,6 +268,29 @@ pub(super) async fn generate_image_bytes_with_progress(
     token: tokio_util::sync::CancellationToken,
     job_id: &str,
 ) -> Result<Vec<u8>, GenerateFailure> {
+    generate_image_bytes_with_progress_typed(
+        pipeline,
+        txt2img,
+        format,
+        compression,
+        cancel,
+        token,
+        job_id,
+    )
+    .await
+    .map_err(GenerationFailure::into_generate_failure)
+}
+
+/// Artifact-mode variant of [`generate_image_bytes_typed`].
+pub(super) async fn generate_image_bytes_with_progress_typed(
+    pipeline: std::sync::Arc<dyn honkbox_sd_core::SdPipeline>,
+    txt2img: honkbox_sd_core::Txt2ImgRequest,
+    format: honkbox_sd_core::OutputFormat,
+    compression: Option<u8>,
+    cancel: Arc<AtomicBool>,
+    token: tokio_util::sync::CancellationToken,
+    job_id: &str,
+) -> Result<Vec<u8>, GenerationFailure> {
     generate_image_bytes_inner(
         pipeline,
         txt2img,
@@ -242,13 +311,10 @@ async fn generate_image_bytes_inner(
     cancel: Arc<AtomicBool>,
     token: tokio_util::sync::CancellationToken,
     progress_job_id: Option<String>,
-) -> Result<Vec<u8>, GenerateFailure> {
+) -> Result<Vec<u8>, GenerationFailure> {
     let worker_cancel = Arc::clone(&cancel);
     let mut worker = tokio::task::spawn_blocking(move || {
-        let to_failure = |err: honkbox_sd_core::SdError| match err {
-            honkbox_sd_core::SdError::Cancelled => GenerateFailure::Cancelled,
-            other => GenerateFailure::Failed(other.to_string()),
-        };
+        let to_failure = GenerationFailure::from_sd_error;
         let img = match &progress_job_id {
             Some(job_id) => pipeline
                 .generate_with_progress(&txt2img, &worker_cancel, &|step, total| {
@@ -261,13 +327,13 @@ async fn generate_image_bytes_inner(
         };
         match compression {
             Some(q) => honkbox_sd_core::encode_image_with_quality(img, format, q)
-                .map_err(|err| GenerateFailure::Failed(err.to_string())),
+                .map_err(|err| GenerationFailure::Failed(err.to_string())),
             None => honkbox_sd_core::encode_image(img, format)
-                .map_err(|err| GenerateFailure::Failed(err.to_string())),
+                .map_err(|err| GenerationFailure::Failed(err.to_string())),
         }
     });
     let join_failure = |err: tokio::task::JoinError| {
-        GenerateFailure::Failed(format!("generation task failed: {err}"))
+        GenerationFailure::Failed(format!("generation task failed: {err}"))
     };
     // Token → flag bridge: whichever lands first wins; a cancel makes the
     // worker return shortly (engine stop), and its answer — normally
@@ -283,7 +349,7 @@ async fn generate_image_bytes_inner(
     // was marked. The token is the authority: never hand back a full image
     // for a cancelled request.
     if token.is_cancelled() {
-        return Err(GenerateFailure::Cancelled);
+        return Err(GenerationFailure::Cancelled);
     }
     outcome
 }
@@ -538,7 +604,7 @@ pub(crate) async fn post_images_generations(
         };
         let generated = match delivery {
             DeliveryMode::Inline => {
-                generate_image_bytes(
+                generate_image_bytes_typed(
                     Arc::clone(&pipeline),
                     txt2img,
                     format,
@@ -549,7 +615,7 @@ pub(crate) async fn post_images_generations(
                 .await
             }
             DeliveryMode::Artifact => {
-                generate_image_bytes_with_progress(
+                generate_image_bytes_with_progress_typed(
                     Arc::clone(&pipeline),
                     txt2img,
                     format,
@@ -563,7 +629,20 @@ pub(crate) async fn post_images_generations(
         };
         let bytes = match generated {
             Ok(bytes) => bytes,
-            Err(GenerateFailure::Cancelled) => {
+            Err(GenerationFailure::UnsupportedConditioning(field)) => {
+                return with_job_id(
+                    super::openai_error_response(
+                        StatusCode::NOT_IMPLEMENTED,
+                        format!(
+                            "{field} is accepted and validated but not applied: the configured {:?} pipeline ignores it — the request is refused rather than rendered without it",
+                            pipeline.backend_id()
+                        ),
+                        Some("conditioning_unsupported"),
+                    ),
+                    job.id(),
+                );
+            }
+            Err(GenerationFailure::Cancelled) => {
                 // The in-flight render was aborted mid-sampling: answer the
                 // named 409, honestly counting the interrupted image as NOT
                 // generated. A cancel that landed before this image started
@@ -577,7 +656,7 @@ pub(crate) async fn post_images_generations(
                     job.id(),
                 );
             }
-            Err(GenerateFailure::Failed(message)) => {
+            Err(GenerationFailure::Failed(message)) => {
                 return super::openai_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     message,

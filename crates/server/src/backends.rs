@@ -4,6 +4,7 @@
 //! one place. Worker crates keep their own DTOs (no `api-types` reuse), so
 //! this module converts at the boundary in both directions.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use honkbox_audio_worker::{KokoroTts, SttPipeline, StubStt, StubTts, TtsPipeline, WhisperStt};
@@ -98,7 +99,12 @@ pub fn make_llm(
     }
 }
 
-/// `--sd-backend` values: instant stub or the real diffusion-rs pipeline.
+/// `true` when this build compiles the Ash SD constructor. Capability output
+/// derives from this one fact, never a separate marker feature.
+pub const ASH_SD_COMPILED: bool = cfg!(feature = "ash-sd");
+
+/// `--sd-backend` values: instant stub, real diffusion-rs pipeline, or the
+/// opt-in direct-Vulkan Ash pipeline.
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
 pub enum SdBackend {
     /// Instant deterministic stub (no model, no GPU).
@@ -106,14 +112,22 @@ pub enum SdBackend {
     Stub,
     /// Real txt2img via stable-diffusion.cpp on a registry checkpoint.
     SdCpp,
+    /// Direct-Vulkan SD 1.5 via `honkbox-ash-backend` (opt-in feature).
+    #[cfg(feature = "ash-sd")]
+    AshSd,
 }
-/// Image pipeline: stub unit struct, or file backend via `resolve` slug→path.
+/// Image pipeline: stub unit struct, file backend via `resolve` slug→path,
+/// or the direct-Vulkan Ash pipeline. `vocab_dir` is the optional CLIP
+/// tokenizer directory passed by `generate`; HTTP passes `None`.
 #[must_use]
 pub fn make_sd(
     backend: SdBackend,
     model: Option<&str>,
     resolve: &dyn Fn(&str) -> std::path::PathBuf,
+    vocab_dir: Option<PathBuf>,
 ) -> Arc<dyn honkbox_sd_core::SdPipeline> {
+    #[cfg(not(feature = "ash-sd"))]
+    let _ = vocab_dir;
     match backend {
         SdBackend::Stub => Arc::new(honkbox_sd_core::StubPipeline),
         SdBackend::SdCpp => {
@@ -123,6 +137,20 @@ pub fn make_sd(
             });
             let path = resolve(slug);
             Arc::new(honkbox_sd_core::SdCppPipeline::new(path))
+        }
+        #[cfg(feature = "ash-sd")]
+        SdBackend::AshSd => {
+            let slug = model.unwrap_or_else(|| {
+                eprintln!("error: --sd-model <slug> is required with --sd-backend ash-sd");
+                std::process::exit(1);
+            });
+            let path = resolve(slug);
+            let device = Arc::new(crate::or_exit(
+                honkbox_ash_backend::device::VulkanDevice::headless(),
+            ));
+            Arc::new(honkbox_ash_backend::sd::AshSdPipeline::new_with_vocab_dir(
+                device, path, vocab_dir,
+            ))
         }
     }
 }
