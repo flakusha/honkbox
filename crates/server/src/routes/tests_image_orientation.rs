@@ -19,7 +19,12 @@ fn decode_upright(raw: &[u8]) -> image::DynamicImage {
         Err(ImageOpWorkError::Bad { message, code }) => {
             panic!("decode failed [{code}]: {message}")
         }
-        Err(_) => panic!("decode failed: unexpected error variant"),
+        Err(ImageOpWorkError::Cancelled { completed }) => {
+            panic!("decode cancelled after {completed} units")
+        }
+        Err(ImageOpWorkError::Failed(message)) => {
+            panic!("decode failed: {message}")
+        }
     }
 }
 
@@ -27,7 +32,12 @@ fn decode_upright(raw: &[u8]) -> image::DynamicImage {
 /// dimmer bottom row. Asymmetric in both axes, so a 90/270 rotation is
 /// detectable from dimensions alone and a flip from pixels.
 fn source_pixel(x: u32, y: u32) -> image::Rgba<u8> {
-    image::Rgba([30 + (x * 40) as u8, if y == 0 { 200 } else { 20 }, 90, 255])
+    image::Rgba([
+        u8::try_from(30 + x * 40).expect("fixture pixel in range"),
+        if y == 0 { 200 } else { 20 },
+        90,
+        255,
+    ])
 }
 
 /// Little-endian TIFF EXIF payload carrying one IFD0 entry: tag `0x0112`,
@@ -67,7 +77,11 @@ fn jpeg_with_exif_orientation(mut jpeg: Vec<u8>, orientation: u16) -> Vec<u8> {
     let mut segment = Vec::new();
     segment.push(0xFF);
     segment.push(0xE1);
-    segment.extend_from_slice(&((exif.len() as u16 + 2).to_be_bytes()));
+    segment.extend_from_slice(
+        &u16::try_from(exif.len() + 2)
+            .expect("fixture EXIF fits u16")
+            .to_be_bytes(),
+    );
     segment.extend_from_slice(&exif);
     assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
     jpeg.splice(2..2, segment);
