@@ -1,6 +1,6 @@
 # TASK: Decide on salvo.rs as the server framework
 
-Status: done (2026-11-24 user override executed; bounded spike landed in `12e7bd7`)
+Status: Done
 Priority: P3
 Epic: epic-salvo-migration
 Owner: unassigned
@@ -51,3 +51,5 @@ to the listener-on-port-0 pattern, regenerate `openapi.json`, and compare
 `bun run check` before committing the rest. Each test must own a unique port
 with `Drop` teardown to keep the parallel-safe test contract. Follow-on seams
 are tracked in `epics/epic-salvo-migration.md`.
+
+**Resolved:** 2026-11-25 registry-driven close: git issue 7108624 (registry tip: 74b6257 Konstantin Fedotov Auto-closed: appended .md marker marks TASK-SALVO-MIGRATION-DECISION done)

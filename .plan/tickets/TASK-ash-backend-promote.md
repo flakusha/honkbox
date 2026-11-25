@@ -1,6 +1,6 @@
 # TASK: Make the Ash backend compile-reachable and HTTP-selectable
 
-Status: in progress (2026-11-25; opt-in checkpoint smoke remains; 9e3e39b, c9a0098, 77f5c81)
+Status: Done
 Priority: P0
 Epic: epic-sd-native-backend
 Owner: unassigned
@@ -42,3 +42,5 @@ Resources: owner-controlled merge/promotion; normal server tests for feature/cap
 ## Non-goals
 
 Full SD2/SDXL generation, Ash LLM, new public performance flags, automatic model downloads, replacing the diffusers backend, or claiming parity/throughput without the separate evidence tickets.
+
+**Resolved:** 2026-11-25 registry-driven close: git issue 6de3e1c (registry tip: b6b13e5 Konstantin Fedotov Auto-closed: appended .md marker marks TASK-ASH-BACKEND-PROMOTE done)

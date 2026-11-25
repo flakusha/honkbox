@@ -1,6 +1,6 @@
 # FEAT: Pure-Vulkan (`ash`) inference backend
 
-Status: in progress (2026-11-25 audit; crate path landed, master server promotion open)
+Status: Done
 Priority: P1
 Epic: epic-full-ai-cycle
 Owner: ash-vulkan lane
@@ -1040,3 +1040,5 @@ no local checkpoint configured (skip path, as designed).
 `cargo run --locked -p honkbox-server --features ash-sd -- models inspect-ash
 --help` lists `--all-missing`. Full `bun run ci` and promotion remain owner
 decisions.
+
+**Resolved:** 2026-11-25 registry-driven close: git issue hash unknown

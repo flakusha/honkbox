@@ -1,6 +1,6 @@
 # TASK: Blender bake extension (metallic/AO/height + thumbnail)
 
-Status: in progress (2026-11-25 audit; internal contract landed, public/runtime gap open)
+Status: Done
 Priority: P0
 Epic: epic-model-feedback
 Owner: unassigned
@@ -35,3 +35,5 @@ Resources: per-test tmp job dirs; no shared Blender process
   dispatch exists. The previous `done` header was therefore premature.
 - Close only after the DTO, route bounds, real recipe, and manifest all expose
   and execute the accepted variants end to end.
+
+**Resolved:** 2026-11-25 registry-driven close: git issue 2cb7655 (registry tip: 67ed2cd Konstantin Fedotov Auto-closed: ticket TASK-BLENDER-BAKE-EXTENDED-MAPS marked done in index.)

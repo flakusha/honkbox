@@ -1,4 +1,17 @@
 {
+  "BUG-ASH-SD15-NUMERICS": {
+    "hash": "pending",
+    "extid": "BUG-ASH-SD15-NUMERICS",
+    "type": "BUG",
+    "title": "Ash SD1.5 timestep and residual numerics",
+    "label": "bug",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/BUG-ash-sd15-numerics.md",
+    "status": "done"
+  },
   "BUG-ATTACHED-JOB-CANCEL-STALLED-STREAM": {
     "hash": "1a0f106",
     "git_issue": "1a0f106",
@@ -95,6 +108,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/epic-3d-capture.md",
+    "status": "proposed"
+  },
+  "EPIC-ASH-NATIVE-FAMILIES": {
+    "hash": "pending",
+    "extid": "EPIC-ASH-NATIVE-FAMILIES",
+    "type": "EPIC",
+    "title": "Ash native inference families",
+    "label": "epic",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/epic-ash-native-families.md",
     "status": "proposed"
   },
   "EPIC-AUDIO-STREAMING": {
@@ -335,6 +361,20 @@
     "source": ".plan/tickets/epic-output-formats.md",
     "status": "in_progress"
   },
+  "EPIC-SALVO-MIGRATION": {
+    "hash": "06d0a6c",
+    "git_issue": "06d0a6c",
+    "extid": "EPIC-SALVO-MIGRATION",
+    "type": "EPIC",
+    "title": "Incremental axum → salvo cutover",
+    "label": "epic",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/epic-salvo-migration.md",
+    "status": "in_progress"
+  },
   "EPIC-SD-NATIVE-BACKEND": {
     "hash": "dd08767",
     "git_issue": "dd08767",
@@ -432,6 +472,71 @@
     "tags": [],
     "source": ".plan/tickets/FEAT-artifact-delivery-and-job-result-events.md",
     "status": "done"
+  },
+  "FEAT-ASH-EMBEDDINGGEMMA-2": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-EMBEDDINGGEMMA-2",
+    "type": "FEAT",
+    "title": "Ash embeddinggemma-2 text proof and gated Gemma 4 E4B decoder",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-ash-embeddinggemma-2.md",
+    "status": "proposed"
+  },
+  "FEAT-ASH-LFM25-TEXT-DECODER": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-LFM25-TEXT-DECODER",
+    "type": "FEAT",
+    "title": "Ash LFM2.5 dense text decoder proof",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-ash-lfm25-text-decoder.md",
+    "status": "proposed"
+  },
+  "FEAT-ASH-MOSS-IMAGE-FAMILY": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-MOSS-IMAGE-FAMILY",
+    "type": "FEAT",
+    "title": "Ash MOSS-Image single-stream flow DiT",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-ash-moss-image-family.md",
+    "status": "proposed"
+  },
+  "FEAT-ASH-QWEN35-DENSE": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-QWEN35-DENSE",
+    "type": "FEAT",
+    "title": "Ash Qwen3.5 dense hybrid text proof",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-ash-qwen35-dense.md",
+    "status": "proposed"
+  },
+  "FEAT-ASH-SD2-SPEC": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-SD2-SPEC",
+    "type": "FEAT",
+    "title": "Specify SD2-base and prove one Ash step",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-ash-sd2-spec.md",
+    "status": "proposed"
   },
   "FEAT-ASH-VULKAN-BACKEND": {
     "hash": "pending",
@@ -724,6 +829,19 @@
     "source": ".plan/tickets/FEAT-location-panorama.md",
     "status": "proposed"
   },
+  "FEAT-MEDIA-MASTER-AND-DERIVED-ARTIFACTS": {
+    "hash": "pending",
+    "extid": "FEAT-MEDIA-MASTER-AND-DERIVED-ARTIFACTS",
+    "type": "FEAT",
+    "title": "Lossless media masters and derived final artifacts",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/FEAT-media-master-and-derived-artifacts.md",
+    "status": "proposed"
+  },
   "FEAT-MODEL-MODALITY-ADVERTISEMENT": {
     "hash": "46a6d0a",
     "git_issue": "46a6d0a",
@@ -919,6 +1037,19 @@
     "source": ".plan/tickets/TASK-api-version-policy.md",
     "status": "done"
   },
+  "TASK-ASH-AUTOREGRESSIVE-STATE": {
+    "hash": "pending",
+    "extid": "TASK-ASH-AUTOREGRESSIVE-STATE",
+    "type": "TASK",
+    "title": "Add Ash autoregressive state caches",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-autoregressive-state.md",
+    "status": "proposed"
+  },
   "TASK-ASH-BACKEND-PROMOTE": {
     "hash": "6de3e1c",
     "git_issue": "6de3e1c",
@@ -931,7 +1062,189 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-backend-promote.md",
+    "status": "done"
+  },
+  "TASK-ASH-DECODER-OPS": {
+    "hash": "pending",
+    "extid": "TASK-ASH-DECODER-OPS",
+    "type": "TASK",
+    "title": "Add portable Ash decoder operations",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-decoder-ops.md",
     "status": "proposed"
+  },
+  "TASK-ASH-FAMILY-READINESS-MARKERS": {
+    "hash": "pending",
+    "extid": "TASK-ASH-FAMILY-READINESS-MARKERS",
+    "type": "TASK",
+    "title": "Mark Ash family readiness without claiming availability",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-family-readiness-markers.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-FLOW-DIT-SUBSTRATE": {
+    "hash": "pending",
+    "extid": "TASK-ASH-FLOW-DIT-SUBSTRATE",
+    "type": "TASK",
+    "title": "Ash single-stream flow-DiT substrate",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-GGUF-DEQUANT": {
+    "hash": "pending",
+    "extid": "TASK-ASH-GGUF-DEQUANT",
+    "type": "TASK",
+    "title": "Add reference GGUF dequantization for the initial Ash dtype set",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-gguf-dequant.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-GGUF-READER": {
+    "hash": "pending",
+    "extid": "TASK-ASH-GGUF-READER",
+    "type": "TASK",
+    "title": "Add a strict shared GGUF metadata and tensor reader",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-gguf-reader.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-LLM-EVIDENCE-INTEGRATION": {
+    "hash": "pending",
+    "extid": "TASK-ASH-LLM-EVIDENCE-INTEGRATION",
+    "type": "TASK",
+    "title": "Integrate measured Ash LLM evidence into the full AI cycle",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-NATIVE-FAMILIES-INDEX": {
+    "hash": "pending",
+    "extid": "TASK-ASH-NATIVE-FAMILIES-INDEX",
+    "type": "TASK",
+    "title": "Reconcile Ash native-family roster and readiness",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-native-families-index.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-QWEN-IMAGE21-ATTENTION-PROOF": {
+    "hash": "pending",
+    "extid": "TASK-ASH-QWEN-IMAGE21-ATTENTION-PROOF",
+    "type": "TASK",
+    "title": "Prove Qwen-Image-2.1 segment attention and prefix KV",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-qwen-image21-attention-proof.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-RRDB-UPSCALER-SPIKE": {
+    "hash": "pending",
+    "extid": "TASK-ASH-RRDB-UPSCALER-SPIKE",
+    "type": "TASK",
+    "title": "Spike RRDB and PixelShuffle shapes on Ash",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-SAMPLING-CONTRACT": {
+    "hash": "pending",
+    "extid": "TASK-ASH-SAMPLING-CONTRACT",
+    "type": "TASK",
+    "title": "Add Ash sampling and stop contract",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-sampling-contract.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-TOKENIZER-FRAMEWORK": {
+    "hash": "pending",
+    "extid": "TASK-ASH-TOKENIZER-FRAMEWORK",
+    "type": "TASK",
+    "title": "Build the shared Ash tokenizer framework",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-tokenizer-framework.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-UNSUPPORTED-CONDITIONING-GUARDS": {
+    "hash": "pending",
+    "extid": "TASK-ASH-UNSUPPORTED-CONDITIONING-GUARDS",
+    "type": "TASK",
+    "title": "Guard Ash conditioning at the pipeline boundary",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-VAE-FAMILY-ADAPTERS": {
+    "hash": "pending",
+    "extid": "TASK-ASH-VAE-FAMILY-ADAPTERS",
+    "type": "TASK",
+    "title": "Ash VAE family adapters",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-vae-family-adapters.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-VERIFICATION-GATES": {
+    "hash": "pending",
+    "extid": "TASK-ASH-VERIFICATION-GATES",
+    "type": "TASK",
+    "title": "Restore Ash verification and provenance gates",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-verification-gates.md",
+    "status": "done"
   },
   "TASK-AUDIO-RESAMPLER-QUALITY": {
     "hash": "355fa7f",
@@ -1157,6 +1470,19 @@
     "source": ".plan/tickets/TASK-blender-bake-extended-maps.md",
     "status": "done"
   },
+  "TASK-BLENDER-TERMINAL-HARDENING": {
+    "hash": "pending",
+    "extid": "TASK-BLENDER-TERMINAL-HARDENING",
+    "type": "TASK",
+    "title": "Blender terminal hardening",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-blender-terminal-hardening.md",
+    "status": "proposed"
+  },
   "TASK-CAMERA-PATH-SCHEMA": {
     "hash": "e47564e",
     "git_issue": "e47564e",
@@ -1226,6 +1552,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-capabilities-golden-fixture.md",
     "status": "done"
+  },
+  "TASK-CAPABILITY-HONESTY-GATE": {
+    "hash": "pending",
+    "extid": "TASK-CAPABILITY-HONESTY-GATE",
+    "type": "TASK",
+    "title": "Capability honesty gate",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-capability-honesty-gate.md",
+    "status": "proposed"
   },
   "TASK-CAPABILITY-SIGNED-URLS": {
     "hash": "d045a46",
@@ -1827,6 +2166,19 @@
     "source": ".plan/tickets/TASK-images-edits-artifact-delivery-parity.md",
     "status": "done"
   },
+  "TASK-INFERENCE-CACHE-CORRECTNESS": {
+    "hash": "pending",
+    "extid": "TASK-INFERENCE-CACHE-CORRECTNESS",
+    "type": "TASK",
+    "title": "Inference cache identity and memory-demand correctness",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-inference-cache-correctness.md",
+    "status": "proposed"
+  },
   "TASK-JOB-RESULT-ARTIFACT-SELECTION-METADATA": {
     "hash": "19c2041",
     "git_issue": "19c2041",
@@ -2107,6 +2459,19 @@
     "source": ".plan/tickets/TASK-model-license-registry.md",
     "status": "done"
   },
+  "TASK-MODEL-PROVENANCE-CONTRACT": {
+    "hash": "pending",
+    "extid": "TASK-MODEL-PROVENANCE-CONTRACT",
+    "type": "TASK",
+    "title": "model identity and provenance contract",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-model-provenance-contract.md",
+    "status": "proposed"
+  },
   "TASK-MULTI-GPU-DEVICE-AXIS": {
     "hash": "9196919",
     "git_issue": "9196919",
@@ -2260,6 +2625,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-per-consumer-api-scopes.md",
     "status": "done"
+  },
+  "TASK-PLAN-INDEX-GENERATOR": {
+    "hash": "pending",
+    "extid": "TASK-PLAN-INDEX-GENERATOR",
+    "type": "TASK",
+    "title": "Make plan indexes regenerate from honkbox sources",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-plan-index-generator.md",
+    "status": "proposed"
   },
   "TASK-PRECOMMIT-GATES": {
     "hash": "203703c",
@@ -2456,6 +2834,34 @@
     "source": ".plan/tickets/TASK-safety-surface-minors.md",
     "status": "done"
   },
+  "TASK-SALVO-DTO-SCHEMA-BRIDGE": {
+    "hash": "a71d37f",
+    "git_issue": "a71d37f",
+    "extid": "TASK-SALVO-DTO-SCHEMA-BRIDGE",
+    "type": "TASK",
+    "title": "Bridge shared DTO schemas for salvo",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-salvo-dto-schema-bridge.md",
+    "status": "done"
+  },
+  "TASK-SALVO-MIDDLEWARE-AND-CODEGEN": {
+    "hash": "b57ea77",
+    "git_issue": "b57ea77",
+    "extid": "TASK-SALVO-MIDDLEWARE-AND-CODEGEN",
+    "type": "TASK",
+    "title": "Salvo middleware and codegen parity",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-salvo-middleware-and-codegen.md",
+    "status": "done"
+  },
   "TASK-SALVO-MIGRATION-DECISION": {
     "hash": "7108624",
     "git_issue": "7108624",
@@ -2468,7 +2874,35 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-salvo-migration-decision.md",
-    "status": "postponed"
+    "status": "done"
+  },
+  "TASK-SALVO-MIGRATION-SPIKE": {
+    "hash": "cb5ac07",
+    "git_issue": "cb5ac07",
+    "extid": "TASK-SALVO-MIGRATION-SPIKE",
+    "type": "TASK",
+    "title": "Salvo migration spike — one route, one test, one artifact",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-salvo-migration-spike.md",
+    "status": "done"
+  },
+  "TASK-SALVO-ROUTE-AND-TEST-CUTOVER": {
+    "hash": "fd6fa59",
+    "git_issue": "fd6fa59",
+    "extid": "TASK-SALVO-ROUTE-AND-TEST-CUTOVER",
+    "type": "TASK",
+    "title": "Cut salvo routes and server tests over",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-salvo-route-and-test-cutover.md",
+    "status": "done"
   },
   "TASK-SALVO-WEBSOCKET-CHAT-STREAM": {
     "hash": "pending",
@@ -2802,6 +3236,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-voice-clone-policy.md",
+    "status": "proposed"
+  },
+  "TASK-VULKAN-COOPMAT-BASELINE": {
+    "hash": "pending",
+    "extid": "TASK-VULKAN-COOPMAT-BASELINE",
+    "type": "TASK",
+    "title": "Capability-gated RDNA3/RDNA4 Vulkan cooperative-matrix baseline",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-vulkan-coopmat-baseline.md",
     "status": "proposed"
   }
 }
