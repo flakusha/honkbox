@@ -160,7 +160,9 @@ pub fn rope(
         .map(|i| theta.powf(-2.0 * i as f32 / rotary_dim as f32))
         .collect();
     require_finite(&frequencies, "rope", "rotary frequencies")?;
-    let position = f32::from(position);
+    // u32 -> f32 never overflows (max ~4.3e9 is finite in f32); it only loses
+    // integer precision above 2^24, which the angle math tolerates.
+    let position = position as f32;
 
     for (source, target) in values
         .chunks_exact(head_dim)
@@ -242,6 +244,9 @@ pub fn short_conv(
 
 #[cfg(test)]
 mod tests {
+    // Reference helpers round-trip through f64 and narrow back to f32.
+    #![allow(clippy::cast_possible_truncation)]
+
     use super::*;
 
     const TOL: f32 = 1e-4;
