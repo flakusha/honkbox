@@ -45,15 +45,24 @@ mod jobs_registry;
 #[allow(dead_code)]
 #[path = "../src/metrics.rs"]
 mod metrics;
+
+#[allow(dead_code)]
+#[path = "../src/routes/openai_constraints.rs"]
+mod openai_constraints;
 #[allow(dead_code)]
 #[path = "../src/ora.rs"]
 mod ora;
 #[allow(dead_code)]
 #[path = "../src/raster.rs"]
 mod raster;
+
 #[allow(dead_code)]
-#[path = "../src/routes.rs"]
-mod routes;
+#[path = "../src/routes/state.rs"]
+mod routes_state;
+mod routes {
+    pub(crate) use crate::openai_constraints::openai_error_response;
+    pub(crate) use crate::routes_state::AppConfig;
+}
 #[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
@@ -68,6 +77,7 @@ mod texture_postprocess;
 /// these test-local stand-ins instead of the full router tree.
 mod harness {
     /// Only the fields publication reads.
+    #[allow(dead_code)]
     pub(crate) mod blender {
         use std::path::PathBuf;
         use std::sync::Arc;
