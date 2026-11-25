@@ -1,5 +1,5 @@
-#![cfg(feature = "ash-llm")]
 //! CPU and opt-in Vulkan proofs for the request-local autoregressive state.
+#![cfg(feature = "ash-llm")]
 
 use honkbox_ash_backend::{
     VkError,
