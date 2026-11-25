@@ -504,7 +504,7 @@ mod tests {
         values[0] = 1.0;
         values[head_dim] = 50.0;
         let mut out = vec![0.0_f32; values.len()];
-        qk_norm(&values, &mut out, 2, 2, head_dim, &gain, 1e-5).expect("two heads");
+        qk_norm(&values, &mut out, 1, 2, head_dim, &gain, 1e-5).expect("two heads");
         // RMSNorm is scale-invariant: two differently scaled heads normalize
         // to the same vector only if each head is normalized on its own.
         assert_close(&out[..head_dim], &out[head_dim..]);
@@ -512,7 +512,7 @@ mod tests {
         let mut perturbed = values.clone();
         perturbed[head_dim + 1] = 7.0;
         let mut second = vec![0.0_f32; values.len()];
-        qk_norm(&perturbed, &mut second, 2, 2, head_dim, &gain, 1e-5).expect("perturbed head");
+        qk_norm(&perturbed, &mut second, 1, 2, head_dim, &gain, 1e-5).expect("perturbed head");
         assert_eq!(&second[..head_dim], &out[..head_dim]);
         assert_ne!(&second[head_dim..], &out[head_dim..]);
     }

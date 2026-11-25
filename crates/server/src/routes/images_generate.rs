@@ -256,6 +256,7 @@ pub(super) async fn generate_image_bytes_typed(
     generate_image_bytes_inner(pipeline, txt2img, format, compression, cancel, token, None).await
 }
 
+#[allow(dead_code)] // used by the binary; standalone route-module test crates need not call it
 /// Artifact-mode variant: pipeline steps feed the job's `job_progress` SSE
 /// frames. `generate_with_progress` defaults to `generate`, so the encoded
 /// bytes are unchanged; only the callback is new.

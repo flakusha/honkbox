@@ -99,8 +99,10 @@ pub fn make_llm(
     }
 }
 
-/// `true` when this build compiles the Ash SD constructor. Capability output
-/// derives from this one fact, never a separate marker feature.
+/// `true` when this build compiles the Ash SD constructor. Asserted by the
+/// promotion contract test; the capability route uses the same compile fact
+/// via a local constant so standalone route test crates need no `backends`.
+#[allow(dead_code)]
 pub const ASH_SD_COMPILED: bool = cfg!(feature = "ash-sd");
 
 /// `--sd-backend` values: instant stub, real diffusion-rs pipeline, or the

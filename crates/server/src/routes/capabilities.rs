@@ -16,6 +16,17 @@ use honkbox_audio_worker::{
 };
 use honkbox_recognition_worker::RecKind as WorkerRecKind;
 
+/// Whether the Ash Stable Diffusion backend is compiled in.
+///
+/// Mirrors the compile-reachable `backends::make_sd` Ash arm: the
+/// `ash-sd` feature is the single switch that enables that arm, so
+/// this flag can never disagree with the backend the server can
+/// actually build. Declared locally (instead of reading
+/// `crate::backends`) so the route module also compiles in the
+/// standalone route-module test crates, which do not declare a
+/// `backends` module.
+const ASH_SD_COMPILED: bool = cfg!(feature = "ash-sd");
+
 /// `GET /v1/capabilities`: the machine-readable server contract (FEAT-
 /// capabilities-api). Everything is DERIVED at request time — compiled
 /// features, runtime config, the live catalog snapshot, and the resource
@@ -209,7 +220,7 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             jobs: true,
             events: true,
             vad: VAD_COMPILED,
-            experimental_ash_sd: crate::backends::ASH_SD_COMPILED,
+            experimental_ash_sd: ASH_SD_COMPILED,
             // Blender engine jobs (`POST /v1/jobs/blender`): `true` only
             // when a Blender engine is installed and probed — the route
             // answers a named 501 otherwise, so the flag never promises
