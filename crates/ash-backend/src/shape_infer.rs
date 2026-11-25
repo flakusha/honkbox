@@ -1,8 +1,8 @@
 //! Infer traversal stage shapes from checkpoint tensor metadata.
 //!
-//! ponytail: only channels/kernel/linear widths come from metadata. Spatial
-//! sizes still come from the caller's sampler; a full model loader needs real
-//! checkpoint-level topology and is not attempted here.
+//! ponytail: only channels/kernel/linear widths come from metadata, following
+//! the reduced topology in [`crate::model_spec`]. Spatial sizes still come from
+//! the caller's sampler; no full-fidelity loader is attempted here.
 
 use crate::{checkpoint::CheckpointMap, model_spec::UnetModelSpec};
 use std::error::Error;
@@ -22,16 +22,16 @@ pub struct ConvInfo {
 /// Shapes needed to configure one `UNet` traversal.
 #[derive(Debug, Clone, Copy)]
 pub struct UnetShapes {
-    /// Latent channels from `conv_in`.
+    /// Latent channels consumed by `conv_in`.
     pub latent_channels: usize,
     /// Entry convolution kernel side.
     pub entry_kernel: usize,
-    /// Encoder downsampler, if the level defines one.
-    pub down: Option<ConvInfo>,
+    /// Three stride-2 downsample convolutions, in execution order.
+    pub downsamples: [ConvInfo; 3],
     /// Mid-level channel width.
     pub mid_channels: usize,
-    /// Decoder upsampler, if the level defines one.
-    pub up: Option<ConvInfo>,
+    /// Two 1×1 projections after the host nearest upsample.
+    pub projections: [ConvInfo; 2],
     /// Output channel width.
     pub output_channels: usize,
     /// Timestep embedding width.
@@ -133,15 +133,36 @@ fn linear(map: &CheckpointMap, key: &str) -> Result<(usize, usize), ShapeError> 
 /// Derive channel and linear widths from a spec's tensor shapes.
 pub fn infer(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<UnetShapes, ShapeError> {
     let entry = conv(map, spec.conv_in.weight)?;
-    let down = match spec.down_levels.first().and_then(|level| level.downsample) {
-        Some(keys) => Some(conv(map, keys.weight)?),
-        None => None,
-    };
+    let downsamples = spec
+        .down_levels
+        .iter()
+        .map(|level| {
+            let keys = level.downsample.ok_or_else(|| ShapeError::Rank {
+                key: level.name.to_owned(),
+                actual: Vec::new(),
+                expected: 4,
+            })?;
+            conv(map, keys.weight)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| ShapeError::Mismatch {
+            key: "down levels".to_owned(),
+            actual: spec.down_levels.len(),
+            expected: 3,
+        })?;
     let mid = conv(map, spec.mid_level.resnets[0].conv1.weight)?;
-    let up = match spec.up_levels.first().and_then(|level| level.upsample) {
-        Some(keys) => Some(conv(map, keys.weight)?),
-        None => None,
-    };
+    let projections = spec
+        .projections
+        .iter()
+        .map(|keys| conv(map, keys.weight))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| ShapeError::Mismatch {
+            key: "projections".to_owned(),
+            actual: spec.projections.len(),
+            expected: 2,
+        })?;
     let output = conv(map, spec.conv_out.weight)?;
     let (hidden, dim) = linear(map, spec.timestep.linear1.weight)?;
     let (channels, hidden_out) = linear(map, spec.timestep.linear2.weight)?;
@@ -160,11 +181,11 @@ pub fn infer(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<UnetShapes
         });
     }
     Ok(UnetShapes {
-        latent_channels: entry.out_c,
+        latent_channels: entry.in_c,
         entry_kernel: entry.kernel,
-        down,
+        downsamples,
         mid_channels: mid.out_c,
-        up,
+        projections,
         output_channels: output.out_c,
         timestep_dim: dim,
         timestep_hidden: hidden,
@@ -177,7 +198,7 @@ pub fn infer(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<UnetShapes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_spec::{SD15_SINGLE_LEVEL, tensor_keys};
+    use crate::model_spec::{SD15_REDUCED, tensor_keys};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -253,47 +274,66 @@ mod tests {
         (TempFile(path), map)
     }
 
+    /// Shapes of the reduced graph the real loader actually reads.
     fn default_shape(key: &str) -> Vec<usize> {
-        if key == "time_embedding.linear_1.weight" {
-            vec![8, 4]
-        } else if key == "time_embedding.linear_2.weight" {
-            vec![8, 8]
-        } else if key.ends_with(".weight") {
-            vec![4, 4, 3, 3]
-        } else {
-            vec![4]
+        match key {
+            "time_embedding.linear_1.weight" => vec![1280, 320],
+            "time_embedding.linear_2.weight" => vec![1280, 1280],
+            "conv_in.weight" => vec![320, 4, 3, 3],
+            "down_blocks.0.downsamplers.0.conv.weight" => vec![320, 320, 3, 3],
+            "input_blocks.6.0.op.weight" => vec![640, 640, 3, 3],
+            "input_blocks.9.0.op.weight" | "mid_block.resnets.0.conv1.weight" => {
+                vec![1280, 1280, 3, 3]
+            }
+            "output_blocks.7.0.skip_connection.weight" => vec![640, 1280, 1, 1],
+            "output_blocks.10.0.skip_connection.weight" => vec![320, 640, 1, 1],
+            "conv_out.weight" => vec![4, 320, 3, 3],
+            "decoder.conv_in.weight" => vec![128, 4, 3, 3],
+            "decoder.conv_out.weight" => vec![3, 128, 3, 3],
+            _ if key.ends_with(".weight") => vec![4, 4, 3, 3],
+            _ => vec![4],
         }
     }
 
     #[test]
-    fn infer_reads_channels_kernel_and_linear_widths() {
-        let (_file, map) = checkpoint(&tensor_keys(&SD15_SINGLE_LEVEL), None);
-        let shapes = infer(&SD15_SINGLE_LEVEL, &map).expect("infer");
+    fn infer_reads_executed_channels_kernels_and_linear_widths() {
+        let (_file, map) = checkpoint(&tensor_keys(&SD15_REDUCED), None);
+        let shapes = infer(&SD15_REDUCED, &map).expect("infer");
         assert_eq!(shapes.latent_channels, 4);
         assert_eq!(shapes.entry_kernel, 3);
-        assert_eq!(shapes.mid_channels, 4);
+        assert_eq!(
+            shapes
+                .downsamples
+                .map(|info| (info.in_c, info.out_c, info.kernel)),
+            [(320, 320, 3), (640, 640, 3), (1280, 1280, 3)]
+        );
+        assert_eq!(shapes.mid_channels, 1280);
+        assert_eq!(
+            shapes
+                .projections
+                .map(|info| (info.in_c, info.out_c, info.kernel)),
+            [(1280, 640, 1), (640, 320, 1)]
+        );
         assert_eq!(shapes.output_channels, 4);
-        assert_eq!(shapes.timestep_dim, 4);
-        assert_eq!(shapes.timestep_hidden, 8);
-        assert_eq!(shapes.timestep_channels, 8);
-        assert_eq!(shapes.down.expect("down").kernel, 3);
-        assert_eq!(shapes.up.expect("up").in_c, 4);
-        assert_eq!(shapes.vae_entry.out_c, 4);
-        assert_eq!(shapes.vae_exit.in_c, 4);
+        assert_eq!(shapes.timestep_dim, 320);
+        assert_eq!(shapes.timestep_hidden, 1280);
+        assert_eq!(shapes.timestep_channels, 1280);
+        assert_eq!(shapes.vae_entry.out_c, 128);
+        assert_eq!(shapes.vae_exit.in_c, 128);
     }
 
     #[test]
     fn infer_rejects_bad_rank_and_channel_mismatch() {
-        let keys = tensor_keys(&SD15_SINGLE_LEVEL);
+        let keys = tensor_keys(&SD15_REDUCED);
         let (_file, map) = checkpoint(&keys, Some(&("time_embedding.linear_1.weight", vec![8])));
         assert!(matches!(
-            infer(&SD15_SINGLE_LEVEL, &map),
+            infer(&SD15_REDUCED, &map),
             Err(ShapeError::Rank { .. })
         ));
 
         let (_file, map) = checkpoint(&keys, Some(&("time_embedding.linear_2.weight", vec![2, 8])));
         assert!(matches!(
-            infer(&SD15_SINGLE_LEVEL, &map),
+            infer(&SD15_REDUCED, &map),
             Err(ShapeError::Mismatch { .. })
         ));
     }

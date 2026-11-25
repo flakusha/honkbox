@@ -17,7 +17,7 @@ use crate::{
     ddim_sampler::DdimSampler,
     device::{CapacityRequirements, VulkanDevice},
     model::{ModelSpec, Op},
-    model_spec::{SD15_SINGLE_LEVEL, validate},
+    model_spec::{SD15_REDUCED, validate},
     prompt,
     sampler::seeded_uniform_noise,
     shape_infer::{ShapeError, UnetShapes, infer},
@@ -188,8 +188,8 @@ fn admit_checkpoint(path: &Path) -> Result<(), SdError> {
 pub fn inspect_checkpoint(path: &Path) -> Result<UnetShapes, SdError> {
     let fail = |msg: String| SdError::Backend(format!("checkpoint '{}': {msg}", path.display()));
     let map = CheckpointMap::read(path).map_err(|e| fail(e.to_string()))?;
-    validate(&SD15_SINGLE_LEVEL, &map).map_err(|e| fail(e.to_string()))?;
-    infer(&SD15_SINGLE_LEVEL, &map).map_err(|e: ShapeError| fail(e.to_string()))
+    validate(&SD15_REDUCED, &map).map_err(|e| fail(e.to_string()))?;
+    infer(&SD15_REDUCED, &map).map_err(|e: ShapeError| fail(e.to_string()))
 }
 
 fn backend_error(message: impl std::fmt::Display) -> SdError {
@@ -480,7 +480,7 @@ mod tests {
     fn spec_checkpoint(omit: Option<&str>, prefixed: bool) -> TempFile {
         let mut header = serde_json::Map::new();
         let mut payload = Vec::new();
-        for (_, key) in tensor_keys(&SD15_SINGLE_LEVEL) {
+        for (_, key) in tensor_keys(&SD15_REDUCED) {
             if omit == Some(key.as_str()) {
                 continue;
             }

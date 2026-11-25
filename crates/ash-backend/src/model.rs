@@ -2,8 +2,8 @@
 //!
 //! A model is an ordered list of compute passes. New passes arrive as new
 //! [`Op`] variants plus a kernel module; dispatch, buffers and admission stay
-//! shared. Checkpoint key mapping is deliberately absent until a real model
-//! lands — nothing consumes it yet.
+//! shared. Checkpoint tensor names live in [`crate::model_spec`]; this module
+//! only declares the compute passes a device must admit.
 
 use crate::{
     VkError,

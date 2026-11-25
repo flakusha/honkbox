@@ -1,6 +1,6 @@
 # TASK: Restore Ash verification and provenance gates
 
-Status: proposed
+Status: done (2026-11-25; 9e3e39b)
 Priority: P1
 Epic: epic-sd-native-backend
 Owner: unassigned
@@ -26,10 +26,10 @@ Resources: normal CPU test process; parity remains ignored/opt-in and skips with
 
 ## Acceptance detail
 
-- [ ] `bun run audit:ash-lints`, `bun run test:ash` and `bun run test:ash:parity` resolve and run.
-- [ ] `bun run spdx` fails when an Ash shader lacks `// Provenance:`.
-- [ ] CI and pre-push no longer reference missing package scripts.
-- [ ] No CI step claims server Ash reachability before the server feature/constructor exists.
+- [x] `bun run audit:ash-lints`, `bun run test:ash` and `bun run test:ash:parity` resolve and run.
+- [x] `bun run spdx` fails when an Ash shader lacks `// Provenance:`.
+- [x] CI and pre-push no longer reference missing package scripts.
+- [x] No CI step claims server Ash reachability before the server feature/constructor exists.
 
 ## Non-goals
 

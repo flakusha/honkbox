@@ -1,6 +1,6 @@
 # TASK: Make the Ash backend compile-reachable and HTTP-selectable
 
-Status: proposed
+Status: in progress (2026-11-25; opt-in checkpoint smoke remains; 9e3e39b, c9a0098, 77f5c81)
 Priority: P0
 Epic: epic-sd-native-backend
 Owner: unassigned
@@ -31,12 +31,12 @@ Resources: owner-controlled merge/promotion; normal server tests for feature/cap
 
 ## Acceptance detail
 
-- [ ] Default server build neither accepts `ash-sd` nor advertises it.
-- [ ] `--features ash-sd` compiles the shared constructor and both CLI/HTTP selection paths.
-- [ ] HTTP capability output matches actual compiled selection; generated snapshots stay in sync.
-- [ ] Missing Vulkan capabilities fail by name rather than returning a fake image or silently selecting another backend.
-- [ ] `BUG-ash-sd15-numerics.md` and `TASK-ash-verification-gates.md` are complete.
-- [ ] Existing Stub/SdCpp tests pass with and without the feature.
+- [x] Default server build neither accepts `ash-sd` nor advertises it.
+- [x] `--features ash-sd` compiles the shared constructor and both CLI/HTTP selection paths.
+- [x] HTTP capability output matches actual compiled selection; generated snapshots stay in sync.
+- [x] Missing Vulkan capabilities fail by name rather than returning a fake image or silently selecting another backend.
+- [x] `BUG-ash-sd15-numerics.md` and `TASK-ash-verification-gates.md` are complete.
+- [x] Existing Stub/SdCpp tests pass with and without the feature.
 - [ ] Opt-in smoke evidence records checkpoint digest/license, device/driver and output hash; absence of hardware remains an explicit unmeasured result.
 
 ## Non-goals

@@ -1,7 +1,7 @@
 //! Declarative tensor-name map for a checkpoint family and `UNet` level topology.
 //!
-//! ponytail: names and presence only. Shape inference, key remapping and
-//! server dispatch come after a real checkpoint confirms this naming.
+//! ponytail: names and presence only, for the reduced graph that executes
+//! today; no full-fidelity block traversal is declared here.
 
 use crate::checkpoint::CheckpointMap;
 use std::error::Error;
@@ -25,20 +25,25 @@ pub struct NormKeys<'a> {
     pub bias: &'a str,
 }
 
-/// One `ResNet` block: two conv+norm pairs.
+/// One `ResNet` block: two conv+norm pairs, a timestep projection and an
+/// optional 1×1 shortcut when the channel count changes.
 #[derive(Debug, Clone, Copy)]
 pub struct ResnetKeys<'a> {
     /// First conv.
     pub conv1: ConvKeys<'a>,
     /// First group norm.
     pub norm1: NormKeys<'a>,
-    /// Second conv.
-    pub conv2: ConvKeys<'a>,
+    /// Timestep projection (`emb_layers.1` in the loader).
+    pub time: ConvKeys<'a>,
     /// Second group norm.
     pub norm2: NormKeys<'a>,
+    /// Second conv.
+    pub conv2: ConvKeys<'a>,
+    /// Channel-changing shortcut, if the loader needs one.
+    pub shortcut: Option<ConvKeys<'a>>,
 }
 
-/// One level: resnets plus an optional downsampler or upsampler.
+/// One level: resnets plus an optional downsampler.
 #[derive(Debug, Clone, Copy)]
 pub struct LevelSpec<'a> {
     /// Human-readable level name for errors.
@@ -47,8 +52,6 @@ pub struct LevelSpec<'a> {
     pub resnets: &'a [ResnetKeys<'a>],
     /// Downsampler conv, if this level has one.
     pub downsample: Option<ConvKeys<'a>>,
-    /// Upsampler conv, if this level has one.
-    pub upsample: Option<ConvKeys<'a>>,
 }
 
 /// Timestep MLP names.
@@ -58,6 +61,19 @@ pub struct TimestepKeys<'a> {
     pub linear1: ConvKeys<'a>,
     /// Second linear layer.
     pub linear2: ConvKeys<'a>,
+}
+
+/// Mid-block cross-attention names. SD 1.5 has no Q/K/V biases; `to_out.0` has one.
+#[derive(Debug, Clone, Copy)]
+pub struct CrossKeys<'a> {
+    /// Query projection weight.
+    pub q: &'a str,
+    /// Key projection weight.
+    pub k: &'a str,
+    /// Value projection weight.
+    pub v: &'a str,
+    /// Output projection weight and bias.
+    pub out: ConvKeys<'a>,
 }
 
 /// VAE decoder entry/exit names (one block).
@@ -80,10 +96,12 @@ pub struct UnetModelSpec<'a> {
     pub conv_in: ConvKeys<'a>,
     /// Encoder levels, in execution order.
     pub down_levels: &'a [LevelSpec<'a>],
-    /// Bottleneck level.
+    /// Bottleneck resnets, in execution order.
     pub mid_level: LevelSpec<'a>,
-    /// Decoder levels, in execution order.
-    pub up_levels: &'a [LevelSpec<'a>],
+    /// Cross-attention projections between the mid resnets.
+    pub cross: CrossKeys<'a>,
+    /// 1×1 channel projections after the host nearest upsample.
+    pub projections: &'a [ConvKeys<'a>],
     /// `UNet` output norm and convolution.
     pub norm_out: NormKeys<'a>,
     /// `UNet` output convolution.
@@ -128,6 +146,10 @@ fn norm_keys(role: &str, keys: NormKeys<'_>, out: &mut KeyList) {
     out.push((role.to_owned(), keys.bias.to_owned()));
 }
 
+fn weight_key(role: &str, key: &str, out: &mut KeyList) {
+    out.push((role.to_owned(), key.to_owned()));
+}
+
 /// All `(role, key)` pairs declared by a spec, in traversal order.
 pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -136,7 +158,6 @@ pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
         .down_levels
         .iter()
         .chain(std::iter::once(&spec.mid_level))
-        .chain(spec.up_levels.iter())
     {
         for (index, resnet) in level.resnets.iter().enumerate() {
             conv_keys(
@@ -150,8 +171,8 @@ pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
                 &mut out,
             );
             conv_keys(
-                &format!("{} resnet {index} conv2", level.name),
-                resnet.conv2,
+                &format!("{} resnet {index} time", level.name),
+                resnet.time,
                 &mut out,
             );
             norm_keys(
@@ -159,13 +180,29 @@ pub fn tensor_keys(spec: &UnetModelSpec<'_>) -> Vec<(String, String)> {
                 resnet.norm2,
                 &mut out,
             );
+            conv_keys(
+                &format!("{} resnet {index} conv2", level.name),
+                resnet.conv2,
+                &mut out,
+            );
+            if let Some(keys) = resnet.shortcut {
+                conv_keys(
+                    &format!("{} resnet {index} shortcut", level.name),
+                    keys,
+                    &mut out,
+                );
+            }
         }
         if let Some(keys) = level.downsample {
             conv_keys(&format!("{} downsample", level.name), keys, &mut out);
         }
-        if let Some(keys) = level.upsample {
-            conv_keys(&format!("{} upsample", level.name), keys, &mut out);
-        }
+    }
+    weight_key("cross q", spec.cross.q, &mut out);
+    weight_key("cross k", spec.cross.k, &mut out);
+    weight_key("cross v", spec.cross.v, &mut out);
+    conv_keys("cross out", spec.cross.out, &mut out);
+    for (index, keys) in spec.projections.iter().enumerate() {
+        conv_keys(&format!("projection {index}"), *keys, &mut out);
     }
     norm_keys("output norm", spec.norm_out, &mut out);
     conv_keys("output conv", spec.conv_out, &mut out);
@@ -187,127 +224,184 @@ pub fn validate(spec: &UnetModelSpec<'_>, map: &CheckpointMap) -> Result<(), Spe
     Ok(())
 }
 
-static DOWN_RESNETS: [ResnetKeys<'static>; 2] = [
-    ResnetKeys {
-        conv1: ConvKeys {
-            weight: "down_blocks.0.resnets.0.conv1.weight",
-            bias: "down_blocks.0.resnets.0.conv1.bias",
-        },
-        norm1: NormKeys {
-            weight: "down_blocks.0.resnets.0.norm1.weight",
-            bias: "down_blocks.0.resnets.0.norm1.bias",
-        },
-        conv2: ConvKeys {
-            weight: "down_blocks.0.resnets.0.conv2.weight",
-            bias: "down_blocks.0.resnets.0.conv2.bias",
-        },
-        norm2: NormKeys {
-            weight: "down_blocks.0.resnets.0.norm2.weight",
-            bias: "down_blocks.0.resnets.0.norm2.bias",
-        },
+// Where `CheckpointMap` has an alias the spec uses the diffusers-style name;
+// later levels use the loader's original name without `model.diffusion_model.`.
+static DOWN_LEVELS: [LevelSpec<'static>; 3] = [
+    LevelSpec {
+        name: "down level 0",
+        resnets: &[ResnetKeys {
+            conv1: ConvKeys {
+                weight: "down_blocks.0.resnets.0.conv1.weight",
+                bias: "down_blocks.0.resnets.0.conv1.bias",
+            },
+            norm1: NormKeys {
+                weight: "down_blocks.0.resnets.0.norm1.weight",
+                bias: "down_blocks.0.resnets.0.norm1.bias",
+            },
+            time: ConvKeys {
+                weight: "down_blocks.0.resnets.0.emb_layers.1.weight",
+                bias: "down_blocks.0.resnets.0.emb_layers.1.bias",
+            },
+            norm2: NormKeys {
+                weight: "down_blocks.0.resnets.0.norm2.weight",
+                bias: "down_blocks.0.resnets.0.norm2.bias",
+            },
+            conv2: ConvKeys {
+                weight: "down_blocks.0.resnets.0.conv2.weight",
+                bias: "down_blocks.0.resnets.0.conv2.bias",
+            },
+            shortcut: None,
+        }],
+        downsample: Some(ConvKeys {
+            weight: "down_blocks.0.downsamplers.0.conv.weight",
+            bias: "down_blocks.0.downsamplers.0.conv.bias",
+        }),
     },
-    ResnetKeys {
-        conv1: ConvKeys {
-            weight: "down_blocks.0.resnets.1.conv1.weight",
-            bias: "down_blocks.0.resnets.1.conv1.bias",
-        },
-        norm1: NormKeys {
-            weight: "down_blocks.0.resnets.1.norm1.weight",
-            bias: "down_blocks.0.resnets.1.norm1.bias",
-        },
-        conv2: ConvKeys {
-            weight: "down_blocks.0.resnets.1.conv2.weight",
-            bias: "down_blocks.0.resnets.1.conv2.bias",
-        },
-        norm2: NormKeys {
-            weight: "down_blocks.0.resnets.1.norm2.weight",
-            bias: "down_blocks.0.resnets.1.norm2.bias",
-        },
+    LevelSpec {
+        name: "down level 1",
+        resnets: &[ResnetKeys {
+            conv1: ConvKeys {
+                weight: "input_blocks.4.0.conv1.weight",
+                bias: "input_blocks.4.0.conv1.bias",
+            },
+            norm1: NormKeys {
+                weight: "input_blocks.4.0.norm1.weight",
+                bias: "input_blocks.4.0.norm1.bias",
+            },
+            time: ConvKeys {
+                weight: "input_blocks.4.0.emb_layers.1.weight",
+                bias: "input_blocks.4.0.emb_layers.1.bias",
+            },
+            norm2: NormKeys {
+                weight: "input_blocks.4.0.norm2.weight",
+                bias: "input_blocks.4.0.norm2.bias",
+            },
+            conv2: ConvKeys {
+                weight: "input_blocks.4.0.conv2.weight",
+                bias: "input_blocks.4.0.conv2.bias",
+            },
+            shortcut: Some(ConvKeys {
+                weight: "input_blocks.4.0.skip_connection.weight",
+                bias: "input_blocks.4.0.skip_connection.bias",
+            }),
+        }],
+        downsample: Some(ConvKeys {
+            weight: "input_blocks.6.0.op.weight",
+            bias: "input_blocks.6.0.op.bias",
+        }),
+    },
+    LevelSpec {
+        name: "down level 2",
+        resnets: &[ResnetKeys {
+            conv1: ConvKeys {
+                weight: "input_blocks.7.0.conv1.weight",
+                bias: "input_blocks.7.0.conv1.bias",
+            },
+            norm1: NormKeys {
+                weight: "input_blocks.7.0.norm1.weight",
+                bias: "input_blocks.7.0.norm1.bias",
+            },
+            time: ConvKeys {
+                weight: "input_blocks.7.0.emb_layers.1.weight",
+                bias: "input_blocks.7.0.emb_layers.1.bias",
+            },
+            norm2: NormKeys {
+                weight: "input_blocks.7.0.norm2.weight",
+                bias: "input_blocks.7.0.norm2.bias",
+            },
+            conv2: ConvKeys {
+                weight: "input_blocks.7.0.conv2.weight",
+                bias: "input_blocks.7.0.conv2.bias",
+            },
+            shortcut: Some(ConvKeys {
+                weight: "input_blocks.7.0.skip_connection.weight",
+                bias: "input_blocks.7.0.skip_connection.bias",
+            }),
+        }],
+        downsample: Some(ConvKeys {
+            weight: "input_blocks.9.0.op.weight",
+            bias: "input_blocks.9.0.op.bias",
+        }),
     },
 ];
 
-static MID_RESNETS: [ResnetKeys<'static>; 1] = [ResnetKeys {
-    conv1: ConvKeys {
-        weight: "mid_block.resnets.0.conv1.weight",
-        bias: "mid_block.resnets.0.conv1.bias",
-    },
-    norm1: NormKeys {
-        weight: "mid_block.resnets.0.norm1.weight",
-        bias: "mid_block.resnets.0.norm1.bias",
-    },
-    conv2: ConvKeys {
-        weight: "mid_block.resnets.0.conv2.weight",
-        bias: "mid_block.resnets.0.conv2.bias",
-    },
-    norm2: NormKeys {
-        weight: "mid_block.resnets.0.norm2.weight",
-        bias: "mid_block.resnets.0.norm2.bias",
-    },
-}];
-
-static UP_RESNETS: [ResnetKeys<'static>; 2] = [
+static MID_RESNETS: [ResnetKeys<'static>; 2] = [
     ResnetKeys {
         conv1: ConvKeys {
-            weight: "up_blocks.1.resnets.0.conv1.weight",
-            bias: "up_blocks.1.resnets.0.conv1.bias",
+            weight: "mid_block.resnets.0.conv1.weight",
+            bias: "mid_block.resnets.0.conv1.bias",
         },
         norm1: NormKeys {
-            weight: "up_blocks.1.resnets.0.norm1.weight",
-            bias: "up_blocks.1.resnets.0.norm1.bias",
+            weight: "mid_block.resnets.0.norm1.weight",
+            bias: "mid_block.resnets.0.norm1.bias",
         },
-        conv2: ConvKeys {
-            weight: "up_blocks.1.resnets.0.conv2.weight",
-            bias: "up_blocks.1.resnets.0.conv2.bias",
+        time: ConvKeys {
+            weight: "mid_block.resnets.0.emb_layers.1.weight",
+            bias: "mid_block.resnets.0.emb_layers.1.bias",
         },
         norm2: NormKeys {
-            weight: "up_blocks.1.resnets.0.norm2.weight",
-            bias: "up_blocks.1.resnets.0.norm2.bias",
+            weight: "mid_block.resnets.0.norm2.weight",
+            bias: "mid_block.resnets.0.norm2.bias",
         },
+        conv2: ConvKeys {
+            weight: "mid_block.resnets.0.conv2.weight",
+            bias: "mid_block.resnets.0.conv2.bias",
+        },
+        shortcut: None,
     },
     ResnetKeys {
         conv1: ConvKeys {
-            weight: "up_blocks.1.resnets.1.conv1.weight",
-            bias: "up_blocks.1.resnets.1.conv1.bias",
+            weight: "middle_block.2.conv1.weight",
+            bias: "middle_block.2.conv1.bias",
         },
         norm1: NormKeys {
-            weight: "up_blocks.1.resnets.1.norm1.weight",
-            bias: "up_blocks.1.resnets.1.norm1.bias",
+            weight: "middle_block.2.norm1.weight",
+            bias: "middle_block.2.norm1.bias",
         },
-        conv2: ConvKeys {
-            weight: "up_blocks.1.resnets.1.conv2.weight",
-            bias: "up_blocks.1.resnets.1.conv2.bias",
+        time: ConvKeys {
+            weight: "middle_block.2.emb_layers.1.weight",
+            bias: "middle_block.2.emb_layers.1.bias",
         },
         norm2: NormKeys {
-            weight: "up_blocks.1.resnets.1.norm2.weight",
-            bias: "up_blocks.1.resnets.1.norm2.bias",
+            weight: "middle_block.2.norm2.weight",
+            bias: "middle_block.2.norm2.bias",
         },
+        conv2: ConvKeys {
+            weight: "middle_block.2.conv2.weight",
+            bias: "middle_block.2.conv2.bias",
+        },
+        shortcut: None,
     },
 ];
 
-static DOWN_LEVELS: [LevelSpec<'static>; 1] = [LevelSpec {
-    name: "down level 0",
-    resnets: &DOWN_RESNETS,
-    downsample: Some(ConvKeys {
-        weight: "down_blocks.0.downsamplers.0.conv.weight",
-        bias: "down_blocks.0.downsamplers.0.conv.bias",
-    }),
-    upsample: None,
-}];
+static CROSS: CrossKeys<'static> = CrossKeys {
+    q: "middle_block.1.transformer_blocks.0.attn2.to_q.weight",
+    k: "middle_block.1.transformer_blocks.0.attn2.to_k.weight",
+    v: "middle_block.1.transformer_blocks.0.attn2.to_v.weight",
+    out: ConvKeys {
+        weight: "middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
+        bias: "middle_block.1.transformer_blocks.0.attn2.to_out.0.bias",
+    },
+};
 
-static UP_LEVELS: [LevelSpec<'static>; 1] = [LevelSpec {
-    name: "up level 0",
-    resnets: &UP_RESNETS,
-    downsample: None,
-    upsample: Some(ConvKeys {
-        weight: "up_blocks.1.upsamplers.0.conv.weight",
-        bias: "up_blocks.1.upsamplers.0.conv.bias",
-    }),
-}];
+static PROJECTIONS: [ConvKeys<'static>; 2] = [
+    ConvKeys {
+        weight: "output_blocks.7.0.skip_connection.weight",
+        bias: "output_blocks.7.0.skip_connection.bias",
+    },
+    ConvKeys {
+        weight: "output_blocks.10.0.skip_connection.weight",
+        bias: "output_blocks.10.0.skip_connection.bias",
+    },
+];
 
-/// SD 1.5-style naming for a one-level topology. New model families add a
-/// sibling constant; no runtime branching on names is needed.
-pub static SD15_SINGLE_LEVEL: UnetModelSpec<'static> = UnetModelSpec {
-    family: "sd15-single-level",
+/// Keys for the reduced graph that `unet_real` actually loads and predicts;
+/// VAE entry/exit keys cover the reduced decoder in `vae_real`.
+///
+/// ponytail: reduced topology, not SD1.5 fidelity. Add real up blocks and
+/// their skip connections here when full-fidelity parity is required.
+pub static SD15_REDUCED: UnetModelSpec<'static> = UnetModelSpec {
+    family: "sd15-reduced",
     conv_in: ConvKeys {
         weight: "conv_in.weight",
         bias: "conv_in.bias",
@@ -317,9 +411,9 @@ pub static SD15_SINGLE_LEVEL: UnetModelSpec<'static> = UnetModelSpec {
         name: "mid level",
         resnets: &MID_RESNETS,
         downsample: None,
-        upsample: None,
     },
-    up_levels: &UP_LEVELS,
+    cross: CROSS,
+    projections: &PROJECTIONS,
     norm_out: NormKeys {
         weight: "conv_norm_out.weight",
         bias: "conv_norm_out.bias",
@@ -411,29 +505,39 @@ mod tests {
     }
 
     #[test]
-    fn sd15_spec_declares_level_topology_and_required_keys() {
-        assert_eq!(SD15_SINGLE_LEVEL.down_levels.len(), 1);
-        assert_eq!(SD15_SINGLE_LEVEL.down_levels[0].resnets.len(), 2);
-        assert_eq!(SD15_SINGLE_LEVEL.up_levels[0].resnets.len(), 2);
-        assert!(SD15_SINGLE_LEVEL.down_levels[0].downsample.is_some());
-        assert!(SD15_SINGLE_LEVEL.up_levels[0].upsample.is_some());
-        let keys = tensor_keys(&SD15_SINGLE_LEVEL);
-        assert!(
-            keys.iter()
-                .any(|(_, key)| key == "mid_block.resnets.0.norm2.weight")
-        );
-        assert!(keys.iter().any(|(_, key)| key == "decoder.conv_out.bias"));
+    fn reduced_spec_declares_executed_topology_and_required_keys() {
+        assert_eq!(SD15_REDUCED.down_levels.len(), 3);
+        for level in SD15_REDUCED.down_levels {
+            assert_eq!(level.resnets.len(), 1);
+            assert!(level.downsample.is_some());
+        }
+        assert_eq!(SD15_REDUCED.mid_level.resnets.len(), 2);
+        assert_eq!(SD15_REDUCED.projections.len(), 2);
+        let keys = tensor_keys(&SD15_REDUCED);
+        for key in [
+            "down_blocks.0.resnets.0.emb_layers.1.bias",
+            "input_blocks.4.0.skip_connection.weight",
+            "middle_block.1.transformer_blocks.0.attn2.to_out.0.weight",
+            "output_blocks.10.0.skip_connection.weight",
+            "time_embedding.linear_2.bias",
+            "decoder.conv_out.bias",
+        ] {
+            assert!(
+                keys.iter().any(|(_, declared)| declared == key),
+                "missing {key}"
+            );
+        }
     }
 
     #[test]
     fn validate_reports_missing_tensor_role_and_key() {
-        let mut keys = tensor_keys(&SD15_SINGLE_LEVEL);
+        let mut keys = tensor_keys(&SD15_REDUCED);
         let (_file, map) = checkpoint(&keys);
-        assert!(validate(&SD15_SINGLE_LEVEL, &map).is_ok());
+        assert!(validate(&SD15_REDUCED, &map).is_ok());
 
         keys.retain(|(_, key)| key != "time_embedding.linear_2.bias");
         let (_file, map) = checkpoint(&keys);
-        match validate(&SD15_SINGLE_LEVEL, &map) {
+        match validate(&SD15_REDUCED, &map) {
             Err(SpecError::Missing { role, key }) => {
                 assert_eq!(role, "timestep linear 2");
                 assert_eq!(key, "time_embedding.linear_2.bias");
@@ -444,7 +548,7 @@ mod tests {
 
     #[test]
     fn validate_accepts_single_file_prefixed_keys() {
-        let keys: Vec<_> = tensor_keys(&SD15_SINGLE_LEVEL)
+        let keys: Vec<_> = tensor_keys(&SD15_REDUCED)
             .into_iter()
             .map(|(role, key)| {
                 let prefix = if key.starts_with("decoder.") {
@@ -456,7 +560,7 @@ mod tests {
             })
             .collect();
         let (_file, map) = checkpoint(&keys);
-        assert!(validate(&SD15_SINGLE_LEVEL, &map).is_ok());
+        assert!(validate(&SD15_REDUCED, &map).is_ok());
         assert!(map.get("conv_in.weight").is_none());
     }
 }

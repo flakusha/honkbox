@@ -75,7 +75,9 @@
 //!   projections with cross-attention and residual add.
 //! - [`sd`]: [`sd::AshSdPipeline`], implementing `honkbox-sd-core`'s
 //!   `SdPipeline`; `generate` validates request, device and checkpoint, then
-//!   stops with a named sampling error until diffusion kernels land.
+//!   samples on the reduced SD 1.5 topology in [`unet_real`] / [`vae_real`]
+//!   (three down levels, one cross-attention layer, host upsample, two 1×1
+//!   projections) — not a full-fidelity SD 1.5 graph.
 //! - [`sdxl`]: [`sdxl::inspect_sdxl_checkpoint`], header-only SDXL shape
 //!   validation and dual-CLIP readiness report (no tensor payload decoded).
 //! - [`llm`]: [`llm::AshLlmPipeline`], implementing the `honkbox-llm-worker`

@@ -1,6 +1,6 @@
 # BUG: Ash SD1.5 timestep and residual numerics
 
-Status: proposed
+Status: done (2026-11-25; c9a0098, 77f5c81)
 Priority: P0
 Epic: epic-sd-native-backend
 Owner: unassigned
@@ -24,10 +24,10 @@ Resources: deterministic CPU vectors and existing synthetic Ash tests; no checkp
 
 ## Acceptance detail
 
-- [ ] `sinusoidal_matches_ggml_half_split` compares exact slot placement against an independent CPU reference.
-- [ ] `resnet_timestep_projection_applies_silu` compares the projected embedding against `SiLU(time)` followed by the stored linear/bias.
-- [ ] Existing Ash SD1.5 tests stay green; no public capability or route changes.
-- [ ] `TASK-ash-backend-promote.md` treats this bug as a promotion blocker.
+- [x] `sinusoidal_matches_ggml_half_split` compares exact slot placement against an independent CPU reference.
+- [x] `resnet_timestep_projection_applies_silu` compares the projected embedding against `SiLU(time)` followed by the stored linear/bias.
+- [x] Existing Ash SD1.5 tests stay green; no public capability or route changes.
+- [x] `TASK-ash-backend-promote.md` treats this bug as a promotion blocker.
 
 ## Non-goals
 
