@@ -1,6 +1,6 @@
 # TASK: Honor EXIF orientation on image inputs
 
-Status: done (image-ops slice; generate-path premise corrected)
+Status: in progress (code + fixtures landed on `fix/img-exif-orientation`; bin-test re-run blocked by shared-target stale test-profile server unit — see FIXED intercom note)
 **Scope:** image-ops EXIF orientation honor
 Priority: P1
 Epic: epic-output-formats
