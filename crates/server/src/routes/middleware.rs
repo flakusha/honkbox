@@ -208,10 +208,11 @@ pub(crate) fn consumer_id(headers: &HeaderMap) -> String {
         .map(str::trim)
         .filter(|key| !key.is_empty());
     let (enabled, scope_map) = runtime_config::scope_facts();
-    if enabled && !scope_map.is_empty() {
-        if let Some((env_name, _)) = scoped_key_match(presented, &scope_map, "write") {
-            return env_name.to_owned();
-        }
+    if enabled
+        && !scope_map.is_empty()
+        && let Some((env_name, _)) = scoped_key_match(presented, &scope_map, "write")
+    {
+        return env_name.to_owned();
     }
     presented.map_or_else(
         || sha256_hex(b"anonymous"),

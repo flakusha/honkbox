@@ -131,6 +131,13 @@ pub struct Capabilities {
     /// catalog. Additive optional field per the version policy above.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub licenses: Option<LicenseCapability>,
+    /// Enforced Blender job bounds (`POST /v1/jobs/blender`): the input-byte
+    /// cap, the output-byte cap and the wall-clock timeout bounds the route
+    /// enforces. Read from the route’s own constants, so the advertisement
+    /// cannot drift from the enforcement. Additive optional field per the
+    /// version policy above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blender_limits: Option<BlenderLimitsCapability>,
     /// Where the generated `OpenAPI` document lives.
     pub openapi: String,
     /// Where the model catalog lives.
@@ -182,6 +189,21 @@ pub struct StorageCapability {
     pub data_dir_present: bool,
 }
 
+/// Enforced Blender job bounds (`Capabilities::blender_limits`): the byte
+/// and timeout caps the `POST /v1/jobs/blender` route enforces. Every value
+/// is read from the route’s own constants, so the advertisement cannot
+/// drift from the enforcement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS, ToSchema)]
+pub struct BlenderLimitsCapability {
+    /// Largest mesh the route hands to Blender, in bytes.
+    pub max_input_bytes: u64,
+    /// Largest artifact set a job may produce, in bytes.
+    pub max_output_bytes: u64,
+    /// Wall-clock bound applied when the request names no timeout, in seconds.
+    pub default_timeout_secs: u64,
+    /// Largest wall-clock bound a request may ask for, in seconds.
+    pub max_timeout_secs: u64,
+}
 /// Compile-time audio.cpp surface (`Capabilities::features.audio_cpp`).
 /// Family lists come from the audio-worker crate's own features, so the
 /// document cannot advertise a family this binary cannot load.
@@ -3153,6 +3175,7 @@ mod tests {
             ArtifactInfo::decl(&config),
             ArtifactManifest::decl(&config),
             Capabilities::decl(&config),
+            BlenderLimitsCapability::decl(&config),
             LicenseCapability::decl(&config),
             LicenseSummaryRow::decl(&config),
             StorageCapability::decl(&config),

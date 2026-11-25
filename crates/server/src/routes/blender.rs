@@ -22,7 +22,9 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use honkbox_api_types::{BlenderJobAccepted, BlenderJobRequest, BlenderStage, OpenAiError};
+use honkbox_api_types::{
+    BlenderJobAccepted, BlenderJobRequest, BlenderLimitsCapability, BlenderStage, OpenAiError,
+};
 use honkbox_external_tools::{AssetStage, MeshFormat, recipe_sha256};
 
 use super::AppConfig;
@@ -32,14 +34,26 @@ use super::external_tools::blender_engine;
 use super::openai_constraints::openai_error_response;
 
 /// The largest mesh the route hands to Blender (bytes).
-pub(super) const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The largest artifact set a job may produce (bytes).
-const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// The job's wall-clock bounds (seconds).
-const DEFAULT_TIMEOUT_SECS: u64 = 600;
-const MAX_TIMEOUT_SECS: u64 = 3600;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
+pub const MAX_TIMEOUT_SECS: u64 = 3600;
+
+/// The enforced Blender job bounds, as advertised in
+/// `GET /v1/capabilities`. The capability document reads THIS, so the
+/// advertised bounds cannot drift from the ones the route enforces.
+pub fn limits() -> BlenderLimitsCapability {
+    BlenderLimitsCapability {
+        max_input_bytes: MAX_INPUT_BYTES,
+        max_output_bytes: MAX_OUTPUT_BYTES,
+        default_timeout_secs: DEFAULT_TIMEOUT_SECS,
+        max_timeout_secs: MAX_TIMEOUT_SECS,
+    }
+}
 
 /// The default artifact name prefix.
 const DEFAULT_PREFIX: &str = "output";

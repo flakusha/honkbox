@@ -48,9 +48,6 @@ mod ora;
 #[path = "../src/raster.rs"]
 mod raster;
 #[allow(dead_code)]
-#[path = "../src/routes.rs"]
-mod routes;
-#[allow(dead_code)]
 #[path = "../src/svg.rs"]
 mod svg;
 #[allow(dead_code)]
@@ -72,6 +69,8 @@ mod harness {
         use honkbox_api_types::BlenderStage;
         use honkbox_external_tools::{AssetStage, MeshFormat};
 
+        // `execute` reads these in production; publication tests never call it.
+        #[allow(dead_code)]
         #[derive(Debug)]
         pub(crate) struct JobPlan {
             pub(crate) stages: Vec<AssetStage>,
@@ -102,6 +101,7 @@ mod harness {
     }
 
     /// `execute` is never called here; this only compiles its imports.
+    #[allow(dead_code)]
     pub(crate) mod supervisor {
         use std::path::Path;
         use std::time::Duration;
@@ -144,6 +144,10 @@ mod harness {
         }
     }
 
+    // Test-seam binding: `super::super::` inside resolves to the stand-ins
+    // above, not the real router tree. Only `publish` is driven, so the
+    // exec half never runs in this target.
+    #[allow(dead_code)]
     #[path = "../../src/routes/blender_exec.rs"]
     pub(crate) mod blender_exec;
 }
@@ -178,7 +182,10 @@ fn stage_outputs(root: &Path, rows: &[(&str, &[u8])]) -> Vec<AssetArtifact> {
             std::fs::write(dir.join(name), bytes).expect("staged artifact");
             AssetArtifact {
                 path: dir.join(name),
-                kind: if name.ends_with(".glb") {
+                kind: if Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
+                {
                     "model"
                 } else {
                     "map"

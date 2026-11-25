@@ -340,5 +340,8 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
                 })
                 .collect(),
         }),
+        // The job route constants are the single source of truth: these
+        // values are the bounds that route actually enforces.
+        blender_limits: Some(super::blender::limits()),
     }
 }

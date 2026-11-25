@@ -1072,7 +1072,7 @@ fn generate(args: GenerateArgs, config: Option<PathBuf>, data_dir_flag: Option<P
         annotations: Vec::new(),
     };
     let record = jobs::image_metadata::generation_record(&inputs);
-    let bytes = or_exit(jobs::image_metadata::embed_record(bytes, format, &record));
+    let bytes = or_exit(jobs::image_metadata::embed_record(&bytes, format, &record));
     let dir = or_exit(jobs::write_bundle(
         &base,
         &inputs,
