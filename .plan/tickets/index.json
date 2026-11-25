@@ -2242,6 +2242,19 @@
     "source": ".plan/tickets/TASK-image-ops-job-route.md",
     "status": "done"
   },
+  "TASK-IMAGE-OPS-MANIFEST-LAST": {
+    "hash": "pending",
+    "extid": "TASK-IMAGE-OPS-MANIFEST-LAST",
+    "type": "TASK",
+    "title": "Manifest-last image-op publication",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-image-ops-manifest-last.md",
+    "status": "proposed"
+  },
   "TASK-IMAGE-TAGGING-SPIKE": {
     "hash": "84c1296",
     "git_issue": "84c1296",
@@ -2440,6 +2453,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-llm-moe-tier-offload.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-PREFIX-KV-REUSE": {
+    "hash": "pending",
+    "extid": "TASK-LLM-PREFIX-KV-REUSE",
+    "type": "TASK",
+    "title": "Persistent prefix/KV reuse",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-prefix-kv-reuse.md",
     "status": "proposed"
   },
   "TASK-LLM-PROMPT-CACHE": {
