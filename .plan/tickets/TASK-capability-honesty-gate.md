@@ -1,6 +1,7 @@
 # TASK: Capability honesty gate
 
-Status: proposed
+Status: In Progress
+**Scope:** Advertise enforced Blender byte/timeout caps in /v1/capabilities
 Priority: P0
 Epic: epic-capabilities-contract
 Owner: unassigned
