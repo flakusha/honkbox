@@ -2,11 +2,12 @@
 //!
 //! Every test owns a unique temp directory under `TMPDIR` with PID, timestamp
 //! and a local collision counter; RAII removes it on every exit path.
+#![cfg(feature = "ash-compute")]
 
 use honkbox_ash_backend::checkpoint::{GgufMap, GgufType, GgufValue};
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TempDir(PathBuf);

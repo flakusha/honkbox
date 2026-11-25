@@ -1,5 +1,9 @@
 api_version
 auth.mode
+blender_limits.default_timeout_secs
+blender_limits.max_input_bytes
+blender_limits.max_output_bytes
+blender_limits.max_timeout_secs
 external_tools.tools
 features.artifact_delivery
 features.audio_cpp.built

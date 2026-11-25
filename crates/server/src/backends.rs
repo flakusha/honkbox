@@ -121,6 +121,7 @@ pub enum SdBackend {
 /// Image pipeline: stub unit struct, file backend via `resolve` slug→path,
 /// or the direct-Vulkan Ash pipeline. `vocab_dir` is the optional CLIP
 /// tokenizer directory passed by `generate`; HTTP passes `None`.
+#[allow(clippy::needless_pass_by_value)] // consumed only under `ash-sd`
 #[must_use]
 pub fn make_sd(
     backend: SdBackend,

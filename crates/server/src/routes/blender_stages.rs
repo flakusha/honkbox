@@ -32,15 +32,15 @@ const MIN_VOXEL_SIZE: f64 = 0.001;
 const MAX_VOXEL_SIZE: f64 = 1000.0;
 
 /// Shared bounds for the two view-based stages (`turntable`, `thumbnail`).
-fn check_view_bounds(frames: &u32, resolution: &u32) -> Result<(), Rejection> {
-    if *frames == 0 || *frames > MAX_TURNTABLE_FRAMES {
+fn check_view_bounds(frames: u32, resolution: u32) -> Result<(), Rejection> {
+    if frames == 0 || frames > MAX_TURNTABLE_FRAMES {
         return Err((
             StatusCode::BAD_REQUEST,
             format!("frames must be 1..={MAX_TURNTABLE_FRAMES}"),
             "blender_stage_frames",
         ));
     }
-    if *resolution < MIN_TURNTABLE_RESOLUTION || *resolution > MAX_TURNTABLE_RESOLUTION {
+    if !(MIN_TURNTABLE_RESOLUTION..=MAX_TURNTABLE_RESOLUTION).contains(&resolution) {
         return Err((
             StatusCode::BAD_REQUEST,
             format!("resolution must be {MIN_TURNTABLE_RESOLUTION}..={MAX_TURNTABLE_RESOLUTION}"),
@@ -166,14 +166,14 @@ pub(super) fn map_stage(
         }
         BlenderStage::ExportGlb => Ok(AssetStage::ExportGlb),
         BlenderStage::Turntable { frames, resolution } => {
-            check_view_bounds(frames, resolution)?;
+            check_view_bounds(*frames, *resolution)?;
             Ok(AssetStage::Turntable {
                 frames: *frames,
                 resolution: *resolution,
             })
         }
         BlenderStage::Thumbnail { frames, resolution } => {
-            check_view_bounds(frames, resolution)?;
+            check_view_bounds(*frames, *resolution)?;
             Ok(AssetStage::Thumbnail {
                 frames: *frames,
                 resolution: *resolution,

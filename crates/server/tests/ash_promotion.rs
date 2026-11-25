@@ -111,7 +111,7 @@ fn config() -> AppConfig {
         sd: Arc::new(honkbox_sd_core::StubPipeline),
         swap: None,
         embed: Arc::new(swap::stub_embed_cache()),
-        swap_max_ttl: Duration::from_secs(24 * 60 * 60),
+        swap_max_ttl: Duration::from_hours(24),
         data_dir: None,
         artifacts: Arc::new(artifacts::Registry::new(
             None,
@@ -155,7 +155,9 @@ fn feature_on_selects_ash_and_advertises_it() {
 #[cfg(not(feature = "ash-sd"))]
 #[test]
 fn feature_off_rejects_ash_and_hides_it() {
-    assert!(!backends::ASH_SD_COMPILED);
+    const {
+        assert!(!backends::ASH_SD_COMPILED);
+    };
     let err = select("ash-sd").expect_err("feature-off build must reject ash-sd");
     let message = err.to_string();
     assert!(message.contains("ash-sd"), "{message}");

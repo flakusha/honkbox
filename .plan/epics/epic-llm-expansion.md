@@ -6,7 +6,8 @@ Owner: unassigned
 Research: `.tmp/research/llm-runtime-memory-2026-11-25.md`,
 `.tmp/research/llm-support-local-roster-2026-11-24.md`,
 `.tmp/research/llama-swap-loop-lore-gaps-2026-11-22.md`,
-`.tmp/research/ash-family-implementation-index-2026-11-25.md`
+`.tmp/research/ash-family-implementation-index-2026-11-25.md`,
+`.tmp/research/residency-kv-cache-memory-planning-2026-11-25.md`
 
 ## Scope
 
@@ -26,9 +27,9 @@ belong to `epic-ash-native-families.md`; retrieval/rerank stays in
 3. `TASK-llm-tool-choice-contract.md` (P2, done): tool-choice fidelity is
    documented and aligned.
 4. `TASK-remote-vision-url-fetch.md` (P2): opt-in SSRF-safe image URL fetch.
-5. Persistent prefix/KV reuse follow-up to `TASK-llm-prompt-cache.md` (P2, not
-   filed): depends on item 1 plus measured long-prefix workloads and bounded KV
-   eviction. The done prompt-cache ticket is not evidence that this exists.
+5. `TASK-llm-prefix-kv-reuse.md` (P2, proposed): persistent prefix/KV reuse
+  follow-up to `TASK-llm-prompt-cache.md`; depends on item 1 plus measured
+  long-prefix workloads and bounded KV eviction. The done prompt-cache ticket is not evidence that this exists.
 6. `TASK-llm-speculative-decoding-spike.md` (P2): draftless `ngram-mod` spike;
    promotion depends on measured prefill/decode behavior, not assumed wins.
 
@@ -42,6 +43,7 @@ belong to `epic-ash-native-families.md`; retrieval/rerank stays in
 - `TASK-llm-tool-choice-contract.md` — documented tool-choice fidelity (P2, done).
 - `TASK-remote-vision-url-fetch.md` — opt-in SSRF-safe image URL fetch (P2).
 - `TASK-llm-speculative-decoding-spike.md` — draftless `ngram-mod` spike (P2).
+- `TASK-llm-prefix-kv-reuse.md` — opt-in cross-request prefix/KV reuse with bounded eviction and measured prefill benefit (P2, proposed; blocked on cache-correctness identity).
 - `FEAT-llama-server-client-backend.md` — opt-in backend for an attached,
   user-installed `llama-server` (landed 2026-11-22).
 - `TASK-negative-prompt-preset-library.md` — versioned prompt/style presets

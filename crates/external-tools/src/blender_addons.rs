@@ -348,11 +348,9 @@ echo 'HONKBOX_ADDONS={"scripts":"/opt/blender/scripts","addons":[{"id":"honkbox_
 
     /// Write an executable fake Blender and return its path.
     #[cfg(unix)]
-    fn write_fake_blender(tag: &str, script: &str) -> PathBuf {
+    fn write_fake_blender(_tag: &str, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let dir =
-            std::env::temp_dir().join(format!("honkbox-ext-addons-{}-{tag}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let dir = crate::scratch_dir("ext-addons").expect("scratch dir");
         let path = dir.join("blender");
         std::fs::write(&path, script).expect("fake blender");
         let mut perms = std::fs::metadata(&path).expect("stat").permissions();

@@ -711,7 +711,7 @@ pub(crate) async fn post_images_generations(
             annotations: bundle_annotations,
         };
         let record = crate::jobs::image_metadata::generation_record(&bundle_inputs);
-        let bytes = match crate::jobs::image_metadata::embed_record(bytes, format, &record) {
+        let bytes = match crate::jobs::image_metadata::embed_record(&bytes, format, &record) {
             Ok(bytes) => bytes,
             Err(message) => {
                 return with_job_id(

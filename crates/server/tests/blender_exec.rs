@@ -10,6 +10,10 @@
 //! state; tests pass alone, in any order, and in parallel. `Fixture::drop`
 //! reclaims the root even on panic.
 #![cfg(unix)]
+// `routes` serves the `crate::routes::` seams the included sources use, and
+// `blender_exec` is additionally bound below so its `super::super::` seams
+// resolve to the test stand-ins. The dual binding is intentional.
+#![allow(clippy::duplicate_mod)]
 
 #[allow(dead_code)]
 #[path = "../src/admission.rs"]
@@ -72,6 +76,8 @@ mod harness {
         use honkbox_api_types::BlenderStage;
         use honkbox_external_tools::{AssetStage, MeshFormat};
 
+        // `execute` reads these in production; publication tests never call it.
+        #[allow(dead_code)]
         #[derive(Debug)]
         pub(crate) struct JobPlan {
             pub(crate) stages: Vec<AssetStage>,
@@ -102,6 +108,7 @@ mod harness {
     }
 
     /// `execute` is never called here; this only compiles its imports.
+    #[allow(dead_code)]
     pub(crate) mod supervisor {
         use std::path::Path;
         use std::time::Duration;
@@ -144,6 +151,13 @@ mod harness {
         }
     }
 
+    // Test-seam binding: `super::super::` inside resolves to the stand-ins
+    // above, not the real router tree. Only `publish` is driven, so the
+    // exec half never runs in this target.
+    #[allow(dead_code)]
+    // `err` is `String` in this seam (the real `supervisor::run` returns
+    // `RunError`); rendering it via `to_string` is intentional here.
+    #[allow(clippy::implicit_clone)]
     #[path = "../../src/routes/blender_exec.rs"]
     pub(crate) mod blender_exec;
 }
@@ -178,7 +192,10 @@ fn stage_outputs(root: &Path, rows: &[(&str, &[u8])]) -> Vec<AssetArtifact> {
             std::fs::write(dir.join(name), bytes).expect("staged artifact");
             AssetArtifact {
                 path: dir.join(name),
-                kind: if name.ends_with(".glb") {
+                kind: if Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
+                {
                     "model"
                 } else {
                     "map"

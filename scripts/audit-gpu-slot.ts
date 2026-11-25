@@ -58,6 +58,9 @@ const GATED_BEFORE_SLOT: Record<string, string> = {
   "blender_jobs.rs:an_unstored_mesh_is_a_404": "x-job-id",
   "blender_jobs.rs:a_digest_mismatch_is_a_400": "x-job-id",
   "blender_jobs.rs:without_an_engine_the_route_is_a_named_501": "x-job-id",
+  // The image-ops blender entry refuses an unknown stage `op` during request
+  // deserialization, before any job is registered or the slot is touched.
+  "image_ops.rs:unknown_blender_stage_op_is_a_named_400": "x-job-id",
 };
 
 const FN_RE = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)/gm;

@@ -232,7 +232,7 @@ fn png_itxt(bytes: &[u8], keyword: &str) -> Option<Value> {
                     .iter()
                     .position(|byte| *byte == 0)
                     .map_or(rest, |at| &rest[at + 1..]);
-                return Some(serde_json::from_slice(text).ok()?);
+                return serde_json::from_slice(text).ok();
             }
         }
         at += 12 + len;
@@ -273,10 +273,10 @@ fn jpeg_exif(bytes: &[u8]) -> &[u8] {
             bytes[at + 2..at + 4].try_into().unwrap(),
         ));
         let payload = &bytes[at + 4..at + 2 + length];
-        if marker == 0xe1 {
-            if let Some(exif) = payload.strip_prefix(b"Exif\0\0") {
-                return exif;
-            }
+        if marker == 0xe1
+            && let Some(exif) = payload.strip_prefix(b"Exif\0\0")
+        {
+            return exif;
         }
         at += 2 + length;
     }
@@ -488,7 +488,7 @@ async fn emitted_bytes_bundle_and_manifest_share_record() {
         assert_eq!(record["seed"], 1234);
         assert_eq!(record["model"], "comfy:f.safetensors");
         assert!(record["model_sha256"].is_null());
-        assert!(!record["honkbox_version"].as_str().unwrap().is_empty());
+        assert_ne!(record["honkbox_version"].as_str().unwrap(), "");
         assert_eq!(
             record["inputs_sha256"].as_str().unwrap().len(),
             64,

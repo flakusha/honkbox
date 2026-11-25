@@ -355,6 +355,14 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-content-record-provenance.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-img-meta-comfyui-pair.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-img-meta-png-parameters.md"
     }
   ],
   "src/integrations/honkbox/capabilities.ts": [
@@ -945,6 +953,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-blender-job-route.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capability-honesty-gate.md"
     }
   ],
   "src/routes/blender_exec.rs": [
@@ -987,6 +999,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-audio-voices-loaded-backend-truth.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-capability-honesty-gate.md"
     },
     {
       "kind": "ticket",

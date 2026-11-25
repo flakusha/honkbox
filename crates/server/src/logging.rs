@@ -192,6 +192,7 @@ fn rotate_if_large(path: &Path, cap: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use honkbox_external_tools::scratch_dir;
 
     /// Prod naming: `<path>.1` (os-string push, not an extension swap).
     fn backup_of(path: &Path) -> PathBuf {
@@ -201,7 +202,9 @@ mod tests {
     }
 
     fn temp_log(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("honkbox-log-rotate-{}-{tag}", std::process::id()))
+        scratch_dir("log-rotate")
+            .expect("scratch dir")
+            .join(format!("{tag}.log"))
     }
 
     #[test]
@@ -211,7 +214,7 @@ mod tests {
         rotate_if_large(&path, 1024);
         assert!(path.exists(), "log kept");
         assert!(!backup_of(&path).exists(), "no backup");
-        fs::remove_file(&path).ok();
+        fs::remove_dir_all(path.parent().expect("parent")).ok();
     }
 
     #[test]
@@ -224,7 +227,7 @@ mod tests {
         assert!(!path.exists(), "oversized log rotated away");
         let backup = fs::read(backup_of(&path)).expect("backup");
         assert_eq!(backup.len(), 2048, "backup holds the rotated log");
-        fs::remove_file(backup_of(&path)).ok();
+        fs::remove_dir_all(path.parent().expect("parent")).ok();
     }
 
     #[test]
@@ -233,6 +236,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         rotate_if_large(&path, 0);
         assert!(!path.exists());
+        fs::remove_dir_all(path.parent().expect("parent")).ok();
     }
 
     #[test]
@@ -248,15 +252,14 @@ mod tests {
         w.flush().expect("flush");
         assert_eq!(fs::read(backup_of(&path)).expect("backup").len(), 10);
         assert_eq!(fs::read(&path).expect("current").len(), 10);
-        fs::remove_file(&path).ok();
-        fs::remove_file(backup_of(&path)).ok();
+        fs::remove_dir_all(path.parent().expect("parent")).ok();
     }
 
     /// Log path derivation: arg > env-independent default under the data
     /// dir; no data dir → `None` (stderr-only).
     #[test]
     fn log_file_resolves_under_data_dir() {
-        let base = std::env::temp_dir().join(format!("honkbox-log-base-{}", std::process::id()));
+        let base = scratch_dir("log-base").expect("scratch dir");
         assert_eq!(
             resolve_log_file(Some(PathBuf::from("/explicit/log")), Some(&base)),
             Some(PathBuf::from("/explicit/log"))

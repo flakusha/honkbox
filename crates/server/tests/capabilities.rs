@@ -868,6 +868,25 @@ async fn blender_flag_agrees_with_the_probe_registry() {
     routes::set_registry_for_tests(None).await;
 }
 
+/// The advertised Blender bounds are the values the job route enforces.
+/// A changed route constant must break this test, and nothing unenforced
+/// (notably a poly-count cap) may be advertised.
+#[tokio::test]
+async fn blender_limits_match_enforced_route_bounds() {
+    let app = app_with(catalog_with(&[]));
+    let doc = get_capabilities(&app).await;
+    let limits = doc["blender_limits"].as_object().expect("blender_limits");
+    let expected = routes::blender::limits();
+    assert_eq!(limits["max_input_bytes"], json!(expected.max_input_bytes));
+    assert_eq!(limits["max_output_bytes"], json!(expected.max_output_bytes));
+    assert_eq!(
+        limits["default_timeout_secs"],
+        json!(expected.default_timeout_secs)
+    );
+    assert_eq!(limits["max_timeout_secs"], json!(expected.max_timeout_secs));
+    assert!(limits.get("poly_count").is_none());
+}
+
 #[tokio::test]
 async fn external_tool_routes_name_missing_tools() {
     let _slot = SLOT_LOCK.lock().await;
