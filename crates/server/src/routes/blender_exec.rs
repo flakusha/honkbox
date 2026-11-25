@@ -162,7 +162,7 @@ mod unix {
             Ok(outcome) => outcome,
             Err(err) => {
                 watcher.stop();
-                return Outcome::Failed(err.clone());
+                return Outcome::Failed(err.to_string());
             }
         };
         watcher.stop();

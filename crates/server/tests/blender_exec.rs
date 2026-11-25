@@ -148,6 +148,9 @@ mod harness {
     // above, not the real router tree. Only `publish` is driven, so the
     // exec half never runs in this target.
     #[allow(dead_code)]
+    // `err` is `String` in this seam (the real `supervisor::run` returns
+    // `RunError`); rendering it via `to_string` is intentional here.
+    #[allow(clippy::implicit_clone)]
     #[path = "../../src/routes/blender_exec.rs"]
     pub(crate) mod blender_exec;
 }
