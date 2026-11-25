@@ -363,6 +363,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-img-meta-png-parameters.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-img-meta-webp-exif.md"
     }
   ],
   "src/integrations/honkbox/capabilities.ts": [

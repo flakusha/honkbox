@@ -2346,7 +2346,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-img-meta-webp-exif.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-INFERENCE-CACHE-CORRECTNESS": {
     "hash": "pending",
