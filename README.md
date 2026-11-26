@@ -1,9 +1,10 @@
 # honkbox
 
-Local-first generative studio in Rust: Stable Diffusion image generation
-plus local LLM chat plus audio (STT/TTS) behind one Axum REST/SSE server,
+Local-first generative studio in Rust: Stable Diffusion image generation,
+local LLM chat, and audio (STT/TTS) behind one Salvo REST/SSE server,
 Vulkan-first GPU with CPU fallback, and a tabbed web UI served over the same
-API.
+API. Axum handlers remain as adapters and handler-level regression coverage
+during the incremental framework cutover.
 
 ## Prereqs
 
@@ -70,13 +71,13 @@ Full list with flags lives in [`package.json`](package.json) `scripts`.
 
 ## Layout
 
-- `crates/api-types` — shared DTOs only (serde + ts-rs + utoipa derives).
+- `crates/api-types` — shared DTOs only (serde + ts-rs + utoipa derives); the Salvo router's separate oapi document is built in `server/src/salvo_version.rs`.
 - `crates/sd-core` — `SdPipeline` impl, samplers/schedulers.
 - `crates/llm-worker` — llama-cpp sessions, GGUF load, token streaming.
 - `crates/audio-worker` — whisper STT, Kokoro TTS, Silero VAD.
 - `crates/recognition-worker` — barcode and OCR recognition pipelines.
 - `crates/external-tools` — Blender/ComfyUI discovery probes; probed once at startup, `GET /v1/external-tools`.
-- `crates/server` — Axum REST+SSE binary, clap CLI, queue, embedded UI.
+- `crates/server` — Salvo REST+SSE binary, clap CLI, queue, embedded UI; `routes/` keeps axum handlers reused by `salvo_routes/` adapters.
 - `crates/registry` — model-dir scan, weight metadata, SQLite catalog cache.
 - `crates/residency` — VRAM ledger + tier presets, `/v1/memory` backing types.
 - `packages/web-ui` — tabbed frontend (Vite + TS); `src/gen/` is generated,

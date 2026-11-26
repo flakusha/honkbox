@@ -4,7 +4,7 @@
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{Query as AxumQuery, State};
+use axum::extract::{Path as AxumPath, Query as AxumQuery, State};
 use honkbox_api_types::{
     BlenderJobRequest, ImageOpRequest, ImagesGenerationRequest, RecognizeRequest, SynthesizeRequest,
 };
@@ -12,11 +12,13 @@ use salvo::prelude::*;
 use serde::de::DeserializeOwned;
 
 use crate::routes::chat_prep::TranscribeQuery;
+use crate::routes::job_records::{self, RecordQuery};
+use crate::routes::presets;
 use crate::routes::{
     audio_upload, blender, embeddings, image_ops_route, images_generate, recognition, rerank,
     shader_validate, texture_postprocess,
 };
-use crate::salvo_support::{config, json, query, respond};
+use crate::salvo_support::{config, json, path, query, respond};
 
 /// Route table for this batch.
 pub fn router() -> Router {
@@ -32,6 +34,10 @@ pub fn router() -> Router {
         .push(Router::with_path("/v1/texture-postprocess").post(post_texture_postprocess))
         .push(Router::with_path("/v1/shader-validate").post(post_shader_validate))
         .push(Router::with_path("/v1/recognize").post(post_recognize))
+        .push(Router::with_path("/v1/presets").get(get_presets))
+        .push(Router::with_path("/v1/presets/{id}").get(get_preset))
+        .push(Router::with_path("/v1/jobs/records").get(get_job_records))
+        .push(Router::with_path("/v1/jobs/records/{id}").get(get_job_record))
 }
 
 /// Raw body with axum's lifted ceiling; salvo's 64 KiB default would truncate.
@@ -182,4 +188,40 @@ async fn post_recognize(req: &mut Request, depot: &mut Depot, res: &mut Response
         recognition::post_recognize(State(config(depot)), body).await,
     )
     .await;
+}
+
+#[salvo::handler]
+async fn get_presets(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let result = presets::get_presets(State(config(depot))).await;
+    respond(res, result).await;
+}
+
+#[salvo::handler]
+async fn get_preset(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let id = match path::<String>(req, "id") {
+        Ok(id) => id,
+        Err(error) => return bad_request(res, error).await,
+    };
+    let result = presets::get_preset(State(config(depot)), AxumPath(id)).await;
+    respond(res, result).await;
+}
+
+#[salvo::handler]
+async fn get_job_records(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let query = match query::<RecordQuery>(req) {
+        Ok(query) => query,
+        Err(error) => return bad_request(res, error).await,
+    };
+    let result = job_records::get_job_records(State(config(depot)), AxumQuery(query)).await;
+    respond(res, result).await;
+}
+
+#[salvo::handler]
+async fn get_job_record(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let id = match path::<String>(req, "id") {
+        Ok(id) => id,
+        Err(error) => return bad_request(res, error).await,
+    };
+    let result = job_records::get_job_record(State(config(depot)), AxumPath(id)).await;
+    respond(res, result).await;
 }

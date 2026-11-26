@@ -36,6 +36,9 @@ mod config;
 #[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
+#[allow(dead_code)]
+#[path = "../src/metrics.rs"]
+mod metrics;
 
 use config::mesh::{MeshConfig, MeshError, MeshProxy, MeshUpstream};
 

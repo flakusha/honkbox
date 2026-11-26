@@ -2490,6 +2490,85 @@
         }
       }
     },
+    "/v1/presets": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/presets`: all operator presets in stable id order. Empty list\nwhen no manifest is configured; a malformed manifest is a named 500,\nnever a silent empty list.",
+        "operationId": "get_presets",
+        "responses": {
+          "200": {
+            "description": "Versioned prompt/style presets",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Manifest invalid or unreadable",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/presets/{id}": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/presets/{id}`: one preset by its stable id. An unknown id is a\nnamed 400 so a client can distinguish a stale picker entry from a server\nfailure.",
+        "operationId": "get_preset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Stable preset id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One versioned preset",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown preset id",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Manifest invalid or unreadable",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/queue": {
       "get": {
         "tags": [],
@@ -2692,6 +2771,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OpenAiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status/warnings": {
+      "get": {
+        "tags": [],
+        "summary": "`GET /v1/status/warnings`: startup notices as a bounded JSON document.",
+        "operationId": "get_status_warnings_axum",
+        "responses": {
+          "200": {
+            "description": "Bounded startup warnings",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -3704,6 +3802,17 @@
             "type": "string",
             "description": "Where the generated `OpenAPI` document lives."
           },
+          "openscad_limits": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpenScadLimitsCapability",
+                "description": "Enforced `OpenSCAD` prop-job bounds (`POST /v1/jobs/openscad`): output\nbytes, wall-clock timeouts, dimensions and cylinder resolution. The\nvalues are read from the route's own limits so the advertisement\ncannot drift from enforcement. Additive optional field per the API\nversion policy above."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "queue": {
             "$ref": "#/components/schemas/QueueCapabilities",
             "description": "Resource-ledger admission knobs a client needs to plan retries:\nper-kind queue caps, the queue wait bound, and the `Retry-After`\nhint the server's 429s carry."
@@ -4688,6 +4797,7 @@
           "vad",
           "experimental_ash_sd",
           "blender",
+          "openscad",
           "artifact_delivery",
           "rerank",
           "python_sidecar",
@@ -4735,6 +4845,10 @@
           "lora": {
             "type": "boolean",
             "description": "Per-request `LoRA` stacks on image generations AND edits."
+          },
+          "openscad": {
+            "type": "boolean",
+            "description": "Typed `OpenSCAD` prop jobs (`POST /v1/jobs/openscad`). `true` only when\na compatible `OpenSCAD` engine is installed and probed; the route\nanswers a named 501 otherwise."
           },
           "python_sidecar": {
             "type": "boolean",
@@ -7387,6 +7501,48 @@
             "type": "integer",
             "format": "int64",
             "description": "`prompt_tokens + completion_tokens`.",
+            "minimum": 0
+          }
+        }
+      },
+      "OpenScadLimitsCapability": {
+        "type": "object",
+        "description": "Enforced `OpenSCAD` prop-job bounds (`Capabilities::openscad_limits`).",
+        "required": [
+          "max_output_bytes",
+          "default_timeout_secs",
+          "max_timeout_secs",
+          "max_dimension_mm",
+          "max_segments"
+        ],
+        "properties": {
+          "default_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wall-clock bound applied when the request names no timeout, in seconds.",
+            "minimum": 0
+          },
+          "max_dimension_mm": {
+            "type": "number",
+            "format": "double",
+            "description": "Largest box dimension or cylinder diameter/height, in millimetres."
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest STL artifact set a job may produce, in bytes.",
+            "minimum": 0
+          },
+          "max_segments": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest cylinder segment count.",
+            "minimum": 0
+          },
+          "max_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest wall-clock bound a request may ask for, in seconds.",
             "minimum": 0
           }
         }

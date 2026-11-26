@@ -33,6 +33,9 @@ mod jobs;
 #[allow(dead_code)]
 #[path = "../src/routes/mesh.rs"]
 mod mesh_route;
+#[allow(dead_code)]
+#[path = "../src/metrics.rs"]
+mod metrics;
 
 use config::mesh::{
     DEFAULT_MAX_RESPONSE_BYTES, MESH_METRIC_KINDS, MeshConfig, MeshError, MeshMetricKind,

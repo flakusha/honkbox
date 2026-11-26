@@ -1833,6 +1833,14 @@ export type Capabilities = {
    */
   blender_limits: BlenderLimitsCapability | null;
   /**
+   * Enforced `OpenSCAD` prop-job bounds (`POST /v1/jobs/openscad`): output
+   * bytes, wall-clock timeouts, dimensions and cylinder resolution. The
+   * values are read from the route's own limits so the advertisement
+   * cannot drift from enforcement. Additive optional field per the API
+   * version policy above.
+   */
+  openscad_limits: OpenScadLimitsCapability | null;
+  /**
    * Where the generated `OpenAPI` document lives.
    */
   openapi: string;
@@ -1858,6 +1866,28 @@ export type BlenderLimitsCapability = {
    * Largest wall-clock bound a request may ask for, in seconds.
    */
   max_timeout_secs: bigint;
+};
+export type OpenScadLimitsCapability = {
+  /**
+   * Largest STL artifact set a job may produce, in bytes.
+   */
+  max_output_bytes: bigint;
+  /**
+   * Wall-clock bound applied when the request names no timeout, in seconds.
+   */
+  default_timeout_secs: bigint;
+  /**
+   * Largest wall-clock bound a request may ask for, in seconds.
+   */
+  max_timeout_secs: bigint;
+  /**
+   * Largest box dimension or cylinder diameter/height, in millimetres.
+   */
+  max_dimension_mm: number;
+  /**
+   * Largest cylinder segment count.
+   */
+  max_segments: number;
 };
 export type LicenseCapability = {
   /**
@@ -1980,6 +2010,12 @@ export type FeatureFlags = {
    * 501 otherwise.
    */
   blender: boolean;
+  /**
+   * Typed `OpenSCAD` prop jobs (`POST /v1/jobs/openscad`). `true` only when
+   * a compatible `OpenSCAD` engine is installed and probed; the route
+   * answers a named 501 otherwise.
+   */
+  openscad: boolean;
   /**
    * Artifact delivery (artifact store routes). `true` exactly when the
    * artifact store (data dir) is present; without a resolved data dir
@@ -2601,6 +2637,163 @@ export type BlenderJobCompletionProgress = {
    * What happened: `start`, `done` or `cancelled`.
    */
   event: string;
+};
+export type OpenScadProp = {
+  "kind": "box";
+  /**
+   * Width in millimetres.
+   */
+  width_mm: number;
+  /**
+   * Depth in millimetres.
+   */
+  depth_mm: number;
+  /**
+   * Height in millimetres.
+   */
+  height_mm: number;
+} | {
+  "kind": "cylinder";
+  /**
+   * Diameter in millimetres.
+   */
+  diameter_mm: number;
+  /**
+   * Height in millimetres.
+   */
+  height_mm: number;
+  /**
+   * Number of segments around the circumference.
+   */
+  segments: number;
+};
+export type OpenScadJobRequest = {
+  /**
+   * The manifest schema version the caller expects (currently `1`).
+   */
+  manifest: number;
+  /**
+   * The closed parametric prop to generate.
+   */
+  prop: OpenScadProp;
+  /**
+   * The exact engine version contract; checked before `OpenSCAD` starts.
+   */
+  engine: OpenScadEngine;
+  /**
+   * The output limits the caller expects. STL is the only v1 output.
+   */
+  output: OpenScadOutput;
+  /**
+   * The job's wall-clock bound in seconds. Omitted uses the advertised
+   * default; the process group is killed when it expires.
+   */
+  timeout_secs?: bigint | null;
+};
+export type OpenScadEngine = {
+  /**
+   * The exact `OpenSCAD` version the caller expects (e.g. `"2021.01"`).
+   */
+  openscad_version: string;
+};
+export type OpenScadOutput = {
+  /**
+   * The byte cap for the produced STL artifact.
+   */
+  max_bytes: bigint;
+};
+export type OpenScadJobAccepted = {
+  /**
+   * Registry job id (`job_<ulid>`); matches `GET /v1/jobs`, the
+   * `X-Job-Id` header and the cancel route while the job is live.
+   */
+  job_id: string;
+  /**
+   * The state at acceptance: always `"queued"`.
+   */
+  status: string;
+  /**
+   * Bundle id (ULID) under `<data_dir>/jobs/{bundle}/` — the manifest and
+   * STL artifact land there. Absent when bundles are disabled.
+   */
+  bundle?: string | null;
+};
+export type OpenScadJobCompletion = {
+  /**
+   * The manifest schema version (currently `1`).
+   */
+  manifest: number;
+  /**
+   * The `OpenSCAD` version that ran the job.
+   */
+  openscad_version: string;
+  /**
+   * The recipe version that ran the job (currently `"prop/v1"`).
+   */
+  recipe_version: string;
+  /**
+   * The sha256 of the generated recipe bytes that ran the job.
+   */
+  recipe_sha256: string;
+  /**
+   * The canonical job parameters, echoed back.
+   */
+  job: OpenScadJobCompletionJob;
+  /**
+   * The produced artifacts, in recipe order.
+   */
+  artifacts: Array<OpenScadJobCompletionArtifact>;
+  /**
+   * Non-fatal notes from the recipe.
+   */
+  warnings: Array<string>;
+  /**
+   * Geometry statistics computed from the produced STL.
+   */
+  stats: OpenScadJobCompletionStats;
+};
+export type OpenScadJobCompletionJob = {
+  /**
+   * The canonical prop that ran, without any executable recipe text.
+   */
+  prop: OpenScadProp;
+};
+export type OpenScadJobCompletionArtifact = {
+  /**
+   * The bundle file name (never a staging path).
+   */
+  name: string;
+  /**
+   * What it is (`"stl"` in v1).
+   */
+  kind: string;
+  /**
+   * Its size in bytes.
+   */
+  bytes: bigint;
+  /**
+   * Its sha256 (of the bundle bytes).
+   */
+  sha256: string;
+  /**
+   * Content-addressed id of the promoted artifact in the registry
+   * (`GET /v1/artifacts/{id}/bytes`).
+   */
+  artifact_id: string;
+};
+export type OpenScadJobCompletionStats = {
+  /**
+   * Number of triangles in the STL.
+   */
+  triangles: bigint;
+  /**
+   * Minimum mesh corner `[x, y, z]`, in millimetres.
+   */
+  min_mm: [number, number, number];
+  /**
+   * Maximum mesh corner `[x, y, z]`, in millimetres.
+   */
+  max_mm: [number, number, number];
 };
 export type NsfwCapability = {
   /**

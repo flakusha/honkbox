@@ -205,7 +205,7 @@ fn png_prompt(record: &Value) -> CodecResult<Option<Vec<u8>>> {
     Ok(Some(text.into_bytes()))
 }
 
-/// Honest honkbox recipe record — never a fabricated ComfyUI node graph.
+/// Honest honkbox recipe record — never a fabricated `ComfyUI` node graph.
 fn png_workflow(record: &Value) -> CodecResult<Option<Vec<u8>>> {
     const WORKFLOW_FIELDS: &[&str] = &[
         "prompt",
@@ -226,7 +226,7 @@ fn png_workflow(record: &Value) -> CodecResult<Option<Vec<u8>>> {
     ];
     let recipe = record
         .get("recipe")
-        .filter(|value| !value.is_null() && value.as_str().map_or(true, |name| !name.is_empty()));
+        .filter(|value| !value.is_null() && value.as_str().is_none_or(|name| !name.is_empty()));
     let mut workflow = serde_json::Map::new();
     workflow.insert("source".to_owned(), json!("honkbox"));
     workflow.insert("kind".to_owned(), json!("honkbox.recipe/1"));
@@ -446,7 +446,7 @@ fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
     chunk
 }
 
-/// Debug-only provenance from an uploaded `PNG`: ComfyUI's `prompt` and
+/// Debug-only provenance from an uploaded `PNG`: `ComfyUI`'s `prompt` and
 /// `workflow` plus A1111 `parameters`. Never execution input.
 pub(crate) fn png_source_annotations(bytes: &[u8]) -> Vec<crate::jobs::BundleAnnotation> {
     let mut annotations = Vec::new();
@@ -480,26 +480,27 @@ pub(crate) fn png_source_annotations(bytes: &[u8]) -> Vec<crate::jobs::BundleAnn
         else {
             break;
         };
-        if kind == b"tEXt" && length <= MAX_METADATA_BYTES {
-            if let Some(separator) = data.iter().position(|byte| *byte == 0) {
-                let keyword = &data[..separator];
-                let value = &data[separator + 1..];
-                if !value.contains(&0) {
-                    let name = if keyword == PROMPT_KEYWORD {
-                        "source_prompt"
-                    } else if keyword == WORKFLOW_KEYWORD {
-                        "source_workflow"
-                    } else if keyword == PARAMETERS_KEYWORD {
-                        "source_parameters"
-                    } else {
-                        ""
-                    };
-                    if !name.is_empty() {
-                        annotations.push(crate::jobs::BundleAnnotation {
-                            name: name.to_owned(),
-                            value: json!(String::from_utf8_lossy(value).into_owned()),
-                        });
-                    }
+        if kind == b"tEXt"
+            && length <= MAX_METADATA_BYTES
+            && let Some(separator) = data.iter().position(|byte| *byte == 0)
+        {
+            let keyword = &data[..separator];
+            let value = &data[separator + 1..];
+            if !value.contains(&0) {
+                let name = if keyword == PROMPT_KEYWORD {
+                    "source_prompt"
+                } else if keyword == WORKFLOW_KEYWORD {
+                    "source_workflow"
+                } else if keyword == PARAMETERS_KEYWORD {
+                    "source_parameters"
+                } else {
+                    ""
+                };
+                if !name.is_empty() {
+                    annotations.push(crate::jobs::BundleAnnotation {
+                        name: name.to_owned(),
+                        value: json!(String::from_utf8_lossy(value).into_owned()),
+                    });
                 }
             }
         }
@@ -1239,8 +1240,14 @@ mod tests {
 
     #[test]
     fn png_source_annotations_absent_without_text_keywords() {
-        assert!(png_source_annotations(&png_source()).is_empty());
-        assert!(png_source_annotations(b"not a png").is_empty());
+        assert_eq!(
+            png_source_annotations(&png_source()),
+            [] as [BundleAnnotation; 0]
+        );
+        assert_eq!(
+            png_source_annotations(b"not a png"),
+            [] as [BundleAnnotation; 0]
+        );
     }
 
     #[test]

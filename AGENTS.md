@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-`honkbox` — local-first generative studio in Rust: Stable-Diffusion image generation (txt2img today; LLM chat + Whisper STT / Kokoro TTS planned) behind a single Axum server with an embedded Bun/Vite web UI. Vulkan-first with CPU fallback, backed by a vendored `diffusion-rs` (stable-diffusion.cpp FFI). Early-stage: only the SD txt2img path is implemented; LLM/audio workers are doc-stubs. Design record lives in `.tmp/research/Reviewed*.md` — read before architecture changes. License: AGPL-3.0-or-later (REUSE.toml; GPL-family dependencies banned via `deny.toml`).
+`honkbox` — local-first generative studio in Rust: Stable-Diffusion image generation, LLM chat, Whisper STT / Kokoro TTS, and recognition behind a single Salvo HTTP server with an embedded Bun/Vite web UI. Vulkan-first with CPU fallback, backed by a vendored `diffusion-rs` (stable-diffusion.cpp FFI) plus an opt-in direct-Vulkan Ash backend. Axum handlers remain as adapters and handler-level regression coverage during the incremental cutover; `salvo_app::router()` serves production traffic. Design record lives in `.tmp/research/Reviewed*.md` and `.plan/` — read before architecture changes. License: AGPL-3.0-or-later (REUSE.toml; GPL-family dependencies banned via `deny.toml`).
 
 ## Architecture & Data Flow
 
 ```
-CLI (clap) / HTTP (axum)
+CLI (clap) / HTTP (salvo; axum handler adapters)
   → config::load                    crates/server/src/config.rs   (one data_dir knob: --data-dir > HONKBOX_DATA_DIR > [core] data_dir > $XDG_STATE_HOME/honkbox; config at <data_dir>/honkbox.toml → HONKBOX_* env)
   → registry::scan_roots             crates/registry/src/lib.rs    (model-dir scan; slugs llm:<rel> / comfy:<rel>)
   → residency::global().try_reserve  crates/residency/src/lib.rs   (process-wide single GPU slot, RAII Lease)
@@ -15,20 +15,20 @@ CLI (clap) / HTTP (axum)
   → encode_image → jobs::write_bundle crates/server/src/jobs.rs    (<data_dir>/jobs/<ulid>/, .part + fsync + rename)
 ```
 
-- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors at `crates/server/src/main.rs:288-291`. Backend features forward `server/vulkan → sd-core/vulkan`; `ash-sd` gates the direct-Vulkan skeleton in `crates/ash-backend` (`honkbox-ash-backend`, empty until the server forwards the flag; `generate` still returns an unimplemented error).
-- TS types flow one way: `crates/api-types` (serde + ts-rs + utoipa) → generated `packages/web-ui/src/gen/` (never hand-edit); CI gates drift via `bun run codegen:check` and the server `openapi` subcommand.
+- **Trait-seam DI is the core pattern**: everything above the pipeline codes against `SdPipeline` (`generate`/`backend_id`); the server swaps constructors in `backends::make_sd` and `main.rs::generate`. Backend features forward `server/vulkan → sd-core/vulkan`; `ash-*` features gate the opt-in direct-Vulkan backend in `crates/ash-backend` (device, kernels, checkpoint/tokenizer decoding and partial diffusion stages). The default SD path stays `SdCppPipeline`.
+- TS types flow one way: `crates/api-types` (serde + ts-rs + utoipa) → generated `packages/web-ui/src/gen/` (never hand-edit); the Salvo router's separate `salvo::oapi` document is built in `server/src/salvo_version.rs`. CI gates drift via `bun run codegen:check` and the server `openapi` subcommand.
 
 ## Key Directories
 
 | Path | Purpose |
 |---|---|
-| `crates/server` (`honkbox-server`) | Only binary (`bin` name `honkbox`, shell alias `hbx` documented in README): main.rs (clap subcommands `serve`/`openapi`/`models show`/`generate`), routes.rs, metrics.rs, config.rs, jobs.rs, logging.rs, downloads.rs (`/v1/downloads` supervisor: `.part` + resume + cancel into `<data_dir>/models`)
+| `crates/server` (`honkbox-server`) | Only binary (`bin` name `honkbox`, shell alias `hbx` documented in README): main.rs (clap + Salvo assembly), salvo_app.rs, salvo_routes/, salvo_middleware.rs, salvo_support.rs, salvo_version.rs, retained axum routes.rs, metrics.rs, config.rs, jobs.rs, logging.rs, downloads.rs (`/v1/downloads` supervisor: `.part` + resume + cancel into `<data_dir>/models`) |
 | `crates/sd-core` | Diffusion pipeline trait + Stub/SdCpp impls |
-| `crates/registry` | Model-dir scanner (std + serde; serde_json only for GGUF/safetensors header metadata; SQLite/hf-hub are planned, NOT built) |
+| `crates/registry` | Model-dir scanner (std + serde; serde_json for GGUF/safetensors headers; bundled SQLite cache is built; hf-hub is not) |
 | `crates/residency` | GPU-slot ledger (`LazyLock` global, `Mutex` slot, RAII) |
 | `crates/api-types` | DTOs shared Rust↔TS via ts-rs codegen |
-| `crates/llm-worker`, `crates/audio-worker` | Zero-dep doc stubs |
-| `crates/recognition-worker` | Recognition pipelines (stub + barcode) behind `POST /v1/recognize` |
+| `crates/llm-worker`, `crates/audio-worker` | llama.cpp chat, Whisper STT, Kokoro TTS, VAD, optional audio.cpp engine |
+| `crates/recognition-worker` | Barcode + OCR pipelines (optional face detection) behind `POST /v1/recognize` |
 | `crates/external-tools` | Blender/ComfyUI probe-once registry; server reports it at `GET /v1/external-tools` and in `Capabilities` |
 | `packages/web-ui` | Bun/Vite frontend; `src/gen/` is generated |
 | `scripts/` | Bun helpers: `dev.ts` (Vite :5173 + cargo-watch :8080), `vendor-patches.ts` (fetches `vendor/` from `vendor.manifest.toml` pins, then applies the `vendor_patches/` stack), `codegen-openapi-check.ts` |
@@ -55,9 +55,9 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 - **Safety**: workspace-wide `unsafe_code = "forbid"`; clippy `all + pedantic`, warnings denied in CI.
 - **Errors**: hand-rolled enums with `Display` + `Error` (e.g. `SdError`, residency `Busy`); CLI paths return `Result<_, String>` + exit(1). No anyhow/thiserror.
 - **Async**: the compute workers (`crates/llm-worker`, `crates/audio-worker`, `crates/recognition-worker`) stay deliberately sync. Crates that are async by nature may use tokio directly (workspace pin: macros + rt-multi-thread) — `crates/server`, and async registry/probe crates such as `crates/external-tools` (HTTP client + subprocess probes). Blocking work inside an async fn goes on `tokio::task::spawn_blocking`.
-- **State**: `LazyLock` global singletons (residency), axum `with_state(AppConfig)`.
+- **State**: `LazyLock` global singletons (residency); Salvo injects config via `affix_state`, retained axum handlers use `State<AppConfig>`.
 - **Formatting**: dprint (width 100, double quotes) for TS/JSON; `cargo fmt` for Rust; TS strict + `noUncheckedIndexedAccess` + `verbatimModuleSyntax`; oxlint correctness=error.
-- **Stub discipline**: unbuilt features (registry SQLite, llm/audio workers, `.plan/`) exist as zero-dep crates/docs — check what's actually implemented before assuming README scope.
+- **Stub discipline**: check code before trusting scope labels; registry SQLite, workers, and `.plan/` are implemented, while some Ash diffusion stages, external-tool integrations, and opt-in features remain partial or feature-gated.
 
 ## Important Files
 
@@ -65,7 +65,8 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
 - `package.json` — all Bun scripts (single entry point for dev/QA commands)
 - `rust-toolchain.toml` — Rust 1.99.0 (minimal profile + clippy/rustfmt/rust-analyzer)
 - `crates/sd-core/src/lib.rs:84` — `SdPipeline` trait (the seam)
-- `crates/server/src/main.rs` — CLI + pipeline construction (line ~288)
+- `crates/server/src/main.rs` — CLI, pipeline construction, and Salvo server assembly (`serve` at ~491)
+- `crates/server/src/salvo_app.rs` — production router; `salvo_routes/` adapts retained axum handlers
 - `vendor.manifest.toml` — fetch pins (full-SHA revs) + ordered vendor patch stack
 - `.github/workflows/ci.yml` — gate job list; release build requires all gates green
 
@@ -86,7 +87,7 @@ Linux native deps (CI parity): `cmake clang libvulkan-dev glslang-tools spirv-he
  target dir, and the `.tmp/` build ban are already mandated in the bullets
  above.
 - Pre-commit hooks in `.githooks/` — activate with `bun run hooks:install`, verify with `bun run hooks:check`. Staged gates: dprint fmt + restage (TS/JSON), oxlint (TS), workspace `cargo fmt --all -- --check` (Rust), `sh -n` (shell), partial-staging guard, hook self-check. Generated files are not blocked here; `codegen:check` in pre-push/CI catches drift. Markdown is intentionally NOT dprint-gated.
-- Planning tooling (`.plan/` tickets with `TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers, giwt worktrees) is **specified but not yet adopted** — see `.tmp/research/ReviewedDocs-Ticketing.md`.
+- Planning tooling is active: `.plan/` tickets (`TASK|FEAT|BUG-<slug>.md` + `Status/Priority/Epic` headers), epics, and giwt worktrees; reconcile `.plan/tickets/index.json` after landing tickets.
 
 ## Testing & QA
 

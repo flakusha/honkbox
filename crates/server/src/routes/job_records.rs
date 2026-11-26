@@ -38,7 +38,7 @@ fn default_limit() -> usize {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub(super) struct RecordQuery {
+pub(crate) struct RecordQuery {
     #[serde(default = "default_limit")]
     limit: usize,
     #[serde(default)]
@@ -159,7 +159,7 @@ fn storage_error(detail: &str) -> Response {
         (status = 500, description = "Storage failure")
     )
 )]
-pub(super) async fn get_job_records(
+pub(crate) async fn get_job_records(
     State(config): State<AppConfig>,
     Query(query): Query<RecordQuery>,
 ) -> Response {
@@ -188,7 +188,7 @@ pub(super) async fn get_job_records(
         (status = 404, description = "No finished bundle with that id")
     )
 )]
-pub(super) async fn get_job_record(
+pub(crate) async fn get_job_record(
     State(config): State<AppConfig>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {

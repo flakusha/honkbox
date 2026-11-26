@@ -13,6 +13,9 @@ mod config;
 #[allow(dead_code)]
 #[path = "../src/jobs.rs"]
 mod jobs;
+#[allow(dead_code)]
+#[path = "../src/metrics.rs"]
+mod metrics;
 
 use std::fs;
 use std::path::{Path, PathBuf};

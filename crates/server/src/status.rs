@@ -13,6 +13,7 @@ use serde::Serialize;
 
 /// Hard cap on stored warnings, so neither the store nor the response grows
 /// with config history.
+#[cfg_attr(test, allow(dead_code))]
 const MAX_WARNINGS: usize = 64;
 
 static WARNINGS: LazyLock<RwLock<Vec<String>>> = LazyLock::new(|| RwLock::new(Vec::new()));
@@ -32,6 +33,7 @@ pub(crate) struct StatusWarning {
     pub(crate) source: String,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn store(warnings: Vec<String>) {
     let mut warnings = warnings;
     warnings.truncate(MAX_WARNINGS);
@@ -39,12 +41,14 @@ fn store(warnings: Vec<String>) {
 }
 
 /// Publish the non-fatal notices collected at startup (overwrites prior set).
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn set_warnings(warnings: Vec<String>) {
     store(warnings);
 }
 
 /// Overwrite the store from an isolated test, with the same clamp as prod.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn set_warnings_for_tests(warnings: Vec<String>) {
     store(warnings);
 }

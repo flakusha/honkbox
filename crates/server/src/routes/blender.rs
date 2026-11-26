@@ -303,8 +303,7 @@ pub(crate) async fn post_blender_job(
                 return openai_error_response(
                     StatusCode::CONFLICT,
                     format!(
-                        "Idempotency-Key {:?} was already used with a different request — retries must resend the identical request; use a fresh key for different work",
-                        key
+                        "Idempotency-Key {key:?} was already used with a different request — retries must resend the identical request; use a fresh key for different work"
                     ),
                     Some("blender_idempotency_conflict"),
                 );
@@ -645,9 +644,10 @@ mod tests {
     #[test]
     fn ledger_replays_the_first_response() {
         let mut ledger = BlenderDedup::default();
-        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
-            BlenderReservation::Execute(entry) => entry,
-            _ => panic!("a fresh key must execute"),
+        let BlenderReservation::Execute(entry) =
+            ledger.reserve("consumer", "key", "hash".to_owned())
+        else {
+            panic!("a fresh key must execute")
         };
         assert!(entry.outcome.set(settled(accepted("job-1"))).is_ok());
         match ledger.reserve("consumer", "key", "hash".to_owned()) {
@@ -690,9 +690,10 @@ mod tests {
     #[test]
     fn ledger_forgets_a_failed_attempt() {
         let mut ledger = BlenderDedup::default();
-        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
-            BlenderReservation::Execute(entry) => entry,
-            _ => panic!("a fresh key must execute"),
+        let BlenderReservation::Execute(entry) =
+            ledger.reserve("consumer", "key", "hash".to_owned())
+        else {
+            panic!("a fresh key must execute")
         };
         let failed = BlenderSettled {
             succeeded: false,

@@ -19,6 +19,9 @@ mod config;
 #[allow(dead_code)] // the whole module tree, not just the items used below
 #[path = "../src/jobs.rs"]
 mod jobs;
+#[allow(dead_code)]
+#[path = "../src/metrics.rs"]
+mod metrics;
 
 use jobs::{BundleInputs, determinism, write_bundle_into};
 

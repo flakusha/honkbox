@@ -236,6 +236,8 @@ impl Drop for CleanupGcRoot {
 /// Counters are process-wide, so assertions compare deltas, never totals.
 #[test]
 fn gc_reclaim_counters_increase_after_expired_sweep() {
+    const ENTRIES: &str = "honkbox_gc_entries_total";
+    const BYTES: &str = "honkbox_gc_reclaimed_bytes_total";
     let base = fresh_gc_root();
     let _cleanup = CleanupGcRoot(base.clone());
     let jobs_root = base.join("jobs");
@@ -256,8 +258,6 @@ fn gc_reclaim_counters_increase_after_expired_sweep() {
         .set_times(times)
         .expect("backdate blob");
 
-    const ENTRIES: &str = "honkbox_gc_entries_total";
-    const BYTES: &str = "honkbox_gc_reclaimed_bytes_total";
     let before = metrics::exposition();
     let before_entries = metric_value(&before, ENTRIES, "expired");
     let before_bytes = metric_value(&before, BYTES, "expired");

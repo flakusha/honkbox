@@ -643,7 +643,7 @@ fn sweep_stale_temp_pngs(max_age: Duration, now: SystemTime) {
             continue;
         }
         let meta = entry.metadata();
-        let bytes = meta.as_ref().map_or(0, |meta| meta.len());
+        let bytes = meta.as_ref().map_or(0, std::fs::Metadata::len);
         let mtime = meta
             .and_then(|meta| meta.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH);
@@ -1055,10 +1055,13 @@ mod tests {
 
     fn sha256_hex(bytes: &[u8]) -> String {
         use sha2::{Digest as _, Sha256};
+        use std::fmt::Write as _;
         Sha256::digest(bytes)
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+            .fold(String::with_capacity(64), |mut out, byte| {
+                write!(out, "{byte:02x}").expect("writing to String cannot fail");
+                out
+            })
     }
 
     /// The manifest pins the exact ordered artifact chain and is committed

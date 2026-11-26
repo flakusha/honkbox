@@ -133,7 +133,7 @@ mod blender_exec;
 pub(super) mod job_content;
 
 #[path = "routes/job_records.rs"]
-mod job_records;
+pub(crate) mod job_records;
 
 #[allow(unused_imports)] // used by .route() and the OpenApi derive's generated types
 use self::job_records::{

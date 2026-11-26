@@ -47,7 +47,7 @@ fn manifest(config: &AppConfig) -> Result<PresetManifest, PresetLoadError> {
     }
 }
 
-fn manifest_error_response(err: PresetLoadError) -> Response {
+fn manifest_error_response(err: &PresetLoadError) -> Response {
     tracing::error!(%err, "preset manifest rejected");
     super::openai_error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -74,7 +74,7 @@ pub(crate) async fn get_presets(State(config): State<AppConfig>) -> Response {
             presets: loaded.presets,
         })
         .into_response(),
-        Err(err) => manifest_error_response(err),
+        Err(err) => manifest_error_response(&err),
     }
 }
 
@@ -97,7 +97,7 @@ pub(crate) async fn get_preset(
 ) -> Response {
     let loaded = match manifest(&config) {
         Ok(loaded) => loaded,
-        Err(err) => return manifest_error_response(err),
+        Err(err) => return manifest_error_response(&err),
     };
     let Some(preset) = loaded.presets.iter().find(|preset| preset.id == id) else {
         return super::openai_error_response(
@@ -116,6 +116,7 @@ pub(crate) async fn get_preset(
 /// Compose a named preset into the existing request DTO before validation.
 /// `X-Honkbox-Preset` is a routing header (H1): prompt text stays in the
 /// body. No new client format and no GPU slot are involved.
+#[allow(clippy::result_large_err)] // axum Response is the request-path error type
 pub(super) fn apply_preset(
     config: &AppConfig,
     preset_id: Option<&str>,
@@ -124,7 +125,7 @@ pub(super) fn apply_preset(
     let Some(id) = preset_id else {
         return Ok(());
     };
-    let loaded = manifest(config).map_err(manifest_error_response)?;
+    let loaded = manifest(config).map_err(|err| manifest_error_response(&err))?;
     let Some(preset) = loaded.presets.iter().find(|preset| preset.id == id) else {
         return Err(super::openai_error_response(
             StatusCode::BAD_REQUEST,

@@ -235,6 +235,8 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             // The sidecar flag keeps its Python-switch semantics.
             python_sidecar: super::runtime_config::python_enabled(),
             fizgig: super::fizgig::available(),
+            // Wire DTOs ship ahead of the route; no OpenSCAD job is mounted.
+            openscad: false,
             texture_postprocess: crate::texture_postprocess::capability().available,
             // The existing unload/running routes only mean something with a
             // swap manager installed (the same fact `runtime.rs` gates on).
@@ -315,6 +317,8 @@ pub(crate) fn capabilities_document(config: &super::AppConfig) -> Capabilities {
             let (enabled, ttl_secs, _) = super::runtime_config::signed_url_facts();
             Some(honkbox_api_types::SignedUrlCapability { enabled, ttl_secs })
         },
+        // No route is mounted, so no enforced limits can be advertised yet.
+        openscad_limits: None,
         scopes: {
             let (enabled, scopes) = super::runtime_config::scope_facts();
             Some(honkbox_api_types::ScopeCapability {

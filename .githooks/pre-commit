@@ -44,7 +44,10 @@ while IFS= read -r f; do
   case "$f" in
     *.ts|*.tsx)
       printf '%s\n' "$f" >>"$TMPDIR/fmt.list"
-      printf '%s\n' "$f" >>"$TMPDIR/ts.list"
+      case "$f" in
+        packages/web-ui/src/gen/*) ;; # oxlint ignores generated files
+        *) printf '%s\n' "$f" >>"$TMPDIR/ts.list" ;;
+      esac
       ;;
     *.json) printf '%s\n' "$f" >>"$TMPDIR/fmt.list" ;;
     *.rs) RS=1 ;;
