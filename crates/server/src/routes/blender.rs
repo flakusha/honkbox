@@ -719,9 +719,10 @@ mod tests {
     fn ledger_evicts_oldest_at_256_entries() {
         let mut ledger = BlenderDedup::default();
         for i in 0..=BLENDER_DEDUP_MAX_ENTRIES {
-            let entry = match ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()) {
-                BlenderReservation::Execute(entry) => entry,
-                _ => panic!("a fresh key must execute"),
+            let BlenderReservation::Execute(entry) =
+                ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned())
+            else {
+                panic!("a fresh key must execute");
             };
             assert!(
                 entry
@@ -744,15 +745,17 @@ mod tests {
     #[test]
     fn ledger_keeps_unsettled_entries_and_evicts_the_next_settled_one() {
         let mut ledger = BlenderDedup::default();
-        let in_flight = match ledger.reserve("consumer", "key-0", "hash".to_owned()) {
-            BlenderReservation::Execute(entry) => entry,
-            _ => panic!("a fresh key must execute"),
+        let BlenderReservation::Execute(in_flight) =
+            ledger.reserve("consumer", "key-0", "hash".to_owned())
+        else {
+            panic!("a fresh key must execute");
         };
         assert!(in_flight.outcome.get().is_none());
         for i in 1..=BLENDER_DEDUP_MAX_ENTRIES {
-            let entry = match ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()) {
-                BlenderReservation::Execute(entry) => entry,
-                _ => panic!("a fresh key must execute"),
+            let BlenderReservation::Execute(entry) =
+                ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned())
+            else {
+                panic!("a fresh key must execute");
             };
             assert!(
                 entry
@@ -783,9 +786,10 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let mut ledger = BlenderDedup::default();
-        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
-            BlenderReservation::Execute(entry) => entry,
-            _ => panic!("a fresh key must execute"),
+        let BlenderReservation::Execute(entry) =
+            ledger.reserve("consumer", "key", "hash".to_owned())
+        else {
+            panic!("a fresh key must execute");
         };
         let runs = Arc::new(AtomicUsize::new(0));
         let mut tasks = Vec::new();
