@@ -154,12 +154,29 @@ impl BlenderDedup {
         self.order.retain(|old| old != &key);
     }
 
+    /// Evict oldest entries past the cap. The bound is soft while entries
+    /// are in flight: an unsettled entry (a reserved key whose job is still
+    /// being admitted) is rotated to the back instead of evicted, so a
+    /// caller replaying the same Idempotency-Key can never re-execute a
+    /// submission that is in flight. Only when every remaining entry is in
+    /// flight does the ledger keep them all and exceed the cap. Keys absent
+    /// from `map` are stale `order` leftovers and are dropped.
     fn trim(&mut self) {
-        while self.map.len() > BLENDER_DEDUP_MAX_ENTRIES {
+        let mut examined = 0usize;
+        while self.map.len() > BLENDER_DEDUP_MAX_ENTRIES && examined < self.order.len() {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
-            self.map.remove(&oldest);
+            let unsettled = self
+                .map
+                .get(&oldest)
+                .is_some_and(|entry| entry.outcome.get().is_none());
+            if unsettled {
+                self.order.push_back(oldest);
+                examined += 1;
+            } else {
+                self.map.remove(&oldest);
+            }
         }
     }
 }
@@ -680,19 +697,101 @@ mod tests {
         }
     }
 
+    /// Every outcome is settled before the cap overflows, so plain
+    /// oldest-first eviction applies: `key-0` is gone after 257 keys.
     #[test]
     fn ledger_evicts_oldest_at_256_entries() {
         let mut ledger = BlenderDedup::default();
         for i in 0..=BLENDER_DEDUP_MAX_ENTRIES {
-            assert!(matches!(
-                ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()),
-                BlenderReservation::Execute(_)
-            ));
+            let entry = match ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()) {
+                BlenderReservation::Execute(entry) => entry,
+                _ => panic!("a fresh key must execute"),
+            };
+            assert!(
+                entry
+                    .outcome
+                    .set(settled(accepted(&format!("job-{i}"))))
+                    .is_ok()
+            );
         }
         assert_eq!(ledger.map.len(), BLENDER_DEDUP_MAX_ENTRIES);
         assert!(matches!(
             ledger.reserve("consumer", "key-0", "hash".to_owned()),
             BlenderReservation::Execute(_)
         ));
+    }
+
+    /// An in-flight entry is never evicted: with `key-0` still unsettled,
+    /// the cap overflow takes the oldest SETTLED entry (`key-1`) instead,
+    /// `key-0` survives, and replaying its key replays rather than
+    /// re-executes a submission that is in flight.
+    #[test]
+    fn ledger_keeps_unsettled_entries_and_evicts_the_next_settled_one() {
+        let mut ledger = BlenderDedup::default();
+        let in_flight = match ledger.reserve("consumer", "key-0", "hash".to_owned()) {
+            BlenderReservation::Execute(entry) => entry,
+            _ => panic!("a fresh key must execute"),
+        };
+        assert!(in_flight.outcome.get().is_none());
+        for i in 1..=BLENDER_DEDUP_MAX_ENTRIES {
+            let entry = match ledger.reserve("consumer", &format!("key-{i}"), "hash".to_owned()) {
+                BlenderReservation::Execute(entry) => entry,
+                _ => panic!("a fresh key must execute"),
+            };
+            assert!(
+                entry
+                    .outcome
+                    .set(settled(accepted(&format!("job-{i}"))))
+                    .is_ok()
+            );
+        }
+        let key0 = ("consumer".to_owned(), "key-0".to_owned());
+        let key1 = ("consumer".to_owned(), "key-1".to_owned());
+        assert!(ledger.map.contains_key(&key0), "in-flight key survives");
+        assert!(
+            !ledger.map.contains_key(&key1),
+            "oldest settled key evicted"
+        );
+        assert!(matches!(
+            ledger.reserve("consumer", "key-0", "hash".to_owned()),
+            BlenderReservation::Replay(_)
+        ));
+    }
+
+    /// N concurrent callers of one key share one entry: the first caller
+    /// holds `Execute`, and the outcome initializes exactly once no matter
+    /// how the runtime interleaves the tasks. Local ledger only — never the
+    /// process-global static.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ledger_single_flights_concurrent_reserves() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut ledger = BlenderDedup::default();
+        let entry = match ledger.reserve("consumer", "key", "hash".to_owned()) {
+            BlenderReservation::Execute(entry) => entry,
+            _ => panic!("a fresh key must execute"),
+        };
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let entry = Arc::clone(&entry);
+            let runs = Arc::clone(&runs);
+            tasks.push(tokio::spawn(async move {
+                entry
+                    .outcome
+                    .get_or_init(|| async {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        settled(accepted("once"))
+                    })
+                    .await
+                    .response
+                    .status()
+            }));
+        }
+        for task in tasks {
+            assert_eq!(task.await.expect("task joins"), StatusCode::ACCEPTED);
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 }
