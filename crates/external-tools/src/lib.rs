@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 mod blender_addons;
 mod blender_assets;
 pub mod llama_server;
+pub mod scene_spec;
 pub mod shader_validate;
 mod texture_postprocess;
 pub mod unirig;
@@ -42,6 +43,11 @@ pub use blender_assets::{
     BakeContract, BakeManifest, BakeMap, BakeSettings, BakeTarget, BakeType, MeshFormat, Primitive,
     ProgressEvent, RECIPE_VERSION, RecipeFiles, build_bake_manifest, build_manifest, plan_bake,
     prepare, recipe_sha256, run as run_asset_job, scratch_dir, write_bake_manifest,
+};
+pub use scene_spec::{
+    Asset, AssetRole, Camera, EngineTarget, Light, LightType, Material, ObjectSpec, Projection,
+    SCHEMA_ID, SceneSpec, SceneSpecError, TextureSlot, ValidatedScene, View, ViewPlan,
+    canonical_json, stage_seed, validate,
 };
 pub use texture_postprocess::{
     ColorSpace, DEFAULT_TILE_SIZE, InputMap, MapRole, OiioTool, OrmPack, OutputMap,

@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://honkbox.dev/schema/scene-spec/v1/scene-spec-v1.json",
+  "title": "scene-spec/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "seed",
+    "engine_target",
+    "assets",
+    "objects",
+    "materials",
+    "cameras",
+    "views",
+    "lights"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "scene-spec/v1"
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "engine_target": {
+      "$ref": "#/$defs/engine_target"
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "objects": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/object_spec"
+      }
+    },
+    "materials": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/material"
+      }
+    },
+    "cameras": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/camera"
+      }
+    },
+    "views": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/view"
+      }
+    },
+    "lights": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/light"
+      }
+    }
+  },
+  "$defs": {
+    "engine_target": {
+      "type": "string",
+      "enum": [
+        "blender_cycles_cpu"
+      ]
+    },
+    "asset_role": {
+      "type": "string",
+      "enum": [
+        "mesh",
+        "albedo",
+        "normal",
+        "roughness",
+        "metalness",
+        "ao",
+        "height"
+      ]
+    },
+    "projection": {
+      "type": "string",
+      "enum": [
+        "perspective",
+        "orthographic"
+      ]
+    },
+    "light_type": {
+      "type": "string",
+      "enum": [
+        "point",
+        "sun",
+        "area"
+      ]
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      }
+    },
+    "vec4": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "number"
+      }
+    },
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safe_target": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\.{1,2}$)[^%\\\\/\\x00-\\x1f\\x7f-\\x9f]+$"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "sha256",
+        "role"
+      ],
+      "properties": {
+        "asset_id": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "role": {
+          "$ref": "#/$defs/asset_role"
+        }
+      }
+    },
+    "texture_slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "asset_id"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/asset_role"
+        },
+        "asset_id": {
+          "$ref": "#/$defs/sha256_hex"
+        }
+      },
+      "not": {
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "const": "mesh"
+          }
+        }
+      }
+    },
+    "object_spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "asset_id",
+        "translation",
+        "rotation",
+        "scale"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset_id": {
+          "$ref": "#/$defs/sha256_hex"
+        },
+        "parent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "material_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "translation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "rotation": {
+          "$ref": "#/$defs/vec3"
+        },
+        "scale": {
+          "$ref": "#/$defs/vec3"
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "base_color",
+        "metallic",
+        "roughness",
+        "texture_slots"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "base_color": {
+          "$ref": "#/$defs/vec3"
+        },
+        "metallic": {
+          "type": "number"
+        },
+        "roughness": {
+          "type": "number"
+        },
+        "texture_slots": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/texture_slot"
+          }
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "position",
+        "target",
+        "up",
+        "projection",
+        "lens",
+        "clip_near",
+        "clip_far"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "target": {
+          "$ref": "#/$defs/vec3"
+        },
+        "up": {
+          "$ref": "#/$defs/vec3"
+        },
+        "projection": {
+          "$ref": "#/$defs/projection"
+        },
+        "lens": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "clip_near": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "clip_far": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "camera_id",
+        "targets",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "camera_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/safe_target"
+          }
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        }
+      }
+    },
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "light_type",
+        "position",
+        "direction",
+        "color",
+        "energy",
+        "attenuation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "light_type": {
+          "$ref": "#/$defs/light_type"
+        },
+        "position": {
+          "$ref": "#/$defs/vec3"
+        },
+        "direction": {
+          "$ref": "#/$defs/vec3"
+        },
+        "color": {
+          "$ref": "#/$defs/vec3"
+        },
+        "energy": {
+          "type": "number",
+          "minimum": 0
+        },
+        "attenuation": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
