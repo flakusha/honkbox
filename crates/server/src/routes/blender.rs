@@ -29,7 +29,7 @@ use honkbox_api_types::{
 use honkbox_external_tools::{AssetStage, MeshFormat, recipe_sha256};
 use tokio::sync::OnceCell;
 
-use crate::determinism::canonical_hash;
+use crate::jobs::determinism::canonical_hash;
 
 use super::AppConfig;
 use super::blender_stages::{map_stage, mesh_format};
@@ -71,32 +71,53 @@ const DEFAULT_PREFIX: &str = "output";
 /// A named rejection: status, message, error code.
 pub(super) type Rejection = (StatusCode, String, &'static str);
 
-/// A settled Blender submission: the exact response the first attempt
-/// answered (202 body and `X-Job-Id` already stamped). Failures are marked
-/// so their entry can be forgotten and a genuine retry can run.
-#[derive(Clone)]
+/// A settled Blender submission. The outcome is owned, not an axum `Response`:
+/// a process-global dedup entry must be `Sync`, and `Body` is not. Replays
+/// render a fresh response from the stored outcome.
 struct BlenderSettled {
     succeeded: bool,
-    response: Response,
+    outcome: SettledOutcome,
 }
 
-impl From<Result<BlenderJobAccepted, Response>> for BlenderSettled {
-    fn from(result: Result<BlenderJobAccepted, Response>) -> Self {
+enum SettledOutcome {
+    Accepted(BlenderJobAccepted),
+    Rejected {
+        status: StatusCode,
+        message: String,
+        code: Option<&'static str>,
+    },
+}
+
+impl BlenderSettled {
+    fn response(&self) -> Response {
+        match &self.outcome {
+            SettledOutcome::Accepted(accepted) => with_job_id(
+                (StatusCode::ACCEPTED, Json(accepted.clone())).into_response(),
+                &accepted.job_id,
+            ),
+            SettledOutcome::Rejected {
+                status,
+                message,
+                code,
+            } => openai_error_response(*status, message.clone(), *code),
+        }
+    }
+}
+
+impl From<Result<BlenderJobAccepted, Rejection>> for BlenderSettled {
+    fn from(result: Result<BlenderJobAccepted, Rejection>) -> Self {
         match result {
-            Ok(accepted) => {
-                let job_id = accepted.job_id.clone();
-                let response = with_job_id(
-                    (StatusCode::ACCEPTED, Json(accepted)).into_response(),
-                    &job_id,
-                );
-                Self {
-                    succeeded: true,
-                    response,
-                }
-            }
-            Err(response) => Self {
+            Ok(accepted) => Self {
+                succeeded: true,
+                outcome: SettledOutcome::Accepted(accepted),
+            },
+            Err((status, message, code)) => Self {
                 succeeded: false,
-                response,
+                outcome: SettledOutcome::Rejected {
+                    status,
+                    message,
+                    code: Some(code),
+                },
             },
         }
     }
@@ -308,40 +329,39 @@ pub(crate) async fn post_blender_job(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             dedup.forget(&consumer, &key);
         }
-        return settled.response.clone();
+        return settled.response();
     }
-    BlenderSettled::from(execute_blender_job(config, req).await).response
+    BlenderSettled::from(execute_blender_job(config, req).await).response()
 }
 
 /// Validate and execute one Blender job. Shared by fresh submissions and the
 /// single-flight replay path; conversion stamps the response envelope once.
-#[allow(clippy::result_large_err)] // axum Response is a fixed-size request-path type
 async fn execute_blender_job(
     config: AppConfig,
     req: BlenderJobRequest,
-) -> Result<BlenderJobAccepted, Response> {
+) -> Result<BlenderJobAccepted, Rejection> {
     let Some(data_dir) = config.data_dir.clone() else {
-        return openai_error_response(
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             "no data dir: the artifact store and the job bundles are disabled".to_string(),
-            Some("blender_storage_unavailable"),
-        );
+            "blender_storage_unavailable",
+        ));
     };
     let mut plan = match plan_job(&req, config.artifacts.clone()) {
         Ok(plan) => plan,
-        Err(rejection) => return rejection_response(rejection),
+        Err(rejection) => return Err(rejection),
     };
     let engine = match engine_gate(&req) {
         Ok(engine) => engine,
-        Err(response) => return response,
+        Err(rejection) => return Err(rejection),
     };
     if !process_groups_supported() {
-        return openai_error_response(
+        return Err((
             StatusCode::NOT_IMPLEMENTED,
             "blender jobs need a unix host: the process supervisor tears down the process group"
                 .to_string(),
-            Some("blender_unsupported_platform"),
-        );
+            "blender_unsupported_platform",
+        ));
     }
     // Admission first, registration second (the shared seam): a rejected
     // request never enters the registry.
@@ -354,7 +374,7 @@ async fn execute_blender_job(
     ) {
         Ok(pair) => pair,
         Err((status, message)) => {
-            return openai_error_response(status, message, Some("blender_busy"));
+            return Err((status, message, "blender_busy"));
         }
     };
     let job_id = guard.id().to_string();
@@ -362,11 +382,11 @@ async fn execute_blender_job(
     let bundle_id = ulid::Ulid::new().to_string();
     let bundle = data_dir.join("jobs").join(&bundle_id);
     if let Err(err) = std::fs::create_dir_all(&bundle) {
-        return openai_error_response(
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("cannot create the job bundle: {err}"),
-            Some("blender_bundle_failed"),
-        );
+            "blender_bundle_failed",
+        ));
     }
     let token = guard.token().clone();
     super::blender_exec::start(plan, bundle, engine.binary, token, lease, guard);
@@ -380,23 +400,22 @@ async fn execute_blender_job(
 /// The engine gate: no Blender installed is a 501, a version or a recipe
 /// digest the caller did not expect is a 409. Both are checked BEFORE the
 /// process starts.
-#[allow(clippy::result_large_err)] // axum Response is a fixed-size request-path type
-fn engine_gate(req: &BlenderJobRequest) -> Result<super::external_tools::BlenderEngine, Response> {
+fn engine_gate(req: &BlenderJobRequest) -> Result<super::external_tools::BlenderEngine, Rejection> {
     let Some(engine) = blender_engine() else {
-        return Err(openai_error_response(
+        return Err((
             StatusCode::NOT_IMPLEMENTED,
             "no blender engine is installed".to_string(),
-            Some("blender_unavailable"),
+            "blender_unavailable",
         ));
     };
     if engine.version != req.engine.blender_version {
-        return Err(openai_error_response(
+        return Err((
             StatusCode::CONFLICT,
             format!(
                 "engine.blender_version {:?} does not match the installed blender {:?}",
                 req.engine.blender_version, engine.version
             ),
-            Some("blender_version_mismatch"),
+            "blender_version_mismatch",
         ));
     }
     // The recipe pin is optional: a caller that pins it gets a named 409
@@ -409,10 +428,10 @@ fn engine_gate(req: &BlenderJobRequest) -> Result<super::external_tools::Blender
     if let Some(expected) = req.engine.script_version.as_deref()
         && expected != recipe
     {
-        return Err(openai_error_response(
+        return Err((
             StatusCode::CONFLICT,
             format!("engine.script_version does not match the installed recipe ({recipe})"),
-            Some("blender_script_version_mismatch"),
+            "blender_script_version_mismatch",
         ));
     }
     Ok(engine)
@@ -538,12 +557,6 @@ fn is_safe_prefix(prefix: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// The named rejection as an error response.
-fn rejection_response(rejection: Rejection) -> Response {
-    let (status, message, code) = rejection;
-    openai_error_response(status, message, Some(code))
-}
-
 #[cfg(test)]
 mod tests {
     use honkbox_api_types::{
@@ -626,7 +639,7 @@ mod tests {
     }
 
     fn settled(accepted: BlenderJobAccepted) -> BlenderSettled {
-        BlenderSettled::from(Ok::<_, Response>(accepted))
+        BlenderSettled::from(Ok::<_, Rejection>(accepted))
     }
 
     #[test]
@@ -641,10 +654,10 @@ mod tests {
             BlenderReservation::Replay(entry) => {
                 let replayed = entry.outcome.get().expect("settled");
                 assert!(replayed.succeeded);
-                assert_eq!(replayed.response.status(), StatusCode::ACCEPTED);
+                let response = replayed.response();
+                assert_eq!(response.status(), StatusCode::ACCEPTED);
                 assert_eq!(
-                    replayed
-                        .response
+                    response
                         .headers()
                         .get("X-Job-Id")
                         .unwrap()
@@ -681,11 +694,14 @@ mod tests {
             BlenderReservation::Execute(entry) => entry,
             _ => panic!("a fresh key must execute"),
         };
-        let failed = BlenderSettled::from(Err(openai_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "boom".to_owned(),
-            None,
-        )));
+        let failed = BlenderSettled {
+            succeeded: false,
+            outcome: SettledOutcome::Rejected {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "boom".to_owned(),
+                code: None,
+            },
+        };
         assert!(!failed.succeeded);
         assert!(entry.outcome.set(failed).is_ok());
         ledger.forget("consumer", "key");
@@ -785,7 +801,7 @@ mod tests {
                         settled(accepted("once"))
                     })
                     .await
-                    .response
+                    .response()
                     .status()
             }));
         }

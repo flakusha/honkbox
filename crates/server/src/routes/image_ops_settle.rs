@@ -300,6 +300,7 @@ pub(super) async fn execute_image_op(
             }
         }
     } else {
+        let worker_job_id = job_id.clone();
         let work = tokio::task::spawn_blocking(move || {
             run_image_op_units(
                 &command,
@@ -308,7 +309,7 @@ pub(super) async fn execute_image_op(
                 jpeg_quality,
                 &token,
                 &artifacts,
-                &job_id,
+                &worker_job_id,
             )
         })
         .await;
@@ -344,7 +345,7 @@ pub(super) async fn execute_image_op(
             .iter()
             .zip(promoted)
             .enumerate()
-            .map(|(i, (unit, info))| crate::jobs::OpsOutputRecord {
+            .map(|(i, (_unit, info))| crate::jobs::OpsOutputRecord {
                 file: format!("op_{i:02}.{}", format.extension()),
                 sha256: info.sha256,
                 artifact_id: info.id,
