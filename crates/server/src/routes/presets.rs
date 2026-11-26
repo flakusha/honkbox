@@ -7,7 +7,7 @@
 
 use axum::{
     Json,
-    extract::Path as AxumPath,
+    extract::{Path as AxumPath, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -139,18 +139,20 @@ pub(super) fn apply_preset(
 /// Append preset text deterministically: caller text first, preset text
 /// second; explicit caller text is never discarded.
 fn compose(req: &mut ImagesGenerationRequest, preset: &Preset) {
+    let prompt = req.prompt.trim();
     if let Some(style) = preset
         .style_prompt
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        let prompt = req.prompt.trim();
         req.prompt = if prompt.is_empty() {
             style.to_owned()
         } else {
             format!("{prompt}, {style}")
         };
+    } else {
+        req.prompt = prompt.to_owned();
     }
     if let Some(negative) = preset
         .negative_prompt
