@@ -83,6 +83,12 @@
       "source": ".plan/tickets/TASK-audiocpp-stt-provider.md"
     }
   ],
+  "src/blender.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-model-kinds-server-coverage.md"
+    }
+  ],
   "src/blender_addons.py": [
     {
       "kind": "ticket",
@@ -315,6 +321,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/BUG-openapi-embeddings-unlisted.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-model-kinds-server-coverage.md"
     }
   ],
   "src/generation/providers/comfyui": [

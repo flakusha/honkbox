@@ -2995,6 +2995,32 @@
     "source": ".plan/tickets/TASK-model-format-validation.md",
     "status": "done"
   },
+  "TASK-MODEL-KINDS-SERVER-COVERAGE": {
+    "hash": "pending",
+    "extid": "TASK-MODEL-KINDS-SERVER-COVERAGE",
+    "type": "TASK",
+    "title": "Model kinds server coverage",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-model-kinds-server-coverage.md",
+    "status": "proposed"
+  },
+  "TASK-MODEL-KINDS-TE-COMPAT-DECISION": {
+    "hash": "pending",
+    "extid": "TASK-MODEL-KINDS-TE-COMPAT-DECISION",
+    "type": "TASK",
+    "title": "Model kinds text-encoder compatibility decision",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-model-kinds-te-compat-decision.md",
+    "status": "proposed"
+  },
   "TASK-MODEL-LICENSE-REGISTRY": {
     "hash": "5addd27",
     "git_issue": "5addd27",
