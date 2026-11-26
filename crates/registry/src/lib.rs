@@ -16,11 +16,16 @@ use std::path::{Path, PathBuf};
 
 pub mod db;
 mod metadata;
+pub mod provenance;
 
 pub use db::env_db_path as registry_db_path;
 pub use db::{AliasRow, DB_ENV, Db, DbError, DbResult, EntryOverride, SCHEMA_VERSION};
 use metadata::probe;
 pub use metadata::{GgufMetadata, ModelFileMetadata, SafetensorsMetadata};
+pub use provenance::{
+    Confidence, CuratedIdentity, IdentityStatus, PROBE_VERSION, PROVENANCE_SCHEMA_VERSION,
+    ProvenanceRecord, evaluate,
+};
 mod presets;
 pub use presets::{
     PRESET_MANIFEST_REL, PRESET_SCHEMA_VERSION, Preset, PresetLoadError, PresetManifest,

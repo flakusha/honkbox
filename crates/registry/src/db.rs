@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-/// Current schema version of the `entries`/`aliases`/`entry_overrides` layout.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Current schema version of the `entries`/`aliases`/`entry_overrides`/`provenance` layout.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Env var selecting the cache DB path; `"off"` or `""` disables persistence.
 pub const DB_ENV: &str = "HONKBOX_REGISTRY_DB";
@@ -155,6 +155,13 @@ const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS meta (
  CREATE TABLE IF NOT EXISTS entry_overrides (
      slug TEXT PRIMARY KEY,
      capabilities TEXT NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS provenance (
+     slug TEXT PRIMARY KEY,
+     schema_version INTEGER NOT NULL,
+     probe_version INTEGER NOT NULL,
+     probed_at INTEGER NOT NULL,
+     record_json TEXT NOT NULL
  );";
 
 /// One cached alias binding: `alias` resolves to the entry with `slug`
@@ -239,7 +246,8 @@ impl Db {
             // schemas are dropped wholesale — the cache is rebuildable.
             conn.execute_batch(&format!(
                 "DROP TABLE IF EXISTS entries; DROP TABLE IF EXISTS aliases; \
-                 DROP TABLE IF EXISTS entry_overrides; DROP TABLE IF EXISTS meta; {SCHEMA_SQL}\
+                 DROP TABLE IF EXISTS entry_overrides; DROP TABLE IF EXISTS provenance; \
+                 DROP TABLE IF EXISTS meta; {SCHEMA_SQL}\
                  INSERT OR REPLACE INTO meta VALUES ('schema_version', '{SCHEMA_VERSION}');"
             ))?;
         }
@@ -262,15 +270,34 @@ impl Db {
                      size_ts = excluded.size_ts",
             )?;
             for e in entries {
+                let path = e.path.to_string_lossy();
+                let bytes = i64::try_from(e.bytes).unwrap_or(i64::MAX);
+                let unchanged = tx
+                    .query_row(
+                        "SELECT 1 FROM entries WHERE slug = ?1 AND path = ?2 AND bytes = ?3",
+                        rusqlite::params![e.slug.as_str(), path.as_ref(), bytes],
+                        |_| Ok(()),
+                    )
+                    .is_ok();
+                if !unchanged {
+                    tx.execute("DELETE FROM provenance WHERE slug = ?1", [&e.slug])?;
+                }
                 stmt.execute((
                     e.slug.as_str(),
                     kind_str(e.kind),
                     e.category.as_str(),
-                    e.path.to_string_lossy().as_ref(),
-                    i64::try_from(e.bytes).unwrap_or(i64::MAX),
+                    path.as_ref(),
+                    bytes,
                     i64::try_from(now_ts).unwrap_or(i64::MAX),
                 ))?;
             }
+            // Orphan verdicts (entry removed) must not outlive the catalog.
+            tx.execute(
+                "DELETE FROM provenance WHERE NOT EXISTS (
+                     SELECT 1 FROM entries WHERE entries.slug = provenance.slug
+                 )",
+                [],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -302,6 +329,68 @@ impl Db {
                 bytes: u64::try_from(bytes.max(0)).unwrap_or(0),
                 metadata: None,
             });
+        }
+        Ok(out)
+    }
+
+    /// Replace-all write of provenance verdicts keyed by registry slug.
+    /// `probed_at` lives in its own column because canonical JSON excludes it.
+    pub fn upsert_provenance(
+        &self,
+        records: &[crate::provenance::ProvenanceRecord],
+    ) -> DbResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO provenance (slug, schema_version, probe_version, probed_at, record_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(slug) DO UPDATE SET
+                     schema_version = excluded.schema_version,
+                     probe_version = excluded.probe_version,
+                     probed_at = excluded.probed_at,
+                     record_json = excluded.record_json",
+            )?;
+            for record in records {
+                stmt.execute((
+                    record.slug.as_str(),
+                    i64::from(record.schema_version),
+                    i64::from(record.probe_version),
+                    i64::try_from(record.probed_at).unwrap_or(i64::MAX),
+                    record.canonical_json().as_str(),
+                ))?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load cached verdicts (slug-sorted). `slug` and `probed_at` are restored
+    /// from their columns, independent of the JSON projection.
+    pub fn load_provenance(&self) -> DbResult<Vec<crate::provenance::ProvenanceRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT slug, probed_at, record_json FROM provenance ORDER BY slug")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (slug, probed_at, json) = row?;
+            let mut record: crate::provenance::ProvenanceRecord = serde_json::from_str(&json)
+                .map_err(|e| {
+                    DbError::Sqlite(rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    ))
+                })?;
+            record.slug = slug;
+            record.probed_at = u64::try_from(probed_at.max(0)).unwrap_or(0);
+            out.push(record);
         }
         Ok(out)
     }
@@ -382,6 +471,8 @@ impl Db {
             if !Path::new(&path).exists() {
                 self.conn
                     .execute("DELETE FROM entries WHERE slug = ?1", [&slug])?;
+                self.conn
+                    .execute("DELETE FROM provenance WHERE slug = ?1", [&slug])?;
                 pruned += 1;
             }
         }
@@ -622,5 +713,128 @@ mod tests {
         db.upsert_entries(&[entry("llm:y.gguf", ModelKind::Llm, "/y", 2)], 7)
             .expect("upsert");
         assert_eq!(db.count(), 1);
+    }
+
+    fn provenance(slug: &str, probed_at: u64) -> crate::provenance::ProvenanceRecord {
+        crate::provenance::ProvenanceRecord {
+            slug: slug.into(),
+            schema_version: crate::provenance::PROVENANCE_SCHEMA_VERSION,
+            probe_version: crate::provenance::PROBE_VERSION,
+            probed_at,
+            file_size: 42,
+            file_sha256: None,
+            provider: "user_supplied".into(),
+            repo_id: None,
+            revision: None,
+            source_path: None,
+            declared_name: None,
+            architecture: None,
+            base_model: None,
+            identity_status: crate::provenance::IdentityStatus::Unknown,
+            confidence: crate::provenance::Confidence::Unknown,
+            reason_code: "no_evidence".into(),
+            evidence: vec!["hf_cache_path".into()],
+        }
+    }
+
+    #[test]
+    fn provenance_roundtrip_is_slug_sorted() {
+        let path = temp_db("prov-roundtrip");
+        let db = Db::open(&path).expect("open");
+        assert_eq!(
+            db.load_provenance().expect("load empty"),
+            Vec::<crate::provenance::ProvenanceRecord>::new()
+        );
+        db.upsert_provenance(&[
+            provenance("z:model.gguf", 22),
+            provenance("a:model.gguf", 11),
+        ])
+        .expect("upsert");
+        let loaded = db.load_provenance().expect("load");
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].slug, "a:model.gguf");
+        assert_eq!(loaded[0].probed_at, 11);
+        assert_eq!(loaded[1].slug, "z:model.gguf");
+        assert_eq!(loaded[1].probed_at, 22);
+        drop(db);
+        let db = Db::open(&path).expect("reopen");
+        assert_eq!(db.load_provenance().expect("reload"), loaded);
+    }
+
+    #[test]
+    fn provenance_invalidated_on_path_change() {
+        let tag = "prov-path";
+        let db = Db::open(&temp_db(tag)).expect("open");
+        let first = real_file(tag, "first.gguf");
+        db.upsert_entries(&[entry("llm:m.gguf", ModelKind::Llm, &first, 10)], 1)
+            .expect("upsert");
+        db.upsert_provenance(&[provenance("llm:m.gguf", 7)])
+            .expect("provenance");
+        assert_eq!(db.load_provenance().expect("load").len(), 1);
+        let second = real_file(tag, "second.gguf");
+        db.upsert_entries(&[entry("llm:m.gguf", ModelKind::Llm, &second, 10)], 2)
+            .expect("path change");
+        assert_eq!(
+            db.load_provenance().expect("after path change"),
+            Vec::<crate::provenance::ProvenanceRecord>::new()
+        );
+    }
+
+    #[test]
+    fn provenance_invalidated_on_byte_change() {
+        let tag = "prov-bytes";
+        let path = real_file(tag, "m.gguf");
+        let db = Db::open(&temp_db(tag)).expect("open");
+        db.upsert_entries(&[entry("llm:m.gguf", ModelKind::Llm, &path, 10)], 1)
+            .expect("upsert");
+        db.upsert_provenance(&[provenance("llm:m.gguf", 7)])
+            .expect("provenance");
+        assert_eq!(db.load_provenance().expect("load").len(), 1);
+        db.upsert_entries(&[entry("llm:m.gguf", ModelKind::Llm, &path, 11)], 2)
+            .expect("byte change");
+        assert_eq!(
+            db.load_provenance().expect("after byte change"),
+            Vec::<crate::provenance::ProvenanceRecord>::new()
+        );
+    }
+
+    #[test]
+    fn provenance_deleted_on_prune() {
+        let tag = "prov-prune";
+        let db = Db::open(&temp_db(tag)).expect("open");
+        let gone = temp_dir(tag)
+            .join("gone.gguf")
+            .to_string_lossy()
+            .into_owned();
+        db.upsert_entries(&[entry("llm:gone.gguf", ModelKind::Llm, &gone, 1)], 1)
+            .expect("upsert");
+        db.upsert_provenance(&[provenance("llm:gone.gguf", 9)])
+            .expect("provenance");
+        assert_eq!(db.prune_missing_roots().expect("prune"), 1);
+        assert_eq!(
+            db.load_provenance().expect("after prune"),
+            Vec::<crate::provenance::ProvenanceRecord>::new()
+        );
+    }
+
+    #[test]
+    fn old_schema_rebuild_has_no_provenance() {
+        let path = temp_db("prov-old-schema");
+        let db = Db::open(&path).expect("open");
+        db.upsert_provenance(&[provenance("llm:old.gguf", 3)])
+            .expect("provenance");
+        assert_eq!(db.load_provenance().expect("load").len(), 1);
+        db.conn
+            .execute_batch(
+                "DROP TABLE entries; INSERT OR REPLACE INTO meta VALUES ('schema_version', '0');",
+            )
+            .expect("downgrade");
+        drop(db);
+        let db = Db::open(&path).expect("reopen");
+        assert_eq!(db.count(), 0);
+        assert_eq!(
+            db.load_provenance().expect("after rebuild"),
+            Vec::<crate::provenance::ProvenanceRecord>::new()
+        );
     }
 }

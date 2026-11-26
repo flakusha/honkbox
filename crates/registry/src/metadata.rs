@@ -38,6 +38,14 @@ pub struct SafetensorsMetadata {
     /// Base-model tag from the safetensors `__metadata__` header, normalized
     /// to `sd15`/`sdxl`/`sd3` when recognized; raw text when unknown.
     pub base_model: Option<String>,
+    /// Raw `general.name` identity value, preserved verbatim.
+    pub identity_name: Option<String>,
+    /// Raw `model_name` identity value, preserved verbatim.
+    pub identity_model_name: Option<String>,
+    /// Raw `model_id` identity value, preserved verbatim.
+    pub identity_model_id: Option<String>,
+    /// Every present raw identity key/value pair, sorted by key.
+    pub raw_identity: Vec<(String, String)>,
 }
 
 /// Header-derived metadata for one weight file.
@@ -270,27 +278,50 @@ fn probe_safetensors(path: &Path) -> Option<SafetensorsMetadata> {
         }
     }
     dtypes.sort_unstable();
-    let base_model = entries
+    let meta = entries
         .get("__metadata__")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|meta| {
-            [
-                "ss_base_model",
-                "base_model",
-                "ss_base_model_version",
-                "modelspec.base_model",
-            ]
-            .into_iter()
-            .find_map(|key| {
-                meta.get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(normalize_base_model)
-            })
-        });
+        .and_then(serde_json::Value::as_object);
+    let base_model = meta.and_then(|meta| {
+        [
+            "ss_base_model",
+            "base_model",
+            "ss_base_model_version",
+            "modelspec.base_model",
+        ]
+        .into_iter()
+        .find_map(|key| {
+            meta.get(key)
+                .and_then(serde_json::Value::as_str)
+                .and_then(normalize_base_model)
+        })
+    });
+    let identity = |key: &str| -> Option<String> {
+        meta.and_then(|meta| meta.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+    };
+    let identity_name = identity("general.name");
+    let identity_model_name = identity("model_name");
+    let identity_model_id = identity("model_id");
+    // Raw identity pairs, emitted in key order (`general.name` < `model_id`
+    // < `model_name`).
+    let raw_identity: Vec<(String, String)> = [
+        ("general.name", identity_name.as_deref()),
+        ("model_id", identity_model_id.as_deref()),
+        ("model_name", identity_model_name.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+    .collect();
     Some(SafetensorsMetadata {
         tensor_count,
         dtypes,
         base_model,
+        identity_name,
+        identity_model_name,
+        identity_model_id,
+        raw_identity,
     })
 }
 
@@ -504,6 +535,10 @@ mod tests {
                 tensor_count: 3,
                 dtypes: vec!["F16".to_owned(), "F32".to_owned()],
                 base_model: Some("sdxl".to_owned()),
+                identity_name: None,
+                identity_model_name: None,
+                identity_model_id: None,
+                raw_identity: Vec::new(),
             }))
         );
     }
@@ -522,7 +557,36 @@ mod tests {
                 tensor_count: 1,
                 dtypes: vec!["F16".to_owned()],
                 base_model: Some("flux-dev".to_owned()),
+                identity_name: None,
+                identity_model_name: None,
+                identity_model_id: None,
+                raw_identity: Vec::new(),
             }))
+        );
+    }
+
+    #[test]
+    fn safetensors_raw_identity_is_preserved_separately_from_base_model() {
+        let header = br#"{"__metadata__":{"general.name":"Weird Name","model_name":"ModelX","model_id":"org/repo","base_model":"SDXL 1.0"},"w":{"dtype":"F16","shape":[1],"data_offsets":[0,2]}}"#;
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(header);
+        let path = write_scratch("st-identity.safetensors", &bytes);
+        let metadata = probe(&path, "safetensors");
+        std::fs::remove_file(&path).ok();
+        let Some(ModelFileMetadata::Safetensors(meta)) = metadata else {
+            panic!("expected safetensors metadata, got {metadata:?}");
+        };
+        assert_eq!(meta.identity_name.as_deref(), Some("Weird Name"));
+        assert_eq!(meta.identity_model_name.as_deref(), Some("ModelX"));
+        assert_eq!(meta.identity_model_id.as_deref(), Some("org/repo"));
+        assert_eq!(meta.base_model.as_deref(), Some("sdxl"));
+        assert_eq!(
+            meta.raw_identity,
+            vec![
+                ("general.name".to_owned(), "Weird Name".to_owned()),
+                ("model_id".to_owned(), "org/repo".to_owned()),
+                ("model_name".to_owned(), "ModelX".to_owned()),
+            ]
         );
     }
 
