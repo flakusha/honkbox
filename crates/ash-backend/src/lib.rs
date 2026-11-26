@@ -268,6 +268,8 @@ pub mod sampler;
 pub mod sd;
 #[cfg(feature = "ash-compute")]
 pub mod sd15_keys;
+#[cfg(all(test, feature = "ash-sd"))]
+mod sd2_step;
 #[cfg(feature = "ash-sd")]
 pub mod sdxl;
 #[cfg(feature = "ash-compute")]

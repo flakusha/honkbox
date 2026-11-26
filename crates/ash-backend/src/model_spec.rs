@@ -460,6 +460,85 @@ pub static SD15_REDUCED: UnetModelSpec<'static> = UnetModelSpec {
     },
 };
 
+/// SD 2-base geometry from the original single-file config:
+/// `in_channels: 4`, `model_channels: 320`, `channel_mult: [1, 2, 4, 4]`,
+/// `context_dim: 1024`, `num_res_blocks: 2`, 1000 discrete steps.
+/// Source: https://huggingface.co/ckpt/stable-diffusion-2-base/raw/main/v2-inference.yaml
+pub const SD2_BASE_CHANNELS: [usize; 4] = [320, 640, 1280, 1280];
+/// Cross-attention context width of the SD 2-base OpenCLIP tower.
+pub const SD2_BASE_CONTEXT_DIM: usize = 1024;
+/// OpenCLIP token count, matching the SD 1.5 CLIP sequence length.
+pub const SD2_BASE_CLIP_TOKENS: usize = 77;
+/// OpenCLIP vocabulary width; SD 2-base is not a new tokenizer.
+pub const SD2_BASE_CLIP_VOCAB: usize = 49408;
+/// OpenCLIP hidden width. Source: SD 2-base `text_encoder/config.json`,
+/// https://huggingface.co/sd2-community/stable-diffusion-2-base/raw/main/text_encoder/config.json
+pub const SD2_BASE_CLIP_HIDDEN: usize = 1024;
+/// OpenCLIP encoder layer count from the same config.
+pub const SD2_BASE_CLIP_LAYERS: usize = 23;
+/// OpenCLIP attention head count from the same config.
+pub const SD2_BASE_CLIP_HEADS: usize = 16;
+/// SD 2-base predicts epsilon. The `2-v` v-prediction variant is out of scope.
+pub const SD2_BASE_PREDICTION: &str = "epsilon";
+/// Original single-file OpenCLIP prefixes used by stable-diffusion.cpp for SD2.
+/// Source: https://github.com/leejet/stable-diffusion.cpp/blob/master/src/conditioning/conditioner.hpp
+pub const SD2_BASE_TEXT_KEYS: [&str; 2] = [
+    "cond_stage_model.transformer.text_model.embeddings.token_embedding.weight",
+    "cond_stage_model.transformer.text_model.embeddings.position_embedding.weight",
+];
+
+/// Tensor names for the reduced SD 2-base graph. The original single-file
+/// checkpoint uses the same `model.diffusion_model.*` and VAE names as SD 1.x;
+/// only the widths, context tower and prediction target differ. This spec does
+/// not claim SDXL or SD 2-v aliases.
+pub static SD2_BASE_REDUCED: UnetModelSpec<'static> = UnetModelSpec {
+    family: "sd2-base-reduced",
+    conv_in: ConvKeys {
+        weight: "conv_in.weight",
+        bias: "conv_in.bias",
+    },
+    down_levels: &DOWN_LEVELS,
+    mid_level: LevelSpec {
+        name: "mid level",
+        resnets: &MID_RESNETS,
+        downsample: None,
+    },
+    cross: CROSS,
+    projections: &PROJECTIONS,
+    norm_out: NormKeys {
+        weight: "conv_norm_out.weight",
+        bias: "conv_norm_out.bias",
+    },
+    conv_out: ConvKeys {
+        weight: "conv_out.weight",
+        bias: "conv_out.bias",
+    },
+    timestep: TimestepKeys {
+        linear1: ConvKeys {
+            weight: "time_embedding.linear_1.weight",
+            bias: "time_embedding.linear_1.bias",
+        },
+        linear2: ConvKeys {
+            weight: "time_embedding.linear_2.weight",
+            bias: "time_embedding.linear_2.bias",
+        },
+    },
+    vae: VaeKeys {
+        conv_in: ConvKeys {
+            weight: "decoder.conv_in.weight",
+            bias: "decoder.conv_in.bias",
+        },
+        norm_out: NormKeys {
+            weight: "decoder.conv_norm_out.weight",
+            bias: "decoder.conv_norm_out.bias",
+        },
+        conv_out: ConvKeys {
+            weight: "decoder.conv_out.weight",
+            bias: "decoder.conv_out.bias",
+        },
+    },
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +656,42 @@ mod tests {
         let (_file, map) = checkpoint(&keys);
         assert!(validate(&SD15_REDUCED, &map).is_ok());
         assert!(map.get("conv_in.weight").is_none());
+    }
+
+    #[test]
+    fn sd2_base_spec_declares_source_cited_geometry() {
+        assert_eq!(SD2_BASE_REDUCED.family, "sd2-base-reduced");
+        assert_eq!(SD2_BASE_CHANNELS, [320, 640, 1280, 1280]);
+        assert_eq!(SD2_BASE_CONTEXT_DIM, 1024);
+        assert_eq!(SD2_BASE_CLIP_TOKENS, 77);
+        assert_eq!(SD2_BASE_CLIP_VOCAB, 49408);
+        assert_eq!(SD2_BASE_CLIP_HIDDEN, 1024);
+        assert_eq!(SD2_BASE_CLIP_LAYERS, 23);
+        assert_eq!(SD2_BASE_CLIP_HEADS, 16);
+        assert_eq!(SD2_BASE_PREDICTION, "epsilon");
+        assert_eq!(
+            SD2_BASE_TEXT_KEYS[1],
+            "cond_stage_model.transformer.text_model.embeddings.position_embedding.weight"
+        );
+        let keys = tensor_keys(&SD2_BASE_REDUCED);
+        assert_eq!(keys.len(), tensor_keys(&SD15_REDUCED).len());
+        assert!(keys.iter().all(|(_, key)| !key.contains("label_emb")));
+    }
+
+    #[test]
+    fn sd2_base_validation_names_declared_tensor_and_key() {
+        let mut keys = tensor_keys(&SD2_BASE_REDUCED);
+        let (_file, map) = checkpoint(&keys);
+        assert!(validate(&SD2_BASE_REDUCED, &map).is_ok());
+
+        keys.retain(|(_, key)| key != "conv_out.bias");
+        let (_file, map) = checkpoint(&keys);
+        match validate(&SD2_BASE_REDUCED, &map) {
+            Err(SpecError::Missing { role, key }) => {
+                assert_eq!(role, "output conv");
+                assert_eq!(key, "conv_out.bias");
+            }
+            Ok(()) => panic!("missing SD2 tensor accepted"),
+        }
     }
 }
