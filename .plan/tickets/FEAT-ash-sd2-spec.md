@@ -101,3 +101,4 @@ Build env: LLVM 22 (`PATH`/`LIBCLANG_PATH`), `CARGO_TARGET_DIR=/tmp/cargo-honkbo
 - `cargo test --locked -p honkbox-ash-backend --features ash-sd unet_predictor`: 1 passed.
 - `cargo test --locked -p honkbox-ash-backend --features ash-sd ddim_sampler`: 2 passed.
 - `giwt plan check-links`: 291 files, 0 broken links.
+- Caller sweep migrated `server/src/main.rs:854-858` from the stale label gate to typed `CheckpointFamily::Sd2`; `cargo fmt --all -- --check` clean. `cargo check --locked -p honkbox-server --features ash-sd` is blocked before success by pre-existing errors in untouched `routes/blender.rs`, `routes/presets.rs` and `image_ops_settle.rs`; no error was reported in `main.rs`.

@@ -851,10 +851,8 @@ fn models_inspect_ash(
         print_missing("clip", &keys.clip_missing, all_missing);
         return;
     }
-    // ponytail: backend has no Sd2 variant yet; gate by label and switch to a
-    // typed match once checkpoint_family exposes Sd2.
     let family_label = family.label();
-    if family_label == "sd2" {
+    if family == honkbox_ash_backend::checkpoint_family::CheckpointFamily::Sd2 {
         println!("family: {family_label}");
         println!("{}", or_exit(readiness_markers(family_label, false)));
         print_ash_capabilities();
