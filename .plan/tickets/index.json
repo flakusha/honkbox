@@ -486,6 +486,24 @@
     "source": ".plan/tickets/FEAT-ash-embeddinggemma-2.md",
     "status": "proposed"
   },
+  "FEAT-ASH-GGUF-EMBEDDING-FAMILY": {
+    "hash": "pending",
+    "extid": "FEAT-ASH-GGUF-EMBEDDING-FAMILY",
+    "type": "FEAT",
+    "title": "GGUF embedding and rerank family on ash",
+    "label": "feat",
+    "priority": "medium",
+    "epic": "epic-full-ai-cycle",
+    "project": "",
+    "tags": [
+      "ash",
+      "vulkan",
+      "gguf",
+      "embedding"
+    ],
+    "source": ".plan/tickets/FEAT-ash-gguf-embedding-family.md",
+    "status": "open"
+  },
   "FEAT-ASH-LFM25-TEXT-DECODER": {
     "hash": "pending",
     "extid": "FEAT-ASH-LFM25-TEXT-DECODER",
@@ -536,7 +554,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/FEAT-ash-sd2-spec.md",
-    "status": "proposed"
+    "status": "done"
   },
   "FEAT-ASH-VULKAN-BACKEND": {
     "hash": "pending",
@@ -1087,7 +1105,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-autoregressive-state.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-ASH-BACKEND-PROMOTE": {
     "hash": "6de3e1c",
@@ -1128,6 +1146,40 @@
     "tags": [],
     "source": ".plan/tickets/TASK-ash-block-trait.md",
     "status": "proposed"
+  },
+  "TASK-ASH-CACHE-DIGEST-HARDENING": {
+    "hash": "pending",
+    "extid": "TASK-ASH-CACHE-DIGEST-HARDENING",
+    "type": "TASK",
+    "title": "Harden ash cache key with model and tokenizer digests",
+    "label": "task",
+    "priority": "high",
+    "epic": "epic-full-ai-cycle",
+    "project": "",
+    "tags": [
+      "ash",
+      "cache",
+      "determinism"
+    ],
+    "source": ".plan/tickets/TASK-ash-cache-digest-hardening.md",
+    "status": "done"
+  },
+  "TASK-ASH-CATALOG-LICENSE-DRIFT": {
+    "hash": "pending",
+    "extid": "TASK-ASH-CATALOG-LICENSE-DRIFT",
+    "type": "TASK",
+    "title": "Fix ash-related catalog license drift",
+    "label": "task",
+    "priority": "low",
+    "epic": "epic-docs-tooling",
+    "project": "",
+    "tags": [
+      "ash",
+      "licensing",
+      "catalog"
+    ],
+    "source": ".plan/tickets/TASK-ash-catalog-license-drift.md",
+    "status": "open"
   },
   "TASK-ASH-DECODER-OPS": {
     "hash": "pending",
@@ -1179,7 +1231,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-flow-dit-substrate.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-ASH-GGUF-DEQUANT": {
     "hash": "pending",
@@ -1400,7 +1452,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-ASH-VAE-FAMILY-ADAPTERS": {
     "hash": "pending",
@@ -1413,7 +1465,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-vae-family-adapters.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-ASH-VAE-TILING-RETRY": {
     "hash": "pending",
@@ -2016,9 +2068,13 @@
     "title": "Device selection ranking review",
     "label": "task",
     "priority": "medium",
-    "epic": "",
+    "epic": "epic-full-ai-cycle",
     "project": "",
-    "tags": [],
+    "tags": [
+      "ash",
+      "vulkan",
+      "device"
+    ],
     "source": ".plan/tickets/TASK-device-selection-rank-review.md",
     "status": "proposed"
   },

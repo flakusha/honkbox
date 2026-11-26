@@ -708,6 +708,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/FEAT-ash-sd2-spec.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-backend-promote.md"
     },
     {
@@ -1431,6 +1435,12 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-taesd-decoder.md"
+    }
+  ],
+  "src/vae_family_adapters.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-vae-family-adapters.md"
     }
   ],
   "src/vae_real.rs": [
