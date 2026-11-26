@@ -214,6 +214,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-determinism-profile-surface.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-inference-cache-correctness.md"
     },
     {
@@ -223,6 +227,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-scene-spec-schema.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-scheduler-lifecycle-spec.md"
     }
   ],
   "src/device.rs": [
@@ -396,6 +404,14 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-admit-then-register-invariant.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-cancel-checkpoint-taxonomy.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-determinism-contract.md"
     },
     {
@@ -405,6 +421,14 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-job-result-artifact-selection-metadata.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-operability-surfaces.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-scheduler-lifecycle-spec.md"
     }
   ],
   "src/jobs_registry.rs": [
@@ -552,6 +576,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-lease-safety-fuzz.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-kv-spill-policy.md"
     },
     {
@@ -580,11 +608,23 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-memory-demand-estimator.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-memory-readout-bytes.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-salvo-dto-schema-bridge.md"
     },
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-sd-base-model-tags.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-shared-model-library.md"
     },
     {
       "kind": "ticket",
@@ -689,6 +729,12 @@
       "source": ".plan/tickets/TASK-ash-gguf-dequant.md"
     }
   ],
+  "src/memory.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-shared-model-library.md"
+    }
+  ],
   "src/memory/rerank.ts": [
     {
       "kind": "ticket",
@@ -717,6 +763,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-llm-prompt-cache.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-operability-surfaces.md"
     },
     {
       "kind": "ticket",
@@ -926,6 +976,10 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-operability-surfaces.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-process-supervisor.md"
     },
     {
@@ -1026,7 +1080,21 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-api-compat-matrix.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-llm-evidence-integration.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-keepalive-knob.md"
+    }
+  ],
+  "src/routes/embeddings.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-api-compat-matrix.md"
     }
   ],
   "src/routes/fizgig.rs": [
@@ -1059,6 +1127,12 @@
       "source": ".plan/tickets/TASK-external-api-catalog-links.md"
     }
   ],
+  "src/routes/image_ops_dedup.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-image-ops-idempotency-isolation.md"
+    }
+  ],
   "src/routes/image_ops_exec.rs": [
     {
       "kind": "ticket",
@@ -1071,6 +1145,12 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-img-meta-exif-orientation.md"
+    }
+  ],
+  "src/routes/image_ops_route.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-image-ops-idempotency-isolation.md"
     }
   ],
   "src/routes/images_edit.rs": [
@@ -1163,6 +1243,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/FEAT-residency-control-plane.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-memory-readout-bytes.md"
     }
   ],
   "src/runtime_config.rs": [
@@ -1175,6 +1259,12 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-salvo-middleware-and-codegen.md"
+    }
+  ],
+  "src/salvo_routes/health_downloads.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-operability-surfaces.md"
     }
   ],
   "src/salvo_version.rs": [
@@ -1215,6 +1305,12 @@
       "source": ".plan/tickets/TASK-ash-unsupported-conditioning-guards.md"
     }
   ],
+  "src/status.rs": [
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-operability-surfaces.md"
+    }
+  ],
   "src/supervisor.rs": [
     {
       "kind": "ticket",
@@ -1234,7 +1330,15 @@
     },
     {
       "kind": "ticket",
+      "source": ".plan/tickets/TASK-embed-cache-parity.md"
+    },
+    {
+      "kind": "ticket",
       "source": ".plan/tickets/TASK-inference-cache-correctness.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-llm-keepalive-knob.md"
     },
     {
       "kind": "ticket",
@@ -1243,6 +1347,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-plan-index-generator.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-swap-byte-awareness.md"
     }
   ],
   "src/timestep.rs": [
@@ -1301,6 +1409,10 @@
     {
       "kind": "ticket",
       "source": ".plan/tickets/TASK-ash-block-level-goldens.md"
+    },
+    {
+      "kind": "ticket",
+      "source": ".plan/tickets/TASK-ash-second-crossattn-depth.md"
     }
   ],
   "src/unet_traversal.rs": [

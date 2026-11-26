@@ -1,6 +1,6 @@
 # TASK: Operability surfaces for jobs and GC
 
-Status: In Progress
+Status: Done
 **Scope:** Operability surfaces: bounded route/GC metrics and status warnings
 Priority: P2
 Epic: epic-full-ai-cycle
@@ -46,3 +46,5 @@ New metrics backend, alerting rules, per-user telemetry.
   Ticket stays In Progress until that baseline is fixed.
 - No api-types or generated bindings changed, so `bun run codegen:check` is
   not implicated by this surface.
+
+**Resolved:** 2026-11-26 registry-driven close: git issue c2fef6c (registry tip: 9d3ad7c Konstantin Fedotov Close issue)

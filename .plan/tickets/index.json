@@ -1023,6 +1023,45 @@
     "source": ".plan/tickets/FEAT-video-source-audio-reuse.md",
     "status": "proposed"
   },
+  "TASK-ADMISSION-DEDUPE-ANALYSIS": {
+    "hash": "pending",
+    "extid": "TASK-ADMISSION-DEDUPE-ANALYSIS",
+    "type": "TASK",
+    "title": "Admission dedupe analysis",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-admission-dedupe-analysis.md",
+    "status": "proposed"
+  },
+  "TASK-ADMIT-THEN-REGISTER-INVARIANT": {
+    "hash": "pending",
+    "extid": "TASK-ADMIT-THEN-REGISTER-INVARIANT",
+    "type": "TASK",
+    "title": "Admit-then-register invariant",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-admit-then-register-invariant.md",
+    "status": "proposed"
+  },
+  "TASK-API-COMPAT-MATRIX": {
+    "hash": "pending",
+    "extid": "TASK-API-COMPAT-MATRIX",
+    "type": "TASK",
+    "title": "API compat decision matrix",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-api-compat-matrix.md",
+    "status": "proposed"
+  },
   "TASK-API-VERSION-POLICY": {
     "hash": "a7841b3",
     "git_issue": "a7841b3",
@@ -1207,6 +1246,19 @@
     "source": ".plan/tickets/TASK-ash-native-families-index.md",
     "status": "proposed"
   },
+  "TASK-ASH-PLACEMENT-GRAMMAR": {
+    "hash": "pending",
+    "extid": "TASK-ASH-PLACEMENT-GRAMMAR",
+    "type": "TASK",
+    "title": "Ash per-module placement grammar",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-placement-grammar.md",
+    "status": "proposed"
+  },
   "TASK-ASH-QWEN-IMAGE21-ATTENTION-PROOF": {
     "hash": "pending",
     "extid": "TASK-ASH-QWEN-IMAGE21-ATTENTION-PROOF",
@@ -1233,6 +1285,19 @@
     "source": ".plan/tickets/TASK-ash-rrdb-upscaler-spike.md",
     "status": "proposed"
   },
+  "TASK-ASH-SAMPLER-DEFAULT-TABLE": {
+    "hash": "pending",
+    "extid": "TASK-ASH-SAMPLER-DEFAULT-TABLE",
+    "type": "TASK",
+    "title": "Ash diffusion sampler default table",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-sampler-default-table.md",
+    "status": "proposed"
+  },
   "TASK-ASH-SAMPLING-CONTRACT": {
     "hash": "pending",
     "extid": "TASK-ASH-SAMPLING-CONTRACT",
@@ -1246,6 +1311,19 @@
     "source": ".plan/tickets/TASK-ash-sampling-contract.md",
     "status": "proposed"
   },
+  "TASK-ASH-SECOND-CROSSATTN-DEPTH": {
+    "hash": "pending",
+    "extid": "TASK-ASH-SECOND-CROSSATTN-DEPTH",
+    "type": "TASK",
+    "title": "Ash second cross-attention growth level (G2)",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-second-crossattn-depth.md",
+    "status": "proposed"
+  },
   "TASK-ASH-SHADER-PIPELINE-CACHE": {
     "hash": "pending",
     "extid": "TASK-ASH-SHADER-PIPELINE-CACHE",
@@ -1257,6 +1335,32 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-shader-pipeline-cache.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-SIGMA-TABLES": {
+    "hash": "pending",
+    "extid": "TASK-ASH-SIGMA-TABLES",
+    "type": "TASK",
+    "title": "Ash sigma tables",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-sigma-tables.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-TAEHV-SEAM": {
+    "hash": "pending",
+    "extid": "TASK-ASH-TAEHV-SEAM",
+    "type": "TASK",
+    "title": "Ash TAEHV seam (gated tracking only)",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-taehv-seam.md",
     "status": "proposed"
   },
   "TASK-ASH-TAESD-DECODER": {
@@ -1309,6 +1413,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-ash-vae-family-adapters.md",
+    "status": "proposed"
+  },
+  "TASK-ASH-VAE-TILING-RETRY": {
+    "hash": "pending",
+    "extid": "TASK-ASH-VAE-TILING-RETRY",
+    "type": "TASK",
+    "title": "Ash VAE tiling retry on oversized decode",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-ash-vae-tiling-retry.md",
     "status": "proposed"
   },
   "TASK-ASH-VERIFICATION-GATES": {
@@ -1601,6 +1718,19 @@
     "source": ".plan/tickets/TASK-camera-path-schema.md",
     "status": "proposed"
   },
+  "TASK-CANCEL-CHECKPOINT-TAXONOMY": {
+    "hash": "pending",
+    "extid": "TASK-CANCEL-CHECKPOINT-TAXONOMY",
+    "type": "TASK",
+    "title": "Cancel checkpoint taxonomy",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-cancel-checkpoint-taxonomy.md",
+    "status": "proposed"
+  },
   "TASK-CANDLE-BACKEND-DECISION": {
     "hash": "db36cbf",
     "git_issue": "db36cbf",
@@ -1851,6 +1981,19 @@
     "source": ".plan/tickets/TASK-determinism-contract.md",
     "status": "done"
   },
+  "TASK-DETERMINISM-PROFILE-SURFACE": {
+    "hash": "pending",
+    "extid": "TASK-DETERMINISM-PROFILE-SURFACE",
+    "type": "TASK",
+    "title": "Determinism profile surface",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-determinism-profile-surface.md",
+    "status": "proposed"
+  },
   "TASK-DEVICE-CAPACITY-GATES": {
     "hash": "62b923c",
     "git_issue": "62b923c",
@@ -1918,6 +2061,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-download-options-contract.md",
+    "status": "proposed"
+  },
+  "TASK-EMBED-CACHE-PARITY": {
+    "hash": "pending",
+    "extid": "TASK-EMBED-CACHE-PARITY",
+    "type": "TASK",
+    "title": "Embed-cache residency parity in the shared readout",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-embed-cache-parity.md",
     "status": "proposed"
   },
   "TASK-ENGINE-BUNDLE-VERIFICATION": {
@@ -2228,6 +2384,19 @@
     "source": ".plan/tickets/TASK-image-ops-command-dto.md",
     "status": "done"
   },
+  "TASK-IMAGE-OPS-IDEMPOTENCY-ISOLATION": {
+    "hash": "pending",
+    "extid": "TASK-IMAGE-OPS-IDEMPOTENCY-ISOLATION",
+    "type": "TASK",
+    "title": "Image-ops idempotency key isolation",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-image-ops-idempotency-isolation.md",
+    "status": "proposed"
+  },
   "TASK-IMAGE-OPS-JOB-ROUTE": {
     "hash": "548fc8a",
     "git_issue": "548fc8a",
@@ -2389,6 +2558,19 @@
     "source": ".plan/tickets/TASK-krita-plugin-fixture.md",
     "status": "proposed"
   },
+  "TASK-LEASE-SAFETY-FUZZ": {
+    "hash": "pending",
+    "extid": "TASK-LEASE-SAFETY-FUZZ",
+    "type": "TASK",
+    "title": "Lease safety fuzz",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-lease-safety-fuzz.md",
+    "status": "proposed"
+  },
   "TASK-LLAMA-SERVER-ATTACH": {
     "hash": "459de41",
     "git_issue": "459de41",
@@ -2414,6 +2596,19 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-llm-constrained-output-eval.md",
+    "status": "proposed"
+  },
+  "TASK-LLM-KEEPALIVE-KNOB": {
+    "hash": "pending",
+    "extid": "TASK-LLM-KEEPALIVE-KNOB",
+    "type": "TASK",
+    "title": "Per-request LLM keepalive TTL knob",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-llm-keepalive-knob.md",
     "status": "proposed"
   },
   "TASK-LLM-KV-SPILL-POLICY": {
@@ -2632,6 +2827,32 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-material-tool-capability-probe.md",
+    "status": "proposed"
+  },
+  "TASK-MEMORY-DEMAND-ESTIMATOR": {
+    "hash": "pending",
+    "extid": "TASK-MEMORY-DEMAND-ESTIMATOR",
+    "type": "TASK",
+    "title": "MemoryDemand estimator struct with labeled estimate/measured source",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-memory-demand-estimator.md",
+    "status": "proposed"
+  },
+  "TASK-MEMORY-READOUT-BYTES": {
+    "hash": "pending",
+    "extid": "TASK-MEMORY-READOUT-BYTES",
+    "type": "TASK",
+    "title": "Additive memory-readout byte decomposition",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-memory-readout-bytes.md",
     "status": "proposed"
   },
   "TASK-MESH-CAPABILITY-ADVERTISEMENT": {
@@ -2855,7 +3076,7 @@
     "project": "",
     "tags": [],
     "source": ".plan/tickets/TASK-operability-surfaces.md",
-    "status": "proposed"
+    "status": "done"
   },
   "TASK-ORA-OUTPUT": {
     "hash": "b4a51d7",
@@ -3230,6 +3451,19 @@
     "source": ".plan/tickets/TASK-scene-spec-schema.md",
     "status": "proposed"
   },
+  "TASK-SCHEDULER-LIFECYCLE-SPEC": {
+    "hash": "pending",
+    "extid": "TASK-SCHEDULER-LIFECYCLE-SPEC",
+    "type": "TASK",
+    "title": "Scheduler lifecycle spec",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-scheduler-lifecycle-spec.md",
+    "status": "proposed"
+  },
   "TASK-SD-BASE-MODEL-TAGS": {
     "hash": "cedc24d",
     "git_issue": "cedc24d",
@@ -3299,6 +3533,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-shader-validate-hook.md",
     "status": "done"
+  },
+  "TASK-SHARED-MODEL-LIBRARY": {
+    "hash": "pending",
+    "extid": "TASK-SHARED-MODEL-LIBRARY",
+    "type": "TASK",
+    "title": "Shared model library semantics",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-shared-model-library.md",
+    "status": "proposed"
   },
   "TASK-SPEECH-INPUT-CAP": {
     "hash": "1fbaf88",
@@ -3411,6 +3658,19 @@
     "tags": [],
     "source": ".plan/tickets/TASK-svg-ora-support.md",
     "status": "done"
+  },
+  "TASK-SWAP-BYTE-AWARENESS": {
+    "hash": "pending",
+    "extid": "TASK-SWAP-BYTE-AWARENESS",
+    "type": "TASK",
+    "title": "Swap entry byte awareness with reasoned eviction",
+    "label": "task",
+    "priority": "medium",
+    "epic": "",
+    "project": "",
+    "tags": [],
+    "source": ".plan/tickets/TASK-swap-byte-awareness.md",
+    "status": "proposed"
   },
   "TASK-TEXTURE-POSTPROCESS-OIIO": {
     "hash": "b7cf85e",
