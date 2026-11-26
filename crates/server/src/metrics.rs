@@ -33,7 +33,7 @@ use honkbox_api_types::ModelKind;
 /// Known route labels (bounded cardinality); parameterized control routes
 /// collapse to their template, everything else counts under `"other"` so
 /// arbitrary fallback paths cannot explode the series set.
-const ROUTES: [&str; 24] = [
+const ROUTES: [&str; 42] = [
     "/health",
     "/api/version",
     "/v1/openapi.json",
@@ -58,6 +58,24 @@ const ROUTES: [&str; 24] = [
     "/comfyui/queue",
     "/comfyui/history/{id}",
     "/comfyui/view",
+    "/v1/presets",
+    "/v1/presets/{id}",
+    "/v1/status/warnings",
+    "/v1/jobs/blender",
+    "/v1/capabilities",
+    "/v1/catalog",
+    "/v1/external-tools",
+    "/v1/external-tools/{id}",
+    "/v1/external-tools/reload",
+    "/v1/downloads",
+    "/v1/downloads/{id}",
+    "/v1/artifacts",
+    "/v1/artifacts/{id}/bytes",
+    "/v1/queue",
+    "/v1/jobs/{id}/bundle.zip",
+    "/v1/jobs/{id}/content/{name}",
+    "/v1/jobs/records",
+    "/v1/jobs/records/{id}",
 ];
 
 /// Status codes tracked verbatim; any other code counts under `"other"`.
@@ -130,6 +148,32 @@ const UNLOAD_REASONS: [&str; 3] = ["ttl", "explicit", "evict"];
 const KIND_SLOTS: usize = KIND_LABELS.len();
 const LOAD_REASON_SLOTS: usize = LOAD_REASONS.len();
 const UNLOAD_REASON_SLOTS: usize = UNLOAD_REASONS.len();
+
+/// GC removal reasons (`reason` label of the two GC counters below).
+const GC_REASONS: [&str; 4] = ["expired", "size_cap", "part_sweep", "temp_sweep"];
+const GC_REASON_SLOTS: usize = GC_REASONS.len();
+
+/// Why a job artifact was reclaimed by startup GC.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GcReason {
+    /// Job dir past its retention TTL.
+    Expired,
+    /// Oldest-first job dir evicted to satisfy the byte cap.
+    SizeCap,
+    /// Crash-leftover `*.part` file.
+    PartSweep,
+    /// Stale `$TMPDIR/honkbox-*.png` scratch file.
+    TempSweep,
+}
+
+fn gc_reason_slot(reason: GcReason) -> usize {
+    match reason {
+        GcReason::Expired => 0,
+        GcReason::SizeCap => 1,
+        GcReason::PartSweep => 2,
+        GcReason::TempSweep => 3,
+    }
+}
 
 /// Why a model was loaded (emitted at the swap manager's load-commit).
 #[derive(Debug, Clone, Copy)]
@@ -280,21 +324,33 @@ static CACHE_HITS: LazyLock<[AtomicU64; KIND_SLOTS]> =
 static CACHE_MISSES: LazyLock<[AtomicU64; KIND_SLOTS]> =
     LazyLock::new(|| [const { AtomicU64::new(0) }; KIND_SLOTS]);
 
+/// Reclaimed bytes by GC reason.
+static GC_RECLAIMED_BYTES: LazyLock<[AtomicU64; GC_REASON_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; GC_REASON_SLOTS]);
+/// Removed entries by GC reason.
+static GC_ENTRIES: LazyLock<[AtomicU64; GC_REASON_SLOTS]> =
+    LazyLock::new(|| [const { AtomicU64::new(0) }; GC_REASON_SLOTS]);
+
 /// Per-kind pipeline-construction duration histograms (the same 11 buckets
 /// as the global request duration).
 static LOAD_DURATION: LazyLock<[Histogram; KIND_SLOTS]> =
     LazyLock::new(|| [const { Histogram::new() }; KIND_SLOTS]);
 
 /// Request route label for a raw URI path: the path itself for known
-/// routes, the templated shape for the two parameterized control routes,
-/// and `"other"` for anything else (fallback hits, escapes, probes).
+/// routes, the template for parameterized routes, and `"other"` for
+/// anything else (fallback hits, escapes, probes). Dynamic ids and file
+/// names never reach a label.
+fn has_single_id(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+}
+
 pub(crate) fn route_label(path: &str) -> &'static str {
     ROUTES
         .iter()
         .find(|route| **route == path)
         .copied()
         .or_else(|| {
-            // Parameterized: one bounded series per template, never per slug.
             if path.starts_with("/v1/models/") && path.ends_with("/unload") {
                 Some("/v1/models/{slug}/unload")
             } else if path.starts_with("/api/models/unload/") {
@@ -303,13 +359,41 @@ pub(crate) fn route_label(path: &str) -> &'static str {
                 Some("/v1/apps/{id}/start")
             } else if path.starts_with("/v1/apps/") && path.ends_with("/stop") {
                 Some("/v1/apps/{id}/stop")
-            } else if path
-                .strip_prefix("/v1/apps/")
-                .is_some_and(|rest| !rest.contains('/'))
-            {
+            } else if has_single_id(path, "/v1/apps/") {
                 Some("/v1/apps/{id}")
             } else if path.starts_with("/comfyui/history/") {
                 Some("/comfyui/history/{id}")
+            } else if has_single_id(path, "/v1/presets/") {
+                Some("/v1/presets/{id}")
+            } else if has_single_id(path, "/v1/external-tools/") {
+                Some("/v1/external-tools/{id}")
+            } else if has_single_id(path, "/v1/downloads/") {
+                Some("/v1/downloads/{id}")
+            } else if has_single_id(path, "/v1/jobs/records/") {
+                Some("/v1/jobs/records/{id}")
+            } else if path
+                .strip_prefix("/v1/artifacts/")
+                .and_then(|rest| rest.strip_suffix("/bytes"))
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                Some("/v1/artifacts/{id}/bytes")
+            } else if path
+                .strip_prefix("/v1/jobs/")
+                .and_then(|rest| rest.strip_suffix("/bundle.zip"))
+                .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            {
+                Some("/v1/jobs/{id}/bundle.zip")
+            } else if path
+                .strip_prefix("/v1/jobs/")
+                .and_then(|rest| rest.strip_suffix("/content/"))
+                .is_some_and(|rest| {
+                    let mut parts = rest.split('/');
+                    parts.next().is_some_and(|id| !id.is_empty())
+                        && parts.next().is_some_and(|name| !name.is_empty())
+                        && parts.next().is_none()
+                })
+            {
+                Some("/v1/jobs/{id}/content/{name}")
             } else {
                 None
             }
@@ -385,6 +469,13 @@ pub(crate) fn note_cache_hit(kind: ModelKind) {
 /// Count one cache miss (call when a pipeline had to be loaded).
 pub(crate) fn note_cache_miss(kind: ModelKind) {
     CACHE_MISSES[kind_slot(kind)].fetch_add(1, Ordering::Relaxed);
+}
+
+/// Count one successful GC removal and the bytes it reclaimed.
+pub(crate) fn note_gc_reclaim(reason: GcReason, bytes: u64) {
+    let slot = gc_reason_slot(reason);
+    GC_ENTRIES[slot].fetch_add(1, Ordering::Relaxed);
+    GC_RECLAIMED_BYTES[slot].fetch_add(bytes, Ordering::Relaxed);
 }
 
 /// Observe one pipeline-construction duration (call around the swap
@@ -516,6 +607,37 @@ fn push_swap_families(out: &mut String) {
     }
 }
 
+/// Render the GC counters: one fixed reason label per bounded slot.
+fn push_gc_families(out: &mut String) {
+    push_family(
+        out,
+        "honkbox_gc_reclaimed_bytes_total",
+        "Bytes reclaimed by startup garbage collection, by reason.",
+        "counter",
+    );
+    for (reason, cell) in GC_REASONS.iter().zip(GC_RECLAIMED_BYTES.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_gc_reclaimed_bytes_total{{reason=\"{reason}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
+
+    push_family(
+        out,
+        "honkbox_gc_entries_total",
+        "Entries removed by startup garbage collection, by reason.",
+        "counter",
+    );
+    for (reason, cell) in GC_REASONS.iter().zip(GC_ENTRIES.iter()) {
+        let _ = writeln!(
+            out,
+            "honkbox_gc_entries_total{{reason=\"{reason}\"}} {}",
+            cell.load(Ordering::Relaxed)
+        );
+    }
+}
+
 /// Render the Prometheus text exposition (version 0.0.4) for every series.
 pub(crate) fn exposition() -> String {
     let mut out = String::new();
@@ -606,6 +728,7 @@ pub(crate) fn exposition() -> String {
         );
     }
 
+    push_gc_families(&mut out);
     push_swap_families(&mut out);
     out
 }

@@ -82,6 +82,13 @@ async fn delete_download(
     Ok(())
 }
 
+/// GET /v1/status/warnings: same bounded document as the axum route.
+#[salvo::handler]
+async fn status_warnings(res: &mut Response) {
+    let result = axum::Json(crate::routes::status::warnings_document());
+    salvo_support::respond(res, result).await;
+}
+
 /// GET /v1/queue.
 #[salvo::handler]
 async fn get_queue(res: &mut Response) {
@@ -116,5 +123,6 @@ pub fn router() -> Router {
                 .delete(delete_download),
         )
         .push(Router::with_path("v1/queue").get(get_queue))
+        .push(Router::with_path("v1/status/warnings").get(status_warnings))
         .push(Router::with_path("v1/content-urls").post(post_content_urls))
 }

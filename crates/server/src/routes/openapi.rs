@@ -58,6 +58,7 @@ pub struct EmbeddedUi;
         get_memory,
         openapi_json,
         metrics_endpoint,
+        get_status_warnings_axum,
         post_chat,
         post_chat_stream,
         post_chat_completions,

@@ -517,6 +517,7 @@ async fn serve(args: ServeArgs, config: Option<PathBuf>, data_dir_flag: Option<P
     let data_dir = loaded.data_dir;
     logging::init(log_file, data_dir.as_deref());
     emit_config_warnings(&loaded.warnings);
+    crate::routes::status::set_warnings(loaded.warnings.clone());
     if let Some(dir) = data_dir.as_deref() {
         info!("honkbox data dir: {}", dir.display());
     } else {

@@ -59,7 +59,10 @@ use axum::{
 use honkbox_api_types::ModelCatalog;
 use honkbox_audio_worker::{StubStt, StubTts};
 use honkbox_llm_worker::StubLlm;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
 use tower::ServiceExt as _;
 
 use routes::{AppConfig, AuthConfig, app};
@@ -160,6 +163,21 @@ async fn metrics_lines_present_after_request() {
     );
     assert!(body.contains("honkbox_gpu_slot_busy_rejections_total{reason=\"queue_full\"}"));
     assert!(body.contains("honkbox_gpu_slot_busy_rejections_total{reason=\"queue_timeout\"}"));
+    // GC reclaim families share the closed reason vocabulary; counters are
+    // process-wide, so only the bounded label grid is asserted here.
+    assert!(body.contains("# TYPE honkbox_gc_reclaimed_bytes_total counter"));
+    assert!(body.contains("# TYPE honkbox_gc_entries_total counter"));
+    for family in [
+        "honkbox_gc_reclaimed_bytes_total",
+        "honkbox_gc_entries_total",
+    ] {
+        for reason in ["expired", "size_cap", "part_sweep", "temp_sweep"] {
+            assert!(
+                body.contains(&format!("{family}{{reason=\"{reason}\"}} ")),
+                "missing {family} series for {reason}: {body}"
+            );
+        }
+    }
     // Kind-labeled swap families render their full bounded grid. Counts in
     // this process depend on which in-module unit tests ran first (the
     // statics are process-wide, see `metrics.rs` tests), so only presence +
@@ -178,4 +196,82 @@ async fn metrics_lines_present_after_request() {
     assert!(body.contains("honkbox_model_loads_total{kind=\"vae\",reason=\"manual\"} 0"));
     assert!(body.contains("honkbox_swap_evictions_total{kind=\"vae\"} 0"));
     assert!(body.ends_with('\n'));
+}
+
+fn fresh_gc_root() -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "honkbox-metrics-gc-{}-{nanos}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("unique gc root");
+    path
+}
+
+fn metric_value(body: &str, family: &str, reason: &str) -> u64 {
+    let prefix = format!("{family}{{reason=\"{reason}\"}} ");
+    body.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("missing series: {prefix}"))
+        .parse()
+        .expect("numeric counter")
+}
+
+/// Deterministic teardown for the unique temp root, even if an assert panics.
+struct CleanupGcRoot(PathBuf);
+
+impl Drop for CleanupGcRoot {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// Resource contract: this test owns a unique temp dir keyed by PID, monotonic
+/// timestamp, and atomic counter; `CleanupGcRoot` removes it on every exit.
+/// Counters are process-wide, so assertions compare deltas, never totals.
+#[test]
+fn gc_reclaim_counters_increase_after_expired_sweep() {
+    let base = fresh_gc_root();
+    let _cleanup = CleanupGcRoot(base.clone());
+    let jobs_root = base.join("jobs");
+    let old_job = jobs_root.join("01OLD");
+    std::fs::create_dir_all(&old_job).expect("job dir");
+    let blob = old_job.join("blob");
+    std::fs::write(&blob, [0_u8; 32]).expect("blob");
+    let old = SystemTime::now()
+        .checked_sub(Duration::from_secs(7200))
+        .expect("clock");
+    let times = std::fs::FileTimes::new()
+        .set_modified(old)
+        .set_accessed(old);
+    std::fs::File::options()
+        .write(true)
+        .open(&blob)
+        .expect("open blob")
+        .set_times(times)
+        .expect("backdate blob");
+
+    const ENTRIES: &str = "honkbox_gc_entries_total";
+    const BYTES: &str = "honkbox_gc_reclaimed_bytes_total";
+    let before = metrics::exposition();
+    let before_entries = metric_value(&before, ENTRIES, "expired");
+    let before_bytes = metric_value(&before, BYTES, "expired");
+
+    jobs::gc_jobs(Some(&jobs_root), Duration::from_secs(3600), u64::MAX);
+
+    assert!(!old_job.exists(), "expired job dir must be swept");
+    let after = metrics::exposition();
+    assert!(
+        metric_value(&after, ENTRIES, "expired") > before_entries,
+        "expired entry counter did not rise: {after}"
+    );
+    assert!(
+        metric_value(&after, BYTES, "expired") > before_bytes,
+        "expired byte counter did not rise: {after}"
+    );
 }

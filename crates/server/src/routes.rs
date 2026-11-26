@@ -64,6 +64,9 @@ use self::external_tools::{
 #[path = "routes/health.rs"]
 pub(super) mod health;
 
+#[path = "status.rs"]
+pub(super) mod status;
+
 #[path = "routes/capabilities.rs"]
 pub(super) mod capabilities;
 
@@ -99,6 +102,8 @@ use self::runtime::{
     __path_get_memory, __path_get_running, __path_post_unload_all, __path_post_unload_one,
     get_memory, get_running, post_unload_all, post_unload_one,
 };
+#[allow(unused_imports)] // handler names are used by .route() and the OpenApi derive
+use self::status::{__path_get_status_warnings_axum, get_status_warnings_axum};
 
 #[path = "routes/catalog.rs"]
 mod catalog;
@@ -505,6 +510,7 @@ pub fn app(config: AppConfig) -> Router {
         .route("/v1/fizgig/jobs/{id}/cancel", post(cancel_fizgig_job))
         .route("/v1/content-urls", post(post_content_urls))
         .route("/metrics", get(metrics_endpoint))
+        .route("/v1/status/warnings", get(get_status_warnings_axum))
         .merge(mesh_router)
         .route_layer(axum_middleware::from_fn_with_state(
             config.clone(),

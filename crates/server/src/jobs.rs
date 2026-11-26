@@ -12,6 +12,8 @@ use std::time::{Duration, SystemTime};
 
 use tracing::{debug, warn};
 
+use super::metrics::{GcReason, note_gc_reclaim};
+
 // Determinism machinery (TASK-determinism-contract) is registered here —
 // not in `main.rs` — because main.rs is owned by the in-flight
 // binary-formats wave (see .tmp/intercom/WHO-DOES-WHAT.md). Promoting it
@@ -567,6 +569,7 @@ fn gc_dir(root: &Path, max_age: Duration, max_bytes: u64) {
                         warn!("gc: cannot remove {}: {e}", path.display());
                     } else {
                         debug!("gc: removed expired job dir {}", path.display());
+                        note_gc_reclaim(GcReason::Expired, size);
                     }
                     continue;
                 }
@@ -587,6 +590,7 @@ fn gc_dir(root: &Path, max_age: Duration, max_bytes: u64) {
             warn!("gc: cannot remove {}: {e}", path.display());
         } else {
             debug!("gc: evicted {} ({}) for size cap", path.display(), size);
+            note_gc_reclaim(GcReason::SizeCap, size);
         }
         total -= size;
     }
@@ -613,10 +617,12 @@ fn sweep_parts_in(dir: &Path) {
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("part"))
         {
+            let bytes = entry.metadata().map_or(0, |meta| meta.len());
             if let Err(e) = fs::remove_file(&path) {
                 warn!("gc: cannot remove {}: {e}", path.display());
             } else {
                 debug!("gc: swept stray part file {}", path.display());
+                note_gc_reclaim(GcReason::PartSweep, bytes);
             }
         }
     }
@@ -636,9 +642,10 @@ fn sweep_stale_temp_pngs(max_age: Duration, now: SystemTime) {
         if !is_scratch {
             continue;
         }
-        let mtime = entry
-            .metadata()
-            .and_then(|m| m.modified())
+        let meta = entry.metadata();
+        let bytes = meta.as_ref().map_or(0, |meta| meta.len());
+        let mtime = meta
+            .and_then(|meta| meta.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH);
         if now.duration_since(mtime).unwrap_or(Duration::ZERO) <= max_age {
             continue;
@@ -647,6 +654,7 @@ fn sweep_stale_temp_pngs(max_age: Duration, now: SystemTime) {
             warn!("gc: cannot remove {}: {e}", entry.path().display());
         } else {
             debug!("gc: swept stale temp png {}", entry.path().display());
+            note_gc_reclaim(GcReason::TempSweep, bytes);
         }
     }
 }
